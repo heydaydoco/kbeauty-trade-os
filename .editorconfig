@@ -1,0 +1,23 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.py]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
+
+# PowerShell 5.1은 BOM 없는 .ps1을 cp949로 읽어 한글 안내가 깨진다.
+[*.ps1]
+end_of_line = crlf
+charset = utf-8-bom
+
+[Makefile]
+indent_style = tab

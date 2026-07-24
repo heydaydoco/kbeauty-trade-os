@@ -1,0 +1,56 @@
+# 리포 전체 줄바꿈 규율 — Windows 작업 PC(core.autocrlf=true) + Linux 컨테이너 조합에서
+# .sh/.sql이 CRLF로 커밋되면 컨테이너가 `bad interpreter: /bin/sh^M`으로 죽는다.
+# 인덱스(커밋되는 실체)는 무조건 LF로 고정한다.
+* text=auto eol=lf
+
+# 컨테이너 안에서 실행·파싱되는 것들 — LF 강제
+*.sh        text eol=lf
+*.sql       text eol=lf
+*.py        text eol=lf
+*.toml      text eol=lf
+*.cfg       text eol=lf
+*.ini       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.jsx       text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.md        text eol=lf
+*.env       text eol=lf
+.env.example      text eol=lf
+.env.prod.example text eol=lf
+Dockerfile        text eol=lf
+Dockerfile.*      text eol=lf
+*.dockerignore    text eol=lf
+.gitignore        text eol=lf
+.gitattributes    text eol=lf
+.editorconfig     text eol=lf
+
+# Windows에서만 실행되는 것들 — CRLF 유지
+# (PowerShell 5.1은 .ps1을 UTF-8 BOM으로 읽어야 한글이 안 깨진다 — 저장 시 BOM 필수)
+*.ps1       text eol=crlf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# CSV는 git이 손대지 않는다.
+# 설계 §12.2·§20 B가 요구하는 UTF-8 BOM CSV는 NUL 바이트가 없어 git이 text로 오판하고,
+# 줄바꿈·BOM을 정규화하면 테스트 픽스처가 조용히 훼손된다.
+*.csv       -text
+*.tsv       -text
+
+# 바이너리
+*.xlsx      binary
+*.xls       binary
+*.pdf       binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.woff      binary
+*.woff2     binary
+*.zip       binary
