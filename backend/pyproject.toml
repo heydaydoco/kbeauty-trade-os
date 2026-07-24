@@ -1,0 +1,47 @@
+# 이 파일은 도구 설정 전용이다. 의존성은 requirements.txt / requirements-dev.txt.
+# (앱을 패키지로 설치하지 않고 PYTHONPATH=/app 으로 실행하므로 빌드 백엔드가 필요 없다)
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",    # pycodestyle
+  "F",         # pyflakes
+  "I",         # isort
+  "UP",        # pyupgrade
+  "B",         # bugbear
+  "SIM",       # simplify
+  "C4",        # comprehensions
+  "DTZ",       # naive datetime 금지 (§2 ADR-02 UTC 저장)
+  "RUF",
+]
+ignore = [
+  "E501",   # 줄 길이는 formatter가 처리
+  "B008",   # FastAPI Depends(...) 기본값 패턴
+]
+
+[tool.ruff.lint.per-file-ignores]
+"migrations/*" = ["I001"]     # alembic 생성 템플릿
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.13"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+no_implicit_optional = true
+strict_equality = true
+plugins = []
+exclude = ["migrations/versions/"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false

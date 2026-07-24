@@ -1,0 +1,10 @@
+# 런타임 의존성 — 직접 의존은 전부 == 로 고정한다.
+# 버전을 올릴 때는 requirements-dev.txt와 함께 보고 CI 초록을 확인한 뒤 커밋한다.
+# (완전 잠금 파일(uv.lock 등) 도입 여부는 Phase 1에서 재검토 — PROGRESS 부채)
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+SQLAlchemy==2.0.51
+psycopg[binary]==3.3.4
+alembic==1.18.5
+pydantic-settings==2.14.2
+structlog==26.1.0

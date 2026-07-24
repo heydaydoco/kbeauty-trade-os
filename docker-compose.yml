@@ -82,5 +82,37 @@ services:
         done
         echo "== db-init 완료 (역할·DB·권한 멱등 반영)"
 
+  # ── 백엔드 API ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      target: dev
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: dev
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 누락 — .env를 확인할 것}
+      TZ: UTC
+      # DSN은 .env의 비밀번호를 재료로 여기서 조립한다(비밀번호 단일 출처).
+      # 런타임은 kbos_app — 테이블을 만들 수 없는 계정이다(§17.5 / ADR-0002).
+      DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_dev
+      MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_dev
+      # 테스트 전용 (pytest가 쓴다)
+      TEST_DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_test
+      TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_test
+      # 마이그레이션 왕복 검사 전용 빈 DB
+      MIGRATION_CHECK_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_migr
+      # Windows 바인드마운트는 파일 변경 이벤트(inotify)가 컨테이너로 전달되지
+      # 않는다. 폴링으로 바꿔야 --reload가 실제로 동작한다.
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./backend:/app
+    ports:
+      - "127.0.0.1:8000:8000"
+
 volumes:
   pgdata:
