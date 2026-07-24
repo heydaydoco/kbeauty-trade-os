@@ -82,6 +82,31 @@ services:
         done
         echo "== db-init 완료 (역할·DB·권한 멱등 반영)"
 
+  # ── 마이그레이션 (1회 실행 후 종료) ───────────────────────────────────────
+  # api보다 먼저 끝나야 한다. 스키마가 옛 상태인 채로 앱이 뜨면 첫 요청에서
+  # "컬럼이 없다"로 터지는데, 그건 기동 실패보다 훨씬 늦게 발견된다.
+  # 접속은 kbos_owner — 런타임 계정에는 DDL 권한이 없다(ADR-0002).
+  migrate:
+    build:
+      context: ./backend
+      target: dev
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: dev
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 누락 — .env를 확인할 것}
+      TZ: UTC
+      DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_dev
+      MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_dev
+    volumes:
+      - ./backend:/app
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+
   # ── 백엔드 API ────────────────────────────────────────────────────────────
   api:
     build:
@@ -91,6 +116,8 @@ services:
       db:
         condition: service_healthy
       db-init:
+        condition: service_completed_successfully
+      migrate:
         condition: service_completed_successfully
     environment:
       APP_ENV: dev
@@ -113,6 +140,17 @@ services:
       - ./backend:/app
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      # 이미지에 curl이 없다. 파이썬 한 줄로 확인한다.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/healthz', timeout=3).status==200 else 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
 volumes:
   pgdata:

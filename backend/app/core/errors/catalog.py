@@ -1,0 +1,70 @@
+"""에러 코드 → HTTP 상태 + 한국어 문구.
+
+문구는 여기에만 존재한다. 클라이언트는 서버가 준 message를 그대로 보여주기만
+한다 — 같은 상황에 서버와 화면이 다른 말을 하는 일을 없앤다.
+
+문구 규칙 (§18.4 "사용자=한국어+원인+조치"):
+    1문장 = 무슨 일이 일어났는가(원인)
+    2문장 = 무엇을 하면 되는가(조치)
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.core.errors.codes import ErrorCode
+
+
+@dataclass(frozen=True, slots=True)
+class ErrorSpec:
+    status_code: int
+    message_ko: str
+
+
+ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
+    ErrorCode.VALIDATION_INVALID_FIELD: ErrorSpec(
+        422,
+        "입력값이 올바르지 않습니다. 표시된 항목을 확인한 뒤 다시 시도해 주세요.",
+    ),
+    ErrorCode.RESOURCE_NOT_FOUND: ErrorSpec(
+        404,
+        "요청하신 자료를 찾을 수 없습니다. 이미 삭제되었거나 주소가 잘못되었을 수 있으니 목록에서 다시 선택해 주세요.",
+    ),
+    ErrorCode.AUTH_UNAUTHENTICATED: ErrorSpec(
+        401,
+        "로그인이 필요합니다. 로그인 화면에서 다시 로그인해 주세요.",
+    ),
+    ErrorCode.AUTH_FORBIDDEN: ErrorSpec(
+        403,
+        "이 자료에 접근할 권한이 없습니다. 필요하시면 관리자에게 권한을 요청해 주세요.",
+    ),
+    ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
+        409,
+        # §17.2가 지정한 문구. 임의로 바꾸지 말 것.
+        "다른 사용자가 먼저 수정했습니다. 화면을 새로 고쳐 최신 내용을 확인한 뒤 다시 저장해 주세요.",
+    ),
+    ErrorCode.IDEMPOTENCY_KEY_CONFLICT: ErrorSpec(
+        409,
+        "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",
+    ),
+    ErrorCode.TRANSACTION_BOUNDARY_VIOLATION: ErrorSpec(
+        500,
+        "요청을 처리하는 중 내부 오류가 발생했습니다. 잠시 후 다시 시도하시고, 계속되면 오류 번호와 함께 관리자에게 알려 주세요.",
+    ),
+    ErrorCode.EXTERNAL_TIMEOUT: ErrorSpec(
+        504,
+        "외부 시스템 응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.",
+    ),
+    ErrorCode.EXTERNAL_UNAVAILABLE: ErrorSpec(
+        503,
+        "외부 시스템에 연결할 수 없습니다. 잠시 후 다시 시도하시고, 계속되면 관리자에게 알려 주세요.",
+    ),
+    ErrorCode.INTERNAL_UNEXPECTED: ErrorSpec(
+        500,
+        "요청을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도하시고, 계속되면 오류 번호와 함께 관리자에게 알려 주세요.",
+    ),
+}
+
+
+def spec_for(code: ErrorCode) -> ErrorSpec:
+    return ERROR_CATALOG[code]
