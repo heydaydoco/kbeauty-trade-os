@@ -13,12 +13,19 @@
 
 ## DoD 판정 (S0-1)
 - ① `docker compose up` 한 번으로 dev 기동 — **충족**(실행 확인: db·db-init·migrate·api·web 정상).
-- ② CI가 push에 실제로 돌고 실패 시 빨간불 — **CI는 충족**(6잡 green: run 30070254770), **병합 차단은 미충족**(GitHub Pro 미반영, ADR-0010).
-- ③ 헬스체크 200 — **충족**(`/healthz` 200, `/readyz` ok).
+- ② CI가 push에 실제로 돌고 실패 시 빨간불 — **CI는 충족**(6잡 green: run 30070254770·30070822909). **병합 차단은 미충족(부채)** — GitHub Pro 미결제 결정(ADR-0011), 폴백(pre-push 훅 + merge-pr.sh + 웹버튼 금지 규율)로 대체.
+- ③ 헬스체크 200 — **충족**.
 - 검증: 백엔드 **122 passed, 1 skipped** / 프런트 vitest **3 passed** / ruff·mypy 통과.
 
+## 브라우저로 확인하는 정확한 URL (헷갈리기 쉬움)
+- 헬스: **http://localhost:8000/api/v1/system/healthz** → `{"status":"ok",...}`
+- 레디니스: **http://localhost:8000/api/v1/system/readyz** → `{"status":"ok",...}`
+- 프런트: **http://localhost:5173** → "API 연결: 정상"
+- ⚠️ 프리픽스 없는 `/healthz`는 **404가 정상**(경로가 `/api/v1/system/` 하위). 404가 한국어
+  오류(`COMMON.RESOURCE.NOT_FOUND`)로 뜨는 건 에러 처리가 동작하는 증거이지 버그 아님.
+
 ## 부채 (렌즈 미통과·보류 — 조용한 누락 금지)
-1. **병합 차단 룰셋** — GitHub Pro 결제 반영 대기. 반영 후 `gh api --method POST .../rulesets --input infra/github/ruleset-main.json` + 고의 실패 PR 실증(docs/qa/K-ci-merge-block.md). §18.3·§20 K DoD가 여기 걸림.
+1. **병합 차단(DoD② 일부) — 미충족 확정**. GitHub Pro 미결제 결정(ADR-0011). 폴백으로 대체: pre-push 훅(위생 검사) + `scripts/merge-pr.sh`(CI green 후에만 병합) + 웹 Merge 버튼 금지(CLAUDE.md). 훅·스크립트는 규율이지 물리 차단이 아님. **재검토 트리거: 협업자 추가 또는 팀 배포 시 Pro/Team 재검토 → 룰셋(infra/github/ruleset-main.json) 적용**.
 2. **프런트 eslint** — TypeScript 7(네이티브 컴파일러)을 typescript-eslint가 아직 미지원(peer <6.1.0)이라 제거. Phase 1(실제 UI)에서 react-hooks 규칙과 함께 도입. tsc strict가 현 게이트.
 3. **pgAdmin(스텝 15)** — DoD 무관이라 이번 세션에서 절단. 영준이 DB 자립 조회 수단으로 S0-2나 여유 시 추가(`profiles: ["tools"]`).
 4. **담당자 라우팅** — §19 Phase 0·ADR-07이 "담당자 라우팅 기본"을 요구하나 WBS S0-2 산출물에 동작 명시 없음. WBS v1.1 갱신 후보(어느 세션에 배정할지).

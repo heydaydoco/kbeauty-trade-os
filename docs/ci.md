@@ -20,13 +20,20 @@
 초록이 되는데, `test_ci_contract.py`가 그 누락을 잡는다. **`ci-ok`는 이름을 바꾸지 말 것**
 (바꾸면 룰셋이 영원히 pending).
 
-## 병합 차단 (GitHub Pro 필요)
+## 병합 차단 — 폴백(옵션 B) 채택
 
-개인 private 리포는 Free에서 rulesets가 잠겨 있다(ADR-0010). Pro 결제 후:
-```
-gh api --method POST repos/heydaydoco/kbeauty-trade-os/rulesets --input infra/github/ruleset-main.json
-```
-상세 절차·실증은 `docs/qa/K-ci-merge-block.md`.
+개인 private 리포는 Free에서 rulesets가 잠겨 있고(ADR-0010), Pro 결제는 하지 않기로
+결정했다(ADR-0011). 그래서 **기계 차단 대신 규율**로 간다:
+
+1. **훅 활성화(1회)**: `git config core.hooksPath .githooks`
+   → 이후 push 전에 `.githooks/pre-push`가 CRLF·.env·시크릿·대소문자 충돌을 즉시 검사.
+2. **병합은 스크립트로만**: `bash scripts/merge-pr.sh <PR번호>`
+   → `gh pr checks --watch --fail-fast`로 CI green을 확인한 뒤에만 `gh pr merge --squash`.
+3. **웹 Merge 버튼 사용 금지**(CLAUDE.md 명문화). 훅·스크립트는 규율이지 물리적 차단이 아니다.
+
+> **DoD② "병합 차단"은 미충족(부채)** 상태다. 협업자 추가 또는 팀 배포 시 Pro/Team을
+> 재검토하고, 그때 `infra/github/ruleset-main.json` 룰셋을 적용한다(ADR-0011).
+> Pro 반영 시 절차·실증: `docs/qa/K-ci-merge-block.md`.
 
 ## 빨간불이 뜨면
 

@@ -3,6 +3,9 @@
 # 인덱스(커밋되는 실체)는 무조건 LF로 고정한다.
 * text=auto eol=lf
 
+# git 훅은 확장자가 없다 — CRLF면 `bad interpreter`로 실행 자체가 안 된다.
+.githooks/*  text eol=lf
+
 # 컨테이너 안에서 실행·파싱되는 것들 — LF 강제
 *.sh        text eol=lf
 *.sql       text eol=lf

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# 병합 차단 폴백(옵션 B) — push 전에 토큰체인 없이 즉시 도는 위생 검사.
+#
+# GitHub Pro가 없어 rulesets로 병합을 기계 차단할 수 없으므로(ADR-0011),
+# 가장 흔한 사고(Windows CRLF·.env 커밋·시크릿 노출)만이라도 push 전에 막는다.
+# 무거운 검사(테스트·타입·린트)는 CI가 하고, 병합은 scripts/merge-pr.sh가
+# CI green 확인 후에만 한다.
+#
+# 활성화(1회):  git config core.hooksPath .githooks
+set -euo pipefail
+
+fail=0
+note() { echo "  ✗ $1"; fail=1; }
+
+# ① 인덱스에 CRLF/혼합 줄바꿈 파일이 없어야 한다.
+if git ls-files --eol | grep -qE '^i/(crlf|mixed)'; then
+  note "CRLF로 커밋된 파일이 있습니다. .gitattributes 확인 후 'git add --renormalize .'"
+fi
+
+# ② .env 실값 파일이 추적되면 안 된다.
+if git ls-files | grep -qE '^\.env$|^\.env\.(dev|prod)$'; then
+  note ".env 실값 파일이 추적되고 있습니다(.gitignore 확인)."
+fi
+
+# ③ 대소문자만 다른 파일명(Windows 충돌).
+dups=$(git ls-files | tr 'A-Z' 'a-z' | sort | uniq -d || true)
+if [ -n "$dups" ]; then
+  note "대소문자만 다른 파일명: $dups"
+fi
+
+# ④ API 키/토큰 패턴 (테스트 픽스처·마스킹 구현은 제외).
+if git grep -nE 'sk-ant-[A-Za-z0-9]{12}|ghp_[A-Za-z0-9]{20}|gho_[A-Za-z0-9]{20}' -- . \
+     ':!*.yml' ':!backend/tests' ':!backend/app/core/logging/redaction.py' ':!.githooks' >/dev/null 2>&1; then
+  note "API 키/토큰으로 보이는 문자열이 있습니다."
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo ""
+  echo "  push를 중단했습니다. 위 항목을 고치고 다시 push하세요."
+  echo "  (정말 우회해야 하면: git push --no-verify — 권장하지 않음)"
+  exit 1
+fi
+
+echo "  ✓ pre-push 위생 검사 통과"

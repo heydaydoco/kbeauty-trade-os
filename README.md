@@ -15,7 +15,23 @@
 
 ## 개발 환경
 
-> S0-1 진행 중 — 기동 절차는 `docs/runbook/local-dev.md`에서 확정된다.
+기동 절차(비개발자용 클릭 단위)는 `docs/runbook/local-dev.md` 참고.
+
+### 브라우저로 확인하는 URL (정확히 이 주소여야 함)
+
+| 용도 | URL | 정상 응답 |
+|---|---|---|
+| 헬스(살아있음) | http://localhost:8000/api/v1/system/healthz | `{"status":"ok",...}` |
+| 레디니스(DB·마이그레이션) | http://localhost:8000/api/v1/system/readyz | `{"status":"ok",...}` |
+| 프런트 화면 | http://localhost:5173 | "API 연결: 정상" |
+
+> ⚠️ `/healthz`(프리픽스 없이)는 **404**가 정상이다 — 경로가 `/api/v1/system/` 하위에 있다.
+> 404가 한국어 오류 메시지(`COMMON.RESOURCE.NOT_FOUND`)로 뜨는 건 에러 처리가 제대로 동작하는 것이지 버그가 아니다.
+
+## 병합 규칙
+
+**웹의 Merge 버튼을 쓰지 않는다.** 병합은 항상 `bash scripts/merge-pr.sh <PR번호>`로만 —
+이 스크립트가 CI green을 확인한 뒤에만 병합한다(자세히는 `docs/ci.md`).
 
 ## 버전 고정 규칙
 
