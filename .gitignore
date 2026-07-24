@@ -1,0 +1,47 @@
+# ── 환경변수: 실값은 절대 커밋하지 않는다 (설계 §18.2 dev/prod 완전 분리) ──
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# ── compose override 사고 차단 ──
+# base+override 합성은 "prod에서 dev 설정을 빼는" 문법이 없어 §18.2를 구조적으로 깬다.
+# dev = docker-compose.yml / prod = docker-compose.prod.yml 두 파일만 존재한다.
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ── Node ──
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+
+# ── 로그·임시·산출물 ──
+.logs/
+*.log
+/files/
+/tmp/
+
+# ── OS·에디터 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json

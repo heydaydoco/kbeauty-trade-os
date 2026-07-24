@@ -1,0 +1,181 @@
+# ============================================================================
+# 개발(dev) 환경 — `docker compose up` 한 번으로 기동한다 (WBS S0-1 DoD①)
+#
+# 운영(prod)은 docker-compose.prod.yml 이 담당하며 이 파일과 완전히 분리돼 있다
+# (DESIGN.md §18.2). base+override 합성을 쓰지 않는 이유: override는 값을
+# "더하기"만 가능하고 base에 있는 dev 전용 바인드마운트를 prod에서 "빼는" 문법이
+# 없어 완전 분리가 구조적으로 불가능하다. → ADR-0003
+#
+# name: 을 지정해 컨테이너·볼륨·네트워크가 kbos-dev_* 네임스페이스로 묶인다.
+# prod는 kbos-prod_* 라서 운영 볼륨을 dev 명령이 건드릴 수 없다.
+# ============================================================================
+name: kbos-dev
+
+services:
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16.14
+    environment:
+      # dev 전용 슈퍼유저. 운영에서는 이 계정으로 앱이 붙지 않는다.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?.env 파일이 없거나 POSTGRES_PASSWORD가 비어 있다. `Copy-Item .env.example .env` 를 먼저 실행할 것}
+      POSTGRES_DB: postgres
+      TZ: UTC
+    command:
+      - postgres
+      # 시각은 UTC 저장이 원칙(§2 ADR-02). 클러스터 레벨에 박아야 이후 새로
+      # 만들어지는 DB(테스트·CI 포함)까지 따라온다.
+      - -c
+      - timezone=UTC
+      - -c
+      - log_timezone=UTC
+      # 느린 쿼리 로그 (§18.4). 300ms 초과 쿼리만 서버 로그에 남긴다.
+      - -c
+      - log_min_duration_statement=300
+    ports:
+      # 127.0.0.1 바인딩 — Docker는 자체 iptables 규칙을 쓰기 때문에 IP를 생략하면
+      # 호스트 방화벽을 우회해 DB가 네트워크에 노출된다.
+      # 호스트에 이미 PostgreSQL이 있어도 충돌하지 않도록 5433을 쓴다.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -h 127.0.0.1 필수 — 유닉스 소켓으로 확인하면 초기화 중인 임시 서버에도
+      # ready가 떠서 db-init이 너무 일찍 붙는다.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # ── DB 부트스트랩 (1회 실행 후 종료) ──────────────────────────────────────
+  # docker-entrypoint-initdb.d를 쓰지 않는 이유:
+  #   ① 데이터 볼륨이 비어 있을 때만 실행돼 SQL을 고쳐도 반영되지 않는다(로그에 흔적도 없음)
+  #   ② GitHub Actions의 services:는 checkout보다 먼저 떠서 리포 파일을 마운트할 수 없다
+  # one-shot 서비스로 만들면 매 기동마다 멱등 실행되고, CI도 같은 파일을
+  # psql -f 로 재사용해 로컬과 CI의 권한 구성이 물리적으로 같아진다.
+  db-init:
+    image: postgres:16.14
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: postgres
+      PGDATABASE: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 누락}
+      KBOS_OWNER_PASSWORD: ${KBOS_OWNER_PASSWORD:?KBOS_OWNER_PASSWORD 누락}
+      KBOS_APP_PASSWORD: ${KBOS_APP_PASSWORD:?KBOS_APP_PASSWORD 누락}
+    volumes:
+      - ./infra/postgres/init:/init:ro
+    restart: "no"
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        for f in /init/*.sql; do
+          echo "== 실행: $$f"
+          psql -q -v ON_ERROR_STOP=1 \
+               -v owner_pw="$$KBOS_OWNER_PASSWORD" \
+               -v app_pw="$$KBOS_APP_PASSWORD" \
+               -f "$$f"
+        done
+        echo "== db-init 완료 (역할·DB·권한 멱등 반영)"
+
+  # ── 마이그레이션 (1회 실행 후 종료) ───────────────────────────────────────
+  # api보다 먼저 끝나야 한다. 스키마가 옛 상태인 채로 앱이 뜨면 첫 요청에서
+  # "컬럼이 없다"로 터지는데, 그건 기동 실패보다 훨씬 늦게 발견된다.
+  # 접속은 kbos_owner — 런타임 계정에는 DDL 권한이 없다(ADR-0002).
+  migrate:
+    build:
+      context: ./backend
+      target: dev
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: dev
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 누락 — .env를 확인할 것}
+      TZ: UTC
+      DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_dev
+      MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_dev
+    volumes:
+      - ./backend:/app
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+
+  # ── 백엔드 API ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      target: dev
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: dev
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 누락 — .env를 확인할 것}
+      TZ: UTC
+      # DSN은 .env의 비밀번호를 재료로 여기서 조립한다(비밀번호 단일 출처).
+      # 런타임은 kbos_app — 테이블을 만들 수 없는 계정이다(§17.5 / ADR-0002).
+      DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_dev
+      MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_dev
+      # 테스트 전용 (pytest가 쓴다)
+      TEST_DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_test
+      TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_test
+      # 마이그레이션 왕복 검사 전용 빈 DB
+      MIGRATION_CHECK_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_migr
+      # Windows 바인드마운트는 파일 변경 이벤트(inotify)가 컨테이너로 전달되지
+      # 않는다. 폴링으로 바꿔야 --reload가 실제로 동작한다.
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./backend:/app
+      # CI 계약 메타 테스트(test_ci_contract.py)가 읽을 수 있게 read-only 마운트.
+      # 컨테이너는 ./backend만 보므로 리포 루트의 .github가 따로 필요하다.
+      - ./.github:/repo/.github:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      # 이미지에 curl이 없다. 파이썬 한 줄로 확인한다.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/healthz', timeout=3).status==200 else 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ── 프런트엔드 (Vite dev server) ──────────────────────────────────────────
+  web:
+    build:
+      context: ./frontend
+      target: dev
+    depends_on:
+      - api
+    environment:
+      TZ: UTC
+      # /api 프록시 대상. 브라우저는 상대경로만 쓰고 vite가 여기로 넘긴다.
+      VITE_API_TARGET: http://api:8000
+      # Windows 바인드마운트는 파일 변경 이벤트가 전달되지 않아 HMR이 죽는다.
+      VITE_USE_POLLING: "true"
+    volumes:
+      - ./frontend:/app
+      # named volume이 호스트 node_modules를 가린다 — Windows에서 설치된
+      # 플랫폼별 네이티브 모듈(esbuild/rollup)이 리눅스 컨테이너를 깨뜨리는 것을 막는다.
+      - web_node_modules:/app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+
+volumes:
+  pgdata:
+  web_node_modules:

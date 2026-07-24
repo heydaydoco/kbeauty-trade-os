@@ -1,0 +1,20 @@
+# 이미지에 절대 들어가면 안 되는 것
+.env
+.env.*
+!.env.example
+
+# 빌드 캐시·산출물
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# 리포 메타
+.git/
+.gitignore

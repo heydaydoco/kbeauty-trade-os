@@ -1,0 +1,39 @@
+"""에러 코드 (DESIGN.md §18.4 — 사용자용 한국어 / 로그용 코드+상세).
+
+형식: `<도메인>.<대상>.<사유>` 3세그먼트, 대문자 스네이크.
+    COMMON.RESOURCE.NOT_FOUND
+    INVENTORY.STOCK.INSUFFICIENT     ← S4 이후 이런 식으로 늘어난다
+
+이건 화면 몇 개가 아니라 **모든 엔드포인트와 클라이언트가 공유하는 와이어 계약**이다.
+배포 뒤에 바꾸면 서버 전건과 클라이언트 전건이 같이 움직인다.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class ErrorCode(StrEnum):
+    # 입력
+    VALIDATION_INVALID_FIELD = "COMMON.VALIDATION.INVALID_FIELD"
+
+    # 자원
+    RESOURCE_NOT_FOUND = "COMMON.RESOURCE.NOT_FOUND"
+
+    # 인증·인가 (S0-2에서 실제로 쓰인다)
+    AUTH_UNAUTHENTICATED = "COMMON.AUTH.UNAUTHENTICATED"
+    AUTH_FORBIDDEN = "COMMON.AUTH.FORBIDDEN"
+
+    # 동시성·멱등 (§17.2 / §17.4)
+    CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"
+    IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"
+
+    # 트랜잭션 경계 (§17.1)
+    TRANSACTION_BOUNDARY_VIOLATION = "COMMON.TRANSACTION.BOUNDARY_VIOLATION"
+
+    # 외부 연동 (§17.6)
+    EXTERNAL_TIMEOUT = "COMMON.EXTERNAL.TIMEOUT"
+    EXTERNAL_UNAVAILABLE = "COMMON.EXTERNAL.UNAVAILABLE"
+
+    # 최후
+    INTERNAL_UNEXPECTED = "COMMON.INTERNAL.UNEXPECTED"

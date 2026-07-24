@@ -1,0 +1,30 @@
+@import "tailwindcss";
+@import "./theme.css";
+
+/* ── 한국어 UI 기본 규율 (DESIGN.md §14) ──────────────────────────────────
+   break-keep(=word-break: keep-all)를 전역 기본으로. 한국어는 어절 단위로
+   줄바꿈해야 읽히고, 글자 중간에서 끊기면 가독성이 크게 떨어진다.
+   긴 영문·숫자(코드·URL)가 넘칠 때만 overflow-wrap이 받아 준다. */
+:root {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  font-family: var(--font-sans);
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* 좁은 셀·헤더·협정명·국가명에 붙인다 — 줄바꿈을 막는다. */
+.cell-nowrap {
+  white-space: nowrap;
+}
+
+/* 숫자·기준값: 가운데 정렬 + 자릿수 정렬(tabular-nums).
+   금액 우측정렬로 임의 변경 금지 — 바꾸려면 DESIGN §14 갱신 + ADR(ADR-0009). */
+.num {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
