@@ -138,6 +138,9 @@ services:
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
       - ./backend:/app
+      # CI 계약 메타 테스트(test_ci_contract.py)가 읽을 수 있게 read-only 마운트.
+      # 컨테이너는 ./backend만 보므로 리포 루트의 .github가 따로 필요하다.
+      - ./.github:/repo/.github:ro
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:

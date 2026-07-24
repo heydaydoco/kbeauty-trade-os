@@ -1,0 +1,233 @@
+name: CI
+
+# push마다 전체 테스트 + 마이그레이션 드라이런 (DESIGN.md §18.3).
+# pull_request 트리거는 쓰지 않는다 — required status check는 head SHA의 체크런을
+# 보므로 push만으로 PR 게이트가 성립하고, 중복 실행으로 무료 분을 태우지 않는다.
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 로컬 compose와 동일 리터럴 태그 (버전 드리프트 방지 — hygiene 잡이 검사)
+  POSTGRES_IMAGE: postgres:16.14
+  TZ: UTC
+
+jobs:
+  # ── 리포 위생 ──────────────────────────────────────────────────────────
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 인덱스에 CRLF 파일이 없는지
+        run: |
+          if git ls-files --eol | grep -E '^i/(crlf|mixed)'; then
+            echo "::error::CRLF로 커밋된 파일이 있습니다. .gitattributes와 git add --renormalize 확인."
+            exit 1
+          fi
+
+      - name: 대소문자만 다른 파일명 충돌이 없는지
+        run: |
+          dups=$(git ls-files | tr 'A-Z' 'a-z' | sort | uniq -d)
+          if [ -n "$dups" ]; then
+            echo "::error::대소문자만 다른 파일명은 Windows에서 충돌합니다: $dups"
+            exit 1
+          fi
+
+      - name: .env 실값이 커밋되지 않았는지
+        run: |
+          if git ls-files | grep -E '^\.env$|^\.env\.(dev|prod)$'; then
+            echo "::error::.env 실값 파일이 추적되고 있습니다."
+            exit 1
+          fi
+
+      - name: 시크릿 패턴이 섞이지 않았는지 (private 리포는 무료 시크릿 스캔이 없다)
+        run: |
+          # 마스킹 테스트·구현에는 가짜 키 패턴이 의도적으로 들어 있으므로 제외한다.
+          if git grep -nE 'sk-ant-[A-Za-z0-9]{12}|ghp_[A-Za-z0-9]{20}|gho_[A-Za-z0-9]{20}' -- . \
+               ':!*.yml' ':!backend/tests' ':!backend/app/core/logging/redaction.py'; then
+            echo "::error::API 키/토큰으로 보이는 문자열이 있습니다."
+            exit 1
+          fi
+
+      - name: PostgreSQL 태그가 compose와 CI에서 일치하는지
+        run: |
+          compose_tag=$(grep -hoE 'postgres:16\.[0-9]+' docker-compose.yml docker-compose.prod.yml | sort -u)
+          count=$(echo "$compose_tag" | wc -l)
+          if [ "$count" -ne 1 ] || [ "postgres:16.14" != "$compose_tag" ]; then
+            echo "::error::postgres 태그 불일치. compose=$compose_tag / CI=postgres:16.14"
+            exit 1
+          fi
+
+      - name: Tailwind v4 규율 (설정 파일이 없어야 한다)
+        run: |
+          if ls frontend/tailwind.config.* 2>/dev/null; then
+            echo "::error::Tailwind v4는 CSS-first다. tailwind.config.*가 있으면 안 된다."
+            exit 1
+          fi
+
+  # ── 백엔드 테스트 + 마이그레이션 드라이런 ────────────────────────────────
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.14
+        env:
+          POSTGRES_PASSWORD: ci_postgres_pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # 로컬과 같은 역할·DB 구조. 비밀번호만 CI 전용.
+      KBOS_OWNER_PASSWORD: ci_owner_pw
+      KBOS_APP_PASSWORD: ci_app_pw
+      APP_ENV: test
+      SECRET_KEY: ci_test_secret_key_0123456789abcdefgh
+      DATABASE_URL: postgresql+psycopg://kbos_app:ci_app_pw@localhost:5432/kbos_dev
+      MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_dev
+      TEST_DATABASE_URL: postgresql+psycopg://kbos_app:ci_app_pw@localhost:5432/kbos_test
+      TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_test
+      MIGRATION_CHECK_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_migr
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: DB 부트스트랩 (로컬과 동일한 init SQL을 psql로 실행)
+        env:
+          PGPASSWORD: ci_postgres_pw
+        run: |
+          for f in infra/postgres/init/*.sql; do
+            echo "== $f"
+            psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+                 -v owner_pw="$KBOS_OWNER_PASSWORD" \
+                 -v app_pw="$KBOS_APP_PASSWORD" \
+                 -f "$f"
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 의존성 설치
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: 린트 (ruff)
+        working-directory: backend
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: 타입 (mypy)
+        working-directory: backend
+        run: mypy app
+
+      - name: 마이그레이션 드라이런 4종 (kbos_migr — pytest DB와 분리)
+        working-directory: backend
+        env:
+          ALEMBIC_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_migr
+        run: |
+          heads=$(alembic heads | grep -c '(head)')
+          [ "$heads" -eq 1 ] || { echo "::error::alembic head가 $heads개 (1개여야 함)"; exit 1; }
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+          alembic check
+
+      - name: 테스트 (커버리지 측정만 — 임계 게이트는 Phase 1 이후)
+        working-directory: backend
+        run: pytest -ra --cov=app --cov-report=xml --cov-report=term-missing
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          retention-days: 7
+
+  # ── 프런트엔드 ─────────────────────────────────────────────────────────
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: 타입체크
+        run: npm run typecheck
+      - name: 린트
+        run: npm run lint
+      - name: 테스트
+        run: npm run test -- --run
+      - name: 빌드
+        run: npm run build
+
+  # ── compose 문법 (dev·prod 둘 다) ────────────────────────────────────────
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+      - name: dev·prod compose 렌더 검증
+        run: |
+          cp .env.example .env
+          docker compose config -q
+          docker compose -f docker-compose.prod.yml --env-file .env.prod.example config -q
+          rm -f .env
+
+  # ── 마이그레이션 리비전 개수 가드 (S0-1 범위 침범 방지) ──────────────────
+  scope-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: S0-1은 baseline 리비전 1개만 (S0-2 첫 작업이 이 가드를 제거한다)
+        run: |
+          count=$(find backend/migrations/versions -name '*.py' | wc -l)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::마이그레이션 리비전이 $count개. S0-1은 baseline 1개만 허용 — S0-2 범위 침범?"
+            echo "S0-2를 시작할 때 이 잡을 ci.yml에서 제거하세요."
+            exit 1
+          fi
+
+  # ── 단일 게이트 ────────────────────────────────────────────────────────
+  # 룰셋의 required check는 이 하나만 지정한다. 잡을 추가/이름변경해도
+  # 룰셋을 건드릴 필요가 없다. (test_ci_contract.py가 needs 누락을 검사)
+  ci-ok:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    if: always()
+    needs: [hygiene, backend, frontend, compose, scope-guard]
+    steps:
+      - name: 모든 잡이 성공했는지
+        run: |
+          results="${{ needs.hygiene.result }} ${{ needs.backend.result }} ${{ needs.frontend.result }} ${{ needs.compose.result }} ${{ needs.scope-guard.result }}"
+          echo "결과: $results"
+          for r in $results; do
+            if [ "$r" != "success" ]; then
+              echo "::error::선행 잡 중 실패가 있습니다: $results"
+              exit 1
+            fi
+          done
+          echo "모든 잡 통과."
