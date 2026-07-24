@@ -1,10 +1,10 @@
 # PROGRESS
 
 ## 완료
-- **S0-1 (리포 골격·인프라·CI)** — DoD ①③ 충족, ② 부분(아래 부채 참고). 브랜치 `s0-1-skeleton`.
+- **S0-1 (리포 골격·인프라·CI) — 종결.** DoD ①③ 충족, ②는 CI 충족·병합차단은 폴백(부채). PR #1이 `main`에 병합됨(`74aa173`). CI green 확인 후 `merge-pr.sh`로 병합.
 
 ## 현재
-- S0-1 마무리 단계. 백엔드·프런트·CI·문서 완료. **미결 1건**: 병합 차단 룰셋(GitHub Pro 반영 대기).
+- S0-1 종결. 다음은 S0-2.
 
 ## 다음
 - **S0-2 (공통 테이블·인증·채번·수직 슬라이스)**. 첫 작업 2가지 잊지 말 것:
@@ -38,7 +38,9 @@
 ## 다음 세션 첫 명령
 ```
 cd C:\Users\PC\orca\kbeauty-trade-os
-git checkout s0-1-skeleton   # (S0-1 PR 병합 후면 main)
+git checkout main
+git pull origin main
+git switch -c s0-2-<주제>      # main 직접 커밋 금지, 브랜치→PR→merge-pr.sh
 Copy-Item .env.example .env
 docker compose up -d --build
 docker compose run --rm api pytest -q
