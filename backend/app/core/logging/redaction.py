@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from typing import Any
 
 REPLACEMENT = "***"
@@ -83,7 +84,9 @@ SENSITIVE_SUFFIXES: tuple[str, ...] = (
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 # 접속 문자열의 비밀번호만 정확히 도려낸다(호스트·DB명은 남겨야 진단이 된다).
-_DSN_PASSWORD = re.compile(r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]*://[^:/@\s]+:)(?P<pw>[^@\s]+)(?P<tail>@)")
+_DSN_PASSWORD = re.compile(
+    r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]*://[^:/@\s]+:)(?P<pw>[^@\s]+)(?P<tail>@)"
+)
 
 _VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"),
@@ -99,11 +102,10 @@ _known_secrets: set[str] = set()
 MIN_REGISTERED_SECRET_LENGTH = 8
 
 
-def register_secret_values(values: object) -> None:
+def register_secret_values(values: str | Iterable[object]) -> None:
     """설정에서 읽은 실제 비밀 값을 마스킹 대상으로 등록한다."""
-    if isinstance(values, str):
-        values = [values]
-    for value in values:  # type: ignore[union-attr]
+    items: Iterable[object] = [values] if isinstance(values, str) else values
+    for value in items:
         text = str(value)
         if len(text) >= MIN_REGISTERED_SECRET_LENGTH:
             _known_secrets.add(text)

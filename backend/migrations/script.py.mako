@@ -1,7 +1,7 @@
 """${message}
 
 리비전 ID: ${up_revision}
-직전 리비전: ${down_revision | comma,n}
+직전 리비전: ${(down_revision | comma,n) or "(없음 - 최초 리비전)"}
 생성 시각(UTC): ${create_date}
 
 체크리스트 (autogenerate 결과는 초안이다 — 사람이 전건 확인한다):

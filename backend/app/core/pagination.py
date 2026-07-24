@@ -8,15 +8,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Generic, TypeVar
+from typing import Annotated
 
 from fastapi import Query
 from pydantic import BaseModel, Field
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
-
-T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +23,10 @@ class PageParams:
 
     page: Annotated[int, Query(ge=1, description="1부터 시작")] = 1
     size: Annotated[
-        int, Query(ge=1, le=MAX_PAGE_SIZE, description=f"기본 {DEFAULT_PAGE_SIZE}, 최대 {MAX_PAGE_SIZE}")
+        int,
+        Query(
+            ge=1, le=MAX_PAGE_SIZE, description=f"기본 {DEFAULT_PAGE_SIZE}, 최대 {MAX_PAGE_SIZE}"
+        ),
     ] = DEFAULT_PAGE_SIZE
 
     @property
@@ -37,7 +38,7 @@ class PageParams:
         return self.size
 
 
-class Page(BaseModel, Generic[T]):
+class Page[T](BaseModel):
     """목록 응답 봉투."""
 
     items: list[T]

@@ -115,7 +115,11 @@ class Settings(BaseSettings):
             )
 
         if any(
-            (self.test_database_url, self.test_migration_database_url, self.migration_check_database_url)
+            (
+                self.test_database_url,
+                self.test_migration_database_url,
+                self.migration_check_database_url,
+            )
         ):
             raise ValueError(
                 "운영 환경에 테스트용 DB 접속정보(TEST_*/MIGRATION_CHECK_*)가 설정돼 있습니다. "

@@ -9,6 +9,8 @@ DDL 권한이 없다(§17.5 / ADR-0002).
 
 from __future__ import annotations
 
+import logging
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -22,15 +24,19 @@ from app.registry import Base
 
 config = context.config
 
-if config.config_file_name is not None:
+# 이미 로깅이 설정돼 있으면(앱·pytest 안에서 호출된 경우) 건드리지 않는다.
+# fileConfig는 기존 로거를 비활성화해서 마스킹 프로세서까지 떼어 낸다.
+if config.config_file_name is not None and not logging.getLogger().handlers:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    """-x url=... 이 있으면 그것, 없으면 설정의 마이그레이션 DSN."""
-    override = context.get_x_argument(as_dictionary=True).get("url")
+    """`-x url=...` → 환경변수 ALEMBIC_DATABASE_URL → 설정의 마이그레이션 DSN 순."""
+    override = context.get_x_argument(as_dictionary=True).get("url") or os.environ.get(
+        "ALEMBIC_DATABASE_URL"
+    )
     if override:
         return override
     if settings.app_env == "test" and settings.test_migration_database_url is not None:

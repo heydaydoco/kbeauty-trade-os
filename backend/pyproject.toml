@@ -1,6 +1,34 @@
 # 이 파일은 도구 설정 전용이다. 의존성은 requirements.txt / requirements-dev.txt.
 # (앱을 패키지로 설치하지 않고 PYTHONPATH=/app 으로 실행하므로 빌드 백엔드가 필요 없다)
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config --durations=10"
+xfail_strict = true
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+# ★ 모든 테스트는 DESIGN.md §20의 그룹 A~K 중 하나에 속해야 한다.
+#   디렉터리가 아니라 마커로 나누는 이유: 한 파일이 여러 그룹에 걸치는 경우가
+#   흔하고(예: 헬스 실패가 H이면서 K), 디렉터리는 하나만 고를 수 있다.
+#   마커 없는 테스트는 수집 단계에서 실패한다(conftest.py).
+markers = [
+  "group_a: 전표·정합",
+  "group_b: 서류",
+  "group_c: 인증·원산지",
+  "group_d: 재고·채널",
+  "group_e: 비용·소싱",
+  "group_f: 회계·연동",
+  "group_g: AI·보안",
+  "group_h: 운영",
+  "group_i: 자동화·통합",
+  "group_j: 안전 계약",
+  "group_k: 보안·품질",
+  "golden: kbeauty-golden-cases-v1.md의 케이스를 그대로 옮긴 것",
+  "concurrency: 실제 동시 실행이 필요하다 — 커밋 필수, 롤백 픽스처 사용 금지",
+  "slow: 느린 테스트",
+  "meta: 테스트·설정 자체를 검사하는 테스트",
+]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100
@@ -21,6 +49,8 @@ select = [
 ignore = [
   "E501",   # 줄 길이는 formatter가 처리
   "B008",   # FastAPI Depends(...) 기본값 패턴
+  # 한국어 주석·문자열에 ×·… 등이 자연스럽게 쓰인다. 라틴 유사문자 오탐 규칙 끔.
+  "RUF001", "RUF002", "RUF003",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -41,7 +71,5 @@ no_implicit_optional = true
 strict_equality = true
 plugins = []
 exclude = ["migrations/versions/"]
-
-[[tool.mypy.overrides]]
-module = "tests.*"
-disallow_untyped_defs = false
+# 앱 코드만 타입을 강제한다. 테스트·마이그레이션은 CI에서 별도로 다룬다.
+files = ["app"]

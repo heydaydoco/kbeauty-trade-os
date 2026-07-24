@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import BigInteger, CHAR
+from sqlalchemy import CHAR, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
 
 #: 통화별 소수 자릿수. 새 통화를 쓰기 전에 반드시 여기에 추가한다.

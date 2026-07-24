@@ -30,9 +30,7 @@ def create_app() -> FastAPI:
     #   접근 로그가 request_id를 찍으려면 RequestContext가 더 바깥이어야 하므로
     #   AccessLog를 먼저 추가한다.
     app.add_middleware(AccessLogMiddleware)
-    app.add_middleware(
-        RequestContextMiddleware, trust_incoming=settings.trust_incoming_request_id
-    )
+    app.add_middleware(RequestContextMiddleware, trust_incoming=settings.trust_incoming_request_id)
 
     register_exception_handlers(app)
     app.include_router(api_router)

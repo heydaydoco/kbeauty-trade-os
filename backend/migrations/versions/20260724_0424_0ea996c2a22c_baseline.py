@@ -1,7 +1,7 @@
 """baseline
 
 리비전 ID: 0ea996c2a22c
-직전 리비전: 
+직전 리비전: (없음 - 최초 리비전)
 생성 시각(UTC): 2026-07-24 04:24:42.177703+00:00
 
 체크리스트 (autogenerate 결과는 초안이다 — 사람이 전건 확인한다):
@@ -16,11 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from alembic import op
-import sqlalchemy as sa
 
-
-revision: str = '0ea996c2a22c'
+revision: str = "0ea996c2a22c"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

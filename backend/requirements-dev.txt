@@ -2,7 +2,8 @@
 
 pytest==9.1.1
 pytest-cov==7.1.0
-httpx==0.28.1
+# starlette 1.3부터 TestClient가 httpx2를 쓴다 (httpx 1세대는 경고 후 제거 예정).
+httpx2==2.9.0
 ruff==0.16.0
 mypy==2.3.0
 PyYAML==6.0.3

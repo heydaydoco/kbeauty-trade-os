@@ -34,6 +34,11 @@ class RequestContextMiddleware:
         token = request_id_var.set(request_id)
         start_query_counter()
 
+        # scope state에도 심는다 — 500 응답을 만드는 Starlette ServerErrorMiddleware는
+        # 이 미들웨어보다 바깥이라 그때는 contextvar가 이미 reset돼 있다. 핸들러는
+        # request.state.request_id로 항상 읽을 수 있어야 한다.
+        scope.setdefault("state", {})["request_id"] = request_id
+
         async def send_with_header(message: Message) -> None:
             if message["type"] == "http.response.start":
                 MutableHeaders(scope=message)[REQUEST_ID_HEADER] = request_id
@@ -48,9 +53,10 @@ class RequestContextMiddleware:
         if self.trust_incoming:
             # 신뢰할 수 있는 프록시 뒤에서만 켠다. 그렇지 않으면 외부가
             # 임의의 값을 보내 로그를 오염시킬 수 있다.
-            for key, value in scope.get("headers", []):
+            headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
+            for key, value in headers:
                 if key.decode("latin-1").lower() == REQUEST_ID_HEADER.lower():
-                    candidate = value.decode("latin-1").strip()[:64]
+                    candidate: str = value.decode("latin-1").strip()[:64]
                     if candidate:
                         return candidate
         return token_hex(_ID_BYTES)

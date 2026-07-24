@@ -70,7 +70,7 @@ def _check_migration() -> tuple[bool, dict[str, str]]:
 
 def readiness() -> tuple[bool, dict[str, Any]]:
     db_ok, db_detail = _check_database()
-    migration_ok, migration_detail = (_check_migration() if db_ok else (False, {"status": "unknown"}))
+    migration_ok, migration_detail = _check_migration() if db_ok else (False, {"status": "unknown"})
     ready = db_ok and migration_ok
     return ready, {
         "status": STATUS_OK if ready else STATUS_ERROR,

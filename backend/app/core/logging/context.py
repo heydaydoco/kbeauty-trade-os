@@ -42,7 +42,9 @@ def bind_request(request_id: str) -> None:
     request_id_var.set(request_id)
 
 
-def add_request_context(logger: Any, method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+def add_request_context(
+    logger: Any, method_name: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
     """structlog 프로세서 — 요청 식별자를 모든 로그 줄에 붙인다."""
     request_id = request_id_var.get()
     if request_id is not None:

@@ -48,9 +48,7 @@ class GuardedSession(Session):
             )
 
 
-def _select_url(
-    *, runtime: bool
-) -> str:
+def _select_url(*, runtime: bool) -> str:
     """실행 환경에 맞는 접속 문자열을 고른다."""
     if settings.app_env == "test":
         url = settings.test_database_url if runtime else settings.test_migration_database_url

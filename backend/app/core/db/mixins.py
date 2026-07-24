@@ -71,5 +71,5 @@ class VersionMixin:
     )
 
     @declared_attr.directive
-    def __mapper_args__(cls) -> dict[str, object]:  # noqa: N805
+    def __mapper_args__(cls) -> dict[str, object]:
         return {"version_id_col": cls.__dict__["version"]}

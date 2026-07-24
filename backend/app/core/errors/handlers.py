@@ -35,8 +35,18 @@ _STATUS_TO_CODE: dict[int, ErrorCode] = {
 }
 
 
+def _request_id(request: Request) -> str | None:
+    # scope state가 1순위 — 500 핸들러는 contextvar 스코프 밖에서 돈다.
+    state_id = getattr(request.state, "request_id", None)
+    return state_id or request_id_var.get()
+
+
 def _envelope(
-    code: ErrorCode, message: str, detail: dict[str, Any], status_code: int
+    code: ErrorCode,
+    message: str,
+    detail: dict[str, Any],
+    status_code: int,
+    request: Request,
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -45,7 +55,7 @@ def _envelope(
                 "code": str(code),
                 "message": message,
                 "detail": detail,
-                "request_id": request_id_var.get(),
+                "request_id": _request_id(request),
             }
         },
     )
@@ -58,7 +68,7 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:
         log.error("app_error", exc_info=exc)
     else:
         log.info("app_error")
-    return _envelope(exc.code, exc.message, exc.detail, exc.status_code)
+    return _envelope(exc.code, exc.message, exc.detail, exc.status_code, request)
 
 
 async def handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
@@ -76,7 +86,11 @@ async def handle_validation_error(request: Request, exc: Exception) -> JSONRespo
     spec = spec_for(ErrorCode.VALIDATION_INVALID_FIELD)
     logger.info("validation_error", path=request.url.path, field_count=len(fields))
     return _envelope(
-        ErrorCode.VALIDATION_INVALID_FIELD, spec.message_ko, {"항목": fields}, spec.status_code
+        ErrorCode.VALIDATION_INVALID_FIELD,
+        spec.message_ko,
+        {"항목": fields},
+        spec.status_code,
+        request,
     )
 
 
@@ -84,9 +98,9 @@ async def handle_http_exception(request: Request, exc: Exception) -> JSONRespons
     assert isinstance(exc, StarletteHTTPException)
     code = _STATUS_TO_CODE.get(exc.status_code, ErrorCode.INTERNAL_UNEXPECTED)
     spec = spec_for(code)
-    message = spec.message_ko if exc.status_code in _STATUS_TO_CODE else spec.message_ko
+    message = spec.message_ko
     logger.info("http_exception", path=request.url.path, status_code=exc.status_code)
-    return _envelope(code, message, {}, exc.status_code)
+    return _envelope(code, message, {}, exc.status_code, request)
 
 
 async def handle_stale_data(request: Request, exc: Exception) -> JSONResponse:
@@ -94,7 +108,7 @@ async def handle_stale_data(request: Request, exc: Exception) -> JSONResponse:
     spec = spec_for(ErrorCode.CONCURRENCY_VERSION_CONFLICT)
     logger.info("version_conflict", path=request.url.path)
     return _envelope(
-        ErrorCode.CONCURRENCY_VERSION_CONFLICT, spec.message_ko, {}, spec.status_code
+        ErrorCode.CONCURRENCY_VERSION_CONFLICT, spec.message_ko, {}, spec.status_code, request
     )
 
 
@@ -102,7 +116,7 @@ async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
     """마지막 그물 — 스택트레이스는 로그에만, 응답에는 오류 번호만."""
     spec = spec_for(ErrorCode.INTERNAL_UNEXPECTED)
     logger.error("unhandled_exception", path=request.url.path, exc_info=exc)
-    return _envelope(ErrorCode.INTERNAL_UNEXPECTED, spec.message_ko, {}, spec.status_code)
+    return _envelope(ErrorCode.INTERNAL_UNEXPECTED, spec.message_ko, {}, spec.status_code, request)
 
 
 def register_exception_handlers(app: FastAPI) -> None:

@@ -48,9 +48,9 @@ class UnitOfWork:
 def unit_of_work() -> Iterator[UnitOfWork]:
     """업무 동작 하나를 감싸는 트랜잭션 경계.
 
-        with unit_of_work() as uow:
-            uow.session.add(...)
-        # 여기서 커밋됨 (예외가 나면 전체 롤백)
+    with unit_of_work() as uow:
+        uow.session.add(...)
+    # 여기서 커밋됨 (예외가 나면 전체 롤백)
     """
     outer = _current_uow.get()
     if outer is not None:

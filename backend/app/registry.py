@@ -9,6 +9,6 @@ from __future__ import annotations
 from app.core.db.base import Base
 
 # S0-2부터 여기에 모델 모듈 임포트를 추가한다. 예:
-#   from app.modules.identity import models as identity_models  # noqa: F401
+#   from app.modules.identity import models as identity_models
 
 __all__ = ["Base"]
