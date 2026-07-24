@@ -7,7 +7,6 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest"
   },
@@ -18,7 +17,6 @@
     "react-router": "8.3.0"
   },
   "devDependencies": {
-    "@eslint/js": "10.0.1",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/jest-dom": "7.0.0",
     "@testing-library/react": "16.3.2",
@@ -27,8 +25,6 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.4",
     "@vitest/coverage-v8": "4.1.10",
-    "eslint": "10.7.0",
-    "globals": "17.7.0",
     "jsdom": "29.1.1",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",

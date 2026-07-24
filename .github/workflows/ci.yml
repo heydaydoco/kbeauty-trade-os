@@ -176,8 +176,8 @@ jobs:
       - run: npm ci
       - name: 타입체크
         run: npm run typecheck
-      - name: 린트
-        run: npm run lint
+      # eslint는 Phase 1로 이월 — typescript-eslint가 TypeScript 7(네이티브 컴파일러)을
+      # 아직 지원하지 않는다(peer <6.1.0). tsc strict가 골격 단계의 게이트다.
       - name: 테스트
         run: npm run test -- --run
       - name: 빌드
