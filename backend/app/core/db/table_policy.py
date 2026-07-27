@@ -44,6 +44,7 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "external_refs",
         "custom_field_defs",
         "custom_field_values",
+        "skus",  # 마스터 — 상태 전환·정보 수정(UPDATE)
     }
 )
 
