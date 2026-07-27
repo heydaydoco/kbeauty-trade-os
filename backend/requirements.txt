@@ -8,3 +8,5 @@ psycopg[binary]==3.3.4
 alembic==1.18.5
 pydantic-settings==2.14.2
 structlog==26.1.0
+# 비밀번호 해시 — §18.1이 argon2/bcrypt를 지정한다. argon2id가 기본값이다.
+argon2-cffi==23.1.0
