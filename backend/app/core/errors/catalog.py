@@ -26,6 +26,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "입력값이 올바르지 않습니다. 표시된 항목을 확인한 뒤 다시 시도해 주세요.",
     ),
+    ErrorCode.REQUEST_MALFORMED: ErrorSpec(
+        400,
+        "요청 내용을 읽지 못했습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.RESOURCE_NOT_FOUND: ErrorSpec(
         404,
         "요청하신 자료를 찾을 수 없습니다. 이미 삭제되었거나 주소가 잘못되었을 수 있으니 목록에서 다시 선택해 주세요.",

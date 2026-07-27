@@ -176,6 +176,33 @@ services:
     ports:
       - "127.0.0.1:5173:5173"
 
+  # ── pgAdmin (선택 — DB 자립 조회용) ───────────────────────────────────────
+  # ★ profiles로 감춰 둔다. `docker compose up`에는 뜨지 않고,
+  #   필요할 때만 `docker compose --profile tools up -d pgadmin`으로 켠다.
+  #   상시 기동하면 dev 기동 시간과 메모리만 먹는다.
+  #
+  # ★ 이 서비스는 **dev 전용**이다. docker-compose.prod.yml에 옮기지 않는다 —
+  #   운영 DB에 웹 콘솔을 붙이는 것은 §18.1의 통제(역할·소유권·audit)를 통째로
+  #   우회하는 경로가 된다.
+  pgadmin:
+    profiles: ["tools"]
+    image: dpage/pgadmin4:9.9
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-dev@localhost}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-devonly}
+      # 개인 개발 환경이라 로그인 화면을 한 번 더 두지 않는다.
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      TZ: UTC
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      # 127.0.0.1 바인딩 — 같은 네트워크의 다른 기기에서 접근할 수 없다.
+      - "127.0.0.1:5050:80"
+
 volumes:
   pgdata:
   web_node_modules:
+  pgadmin_data:

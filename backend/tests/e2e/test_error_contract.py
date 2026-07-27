@@ -82,3 +82,24 @@ def test_message_is_korean() -> None:
     """사용자용 메시지는 한국어다"""
     error = client.get("/api/v1/_probe/boom").json()["error"]
     assert any("가" <= ch <= "힣" for ch in error["message"])
+
+
+def test_malformed_body_reports_a_client_error_not_an_internal_one() -> None:
+    """읽을 수 없는 본문은 400 + REQUEST.MALFORMED다 (상태와 코드가 어긋나지 않는다)
+
+    ★ 이 케이스가 없어서, 클라이언트가 보낸 깨진 본문이 "서버 내부 오류"로
+      보고됐다. 상태는 400인데 코드는 INTERNAL이라 어느 쪽 잘못인지 알 수 없었고,
+      실제로 원인 추적을 크게 낭비시켰다.
+    """
+    response = client.post(
+        "/api/v1/auth/login",
+        content=b'{"email": "\xff\xfe not utf-8"}',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()["error"]
+    assert body["code"] == "COMMON.REQUEST.MALFORMED"
+    assert body["request_id"]
+    # 사용자에게는 조치가 담긴 한국어 문구가 간다(§18.4).
+    assert "다시 시도" in body["message"]

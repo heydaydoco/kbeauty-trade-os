@@ -17,6 +17,9 @@ class ErrorCode(StrEnum):
     # 입력
     VALIDATION_INVALID_FIELD = "COMMON.VALIDATION.INVALID_FIELD"
 
+    #: 본문이 JSON이 아니거나 인코딩이 깨진 등 요청 자체가 읽히지 않는 경우.
+    REQUEST_MALFORMED = "COMMON.REQUEST.MALFORMED"
+
     # 자원
     RESOURCE_NOT_FOUND = "COMMON.RESOURCE.NOT_FOUND"
 
