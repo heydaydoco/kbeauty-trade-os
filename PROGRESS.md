@@ -36,6 +36,8 @@
   2. 테스트 격리 픽스처가 매 테스트 후 전 테이블을 TRUNCATE → (a) 마이그레이션 시드(`roles`)까지 지웠고, **한 번 지워진 DB는 `upgrade head`가 no-op이라 영구히 시드 없는 상태로 고정**된다(인가 코드가 잘못된 것처럼 보이는 실패), (b) 테스트당 ~2.8초를 태웠다(전체 235s).
      → 수정: `PRESERVED_TABLES`에 시드 테이블 추가 + `_prepare_schema`가 매 세션 `downgrade base → upgrade head`로 바닥부터 재구축 + **더럽혀진 테이블만** TRUNCATE. 전체 235s → 117s.
      → **규칙: 마이그레이션이 시드를 넣는 테이블은 `tests/conftest.py`의 `PRESERVED_TABLES`에 반드시 추가한다**(S2-1 요건 템플릿, S3-4 FTA 협정 시드 등이 해당).
+  3. **(위 수정이 만든 후속 결함 — CI가 잡았다)** 정리 대상 테이블 목록을 세션 스코프로 캐시하면서 `_prepare_schema`에 의존을 걸지 않아, 목록이 **스키마 생성보다 먼저** 평가되면 빈 채로 고정되고 이후 모든 정리가 조용히 no-op이 됐다. 테이블이 남아 있는 개발 PC에서는 통과하고 **DB가 새것인 CI에서만** 23건이 무너진다.
+     → **규칙: 픽스처 순서를 autouse에 기대지 말고 인자로 명시한다.** 더불어 "빈 목록"은 정상이 아니라 오류로 취급한다(`pytest.UsageError`). 검증은 로컬에서 `kbos_test` 스키마를 통째로 드롭해 CI 조건을 재현한 뒤 181 passed로 확인했다.
 - **프런트 HTTP 클라이언트는 `httpx`가 아니라 `httpx2`** — starlette 1.3부터 TestClient가 httpx2를 쓴다. 테스트에서 `from httpx import ...`는 ModuleNotFoundError다.
 - **FastAPI 신버전은 `include_router`를 `_IncludedRouter`로 감싼다** — `app.routes`에 라우트가 평탄화되지 않아 구조 순회로 라우트 목록을 만들 수 없다. 인증 커버리지 검사는 **OpenAPI 스키마 + 실제 요청**으로 구현했다(버전 무관).
 - **역할 5종 시드는 마이그레이션에 하드코딩**했다. `ROLE_SEED` 상수를 임포트하면 상수를 고치는 순간 과거 마이그레이션의 결과가 바뀐다 — 마이그레이션은 실행된 역사다.

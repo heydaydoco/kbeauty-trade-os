@@ -129,11 +129,21 @@ def _prepare_schema() -> None:
 
 
 @pytest.fixture(scope="session")
-def _truncatable_tables() -> list[str]:
+def _truncatable_tables(_prepare_schema: None) -> list[str]:
     """정리 대상 테이블 목록. 스키마는 세션 중 변하지 않으므로 한 번만 읽는다.
 
     목록을 하드코딩하지 않고 pg_tables에서 읽는다 — 새 테이블이 생겼는데
     목록에 추가하지 않아 데이터가 남는 사고를 없앤다.
+
+    ★ `_prepare_schema`를 인자로 받는 것이 이 픽스처의 핵심이다.
+      autouse라는 이유로 스키마 생성이 먼저 돌 것이라 가정하면 안 된다 —
+      pytest는 같은 스코프에서 autouse를 먼저 두지만, 이 픽스처가 스키마보다
+      앞서 평가되면 목록이 **빈 채로 고정**되고 이후 모든 정리가 조용히
+      no-op이 된다. 그러면 테이블이 이미 남아 있는 개발 PC에서는 통과하고
+      DB가 새것인 CI에서만 무너진다(실제로 그렇게 터졌다).
+
+    ★ 빈 목록을 그대로 돌려주지 않는다. 빈 목록은 "지울 게 없다"가 아니라
+      "스키마를 못 봤다"는 신호다.
     """
     with owner_engine.connect() as connection:
         names = (
@@ -141,7 +151,14 @@ def _truncatable_tables() -> list[str]:
             .scalars()
             .all()
         )
-    return [name for name in names if name not in PRESERVED_TABLES]
+    targets = [name for name in names if name not in PRESERVED_TABLES]
+    if not targets:
+        raise pytest.UsageError(
+            "정리 대상 테이블이 하나도 없습니다. 마이그레이션이 적용되기 전에 목록을 "
+            "읽었을 가능성이 높습니다 — 이 상태로는 테스트 간 데이터가 그대로 새어 "
+            "다음 테스트를 오염시킵니다."
+        )
+    return targets
 
 
 @pytest.fixture(autouse=True)
