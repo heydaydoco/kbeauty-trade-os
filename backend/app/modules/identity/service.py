@@ -14,12 +14,12 @@ from datetime import datetime, timedelta
 from hashlib import sha256
 from secrets import token_urlsafe
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
-from app.core.errors.exceptions import AppError
+from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.time import utcnow
 from app.modules.audit import service as audit
 from app.modules.audit.models import AuditAction
@@ -271,3 +271,167 @@ def _purge_expired_sessions(session: Session, user_id: int, now: datetime) -> No
             UserSession.expires_at <= now,
         )
     )
+
+
+# ── 사용자 조회·역할 부여 (§2 권한·통제 / §18.1 인가·audit) ─────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class UserView:
+    """읽기 전용 사용자 표현. ORM 객체를 트랜잭션 밖으로 내보내지 않는다."""
+
+    id: int
+    email: str
+    display_name: str
+    is_active: bool
+    roles: frozenset[RoleCode]
+
+
+def _roles_by_user(session: Session, user_ids: list[int]) -> dict[int, set[RoleCode]]:
+    """페이지 전체의 역할을 한 번에 읽는다.
+
+    사용자마다 역할을 따로 조회하면 목록 50건에 쿼리 51번이다(§22 렌즈 7 N+1).
+    """
+    if not user_ids:
+        return {}
+    rows = session.execute(
+        select(UserRole.user_id, Role.code)
+        .join(Role, Role.id == UserRole.role_id)
+        .where(
+            UserRole.user_id.in_(user_ids),
+            UserRole.deleted_at.is_(None),
+            Role.deleted_at.is_(None),
+        )
+    ).all()
+    grouped: dict[int, set[RoleCode]] = {user_id: set() for user_id in user_ids}
+    for user_id, code in rows:
+        grouped[user_id].add(RoleCode(code))
+    return grouped
+
+
+def list_users(*, offset: int, limit: int) -> tuple[list[UserView], int]:
+    """살아 있는 사용자 목록과 전체 건수. 페이지네이션은 호출부가 강제한다(§18.4)."""
+    with unit_of_work() as uow:
+        session = uow.session
+        total = session.execute(
+            select(func.count()).select_from(User).where(User.deleted_at.is_(None))
+        ).scalar_one()
+        users = list(
+            session.execute(
+                select(User)
+                .where(User.deleted_at.is_(None))
+                .order_by(User.id)
+                .offset(offset)
+                .limit(limit)
+            ).scalars()
+        )
+        roles = _roles_by_user(session, [user.id for user in users])
+        return [
+            UserView(
+                id=user.id,
+                email=user.email,
+                display_name=user.display_name,
+                is_active=user.is_active,
+                roles=frozenset(roles.get(user.id, set())),
+            )
+            for user in users
+        ], total
+
+
+def get_user(user_id: int) -> UserView | None:
+    with unit_of_work() as uow:
+        session = uow.session
+        user = session.execute(
+            select(User).where(User.id == user_id, User.deleted_at.is_(None))
+        ).scalar_one_or_none()
+        if user is None:
+            return None
+        return UserView(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            is_active=user.is_active,
+            roles=_load_roles(session, user.id),
+        )
+
+
+def grant_role(*, user_id: int, role: RoleCode, actor_user_id: int) -> UserView:
+    """역할을 부여한다. 이미 있으면 아무것도 하지 않는다(재요청이 에러가 아니다)."""
+    with unit_of_work() as uow:
+        session = uow.session
+        user = session.execute(
+            select(User).where(User.id == user_id, User.deleted_at.is_(None))
+        ).scalar_one_or_none()
+        if user is None:
+            raise NotFoundError(log_context={"user_id": user_id})
+
+        role_id = session.execute(
+            select(Role.id).where(Role.code == role.value, Role.deleted_at.is_(None))
+        ).scalar_one()
+        existing = session.execute(
+            select(UserRole).where(
+                UserRole.user_id == user_id,
+                UserRole.role_id == role_id,
+                UserRole.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+
+        if existing is None:
+            session.add(UserRole(user_id=user_id, role_id=role_id, created_by_id=actor_user_id))
+            audit.record(
+                session,
+                action=AuditAction.ROLE_GRANTED,
+                actor_user_id=actor_user_id,
+                entity_type="users",
+                entity_id=user_id,
+                detail={"role": role.value},
+            )
+        session.flush()
+        return UserView(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            is_active=user.is_active,
+            roles=_load_roles(session, user.id),
+        )
+
+
+def revoke_role(*, user_id: int, role: RoleCode, actor_user_id: int) -> UserView:
+    """역할을 회수한다(soft delete). 없으면 아무것도 하지 않는다."""
+    with unit_of_work() as uow:
+        session = uow.session
+        user = session.execute(
+            select(User).where(User.id == user_id, User.deleted_at.is_(None))
+        ).scalar_one_or_none()
+        if user is None:
+            raise NotFoundError(log_context={"user_id": user_id})
+
+        assignment = session.execute(
+            select(UserRole)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(
+                UserRole.user_id == user_id,
+                Role.code == role.value,
+                UserRole.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+
+        if assignment is not None:
+            assignment.deleted_at = utcnow()
+            assignment.updated_by_id = actor_user_id
+            audit.record(
+                session,
+                action=AuditAction.ROLE_REVOKED,
+                actor_user_id=actor_user_id,
+                entity_type="users",
+                entity_id=user_id,
+                detail={"role": role.value},
+            )
+        session.flush()
+        return UserView(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            is_active=user.is_active,
+            roles=_load_roles(session, user.id),
+        )

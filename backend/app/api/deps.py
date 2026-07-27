@@ -13,8 +13,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Annotated
+from collections.abc import Callable, Iterator
+from typing import Annotated, Any
 
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
@@ -57,10 +57,8 @@ def get_current_user(request: Request) -> AuthenticatedUser:
 CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
 
 
-def require_roles(*allowed: RoleCode) -> object:
-    """지정한 역할 중 하나라도 있어야 통과한다 (§18.1 API 레벨 인가).
-
-        @router.post("/skus", dependencies=[require_roles(RoleCode.ADMIN, RoleCode.TRADE)])
+def _role_guard(*allowed: RoleCode) -> Callable[[AuthenticatedUser], AuthenticatedUser]:
+    """지정한 역할 중 하나라도 있어야 통과하는 검사기를 만든다 (§18.1 API 레벨 인가).
 
     ADMIN은 언제나 통과한다 — 관리자를 개별 목록에 매번 적게 하면 언젠가
     빠뜨리고, 빠뜨린 화면은 관리자가 못 쓰는 화면이 된다.
@@ -76,4 +74,16 @@ def require_roles(*allowed: RoleCode) -> object:
             }
         )
 
-    return Depends(_guard)
+    return _guard
+
+
+def require_roles(*allowed: RoleCode) -> Any:
+    """`dependencies=[...]`에 넣는 형태 — 행위자를 쓰지 않는 엔드포인트용.
+
+    @router.get("/users", dependencies=[require_roles(RoleCode.ADMIN)])
+    """
+    return Depends(_role_guard(*allowed))
+
+
+#: 행위자가 필요한 관리자 전용 엔드포인트에서 `current: AdminUser`로 받는다.
+AdminUser = Annotated[AuthenticatedUser, Depends(_role_guard(RoleCode.ADMIN))]
