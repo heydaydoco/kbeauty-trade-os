@@ -16,12 +16,14 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from typing import Annotated, Any
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from sqlalchemy.orm import Session
 
 from app.core.db.session import SessionFactory
-from app.core.errors.exceptions import ForbiddenError, UnauthenticatedError
+from app.core.errors.codes import ErrorCode
+from app.core.errors.exceptions import AppError, ForbiddenError, UnauthenticatedError
 from app.core.logging.context import user_id_var, user_role_var
+from app.modules.idempotency.service import IDEMPOTENCY_HEADER
 from app.modules.identity import service as identity_service
 from app.modules.identity.models import RoleCode
 from app.modules.identity.service import SESSION_COOKIE_NAME, AuthenticatedUser
@@ -87,3 +89,21 @@ def require_roles(*allowed: RoleCode) -> Any:
 
 #: 행위자가 필요한 관리자 전용 엔드포인트에서 `current: AdminUser`로 받는다.
 AdminUser = Annotated[AuthenticatedUser, Depends(_role_guard(RoleCode.ADMIN))]
+
+
+def get_idempotency_key(
+    idempotency_key: Annotated[str | None, Header(alias=IDEMPOTENCY_HEADER)] = None,
+) -> str:
+    """확정·생성 요청의 멱등 키 (§17.4).
+
+    없으면 거절한다. "있으면 쓰고 없으면 그냥 실행"으로 두면 더블클릭 보호가
+    클라이언트의 선의에 달리게 되고, 헤더를 빠뜨린 화면 하나가 조용히 이중 전표를
+    만든다. 프런트 lib/api.ts는 모든 쓰기 요청에 자동으로 붙인다.
+    """
+    if not idempotency_key:
+        raise AppError(ErrorCode.IDEMPOTENCY_KEY_REQUIRED)
+    return idempotency_key
+
+
+#: 라우터에서 `key: IdempotencyKey`로 받는다.
+IdempotencyKey = Annotated[str, Depends(get_idempotency_key)]

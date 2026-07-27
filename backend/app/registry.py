@@ -9,6 +9,22 @@ from __future__ import annotations
 
 from app.core.db.base import Base
 from app.modules.audit import models as audit_models
+from app.modules.catalog import models as catalog_models
+from app.modules.idempotency import models as idempotency_models
 from app.modules.identity import models as identity_models
+from app.modules.numbering import models as numbering_models
+from app.modules.outbox import models as outbox_models
+from app.modules.platform import models as platform_models
+from app.modules.worklist import models as worklist_models
 
-__all__ = ["Base", "audit_models", "identity_models"]
+__all__ = [
+    "Base",
+    "audit_models",
+    "catalog_models",
+    "idempotency_models",
+    "identity_models",
+    "numbering_models",
+    "outbox_models",
+    "platform_models",
+    "worklist_models",
+]

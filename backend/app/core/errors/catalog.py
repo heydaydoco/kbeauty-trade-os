@@ -26,6 +26,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "입력값이 올바르지 않습니다. 표시된 항목을 확인한 뒤 다시 시도해 주세요.",
     ),
+    ErrorCode.REQUEST_MALFORMED: ErrorSpec(
+        400,
+        "요청 내용을 읽지 못했습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.RESOURCE_NOT_FOUND: ErrorSpec(
         404,
         "요청하신 자료를 찾을 수 없습니다. 이미 삭제되었거나 주소가 잘못되었을 수 있으니 목록에서 다시 선택해 주세요.",
@@ -52,6 +56,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         403,
         "비활성 처리된 계정입니다. 관리자에게 계정 활성화를 요청해 주세요.",
     ),
+    ErrorCode.IDENTITY_LAST_ADMIN_PROTECTED: ErrorSpec(
+        409,
+        "마지막 남은 관리자입니다. 이 계정의 관리자 권한을 회수하거나 비활성화하면 아무도 시스템을 관리할 수 없게 됩니다. 다른 사용자에게 관리자 권한을 먼저 부여해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.
@@ -60,6 +68,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.IDEMPOTENCY_KEY_CONFLICT: ErrorSpec(
         409,
         "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",
+    ),
+    ErrorCode.IDEMPOTENCY_KEY_REQUIRED: ErrorSpec(
+        400,
+        "요청 식별 키가 없어 처리하지 못했습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.",
     ),
     ErrorCode.TRANSACTION_BOUNDARY_VIOLATION: ErrorSpec(
         500,

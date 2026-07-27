@@ -20,6 +20,10 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+class AccountActiveRequest(BaseModel):
+    is_active: bool
+
+
 class RoleAssignmentRequest(BaseModel):
     role: RoleCode
 

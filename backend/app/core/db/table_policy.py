@@ -32,6 +32,19 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "roles",  # 마이그레이션으로만 바뀌지만 DDL 대상은 아니다
         "user_roles",  # 회수 = soft delete(UPDATE)
         "user_sessions",  # last_seen_at 갱신·폐기(UPDATE)
+        # S0-2 — 공통
+        "doc_number_seq",  # 카운터 증가(UPDATE)가 곧 채번이다
+        "idempotency_keys",  # 최초 결과 기록(UPDATE) + TTL 청소(DELETE)
+        "events",  # 발송 결과 기록(published_at·attempts)
+        "tasks",
+        "alert_rules",
+        "alerts",  # ack 시각 기록
+        "scheduled_jobs",  # 마지막 실행 결과 기록
+        "feature_flags",
+        "external_refs",
+        "custom_field_defs",
+        "custom_field_values",
+        "skus",  # 마스터 — 상태 전환·정보 수정(UPDATE)
     }
 )
 

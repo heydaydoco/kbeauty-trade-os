@@ -27,7 +27,13 @@ from app.core.logging.context import request_id_var
 logger = get_logger(__name__)
 
 #: 상태 코드만 알고 있을 때 쓸 기본 코드.
+#:
+#: ★ 여기 없는 상태는 INTERNAL_UNEXPECTED로 떨어진다 — 즉 **상태는 4xx인데 코드는
+#:   "서버 내부 오류"**인 모순된 응답이 나간다. 실제로 400(본문 파싱 실패)이 그렇게
+#:   나가서, 클라이언트 잘못인 요청을 서버 장애처럼 보이게 만들고 원인 추적을
+#:   크게 낭비시켰다. 새 상태를 쓰기 시작하면 여기 한 줄을 같이 추가한다.
 _STATUS_TO_CODE: dict[int, ErrorCode] = {
+    400: ErrorCode.REQUEST_MALFORMED,
     401: ErrorCode.AUTH_UNAUTHENTICATED,
     403: ErrorCode.AUTH_FORBIDDEN,
     404: ErrorCode.RESOURCE_NOT_FOUND,
