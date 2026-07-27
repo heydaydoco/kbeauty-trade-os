@@ -196,21 +196,6 @@ jobs:
           docker compose -f docker-compose.prod.yml --env-file .env.prod.example config -q
           rm -f .env
 
-  # ── 마이그레이션 리비전 개수 가드 (S0-1 범위 침범 방지) ──────────────────
-  scope-guard:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v5
-      - name: S0-1은 baseline 리비전 1개만 (S0-2 첫 작업이 이 가드를 제거한다)
-        run: |
-          count=$(find backend/migrations/versions -name '*.py' | wc -l)
-          if [ "$count" -ne 1 ]; then
-            echo "::error::마이그레이션 리비전이 $count개. S0-1은 baseline 1개만 허용 — S0-2 범위 침범?"
-            echo "S0-2를 시작할 때 이 잡을 ci.yml에서 제거하세요."
-            exit 1
-          fi
-
   # ── 단일 게이트 ────────────────────────────────────────────────────────
   # 룰셋의 required check는 이 하나만 지정한다. 잡을 추가/이름변경해도
   # 룰셋을 건드릴 필요가 없다. (test_ci_contract.py가 needs 누락을 검사)
@@ -218,11 +203,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     if: always()
-    needs: [hygiene, backend, frontend, compose, scope-guard]
+    needs: [hygiene, backend, frontend, compose]
     steps:
       - name: 모든 잡이 성공했는지
         run: |
-          results="${{ needs.hygiene.result }} ${{ needs.backend.result }} ${{ needs.frontend.result }} ${{ needs.compose.result }} ${{ needs.scope-guard.result }}"
+          results="${{ needs.hygiene.result }} ${{ needs.backend.result }} ${{ needs.frontend.result }} ${{ needs.compose.result }}"
           echo "결과: $results"
           for r in $results; do
             if [ "$r" != "success" ]; then

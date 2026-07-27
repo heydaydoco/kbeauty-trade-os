@@ -2,7 +2,7 @@
 
 ## 구조
 
-`.github/workflows/ci.yml` — push마다 6잡:
+`.github/workflows/ci.yml` — push마다 5잡:
 
 | 잡 | 하는 일 |
 |---|---|
@@ -10,8 +10,10 @@
 | backend | init SQL 실행 → ruff·mypy → 마이그레이션 드라이런 4종 → pytest(+커버리지) |
 | frontend | npm ci → typecheck → vitest → build |
 | compose | dev·prod compose 문법 검증 |
-| scope-guard | 마이그레이션 리비전 1개 초과 시 실패(S0-1 범위 침범 방지 — **S0-2 첫 작업이 이 잡 제거**) |
 | ci-ok | 위 전부 성공했는지 확인하는 **단일 게이트** |
+
+> S0-1의 `scope-guard` 잡(마이그레이션 리비전 1개 제한)은 S0-2 시작과 함께 제거했다 —
+> S0-2가 리비전을 여러 개 추가한다. 6잡 → **5잡**.
 
 ## required check는 `ci-ok` 하나만
 
@@ -45,7 +47,7 @@
 
 ## 무료 분 예산
 
-Free private는 월 2,000분(Pro는 3,000분), 잡당 분 단위 올림 = 잡 6개면 실사용 짧아도
-최소 6분 청구. 초과하면 CI가 멈춰 §18.3 계약이 정지한다. 첫 실행들의 Billable time을
+Free private는 월 2,000분(Pro는 3,000분), 잡당 분 단위 올림 = 잡 5개면 실사용 짧아도
+최소 5분 청구. 초과하면 CI가 멈춰 §18.3 계약이 정지한다. 첫 실행들의 Billable time을
 PROGRESS "주의 인계"에 기록해 추정이 아닌 실측으로 예산을 관리한다.
 - 확인 위치: Actions 탭 → 특정 run → 우측 상단 요약, 또는 Settings → Billing.

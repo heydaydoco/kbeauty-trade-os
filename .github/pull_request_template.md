@@ -30,11 +30,9 @@
 
 ---
 
-## S0-1 범위 가드 (Phase 0 첫 세션 한정 — S0-2 시작 시 이 절 삭제)
+## 증거 (없으면 반려)
 
-아래는 **S0-2 이후** 범위다. S0-1 PR에 섞였다면 되돌린다.
-
-- [ ] users/roles·로그인·인증 미들웨어 **없음**
-- [ ] audit_log·doc_number_seq(채번)·external_refs·custom_field_defs·feature_flags·events·scheduled_jobs·alert_rules·tasks **테이블 없음**
-- [ ] SKU 모델·등록/목록 API·CSV 내보내기 **없음**
-- [ ] 마이그레이션 리비전은 baseline 1개뿐 (scope-guard 잡이 검사)
+- [ ] `pytest` 전체 통과 로그 원문 (§22 렌즈 8)
+- [ ] 프런트 `vitest` 결과 (프런트 변경 시)
+- [ ] CI run 링크 — `ci-ok` green
+- [ ] 병합은 `bash scripts/merge-pr.sh <PR번호>`로만 (웹 Merge 버튼 금지 — ADR-0011)
