@@ -45,6 +45,11 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "credential",
         "credentials",
         "session_id",
+        # 해시라고 안전한 게 아니다. 유출되면 오프라인 대입의 출발점이 되고,
+        # 세션 토큰 해시는 그 자체가 DB의 세션 조회 키다(ADR-0013).
+        "password_hash",
+        "token_hash",
+        "session_token",
         "otp",
         "pin",
         "cvv",

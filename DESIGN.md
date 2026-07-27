@@ -51,7 +51,7 @@
 
 **전체 테이블 맵**
 ```
-[공통]  users, roles, audit_log, doc_number_seq, fx_rates, feature_flags, custom_field_defs/values,
+[공통]  users, roles, user_roles, user_sessions, audit_log, doc_number_seq, fx_rates, feature_flags, custom_field_defs/values,
         external_refs, sync_policies, holidays(국가별), alert_rules, alerts, tasks, approvals,
         events(아웃박스), webhook_subscriptions, notification_channels, scheduled_jobs,
         inbound_rules, auto_confirm_rules, outbound_policies, projects(출시 그룹핑)
@@ -74,6 +74,8 @@
 [M9]    import_staging, mapping_templates, posting_rules, journal_drafts
 [M10]   ai_prompt_templates, ai_logs, knowledge_notes, feature_requests
 ```
+
+> **[공통] 보강(S0-2)**: `user_roles`(사용자×역할 — 겸직 허용을 위한 정규화), `user_sessions`(서버측 세션 — §18.1 "세션 만료"와 §2 "계정 비활성 절차"가 성립하려면 발급된 세션을 즉시 무효화할 수 있어야 한다). [ADR-0013]
 
 ---
 
@@ -316,6 +318,8 @@ Phase 7~ 확장(="문서 내 v2" 항목): 지식→기능화 파이프라인, �
          SMTP 화이트리스트 자동 발송, 슬랙 인터랙티브·조회 커맨드, 노션 발행·지식 양방향,
          대행사·바이어 외부 링크, 효능 표방 라이브러리, REWORK 이동유형(백로그)
 ```
+> **담당자 라우팅의 위치(S0-2 보강)**: Phase 0의 "담당자 라우팅"은 **구조**(담당자 컬럼 — `tasks.assignee_id`, `alert_rules`의 수신 대상)까지다. 이벤트→수신자 결정→채널 발송이라는 **동작**(ADR-07 "전사 폭포 금지")은 notification_channels·webhook_subscriptions·알림센터가 서는 **Phase 2(S2-3)**가 담당한다 — Phase 0에는 발송 채널이 없어 라우팅을 구현해도 §20 H로 검증할 수단이 없다. [ADR-0012]
+
 AI가 Phase 6인 이유 — 데이터가 쌓인 위에서 가치가 나며, 스테이징 구조는 Phase 1부터 깔려 있어 그대로 꽂힌다.
 
 ---

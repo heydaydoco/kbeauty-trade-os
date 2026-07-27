@@ -17,12 +17,21 @@ from typing import Any
 
 #: 앱 계정이 UPDATE/DELETE 할 수 없는 테이블 (INSERT/SELECT만).
 #: 정정은 원본 수정이 아니라 반대 부호의 역기록으로 한다(ADR-05).
-IMMUTABLE_TABLES: frozenset[str] = frozenset()
+IMMUTABLE_TABLES: frozenset[str] = frozenset(
+    {
+        "audit_log",  # S0-2
+    }
+)
 
 #: 일반 테이블. 여기 적는 것은 "불변이 아님을 확인했다"는 뜻이다.
 MUTABLE_TABLES: frozenset[str] = frozenset(
     {
         "alembic_version",  # alembic이 소유·관리
+        # S0-2 — 신원
+        "users",  # 프로필·잠금 카운터·비활성 전환
+        "roles",  # 마이그레이션으로만 바뀌지만 DDL 대상은 아니다
+        "user_roles",  # 회수 = soft delete(UPDATE)
+        "user_sessions",  # last_seen_at 갱신·폐기(UPDATE)
     }
 )
 

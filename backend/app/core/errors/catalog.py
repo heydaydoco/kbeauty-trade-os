@@ -38,6 +38,20 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         403,
         "이 자료에 접근할 권한이 없습니다. 필요하시면 관리자에게 권한을 요청해 주세요.",
     ),
+    ErrorCode.AUTH_INVALID_CREDENTIALS: ErrorSpec(
+        401,
+        # 어느 쪽이 틀렸는지 밝히지 않는다 — 이메일 존재 여부를 알려 주면
+        # 계정 목록을 긁어모으는 통로가 된다(§18.1).
+        "이메일 또는 비밀번호가 올바르지 않습니다. 다시 확인해 주세요.",
+    ),
+    ErrorCode.AUTH_ACCOUNT_LOCKED: ErrorSpec(
+        423,
+        "비밀번호를 5회 연속 틀려 계정이 잠겼습니다. 잠시 후 다시 시도하시거나 관리자에게 잠금 해제를 요청해 주세요.",
+    ),
+    ErrorCode.AUTH_ACCOUNT_INACTIVE: ErrorSpec(
+        403,
+        "비활성 처리된 계정입니다. 관리자에게 계정 활성화를 요청해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

@@ -25,6 +25,11 @@ def _parse(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
+def _router_files() -> list[Path]:
+    """HTTP 표면 전체 — app/api 아래와 각 모듈의 router.py."""
+    return _python_files("api") + sorted(APP_ROOT.glob("modules/*/router.py"))
+
+
 def test_no_naive_datetime_calls() -> None:
     """app 어디에서도 datetime.now()/utcnow()를 직접 부르지 않는다 (app/core/time.py 제외)
 
@@ -49,13 +54,13 @@ def test_no_naive_datetime_calls() -> None:
 
 
 def test_routers_do_not_control_transactions() -> None:
-    """api 계층에서 commit/rollback/begin/sessionmaker/create_engine을 쓰지 않는다
+    """라우터(app/api·modules/*/router.py)가 commit/rollback/begin을 쓰지 않는다
 
     §17.1 트랜잭션 경계는 서비스 레이어(unit_of_work)만 담당한다.
     """
     forbidden = {"commit", "rollback", "begin", "sessionmaker", "create_engine"}
     offenders: list[str] = []
-    for path in _python_files("api"):
+    for path in _router_files():
         for node in ast.walk(_parse(path)):
             if isinstance(node, ast.Call):
                 func = node.func
@@ -107,6 +112,26 @@ def test_no_direct_external_http_imports() -> None:
     assert not offenders, "외부 HTTP/메일 직접 임포트: " + ", ".join(offenders)
 
 
+def test_every_model_module_is_registered() -> None:
+    """app/modules/*/models.py는 전부 app/registry.py에서 임포트된다
+
+    빠뜨리면 autogenerate가 그 테이블을 "없어야 할 테이블"로 보고 DROP TABLE
+    마이그레이션을 만든다. 리뷰에서 걸러지길 기대할 종류의 실수가 아니다.
+    """
+    model_modules = sorted(p.parent.name for p in APP_ROOT.glob("modules/*/models.py"))
+    imported = {
+        node.module
+        for node in ast.walk(_parse(APP_ROOT / "registry.py"))
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    missing = [name for name in model_modules if f"app.modules.{name}" not in imported]
+    assert not missing, (
+        f"registry.py에 임포트되지 않은 모델 모듈: {missing} — "
+        "autogenerate가 해당 테이블에 DROP TABLE을 만듭니다"
+    )
+
+
 def test_app_files_are_parseable() -> None:
     """스캔이 공회전이 아니다 — 실제로 파일을 읽었다"""
     assert len(_python_files()) > 10
+    assert _router_files(), "라우터 파일을 하나도 찾지 못했습니다 — 스캔 경로 확인"
