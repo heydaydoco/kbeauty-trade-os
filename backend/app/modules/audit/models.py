@@ -41,6 +41,11 @@ class AuditAction:
     ACCESS_DENIED = "auth.access.denied"
     ROLE_GRANTED = "identity.role.granted"
     ROLE_REVOKED = "identity.role.revoked"
+    ACCOUNT_ACTIVATED = "identity.account.activated"
+    ACCOUNT_DEACTIVATED = "identity.account.deactivated"
+    ACCOUNT_UNLOCKED = "identity.account.unlocked"
+    #: 마지막 관리자를 지우려는 시도. 막힌 시도야말로 남아야 하는 기록이다.
+    LAST_ADMIN_PROTECTED = "identity.admin.last_one_protected"
 
 
 class AuditLog(PkMixin, Base):

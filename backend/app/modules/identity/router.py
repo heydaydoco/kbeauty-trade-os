@@ -17,6 +17,7 @@ from app.core.pagination import Page, PageParams
 from app.modules.identity import service
 from app.modules.identity.models import RoleCode
 from app.modules.identity.schemas import (
+    AccountActiveRequest,
     LoginRequest,
     MeResponse,
     RoleAssignmentRequest,
@@ -117,3 +118,19 @@ def grant_role(user_id: int, payload: RoleAssignmentRequest, current: AdminUser)
 @users_router.delete("/{user_id}/roles/{role}", summary="역할 회수 (관리자)")
 def revoke_role(user_id: int, role: RoleCode, current: AdminUser) -> UserSummary:
     return _summary(service.revoke_role(user_id=user_id, role=role, actor_user_id=current.id))
+
+
+@users_router.patch("/{user_id}/active", summary="계정 활성·비활성 (관리자)")
+def set_account_active(
+    user_id: int, payload: AccountActiveRequest, current: AdminUser
+) -> UserSummary:
+    return _summary(
+        service.set_account_active(
+            user_id=user_id, is_active=payload.is_active, actor_user_id=current.id
+        )
+    )
+
+
+@users_router.post("/{user_id}/unlock", summary="로그인 잠금 해제 (관리자)")
+def unlock_account(user_id: int, current: AdminUser) -> UserSummary:
+    return _summary(service.unlock_account(user_id=user_id, actor_user_id=current.id))

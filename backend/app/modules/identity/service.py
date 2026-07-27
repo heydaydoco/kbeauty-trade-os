@@ -259,6 +259,21 @@ def _revoke_by_token(session: Session, token: str, now: datetime) -> int | None:
     return row.id
 
 
+def _revoke_all_sessions(session: Session, user_id: int, now: datetime) -> int:
+    """그 사람의 살아 있는 세션을 전부 폐기한다 (계정 비활성·강제 로그아웃)."""
+    rows = list(
+        session.execute(
+            select(UserSession).where(
+                UserSession.user_id == user_id,
+                UserSession.revoked_at.is_(None),
+            )
+        ).scalars()
+    )
+    for row in rows:
+        row.revoked_at = now
+    return len(rows)
+
+
 def _purge_expired_sessions(session: Session, user_id: int, now: datetime) -> None:
     """만료된 세션 행을 지운다 (ADR-0013 "만료 세션 정리").
 
@@ -396,15 +411,70 @@ def grant_role(*, user_id: int, role: RoleCode, actor_user_id: int) -> UserView:
         )
 
 
+def _active_admin_ids(session: Session) -> set[int]:
+    """지금 실제로 시스템을 관리할 수 있는 사람들.
+
+    "관리자 역할이 있다"가 아니라 **"로그인해서 관리할 수 있다"**가 기준이다 —
+    비활성 계정은 관리자 역할이 남아 있어도 아무것도 못 한다. 이 구분을 놓치면
+    비활성 관리자 한 명을 믿고 마지막 활성 관리자를 지우게 된다.
+    """
+    return set(
+        session.execute(
+            select(User.id)
+            .join(UserRole, UserRole.user_id == User.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(
+                Role.code == RoleCode.ADMIN.value,
+                User.deleted_at.is_(None),
+                User.is_active.is_(True),
+                UserRole.deleted_at.is_(None),
+                Role.deleted_at.is_(None),
+            )
+        ).scalars()
+    )
+
+
+def _would_orphan_the_system(session: Session, user_id: int) -> bool:
+    """이 사용자를 관리 인원에서 빼면 관리자가 0명이 되는가."""
+    admins = _active_admin_ids(session)
+    return admins == {user_id}
+
+
+def _view_of(session: Session, user: User) -> UserView:
+    return UserView(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        is_active=user.is_active,
+        roles=_load_roles(session, user.id),
+    )
+
+
+def _load_user_for_update(session: Session, user_id: int) -> User:
+    """관리 대상 사용자를 행 잠금과 함께 읽는다.
+
+    잠그지 않으면 "마지막 관리자인가"를 확인하는 순간과 지우는 순간 사이에
+    다른 요청이 나머지 관리자를 지울 수 있다 — 둘 다 "나 말고 또 있다"를 보고
+    통과해서 관리자 0명이 된다(§17.2 "확인→기록" 직렬화).
+    """
+    user = session.execute(
+        select(User).where(User.id == user_id, User.deleted_at.is_(None)).with_for_update()
+    ).scalar_one_or_none()
+    if user is None:
+        raise NotFoundError(log_context={"user_id": user_id})
+    return user
+
+
 def revoke_role(*, user_id: int, role: RoleCode, actor_user_id: int) -> UserView:
-    """역할을 회수한다(soft delete). 없으면 아무것도 하지 않는다."""
+    """역할을 회수한다(soft delete). 없으면 아무것도 하지 않는다.
+
+    ★ 마지막 관리자의 ADMIN은 회수할 수 없다. 되돌릴 방법이 시스템 안에 없는
+      상태(관리자 0명)를 만드는 조작이라, 복구에 DB 직접 수정이 필요해진다.
+    """
+    blocked = False
     with unit_of_work() as uow:
         session = uow.session
-        user = session.execute(
-            select(User).where(User.id == user_id, User.deleted_at.is_(None))
-        ).scalar_one_or_none()
-        if user is None:
-            raise NotFoundError(log_context={"user_id": user_id})
+        user = _load_user_for_update(session, user_id)
 
         assignment = session.execute(
             select(UserRole)
@@ -416,7 +486,21 @@ def revoke_role(*, user_id: int, role: RoleCode, actor_user_id: int) -> UserView
             )
         ).scalar_one_or_none()
 
-        if assignment is not None:
+        if (
+            assignment is not None
+            and role is RoleCode.ADMIN
+            and _would_orphan_the_system(session, user_id)
+        ):
+            blocked = True
+            audit.record(
+                session,
+                action=AuditAction.LAST_ADMIN_PROTECTED,
+                actor_user_id=actor_user_id,
+                entity_type="users",
+                entity_id=user_id,
+                detail={"attempted": "revoke_admin_role"},
+            )
+        elif assignment is not None:
             assignment.deleted_at = utcnow()
             assignment.updated_by_id = actor_user_id
             audit.record(
@@ -428,10 +512,81 @@ def revoke_role(*, user_id: int, role: RoleCode, actor_user_id: int) -> UserView
                 detail={"role": role.value},
             )
         session.flush()
-        return UserView(
-            id=user.id,
-            email=user.email,
-            display_name=user.display_name,
-            is_active=user.is_active,
-            roles=_load_roles(session, user.id),
-        )
+        view = _view_of(session, user)
+
+    # 막힌 시도의 기록을 남긴 뒤에 거절한다(로그인 실패와 같은 이유 — 롤백되면
+    # "누가 마지막 관리자를 지우려 했는가"가 사라진다).
+    if blocked:
+        raise AppError(ErrorCode.IDENTITY_LAST_ADMIN_PROTECTED)
+    return view
+
+
+def set_account_active(*, user_id: int, is_active: bool, actor_user_id: int) -> UserView:
+    """계정 활성/비활성 (§2 "계정 비활성 절차").
+
+    삭제가 아니라 끄는 것이다 — 감사 이력과 담당 이력은 그대로 남아야 한다.
+    마지막 관리자는 끌 수 없다(역할 회수와 같은 이유).
+    """
+    blocked = False
+    with unit_of_work() as uow:
+        session = uow.session
+        user = _load_user_for_update(session, user_id)
+
+        if not is_active and user.is_active and _would_orphan_the_system(session, user_id):
+            blocked = True
+            audit.record(
+                session,
+                action=AuditAction.LAST_ADMIN_PROTECTED,
+                actor_user_id=actor_user_id,
+                entity_type="users",
+                entity_id=user_id,
+                detail={"attempted": "deactivate_last_admin"},
+            )
+        elif user.is_active != is_active:
+            user.is_active = is_active
+            user.updated_by_id = actor_user_id
+            if not is_active:
+                # 끈 계정의 세션이 살아 있으면 "비활성"이 화면에만 존재하는 상태가
+                # 된다. resolve_session이 is_active를 보긴 하지만, 여기서 실제로
+                # 폐기해야 감사 기록에 시점이 남는다(ADR-0013).
+                _revoke_all_sessions(session, user_id, utcnow())
+            audit.record(
+                session,
+                action=(
+                    AuditAction.ACCOUNT_ACTIVATED if is_active else AuditAction.ACCOUNT_DEACTIVATED
+                ),
+                actor_user_id=actor_user_id,
+                entity_type="users",
+                entity_id=user_id,
+            )
+        session.flush()
+        view = _view_of(session, user)
+
+    if blocked:
+        raise AppError(ErrorCode.IDENTITY_LAST_ADMIN_PROTECTED)
+    return view
+
+
+def unlock_account(*, user_id: int, actor_user_id: int) -> UserView:
+    """잠긴 계정을 관리자가 즉시 푼다 (ADR-0013 잠금 해제 경로).
+
+    자동 해제(LOCKOUT_DURATION)를 기다리게만 하면, 출고 마감처럼 시간이 곧
+    비용인 순간에 담당자가 15분을 통째로 잃는다.
+    """
+    with unit_of_work() as uow:
+        session = uow.session
+        user = _load_user_for_update(session, user_id)
+        was_locked = user.locked_until is not None or user.failed_login_count > 0
+        user.locked_until = None
+        user.failed_login_count = 0
+        user.updated_by_id = actor_user_id
+        if was_locked:
+            audit.record(
+                session,
+                action=AuditAction.ACCOUNT_UNLOCKED,
+                actor_user_id=actor_user_id,
+                entity_type="users",
+                entity_id=user_id,
+            )
+        session.flush()
+        return _view_of(session, user)

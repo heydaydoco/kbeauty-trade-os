@@ -52,6 +52,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         403,
         "비활성 처리된 계정입니다. 관리자에게 계정 활성화를 요청해 주세요.",
     ),
+    ErrorCode.IDENTITY_LAST_ADMIN_PROTECTED: ErrorSpec(
+        409,
+        "마지막 남은 관리자입니다. 이 계정의 관리자 권한을 회수하거나 비활성화하면 아무도 시스템을 관리할 수 없게 됩니다. 다른 사용자에게 관리자 권한을 먼저 부여해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.
