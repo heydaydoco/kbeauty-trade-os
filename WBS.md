@@ -1,4 +1,4 @@
-# kbeauty-trade-os — WBS(세션 태스크 분해서) v1.1
+# kbeauty-trade-os — WBS(세션 태스크 분해서) v1.2
 
 > **용도**: `DESIGN.md` §19 로드맵을 Claude Code(Opus) 한 세션 크기의 태스크로 분해한 실행 레일. 구현 모델은 이 문서의 태스크 ID 순서대로 진행한다.
 > **우선순위**: 이 문서 ↔ `DESIGN.md` 충돌 시 **DESIGN.md 우선**, 충돌 발견 시 구현 중단 후 보고(CLAUDE.md 수칙).
@@ -45,7 +45,7 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 
 **S0-2 | 공통 테이블·인증·채번·수직 슬라이스**
 - 범위: §3 공통 테이블, §2 권한·통제(역할 5종), §17.3·17.4, §18.1
-- 산출물: users/roles/audit_log/doc_number_seq/external_refs/custom_field_defs·values/feature_flags/events(아웃박스)/scheduled_jobs/alert_rules·alerts/tasks 마이그레이션, 로그인(argon2·5회 잠금·세션 만료), 채번 서비스(행 잠금+UNIQUE 이중), 작업 큐 골격, **SKU 등록→목록(페이지네이션 50)→CSV(UTF-8 BOM) 끝-끝 관통**
+- 산출물: users/roles/audit_log/doc_number_seq/external_refs/custom_field_defs·values/feature_flags/events(아웃박스)/scheduled_jobs/alert_rules·alerts/tasks 마이그레이션, 로그인(argon2·5회 잠금·세션 만료), 채번 서비스(행 잠금+UNIQUE 이중), 작업 큐 골격, **SKU 등록→목록(페이지네이션 50)→CSV(UTF-8 BOM) 끝-끝 관통**, **담당자 컬럼**(`tasks.assignee_id`·`alert_rules` 수신 대상 — v1.2 추가, 라우팅 **동작**은 S2-3 — ADR-0012)
 - DoD: 채번 동시 100건 중복 0 / audit_log 불변(UPDATE 거부) / 타 사용자 리소스 403 / idempotency key 더블클릭 → 전표 1건
 - 검증: J(채번·롤백·멱등), K(403·잠금·페이지네이션) + **GC-A3**
 
@@ -91,9 +91,9 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 
 **S2-3 | 준비도 매트릭스·기일 알림**
 - 범위: §5.3, §2 ADR-07, §4.7(유효기간 문서 스캔)
-- 산출물: 매트릭스 화면(계산값·미저장·신호등 4색), 기일 엔진 1차(documents+certifications 유효기간 스캔), notification_channels/webhook_subscriptions, 알림센터, 발송 이력 dedup, ack 재발송 금지, D-3 에스컬레이션, 데일리 브리핑 1통
-- DoD: 만료일 변경 → 매트릭스 즉시 반영(집계 저장 없음 증명) / 동일 기일 중복 발송 0 / 미확인 에스컬레이션 발동
-- 검증: C(매트릭스), H(재발송 0·에스컬레이션) + **GC-C1**
+- 산출물: 매트릭스 화면(계산값·미저장·신호등 4색), 기일 엔진 1차(documents+certifications 유효기간 스캔), notification_channels/webhook_subscriptions, 알림센터, 발송 이력 dedup, ack 재발송 금지, D-3 에스컬레이션, 데일리 브리핑 1통, **담당자 라우팅**(이벤트→수신자 결정→채널 발송 — 전사 폭포 금지, S0-2의 담당자 컬럼을 수신자 출처로 사용. v1.2 추가 — ADR-0012)
+- DoD: 만료일 변경 → 매트릭스 즉시 반영(집계 저장 없음 증명) / 동일 기일 중복 발송 0 / 미확인 에스컬레이션 발동 / **담당자 지정 건은 담당자에게만 발송(전사 폭포 0건)**
+- 검증: C(매트릭스), H(재발송 0·에스컬레이션·**담당자 라우팅**) + **GC-C1**
 
 **S2-4 | 대행 협업·T1 시드·장애 SOP**
 - 범위: §5.4·5.5·5.6, §21(장애 운영 수칙 — P2 작성 명시)
@@ -219,6 +219,9 @@ SMTP 자동 발송, 이카운트 API·UNI-PASS, 슬랙 인터랙티브·조회 �
 - 순서 변경·태스크 분할이 필요하면 사유와 함께 v1.1로 갱신 + ADR 5줄(§21).
 
 ## 변경 이력
+
+**v1.2 (2026-07-27)**
+1. **담당자 라우팅 배정** — DESIGN §19가 Phase 0에 요구하는 "담당자 라우팅"이 v1.1의 어느 세션 산출물에도 없었다(PROGRESS 부채 #4). **구조**(담당자 컬럼)는 S0-2, **동작**(이벤트→수신자 결정→발송)은 S2-3으로 나눠 배정. 근거: 발송 채널이 서는 세션이 S2-3이라 Phase 0에서는 동작을 검증할 수단 자체가 없다(§22 렌즈 8). DESIGN §19에 각주 1줄 동반. → **ADR-0012**
 
 **v1.1 (2026-07-24)**
 1. **S2-4 백업 배정** — DESIGN §2·§20 H가 요구하는 백업·복원 리허설이 v1.0의 어느 세션에도 배정돼 있지 않아(영원히 안 만들어지는 구조) S2-4 산출물·DoD에 추가. 근거: §19가 Phase 2를 실사용 개시로 명시 → Phase 2 마지막 세션이 "백업 없이 실운영 진입"을 막는 마지막 관문. → **ADR-0001**
