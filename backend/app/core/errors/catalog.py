@@ -65,6 +65,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",
     ),
+    ErrorCode.IDEMPOTENCY_KEY_REQUIRED: ErrorSpec(
+        400,
+        "요청 식별 키가 없어 처리하지 못했습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.TRANSACTION_BOUNDARY_VIOLATION: ErrorSpec(
         500,
         "요청을 처리하는 중 내부 오류가 발생했습니다. 잠시 후 다시 시도하시고, 계속되면 오류 번호와 함께 관리자에게 알려 주세요.",
