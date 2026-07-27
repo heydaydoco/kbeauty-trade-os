@@ -42,8 +42,21 @@ ALEMBIC_INI = BACKEND_ROOT / "alembic.ini"
 #: DESIGN.md §20의 테스트 그룹.
 GROUP_MARKERS = frozenset(f"group_{letter}" for letter in "abcdefghijk")
 
-#: 마이그레이션 관리 테이블 — TRUNCATE 대상에서 제외한다.
-PRESERVED_TABLES = frozenset({"alembic_version"})
+#: TRUNCATE 대상에서 제외하는 테이블.
+#:
+#: ★ 마이그레이션이 채워 넣는 시드(참조 데이터)가 여기 들어간다. 매 테스트 후
+#:   비워 버리면 스키마를 만든 마이그레이션은 세션당 한 번만 도는 탓에 두 번째
+#:   테스트부터 시드가 사라진다 — "역할이 없어서" 실패하는 인가 테스트가 줄줄이
+#:   나오는데 원인은 인가 코드가 아니라 이 목록이다.
+#:
+#: ★ 대신 여기 넣은 테이블을 **테스트가 고치면 그 변경이 다음 테스트로 샌다**.
+#:   시드 테이블은 마이그레이션으로만 바뀌는 것들이어야 한다(roles가 그렇다).
+PRESERVED_TABLES = frozenset(
+    {
+        "alembic_version",  # alembic이 소유·관리
+        "roles",  # 역할 5종 시드 — 마이그레이션 소유, 앱·테스트는 읽기만 (S0-2)
+    }
+)
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -97,29 +110,63 @@ def pytest_itemcollected(item: pytest.Item) -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def _prepare_schema() -> None:
-    """테스트 스키마는 마이그레이션으로만 만든다.
+    """테스트 스키마는 마이그레이션으로만, 매 세션 **바닥부터** 만든다.
 
     Base.metadata.create_all()을 쓰면 "테스트가 통과하는 스키마"와
     "마이그레이션이 만드는 스키마"가 갈라져서 §18.3의 드라이런이 형식만 남는다.
+
+    ★ upgrade만 하지 않고 downgrade base를 먼저 부르는 이유:
+      마이그레이션이 넣는 시드(roles 등)는 리비전이 적용될 때 딱 한 번 들어간다.
+      이미 head인 DB에 upgrade head는 아무것도 하지 않으므로, 과거에 어떤 사고로
+      시드가 지워졌다면 그 DB는 **영원히 시드 없는 상태로 고정**된다. 그 상태는
+      "인가 코드가 잘못된 것처럼 보이는" 실패로 나타나 원인 추적을 크게 낭비시킨다.
+      매번 바닥부터 올리면 그 상태가 존재할 수 없고, downgrade 경로도 덤으로
+      매 실행 검증된다.
     """
-    command.upgrade(AlembicConfig(str(ALEMBIC_INI)), "head")
+    config = AlembicConfig(str(ALEMBIC_INI))
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
 
 
-@pytest.fixture(autouse=True)
-def _clean_tables() -> Iterator[None]:
-    """각 테스트 후 모든 테이블을 비운다(소유자 계정의 별도 커넥션).
+@pytest.fixture(scope="session")
+def _truncatable_tables() -> list[str]:
+    """정리 대상 테이블 목록. 스키마는 세션 중 변하지 않으므로 한 번만 읽는다.
 
-    테이블 목록을 하드코딩하지 않고 pg_tables에서 읽는다 — 새 테이블이
-    생겼는데 목록에 추가하지 않아 데이터가 남는 사고를 없앤다.
+    목록을 하드코딩하지 않고 pg_tables에서 읽는다 — 새 테이블이 생겼는데
+    목록에 추가하지 않아 데이터가 남는 사고를 없앤다.
     """
-    yield
-    with owner_engine.begin() as connection:
+    with owner_engine.connect() as connection:
         names = (
             connection.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
             .scalars()
             .all()
         )
-        targets = [name for name in names if name not in PRESERVED_TABLES]
-        if targets:
-            quoted = ", ".join(f'public."{name}"' for name in targets)
+    return [name for name in names if name not in PRESERVED_TABLES]
+
+
+@pytest.fixture(autouse=True)
+def _clean_tables(_truncatable_tables: list[str]) -> Iterator[None]:
+    """각 테스트 후 **데이터가 들어간 테이블만** 비운다(소유자 계정의 별도 커넥션).
+
+    ★ 전 테이블 무조건 TRUNCATE는 테이블 수에 비례해 느려진다. Docker Desktop
+      (WSL2) 환경에서 실측 테스트당 ~2.8초였고, 테이블이 12개로 늘어나는 S0-2
+      기준으로는 전체 실행이 분 단위로 밀린다 — 느린 테스트는 안 돌리는 테스트가
+      되고, 그러면 §18.3 "회귀를 기계가 잡는다"가 무너진다.
+
+      대부분의 테스트는 DB에 아무것도 쓰지 않는다. 비어 있는지 확인하는 EXISTS는
+      빈 테이블에서 사실상 공짜라, 실제로 더럽힌 테스트만 값을 치른다.
+
+    CASCADE가 참조 테이블까지 함께 비우므로 부분 목록이어도 고아 행은 남지 않는다.
+    """
+    yield
+    with owner_engine.begin() as connection:
+        dirty = [
+            name
+            for name in _truncatable_tables
+            if connection.execute(
+                text(f'SELECT EXISTS (SELECT 1 FROM public."{name}")')
+            ).scalar_one()
+        ]
+        if dirty:
+            quoted = ", ".join(f'public."{name}"' for name in dirty)
             connection.execute(text(f"TRUNCATE {quoted} RESTART IDENTITY CASCADE"))

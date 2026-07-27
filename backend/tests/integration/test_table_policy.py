@@ -50,8 +50,9 @@ def test_no_stale_classification() -> None:
 
 def test_immutable_tables_have_no_app_write_grants() -> None:
     """불변 테이블에는 앱 계정의 UPDATE/DELETE 권한이 없다"""
-    if not IMMUTABLE_TABLES:
-        pytest.skip("불변 테이블은 S0-2(audit_log)부터 생긴다")
+    # S0-2에서 audit_log가 첫 불변 테이블이 됐다. 목록이 비면 분류가 지워진 것이므로
+    # 조용히 skip하지 않고 실패시킨다(빈 목록으로 초록을 사지 않는다).
+    assert IMMUTABLE_TABLES, "불변 테이블이 하나도 없다 — table_policy.py의 분류가 지워졌는가?"
     with owner_engine.connect() as connection:
         for table in sorted(IMMUTABLE_TABLES):
             for privilege in ("UPDATE", "DELETE"):

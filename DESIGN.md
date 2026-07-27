@@ -51,7 +51,7 @@
 
 **전체 테이블 맵**
 ```
-[공통]  users, roles, audit_log, doc_number_seq, fx_rates, feature_flags, custom_field_defs/values,
+[공통]  users, roles, user_roles, user_sessions, audit_log, doc_number_seq, fx_rates, feature_flags, custom_field_defs/values,
         external_refs, sync_policies, holidays(국가별), alert_rules, alerts, tasks, approvals,
         events(아웃박스), webhook_subscriptions, notification_channels, scheduled_jobs,
         inbound_rules, auto_confirm_rules, outbound_policies, projects(출시 그룹핑)
@@ -74,6 +74,8 @@
 [M9]    import_staging, mapping_templates, posting_rules, journal_drafts
 [M10]   ai_prompt_templates, ai_logs, knowledge_notes, feature_requests
 ```
+
+> **[공통] 보강(S0-2)**: `user_roles`(사용자×역할 — 겸직 허용을 위한 정규화), `user_sessions`(서버측 세션 — §18.1 "세션 만료"와 §2 "계정 비활성 절차"가 성립하려면 발급된 세션을 즉시 무효화할 수 있어야 한다). [ADR-0013]
 
 ---
 
