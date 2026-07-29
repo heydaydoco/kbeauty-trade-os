@@ -79,6 +79,17 @@ def build_engine(url: str, **overrides: Any) -> Engine:
         "pool_pre_ping": True,
         "future": True,
         "echo": False,
+        # ★ SQL 오류 메시지·트레이스백에 바인드 파라미터를 싣지 않는다 (§18.1·§20 G).
+        #
+        #   events.py는 이미 파라미터를 로그에서 뺐지만, **예외 경로가 남아 있었다** —
+        #   INSERT가 실패하면 SQLAlchemy가 예외 문자열에 `[parameters: {...}]`를
+        #   붙이고, 그 예외가 handle_unexpected로 가면 트레이스백째 로그에 남는다.
+        #   거기에는 매입가(원가)도 비밀번호 해시도 그대로 들어 있다. 임의의
+        #   숫자·해시는 마스킹 규칙으로 잡을 수 없으므로 애초에 만들지 않는다.
+        #
+        #   대가는 진단 정보다. 문장(SQL)과 PostgreSQL의 DETAIL(제약 이름·키 값)은
+        #   그대로 남으므로 "무엇이 왜 실패했는지"는 여전히 보인다.
+        "hide_parameters": True,
     }
     # poolclass를 지정한 호출(예: alembic의 NullPool)에는 풀 크기 인자를 넘기면
     # create_engine이 TypeError를 낸다 — NullPool은 그 인자를 받지 않는다.
