@@ -7,7 +7,13 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-from app.modules.catalog.models import PRODUCT_STATUSES, SKU_KINDS, SKU_STATUSES
+from app.modules.catalog.models import (
+    PRICE_TYPES,
+    PRODUCT_STATUSES,
+    SKU_KINDS,
+    SKU_STATUSES,
+)
+from app.modules.catalog.pricing import SkuPriceView
 from app.modules.catalog.service import (
     BrandView,
     ProductView,
@@ -19,6 +25,7 @@ from app.modules.catalog.service import (
 _STATUS_PATTERN = f"^({'|'.join(SKU_STATUSES)})$"
 _PRODUCT_STATUS_PATTERN = f"^({'|'.join(PRODUCT_STATUSES)})$"
 _KIND_PATTERN = f"^({'|'.join(SKU_KINDS)})$"
+_PRICE_TYPE_PATTERN = f"^({'|'.join(PRICE_TYPES)})$"
 
 
 # ── 브랜드 ─────────────────────────────────────────────────────────────────
@@ -253,4 +260,47 @@ class SetComponentSummary(BaseModel):
             component_name_ko=view.component_name_ko,
             component_shelf_life_months=view.component_shelf_life_months,
             quantity=view.quantity,
+        )
+
+
+# ── 단가 이력 (§4.1 / ADR-0017·0018) ───────────────────────────────────────
+
+
+class SkuPriceCreateRequest(BaseModel):
+    """단가 등록 요청.
+
+    ★ 금액은 **사람이 쓰는 표기**로 받는다(12000 / 12.34). 서버가 통화별
+      자릿수로 정수 최소단위로 바꾼다 — 화면마다 환산하면 그 규칙이 갈린다.
+    """
+
+    price_type: str = Field(pattern=_PRICE_TYPE_PATTERN)
+    currency: str = Field(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
+    #: Decimal로 받는다. float으로 받으면 12.34가 12.339999…로 들어온다(§2 ADR-02).
+    amount: Decimal = Field(ge=0)
+    effective_from: date
+    note: str | None = None
+
+
+class SkuPriceSummary(BaseModel):
+    id: int
+    sku_id: int
+    price_type: str
+    currency: str
+    #: 정수 최소단위. 표시 변환은 화면이 /v1/system/currencies의 자릿수로 한다.
+    amount: int
+    effective_from: date
+    note: str | None
+    is_current: bool
+
+    @classmethod
+    def of(cls, view: SkuPriceView) -> SkuPriceSummary:
+        return cls(
+            id=view.id,
+            sku_id=view.sku_id,
+            price_type=view.price_type,
+            currency=view.currency,
+            amount=view.amount,
+            effective_from=view.effective_from,
+            note=view.note,
+            is_current=view.is_current,
         )

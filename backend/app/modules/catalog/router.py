@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.core.csv_export import csv_response
 from app.core.pagination import Page, PageParams
-from app.modules.catalog import service
+from app.modules.catalog import pricing, service
 from app.modules.catalog.schemas import (
     BrandCreateRequest,
     BrandSummary,
@@ -25,6 +25,8 @@ from app.modules.catalog.schemas import (
     SkuCreateRequest,
     SkuHsCodeCreateRequest,
     SkuHsCodeSummary,
+    SkuPriceCreateRequest,
+    SkuPriceSummary,
     SkuSummary,
 )
 from app.modules.identity.models import RoleCode
@@ -303,3 +305,46 @@ def list_set_components(
         set_sku_id=sku_id, offset=params.offset, limit=params.limit
     )
     return Page.of([SetComponentSummary.of(view) for view in views], total, params)
+
+
+# ── 단가 이력 (§4.1 / ADR-0017·0018) ───────────────────────────────────────
+
+
+@router.post(
+    "/{sku_id}/prices",
+    summary="SKU 단가 등록 (판가·매입가)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_REGISTER)],
+)
+def create_sku_price(
+    sku_id: int,
+    payload: SkuPriceCreateRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> SkuPriceSummary:
+    status_code, body = pricing.record_price(
+        actor=current,
+        idempotency_key=key,
+        sku_id=sku_id,
+        payload=payload.model_dump(mode="json"),
+    )
+    response.status_code = status_code
+    return SkuPriceSummary.model_validate(body)
+
+
+@router.get("/{sku_id}/prices", summary="SKU 단가 이력")
+def list_sku_prices(
+    sku_id: int, current: CurrentUser, params: Annotated[PageParams, Depends()]
+) -> Page[SkuPriceSummary]:
+    """★ 조회 역할에게는 매입가 행이 목록에도 건수에도 없다(ADR-0018)."""
+    views, total = pricing.list_prices(
+        actor=current, sku_id=sku_id, offset=params.offset, limit=params.limit
+    )
+    return Page.of([SkuPriceSummary.of(view) for view in views], total, params)
+
+
+@router.get("/{sku_id}/prices/{price_id}", summary="SKU 단가 상세")
+def get_sku_price(sku_id: int, price_id: int, current: CurrentUser) -> SkuPriceSummary:
+    """감춰야 하는 행은 403이 아니라 404다 — 403은 존재를 알려 준다(ADR-0018)."""
+    return SkuPriceSummary.of(pricing.get_price(actor=current, sku_id=sku_id, price_id=price_id))

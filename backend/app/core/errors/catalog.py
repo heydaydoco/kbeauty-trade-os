@@ -60,6 +60,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "마지막 남은 관리자입니다. 이 계정의 관리자 권한을 회수하거나 비활성화하면 아무도 시스템을 관리할 수 없게 됩니다. 다른 사용자에게 관리자 권한을 먼저 부여해 주세요.",
     ),
+    ErrorCode.CATALOG_PRICE_NOT_EFFECTIVE: ErrorSpec(
+        422,
+        "해당 기준일에 적용되는 단가가 없습니다. 그 날짜 이전에 발효되는 단가를 먼저 등록해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

@@ -66,6 +66,11 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "margin",
         "unit_cost",
         "landed_cost",
+        # 매입가는 원가다(ADR-0018). 조회 역할이 화면에서 볼 수 없는 값이라
+        # 로그에도 남으면 안 된다. ★ `amount`·`price`를 통째로 넣지는 않는다 —
+        # 판가·전표 금액은 원가가 아니고, 그것까지 가리면 진단이 불가능해진다.
+        "purchase_price",
+        "purchase_amount",
     }
 )
 

@@ -740,7 +740,7 @@ def _guard_verified_on(value: date) -> None:
         )
 
 
-def _live_sku(session: Session, sku_id: int) -> Sku:
+def require_sku(session: Session, sku_id: int) -> Sku:
     sku = session.execute(
         select(Sku).where(Sku.id == sku_id, Sku.deleted_at.is_(None))
     ).scalar_one_or_none()
@@ -769,7 +769,7 @@ def create_sku_hs_code(
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
 
-        sku = _live_sku(session, sku_id)
+        sku = require_sku(session, sku_id)
         # 스키마가 date로 검증했지만 model_dump(mode="json")을 거치며 ISO 문자열이
         # 됐다. 다른 엔드포인트와 같은 직렬화 경로를 쓰기 위한 값이라 여기서 되돌린다.
         verified_on = date.fromisoformat(str(payload["last_verified_on"]))
@@ -810,7 +810,7 @@ def create_sku_hs_code(
 def list_sku_hs_codes(*, sku_id: int, offset: int, limit: int) -> tuple[list[SkuHsCodeView], int]:
     with unit_of_work() as uow:
         session = uow.session
-        _live_sku(session, sku_id)
+        require_sku(session, sku_id)
         condition = (SkuHsCode.sku_id == sku_id, SkuHsCode.deleted_at.is_(None))
         total = session.execute(
             select(func.count()).select_from(SkuHsCode).where(*condition)
@@ -918,8 +918,8 @@ def add_set_component(
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
 
-        set_sku = _live_sku(session, set_sku_id)
-        component = _live_sku(session, int(payload["component_sku_id"]))
+        set_sku = require_sku(session, set_sku_id)
+        component = require_sku(session, int(payload["component_sku_id"]))
         _guard_set_composition(set_sku, component)
 
         # ★ 실패 경로에서 쓸 값은 flush **전에** 평범한 변수로 빼 둔다.
@@ -958,7 +958,7 @@ def list_set_components(
 ) -> tuple[list[SetComponentView], int]:
     with unit_of_work() as uow:
         session = uow.session
-        _live_sku(session, set_sku_id)
+        require_sku(session, set_sku_id)
         condition = (SetComponent.set_sku_id == set_sku_id, SetComponent.deleted_at.is_(None))
         total = session.execute(
             select(func.count()).select_from(SetComponent).where(*condition)

@@ -24,6 +24,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import (
+    CHAR,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -271,4 +272,53 @@ class SetComponent(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, Actor
         positive("quantity"),
         CheckConstraint("set_sku_id <> component_sku_id", name="no_self_reference"),
         unique_active("set_components", "set_sku_id", "component_sku_id"),
+    )
+
+
+#: 단가의 종류 (§4.1 "판가·매입가는 이력 테이블로").
+#: PURCHASE는 **원가**다 — 조회 역할에게는 행 자체를 보이지 않는다(ADR-0018).
+PRICE_TYPES = ("SALES", "PURCHASE")
+
+
+class SkuPrice(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):
+    """단가 이력 (§4.1 "그때 단가" 분쟁 대비 / ADR-0017).
+
+    ■ 종료일을 저장하지 않는다
+
+      다음 행의 발효일이 곧 이전 행의 종료다. 종료일을 두면 기간 겹침이 표현
+      가능해지고, 겹친 이력은 "그때 단가"를 두 개로 만든다 — 이 테이블의 목적
+      자체가 무너진다. 종료일이 없으면 겹침이 **원천적으로 불가능**하다.
+
+    ■ 기준일 조회는 없으면 오류다
+
+      `effective_from <= 기준일` 중 최댓값 1행. 없으면 0이나 null이 아니라
+      오류로 실패한다(service.price_at). S3-1의 전표 단가 스냅샷이 이 조회를
+      소비하므로, 0을 돌려주면 금액 0원 전표가 조용히 확정된다.
+
+    ■ 금액은 정수 최소단위 + 통화 (§2 ADR-02)
+
+      USD 12.34 → 1234. 통화별 자릿수는 app/core/money.py가 유일한 출처이고,
+      서비스가 그 표로 변환·검증한다. DB에 통화 목록 CHECK를 두지 않는 이유는
+      그 목록이 money.py와 갈라지는 순간 어느 쪽이 진실인지 알 수 없어지기 때문이다.
+    """
+
+    __tablename__ = "sku_prices"
+
+    sku_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("skus.id", ondelete="RESTRICT"), nullable=False
+    )
+    price_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    currency: Mapped[str] = mapped_column(CHAR(3), nullable=False)
+    #: 정수 최소단위. Float 금지(§2 ADR-02 / GC-G1).
+    amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: 발효일(업무 날짜). 미래 날짜를 허용한다 — 인상 예고가 실무에 있다.
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        value_in("price_type", PRICE_TYPES),
+        # 0을 막지 않는다 — 사은품 0원이 실재하고, §20 B도 무상(금액 0)을 인정한다.
+        CheckConstraint("amount >= 0", name="amount_nonnegative"),
+        CheckConstraint("currency = upper(currency)", name="currency_uppercase"),
+        unique_active("sku_prices", "sku_id", "price_type", "currency", "effective_from"),
     )
