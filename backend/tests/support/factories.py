@@ -67,8 +67,12 @@ def create_product(
     """
     # ★ 브랜드는 트랜잭션 **밖에서** 먼저 만든다. unit_of_work를 중첩하면
     #   §17.1의 "업무 동작 하나 = 트랜잭션 하나"가 테스트 준비 코드에서부터 깨진다.
+    #
+    # ★ 브랜드 코드를 제품 코드에서 파생시킨다. 고정값을 쓰면 한 테스트가 제품을
+    #   둘 만드는 순간 브랜드 부분 유니크에 걸려, **테스트 준비 코드가 실패하고
+    #   그 실패가 마치 기능 결함처럼 보인다**(실제로 그렇게 한 번 헤맸다).
     if brand_id is None:
-        brand_id = create_brand()
+        brand_id = create_brand(f"B-{product_code}"[:20])
     with unit_of_work() as uow:
         product = Product(
             brand_id=brand_id,

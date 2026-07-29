@@ -49,6 +49,7 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "brands",
         "products",
         "sku_hs_codes",  # 세율 메모·근거링크·최종확인일 갱신(UPDATE)
+        "set_components",  # 구성 수량 변경·구성품 제외(soft delete)
     }
 )
 

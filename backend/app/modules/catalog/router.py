@@ -20,6 +20,8 @@ from app.modules.catalog.schemas import (
     BrandSummary,
     ProductCreateRequest,
     ProductSummary,
+    SetComponentCreateRequest,
+    SetComponentSummary,
     SkuCreateRequest,
     SkuHsCodeCreateRequest,
     SkuHsCodeSummary,
@@ -265,3 +267,39 @@ def list_sku_hs_codes(
         sku_id=sku_id, offset=params.offset, limit=params.limit
     )
     return Page.of([SkuHsCodeSummary.of(view) for view in views], total, params)
+
+
+# ── 세트 구성 (§4.2 / GC-E1) ───────────────────────────────────────────────
+
+
+@router.post(
+    "/{sku_id}/components",
+    summary="세트 구성품 추가",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_REGISTER)],
+)
+def add_set_component(
+    sku_id: int,
+    payload: SetComponentCreateRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> SetComponentSummary:
+    status_code, body = service.add_set_component(
+        actor=current,
+        idempotency_key=key,
+        set_sku_id=sku_id,
+        payload=payload.model_dump(mode="json"),
+    )
+    response.status_code = status_code
+    return SetComponentSummary.model_validate(body)
+
+
+@router.get("/{sku_id}/components", summary="세트 구성 목록")
+def list_set_components(
+    sku_id: int, current: CurrentUser, params: Annotated[PageParams, Depends()]
+) -> Page[SetComponentSummary]:
+    views, total = service.list_set_components(
+        set_sku_id=sku_id, offset=params.offset, limit=params.limit
+    )
+    return Page.of([SetComponentSummary.of(view) for view in views], total, params)

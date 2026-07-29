@@ -20,7 +20,7 @@ from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.time import today_kst
-from app.modules.catalog.models import Brand, Product, Sku, SkuHsCode
+from app.modules.catalog.models import Brand, Product, SetComponent, Sku, SkuHsCode
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.outbox import service as outbox
@@ -823,3 +823,152 @@ def list_sku_hs_codes(*, sku_id: int, offset: int, limit: int) -> tuple[list[Sku
             .limit(limit)
         ).scalars()
         return [_hs_view(row) for row in rows], total
+
+
+# ── 세트 구성 (§4.2 / GC-E1 / ADR-0016) ────────────────────────────────────
+
+
+SET_COMPONENT_CREATE_ENDPOINT = "POST /api/v1/skus/{sku_id}/components"
+
+
+@dataclass(frozen=True, slots=True)
+class SetComponentView:
+    id: int
+    set_sku_id: int
+    component_sku_id: int
+    component_sku_code: str
+    component_name_ko: str
+    #: 구성품의 사용기한(개월). 세트 **로트**의 유통기한은 구성품 로트에서
+    #: 나오지만(§4.2, sets.set_lot_expiry), 마스터 화면에서 구성품별 기한을
+    #: 나란히 보여 주려면 이 값이 필요하다.
+    component_shelf_life_months: int | None
+    quantity: int
+
+
+def _component_view(row: SetComponent, component: Sku) -> SetComponentView:
+    return SetComponentView(
+        id=row.id,
+        set_sku_id=row.set_sku_id,
+        component_sku_id=row.component_sku_id,
+        component_sku_code=component.sku_code,
+        component_name_ko=component.name_ko,
+        component_shelf_life_months=component.shelf_life_months,
+        quantity=row.quantity,
+    )
+
+
+def _serialize_component(view: SetComponentView) -> dict[str, Any]:
+    return {
+        "id": view.id,
+        "set_sku_id": view.set_sku_id,
+        "component_sku_id": view.component_sku_id,
+        "component_sku_code": view.component_sku_code,
+        "component_name_ko": view.component_name_ko,
+        "component_shelf_life_months": view.component_shelf_life_months,
+        "quantity": view.quantity,
+    }
+
+
+def _guard_set_composition(set_sku: Sku, component: Sku) -> None:
+    """세트 구성의 두 규칙 (§4.2 / ADR-0016 A8).
+
+    ★ DB는 이 둘을 못 잡는다 — 둘 다 **다른 행**을 봐야 판정되기 때문이다.
+      그래서 규칙이 여기 한 곳에만 있고, 테스트가 그것을 지킨다.
+    """
+    # ★ 자기 참조를 **가장 먼저** 본다. 세트가 자기 자신을 가리킨 경우 뒤의
+    #   "구성품은 단품이어야 합니다"에 먼저 걸려서, 원인과 다른 안내가 나간다.
+    if set_sku.id == component.id:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={"component_sku_id": "세트는 자기 자신을 구성품으로 가질 수 없습니다."},
+            log_context={"set_sku_id": set_sku.id},
+        )
+    if set_sku.kind != "SET":
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                "set_sku_id": f"구성품을 담을 수 있는 것은 세트 SKU뿐입니다"
+                f"(이 SKU는 단품입니다: {set_sku.sku_code})."
+            },
+            log_context={"set_sku_id": set_sku.id, "kind": set_sku.kind},
+        )
+    if component.kind != "SINGLE":
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                "component_sku_id": f"세트를 다른 세트의 구성품으로 넣을 수 없습니다"
+                f"({component.sku_code}). 구성품은 단품이어야 합니다."
+            },
+            log_context={"component_sku_id": component.id, "kind": component.kind},
+        )
+
+
+def add_set_component(
+    *, actor: AuthenticatedUser, idempotency_key: str, set_sku_id: int, payload: dict[str, Any]
+) -> tuple[int, dict[str, Any]]:
+    with unit_of_work() as uow:
+        session = uow.session
+        claim = idempotency.claim(
+            session,
+            actor_user_id=actor.id,
+            endpoint=SET_COMPONENT_CREATE_ENDPOINT,
+            key=idempotency_key,
+            request_body={**payload, "set_sku_id": set_sku_id},
+        )
+        if claim.replay is not None:
+            return claim.replay.status_code, claim.replay.body
+
+        set_sku = _live_sku(session, set_sku_id)
+        component = _live_sku(session, int(payload["component_sku_id"]))
+        _guard_set_composition(set_sku, component)
+
+        # ★ 실패 경로에서 쓸 값은 flush **전에** 평범한 변수로 빼 둔다.
+        #   flush가 실패하면 세션은 롤백 대기 상태가 되고, 그 뒤에 ORM 속성을
+        #   읽으면 만료된 값을 다시 읽으려다 PendingRollbackError가 난다 —
+        #   그러면 사용자에게는 "중복입니다" 대신 500이 가고, 로그의 원인도
+        #   진짜 원인(유니크 위반)이 아니라 롤백 오류로 뒤바뀐다.
+        component_id = component.id
+        row = SetComponent(
+            set_sku_id=set_sku.id,
+            component_sku_id=component_id,
+            quantity=int(payload["quantity"]),
+            created_by_id=actor.id,
+        )
+        session.add(row)
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise AppError(
+                ErrorCode.VALIDATION_INVALID_FIELD,
+                detail={
+                    "component_sku_id": "이미 구성에 들어 있는 품목입니다. "
+                    "수량을 바꾸려면 기존 항목을 수정해 주세요."
+                },
+                log_context={"set_sku_id": set_sku_id, "component_sku_id": component_id},
+            ) from exc
+
+        body = _serialize_component(_component_view(row, component))
+        assert claim.record is not None
+        idempotency.complete(session, claim.record, status_code=201, body=body)
+        return 201, body
+
+
+def list_set_components(
+    *, set_sku_id: int, offset: int, limit: int
+) -> tuple[list[SetComponentView], int]:
+    with unit_of_work() as uow:
+        session = uow.session
+        _live_sku(session, set_sku_id)
+        condition = (SetComponent.set_sku_id == set_sku_id, SetComponent.deleted_at.is_(None))
+        total = session.execute(
+            select(func.count()).select_from(SetComponent).where(*condition)
+        ).scalar_one()
+        rows = session.execute(
+            select(SetComponent, Sku)
+            .join(Sku, SetComponent.component_sku_id == Sku.id)
+            .where(*condition)
+            .order_by(Sku.sku_code)
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [_component_view(row, component) for row, component in rows], total

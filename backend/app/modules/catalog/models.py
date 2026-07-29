@@ -238,3 +238,37 @@ class SkuHsCode(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMix
         CheckConstraint("length(btrim(source_url)) > 0", name="source_url_not_blank"),
         unique_active("sku_hs_codes", "sku_id", "country_code", "hs_version"),
     )
+
+
+class SetComponent(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):
+    """세트 구성 (§4.2 / GC-E1).
+
+    세트 1개를 만들 때 들어가는 구성품과 수량이다. 조립·해체는 재고 원장의
+    ASSEMBLY/DISASSEMBLY(§8.2)가 하고, 그건 Phase 4다 — 여기는 **구성의 정의**만
+    갖는다.
+
+    ★ DB가 못 잠그는 두 가지가 있다: "set_sku는 kind='SET'이어야 한다"와
+      "구성품은 kind='SINGLE'이어야 한다"(§4.2 중첩 세트 금지, ADR-0016). 둘 다
+      **다른 행**을 봐야 판정되는 조건이라 CHECK로 표현할 수 없다. 트리거를 쓰지
+      않는 이유는 ORM에서 보이지 않아 마이그레이션·테스트가 어려워지고, 규칙이
+      코드와 DB 두 곳으로 갈라지기 때문이다 — 서비스가 검증하고 테스트가 지킨다.
+      자기 자신 참조만은 한 행 안에서 판정되므로 CHECK로 막는다.
+    """
+
+    __tablename__ = "set_components"
+
+    set_sku_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("skus.id", ondelete="RESTRICT"), nullable=False
+    )
+    component_sku_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("skus.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: 세트 1개당 들어가는 수량. GC-E1의 "본품 2 + 미니 1"이 이 값이다.
+    #: 원장은 EA 단일이므로(§8.2) 여기도 EA다.
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        positive("quantity"),
+        CheckConstraint("set_sku_id <> component_sku_id", name="no_self_reference"),
+        unique_active("set_components", "set_sku_id", "component_sku_id"),
+    )

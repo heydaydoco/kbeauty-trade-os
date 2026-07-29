@@ -8,7 +8,13 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from app.modules.catalog.models import PRODUCT_STATUSES, SKU_KINDS, SKU_STATUSES
-from app.modules.catalog.service import BrandView, ProductView, SkuHsCodeView, SkuView
+from app.modules.catalog.service import (
+    BrandView,
+    ProductView,
+    SetComponentView,
+    SkuHsCodeView,
+    SkuView,
+)
 
 _STATUS_PATTERN = f"^({'|'.join(SKU_STATUSES)})$"
 _PRODUCT_STATUS_PATTERN = f"^({'|'.join(PRODUCT_STATUSES)})$"
@@ -216,4 +222,35 @@ class SkuHsCodeSummary(BaseModel):
             tariff_note=view.tariff_note,
             source_url=view.source_url,
             last_verified_on=view.last_verified_on,
+        )
+
+
+# ── 세트 구성 (§4.2 / GC-E1) ───────────────────────────────────────────────
+
+
+class SetComponentCreateRequest(BaseModel):
+    component_sku_id: int
+    #: 세트 1개당 수량. 원장은 EA 단일이다(§8.2).
+    quantity: int = Field(gt=0)
+
+
+class SetComponentSummary(BaseModel):
+    id: int
+    set_sku_id: int
+    component_sku_id: int
+    component_sku_code: str
+    component_name_ko: str
+    component_shelf_life_months: int | None
+    quantity: int
+
+    @classmethod
+    def of(cls, view: SetComponentView) -> SetComponentSummary:
+        return cls(
+            id=view.id,
+            set_sku_id=view.set_sku_id,
+            component_sku_id=view.component_sku_id,
+            component_sku_code=view.component_sku_code,
+            component_name_ko=view.component_name_ko,
+            component_shelf_life_months=view.component_shelf_life_months,
+            quantity=view.quantity,
         )
