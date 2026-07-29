@@ -20,6 +20,7 @@ from app.core.logging.redaction import (
     is_sensitive_key,
     normalize_key,
     register_secret_values,
+    scrub_text,
 )
 
 pytestmark = pytest.mark.group_k
@@ -195,3 +196,24 @@ def test_purchase_price_keys_are_masked() -> None:
     assert is_sensitive_key("purchaseAmount")  # camelCase도 정규화해서 잡는다
     assert not is_sensitive_key("amount")
     assert not is_sensitive_key("sales_price")
+
+
+def test_postgres_failing_row_detail_is_scrubbed() -> None:
+    """PostgreSQL의 "Failing row contains (…)"는 행 전체 값이라 지운다
+
+    hide_parameters로는 막히지 않는 경로다(서버가 만든 문자열). 제약 이름은
+    남아야 진단이 되므로 그 줄만 자른다.
+    """
+    raw = (
+        'new row for relation "sku_prices" violates check constraint '
+        '"ck_sku_prices_price_type_valid"\n'
+        "DETAIL:  Failing row contains (1, 1, BOGUS, KRW, 7654321, 2026-01-01, null).\n"
+        "[SQL: INSERT INTO sku_prices ...]"
+    )
+
+    cleaned = scrub_text(raw)
+
+    assert "7654321" not in cleaned
+    assert "BOGUS" not in cleaned
+    assert "ck_sku_prices_price_type_valid" in cleaned
+    assert "INSERT INTO sku_prices" in cleaned

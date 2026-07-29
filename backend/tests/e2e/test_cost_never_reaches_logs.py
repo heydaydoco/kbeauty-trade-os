@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db.uow import unit_of_work
+from app.core.logging import get_logger
 from app.main import app
 from app.modules.catalog.models import SkuPrice
 from app.modules.identity.models import RoleCode
@@ -139,3 +140,41 @@ def test_the_detector_would_notice_a_leak(
 
     # 요청 자체는 로그에 남는다 — 즉 캡처가 살아 있다.
     assert "999999" in caplog.text
+
+
+def test_a_constraint_violation_does_not_leak_the_failing_row_into_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """★ PostgreSQL의 "Failing row contains (…)"가 로그로 나가지 않는다
+
+    hide_parameters는 **우리가 보낸** 바인드 값만 가린다. 제약 위반 시 서버가
+    DETAIL에 실어 보내는 "Failing row contains (…)"는 **행 전체 값**이고, 그건
+    서버가 만든 문자열이라 엔진 설정으로 막을 수 없다. 실측으로 확인한 경로다:
+
+        DETAIL:  Failing row contains (1, 1, BOGUS, KRW, 7654321, 2026-01-01, …)
+
+    마지막 관문(마스킹 프로세서)이 지운다.
+    """
+    sku_id = create_sku()
+
+    with pytest.raises(IntegrityError) as exc, unit_of_work() as uow:
+        uow.session.add(
+            SkuPrice(
+                sku_id=sku_id,
+                price_type="BOGUS",  # CHECK 위반 — 앱 검증을 우회해 직접 넣는다
+                currency="KRW",
+                amount=int(COST),
+                effective_from="2026-01-01",
+            )
+        )
+        uow.session.flush()
+
+    # 예외 문자열 자체에는 남아 있다 — PostgreSQL이 만든 문자열이기 때문이다.
+    assert COST in str(exc.value)
+
+    with caplog.at_level(logging.ERROR):
+        get_logger("test.leak").error("unhandled_exception", exc_info=exc.value)
+
+    assert COST not in caplog.text
+    # 진단은 유지된다 — 어떤 제약이 걸렸는지는 남는다.
+    assert "ck_sku_prices_price_type_valid" in caplog.text

@@ -98,6 +98,17 @@ _DSN_PASSWORD = re.compile(
     r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]*://[^:/@\s]+:)(?P<pw>[^@\s]+)(?P<tail>@)"
 )
 
+# PostgreSQL이 CHECK·NOT NULL 위반 시 DETAIL에 실어 보내는 "Failing row contains (…)".
+#
+# ★ **행 전체 값**이다 — 매입가도 비밀번호 해시도 그대로 들어 있다. 이건 서버가
+#   만든 문자열이라 SQLAlchemy의 hide_parameters로는 막히지 않는다(그건 우리가
+#   보낸 바인드 값만 가린다). 실측으로 확인한 유출 경로다:
+#       DETAIL:  Failing row contains (1, 1, BOGUS, KRW, 7654321, 2026-01-01, …)
+#
+#   줄 끝까지 지운다 — 값 안에 괄호가 들어 있을 수 있어 괄호 짝으로는 못 자른다.
+#   제약 이름은 바로 앞 줄에 있으므로 "무엇이 왜 실패했는지"는 남는다.
+_PG_FAILING_ROW = re.compile(r"Failing row contains \([^\n]*")
+
 _VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9]{16,}"),
@@ -144,6 +155,7 @@ def is_sensitive_key(key: object) -> bool:
 def scrub_text(text: str) -> str:
     """문자열 안의 비밀을 지운다 (예외 트레이스백·SQL·URL 포함)."""
     cleaned = _DSN_PASSWORD.sub(rf"\g<head>{REPLACEMENT}\g<tail>", text)
+    cleaned = _PG_FAILING_ROW.sub(f"Failing row contains {REPLACEMENT}", cleaned)
     for pattern in _VALUE_PATTERNS:
         cleaned = pattern.sub(REPLACEMENT, cleaned)
     for secret in _known_secrets:

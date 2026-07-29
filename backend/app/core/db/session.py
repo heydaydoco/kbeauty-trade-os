@@ -97,6 +97,10 @@ def build_engine(url: str, **overrides: Any) -> Engine:
         options["pool_size"] = 10
         options["max_overflow"] = 10
     options.update(overrides)
+    # ★ 이것만은 호출자가 덮을 수 없다. dev/prod나 테스트 하네스에서 "진단하려고"
+    #   한 번 켜면 그 환경의 로그에 원가·비밀번호 해시가 남는다 — §18.1에는
+    #   환경 분기가 없다.
+    options["hide_parameters"] = True
     return create_engine(url, **options)
 
 
