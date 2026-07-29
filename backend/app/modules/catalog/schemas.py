@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from pydantic import BaseModel, Field
 
 from app.modules.catalog.models import PRODUCT_STATUSES, SKU_KINDS, SKU_STATUSES
@@ -92,6 +94,28 @@ class SkuCreateRequest(BaseModel):
     #: 알려 주려면 필드 키가 붙은 오류여야 한다). 최종 판정자는 DB CHECK다.
     product_id: int | None = None
 
+    # 물류 (§4.1)
+    barcode: str | None = Field(default=None, max_length=20)
+    #: 소매포장 포함 판매단위 1개의 중량(g). 선적의 G.W./N.W.와 다르다(ADR-0003 ⑧).
+    unit_weight_g: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=3)
+    box_qty: int | None = Field(default=None, gt=0)
+    shelf_life_months: int | None = Field(default=None, gt=0)
+    manufacturer_name: str | None = Field(default=None, max_length=100)
+
+    # DG (§4.1 / §7.7). 완결성·교차 정합은 P4 DG 게이트가 본다(ADR-0016 부기).
+    dg_flag: bool = False
+    un_number: str | None = Field(default=None, max_length=10)
+    dg_class: str | None = Field(default=None, max_length=10)
+    packing_group: str | None = Field(default=None, max_length=3)
+    #: 인화점은 음수도 실재한다(에탄올 13℃, 더 낮은 것도 있다) — 하한을 걸지 않는다.
+    flash_point_c: Decimal | None = Field(default=None, max_digits=5, decimal_places=1)
+    alcohol_content_pct: Decimal | None = Field(
+        default=None, ge=0, le=100, max_digits=5, decimal_places=2
+    )
+    is_aerosol: bool = False
+    is_limited_quantity: bool = False
+    msds_url: str | None = Field(default=None, max_length=500)
+
 
 class SkuSummary(BaseModel):
     id: int
@@ -104,6 +128,20 @@ class SkuSummary(BaseModel):
     product_code: str | None
     product_name_ko: str | None
     brand_name_ko: str | None
+    barcode: str | None
+    unit_weight_g: Decimal | None
+    box_qty: int | None
+    shelf_life_months: int | None
+    manufacturer_name: str | None
+    dg_flag: bool
+    un_number: str | None
+    dg_class: str | None
+    packing_group: str | None
+    flash_point_c: Decimal | None
+    alcohol_content_pct: Decimal | None
+    is_aerosol: bool
+    is_limited_quantity: bool
+    msds_url: str | None
 
     @classmethod
     def of(cls, view: SkuView) -> SkuSummary:
@@ -118,4 +156,18 @@ class SkuSummary(BaseModel):
             product_code=view.product_code,
             product_name_ko=view.product_name_ko,
             brand_name_ko=view.brand_name_ko,
+            barcode=view.barcode,
+            unit_weight_g=view.unit_weight_g,
+            box_qty=view.box_qty,
+            shelf_life_months=view.shelf_life_months,
+            manufacturer_name=view.manufacturer_name,
+            dg_flag=view.dg_flag,
+            un_number=view.un_number,
+            dg_class=view.dg_class,
+            packing_group=view.packing_group,
+            flash_point_c=view.flash_point_c,
+            alcohol_content_pct=view.alcohol_content_pct,
+            is_aerosol=view.is_aerosol,
+            is_limited_quantity=view.is_limited_quantity,
+            msds_url=view.msds_url,
         )

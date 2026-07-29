@@ -34,6 +34,8 @@ router = APIRouter(prefix="/skus", tags=["skus"])
 
 BRAND_CSV_HEADER = ("브랜드코드", "브랜드명(국문)", "브랜드명(영문)")
 PRODUCT_CSV_HEADER = ("제품코드", "제품명(국문)", "제품명(영문)", "브랜드코드", "상태")
+#: 마스터 전 항목을 내보낸다 — S1-3의 왕복 편집(§12.2)이 이 양식을 그대로
+#: 소비하므로, 화면에 안 보이는 칸이라고 빼면 그때 왕복이 성립하지 않는다.
 SKU_CSV_HEADER = (
     "품번",
     "품명(국문)",
@@ -43,6 +45,20 @@ SKU_CSV_HEADER = (
     "제품명(국문)",
     "브랜드명(국문)",
     "상태",
+    "바코드",
+    "중량(g)",
+    "박스입수",
+    "사용기한(개월)",
+    "제조사",
+    "위험물",
+    "UN번호",
+    "Class",
+    "포장등급",
+    "인화점(℃)",
+    "알코올함량(%)",
+    "에어로졸",
+    "LQ",
+    "MSDS링크",
 )
 
 
@@ -185,6 +201,20 @@ def export_skus_csv(current: CurrentUser) -> StreamingResponse:
                 view.product_name_ko,
                 view.brand_name_ko,
                 view.status,
+                view.barcode,
+                view.unit_weight_g,
+                view.box_qty,
+                view.shelf_life_months,
+                view.manufacturer_name,
+                view.dg_flag,
+                view.un_number,
+                view.dg_class,
+                view.packing_group,
+                view.flash_point_c,
+                view.alcohol_content_pct,
+                view.is_aerosol,
+                view.is_limited_quantity,
+                view.msds_url,
             )
             for view in views
         ],

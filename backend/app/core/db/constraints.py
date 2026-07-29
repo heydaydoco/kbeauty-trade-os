@@ -61,8 +61,22 @@ def value_in(column: str, values: Iterable[str], *, name: str | None = None) -> 
 
 
 def positive(column: str, *, name: str | None = None) -> CheckConstraint:
-    """수량·금액이 0보다 커야 하는 제약."""
+    """수량·금액이 0보다 커야 하는 제약.
+
+    ★ NULL 허용 컬럼에도 그대로 쓴다. SQL의 CHECK는 식이 FALSE일 때만 거부하고
+      NULL(=미지)은 통과시킨다 — "값이 있으면 0보다 커야 한다"가 정확히 이 의미다.
+    """
     return CheckConstraint(f"{column} > 0", name=name or f"{column}_positive")
+
+
+def in_range(
+    column: str, low: str | int, high: str | int, *, name: str | None = None
+) -> CheckConstraint:
+    """값이 있으면 [low, high] 안이어야 하는 제약 (예: 알코올 함량 0~100%).
+
+    positive()와 같은 이유로 NULL은 통과한다.
+    """
+    return CheckConstraint(f"{column} BETWEEN {low} AND {high}", name=name or f"{column}_range")
 
 
 def nonzero(column: str, *, name: str | None = None) -> CheckConstraint:

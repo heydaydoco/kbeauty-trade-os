@@ -20,11 +20,23 @@
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, String, Text
+from decimal import Decimal
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db.base import Base
-from app.core.db.constraints import unique_active, value_in
+from app.core.db.constraints import in_range, positive, unique_active, value_in
 from app.core.db.mixins import (
     ActorMixin,
     PkMixin,
@@ -103,6 +115,42 @@ class Sku(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Ba
         BigInteger, ForeignKey("products.id", ondelete="RESTRICT"), nullable=True
     )
 
+    # ── 물류 속성 (§4.1) ───────────────────────────────────────────────────
+    barcode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: **소매포장을 포함한 판매단위 1개의 중량(g)** — 선적 서류의 G.W.(포장·팔레트
+    #: 포함)·N.W.(내용물만)와는 다른 값이다. 그 둘은 마스터가 아니라 선적
+    #: 라인(§7.6)이 갖는다. [ADR-0003 ⑧]
+    unit_weight_g: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
+    #: 박스입수. 원장은 EA 단일이고 BOX는 화면 환산이다(§8.2) — 그 환산 계수가 이 값이다.
+    box_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: 제조일로부터의 사용기한(개월). 화장품 표기 관행이 개월이고,
+    #: P4의 로트 유통기한 계산이 이 값을 입력으로 쓴다.
+    shelf_life_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: S1-3에서 partners FK로 승격한다(ADR-0020).
+    manufacturer_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # ── DG 속성 (§4.1 / §7.7) ──────────────────────────────────────────────
+    #
+    # ★ 여기서 잠그는 것은 두 방향뿐이다(ADR-0016 정정):
+    #     ① SET이면 DG 속성 전부 부재 ② 비DG면 UN번호·Class·PG·LQ 부재.
+    #   dg_flag=true 방향의 완결성(UN번호 필수 등)과 교차 정합(에어로졸↔DG)은
+    #   §7.7 DG 게이트(P4)가 맡는다 — 등록 시점에 DG 정보가 다 모여 있지 않은
+    #   것이 실무의 정상 상태이고, 차단해야 할 지점은 등록이 아니라 선적이다.
+    dg_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    un_number: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    dg_class: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    packing_group: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    #: 인화점(℃). 에탄올 13℃처럼 낮고 음수도 가능해 범위 제약을 걸지 않는다.
+    flash_point_c: Mapped[Decimal | None] = mapped_column(Numeric(5, 1), nullable=True)
+    alcohol_content_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    is_aerosol: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    #: LQ(Limited Quantity) 포장 적용 여부.
+    is_limited_quantity: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    #: S1-3에서 documents 링크로 승격한다(ADR-0020).
+    msds_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     __table_args__ = (
         value_in("status", SKU_STATUSES),
         value_in("kind", SKU_KINDS, name="kind_valid"),
@@ -111,5 +159,28 @@ class Sku(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Ba
             "(kind = 'SINGLE' AND product_id IS NOT NULL) OR (kind = 'SET' AND product_id IS NULL)",
             name="kind_product_link",
         ),
+        # ① 세트는 DG 속성을 하나도 갖지 않는다 (ADR-0016 부기 — P4까지 미결).
+        CheckConstraint(
+            "kind <> 'SET' OR ("
+            " dg_flag = false AND un_number IS NULL AND dg_class IS NULL"
+            " AND packing_group IS NULL AND flash_point_c IS NULL"
+            " AND alcohol_content_pct IS NULL AND is_aerosol = false"
+            " AND is_limited_quantity = false AND msds_url IS NULL)",
+            name="set_has_no_dg",
+        ),
+        # ② 비DG 행에는 DG 분류가 있어야만 의미가 생기는 값이 남아 있으면 안 된다.
+        #    인화점·알코올함량·에어로졸·MSDS는 여기 없다 — 그건 "왜 DG가 아닌지"의
+        #    근거값이라 비DG 행에도 있어야 한다.
+        CheckConstraint(
+            "dg_flag = true OR ("
+            " un_number IS NULL AND dg_class IS NULL AND packing_group IS NULL"
+            " AND is_limited_quantity = false)",
+            name="dg_classification_only_when_dangerous",
+        ),
+        # 상식 범위. NULL은 통과한다(값이 있으면 지켜야 한다는 뜻).
+        positive("unit_weight_g"),
+        positive("box_qty"),
+        positive("shelf_life_months"),
+        in_range("alcohol_content_pct", 0, 100),
         unique_active("skus", "sku_code"),
     )
