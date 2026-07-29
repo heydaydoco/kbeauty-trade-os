@@ -66,6 +66,11 @@ SENSITIVE_KEYS: frozenset[str] = frozenset(
         "margin",
         "unit_cost",
         "landed_cost",
+        # 매입가는 원가다(ADR-0018). 조회 역할이 화면에서 볼 수 없는 값이라
+        # 로그에도 남으면 안 된다. ★ `amount`·`price`를 통째로 넣지는 않는다 —
+        # 판가·전표 금액은 원가가 아니고, 그것까지 가리면 진단이 불가능해진다.
+        "purchase_price",
+        "purchase_amount",
     }
 )
 
@@ -92,6 +97,18 @@ _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _DSN_PASSWORD = re.compile(
     r"(?P<head>[A-Za-z][A-Za-z0-9+.\-]*://[^:/@\s]+:)(?P<pw>[^@\s]+)(?P<tail>@)"
 )
+
+# PostgreSQL이 CHECK·NOT NULL 위반 시 DETAIL에 실어 보내는 "Failing row contains (…)".
+#
+# ★ **행 전체 값**이다 — 매입가도 비밀번호 해시도 그대로 들어 있다. 이건 서버가
+#   만든 문자열이라 SQLAlchemy의 hide_parameters로는 막히지 않는다(그건 우리가
+#   보낸 바인드 값만 가린다). 실측으로 확인한 유출 경로다:
+#       DETAIL:  Failing row contains (1, 1, BOGUS, KRW, 7654321, 2026-01-01, …)
+_PG_FAILING_ROW_START = "Failing row contains ("
+
+# SQLAlchemy가 그 뒤에 붙이는 꼬리표들. 여기까지가 지울 구간이고, 이 뒤(문장·
+# 배경 링크)는 진단에 필요해서 남긴다.
+_SQLALCHEMY_TAIL_MARKERS = ("\n[SQL:", "\n[SQL parameters", "\n(Background on this error")
 
 _VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"),
@@ -136,9 +153,47 @@ def is_sensitive_key(key: object) -> bool:
     return normalized in SENSITIVE_KEYS or normalized.endswith(SENSITIVE_SUFFIXES)
 
 
+def _scrub_failing_row(text: str) -> str:
+    """PostgreSQL의 "Failing row contains (…)" 구간을 통째로 지운다.
+
+    ★ 줄 끝으로 자르면 안 된다. PostgreSQL은 값 안의 **개행을 그대로 싣는다**
+      — 실측: `Failing row contains (…, 1234, …, 메모\\nTAILSECRET…, …)`.
+      줄 끝 절단은 개행 앞만 지우고 뒤를 남겼다. 괄호 짝으로 자르는 것도 같은
+      이유(값 안의 괄호)로 안 된다.
+
+      그래서 **여는 괄호부터 SQLAlchemy 꼬리표 앞까지**를 통째로 지운다.
+      제약 이름은 앞 줄에, 실패한 문장은 `[SQL: …]`에 남으므로 진단은 유지된다.
+
+    ★ 꼬리표는 **위조될 수 있다**. 사용자가 메모에 `"\\n[SQL:"`을 그대로 적으면
+      절단이 거기서 멈추고 뒤가 남는다 — 실측으로 확인했다. 그래서 두 겹으로 막는다.
+
+        ① 꼬리표는 **마지막** 등장 위치로 찾는다. 값은 DETAIL 안에 있고 진짜
+           꼬리표는 그 뒤에 오므로, 마지막 것이 진짜다.
+        ② 그렇게 정한 삭제 구간 안에 **또 꼬리표가 보이면** 위조가 섞인
+           것이므로 **메시지 끝까지** 지운다. 문장을 잃더라도 값을 남기지 않는다
+           — 과잉 삭제가 유출보다 낫다(fail-closed).
+    """
+    start = text.find(_PG_FAILING_ROW_START)
+    if start < 0:
+        return text
+
+    tail_at = len(text)
+    for marker in _SQLALCHEMY_TAIL_MARKERS:
+        found = text.rfind(marker)
+        if found > start:
+            tail_at = min(tail_at, found)
+
+    removed = text[start:tail_at]
+    if any(marker in removed for marker in _SQLALCHEMY_TAIL_MARKERS):
+        tail_at = len(text)
+
+    return f"{text[:start]}Failing row contains {REPLACEMENT}{text[tail_at:]}"
+
+
 def scrub_text(text: str) -> str:
     """문자열 안의 비밀을 지운다 (예외 트레이스백·SQL·URL 포함)."""
     cleaned = _DSN_PASSWORD.sub(rf"\g<head>{REPLACEMENT}\g<tail>", text)
+    cleaned = _scrub_failing_row(cleaned)
     for pattern in _VALUE_PATTERNS:
         cleaned = pattern.sub(REPLACEMENT, cleaned)
     for secret in _known_secrets:

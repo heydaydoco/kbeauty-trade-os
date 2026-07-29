@@ -9,7 +9,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.core.db.uow import unit_of_work
-from app.modules.catalog.models import Brand, Product
+from app.modules.catalog.models import Brand, Product, Sku
 from app.modules.identity.models import Role, RoleCode, User, UserRole
 from app.modules.identity.passwords import hash_password
 
@@ -82,3 +82,24 @@ def create_product(
         uow.session.add(product)
         uow.session.flush()
         return product.id
+
+
+def create_sku(
+    sku_code: str = "SKU-001",
+    *,
+    name_ko: str = "테스트 SKU",
+    product_id: int | None = None,
+) -> int:
+    """단품 SKU를 만들고 id를 돌려준다 (§4.1 — 단품은 처방 없이 존재할 수 없다)."""
+    if product_id is None:
+        product_id = create_product(f"P-{sku_code}"[:40])
+    with unit_of_work() as uow:
+        sku = Sku(
+            sku_code=sku_code,
+            name_ko=name_ko,
+            kind="SINGLE",
+            product_id=product_id,
+        )
+        uow.session.add(sku)
+        uow.session.flush()
+        return sku.id

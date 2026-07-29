@@ -8,6 +8,7 @@ import { orEmpty, statusLabel } from "../lib/labels";
 import { usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { BRANDS_QUERY_KEY, fieldMessage, type Brand } from "./brands";
+import { ITEM_PROFILES_QUERY_KEY, type ItemProfile } from "./item-profiles";
 
 export interface Product {
   id: number;
@@ -19,6 +20,8 @@ export interface Product {
   brand_id: number;
   brand_code: string;
   brand_name_ko: string;
+  item_profile_id: number | null;
+  item_profile_name_ko: string | null;
 }
 
 export const PRODUCTS_QUERY_KEY = ["products"] as const;
@@ -31,13 +34,19 @@ export function ProductsPage() {
   const [code, setCode] = useState("");
   const [nameKo, setNameKo] = useState("");
   const [brandId, setBrandId] = useState("");
+  const [profileId, setProfileId] = useState("");
 
   const list = usePagedQuery<Product>(PRODUCTS_QUERY_KEY, "/v1/products");
   // 브랜드가 없으면 제품을 만들 수 없다 — 그 사실을 폼에서 바로 알려 준다.
   const brands = usePagedQuery<Brand>(BRANDS_QUERY_KEY, "/v1/brands", canRegister);
+  const profiles = usePagedQuery<ItemProfile>(
+    ITEM_PROFILES_QUERY_KEY,
+    "/v1/item-profiles",
+    canRegister,
+  );
 
   const register = useMutation({
-    mutationFn: (input: { brand_id: number; product_code: string; name_ko: string }) =>
+    mutationFn: (input: Record<string, unknown>) =>
       apiFetch<Product>("/v1/products", { method: "POST", body: input }),
     onSuccess: () => {
       setCode("");
@@ -75,6 +84,8 @@ export function ProductsPage() {
               brand_id: Number(brandId),
               product_code: code,
               name_ko: nameKo,
+              // 품목군은 선택이다 — 안 고르면 아예 보내지 않는다.
+              item_profile_id: profileId === "" ? undefined : Number(profileId),
             });
           }}
         >
@@ -116,6 +127,22 @@ export function ProductsPage() {
               className="rounded border border-gray-300 px-3 py-2"
             />
           </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="cell-nowrap text-gray-600">품목군 (선택)</span>
+            <select
+              name="item_profile_id"
+              value={profileId}
+              onChange={(event) => setProfileId(event.target.value)}
+              className="rounded border border-gray-300 px-3 py-2"
+            >
+              <option value="">없음</option>
+              {profiles.data?.items.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name_ko}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             type="submit"
             disabled={register.isPending}
@@ -156,6 +183,7 @@ export function ProductsPage() {
                 <th className="px-4 py-2">제품명(국문)</th>
                 <th className="px-4 py-2">제품명(영문)</th>
                 <th className="cell-nowrap px-4 py-2">브랜드</th>
+                <th className="cell-nowrap px-4 py-2">품목군</th>
                 <th className="cell-nowrap px-4 py-2 num">상태</th>
               </tr>
             </thead>
@@ -166,6 +194,9 @@ export function ProductsPage() {
                   <td className="px-4 py-2">{product.name_ko}</td>
                   <td className="px-4 py-2">{orEmpty(product.name_en)}</td>
                   <td className="cell-nowrap px-4 py-2">{product.brand_name_ko}</td>
+                  <td className="cell-nowrap px-4 py-2">
+                    {orEmpty(product.item_profile_name_ko)}
+                  </td>
                   <td className="cell-nowrap px-4 py-2 num">{statusLabel(product.status)}</td>
                 </tr>
               ))}

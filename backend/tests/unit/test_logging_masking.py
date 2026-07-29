@@ -20,6 +20,7 @@ from app.core.logging.redaction import (
     is_sensitive_key,
     normalize_key,
     register_secret_values,
+    scrub_text,
 )
 
 pytestmark = pytest.mark.group_k
@@ -181,3 +182,38 @@ def test_exception_traceback_password_is_masked(rendered: list[str]) -> None:
         line = _emit(rendered, event="boom", exc_info=sys.exc_info())
     assert "tracebackpw999" not in line
     assert "Traceback" in line
+
+
+def test_purchase_price_keys_are_masked() -> None:
+    """매입가(원가) 키는 로그에서도 가려진다 (ADR-0018 / §18.1)
+
+    화면에서 못 보는 값이 로그에 평문이면 §18.1의 마스킹 통제가 그대로 우회된다.
+    ★ `amount`·`price`를 통째로 가리지는 않는다 — 판가·전표 금액은 원가가
+      아니고, 그것까지 가리면 진단이 불가능해진다.
+    """
+    assert is_sensitive_key("purchase_price")
+    assert is_sensitive_key("purchase_amount")
+    assert is_sensitive_key("purchaseAmount")  # camelCase도 정규화해서 잡는다
+    assert not is_sensitive_key("amount")
+    assert not is_sensitive_key("sales_price")
+
+
+def test_postgres_failing_row_detail_is_scrubbed() -> None:
+    """PostgreSQL의 "Failing row contains (…)"는 행 전체 값이라 지운다
+
+    hide_parameters로는 막히지 않는 경로다(서버가 만든 문자열). 제약 이름은
+    남아야 진단이 되므로 그 줄만 자른다.
+    """
+    raw = (
+        'new row for relation "sku_prices" violates check constraint '
+        '"ck_sku_prices_price_type_valid"\n'
+        "DETAIL:  Failing row contains (1, 1, BOGUS, KRW, 7654321, 2026-01-01, null).\n"
+        "[SQL: INSERT INTO sku_prices ...]"
+    )
+
+    cleaned = scrub_text(raw)
+
+    assert "7654321" not in cleaned
+    assert "BOGUS" not in cleaned
+    assert "ck_sku_prices_price_type_valid" in cleaned
+    assert "INSERT INTO sku_prices" in cleaned

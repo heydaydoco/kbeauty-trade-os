@@ -60,6 +60,13 @@ describe("라우팅", () => {
     expect(await screen.findByRole("heading", { name: "제품(처방)" })).toBeInTheDocument();
   });
 
+  it("/item-profiles는 품목군 화면을 연다", async () => {
+    stubLoggedIn();
+    renderWithProviders(<AppRoutes />, { route: "/item-profiles" });
+
+    expect(await screen.findByRole("heading", { name: "품목군" })).toBeInTheDocument();
+  });
+
   it("/ 는 SKU 목록으로 보낸다", async () => {
     stubLoggedIn();
     renderWithProviders(<AppRoutes />, { route: "/" });
@@ -97,5 +104,6 @@ describe("라우팅", () => {
     expect(await screen.findByRole("link", { name: "SKU" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "제품(처방)" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "브랜드" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "품목군" })).toBeInTheDocument();
   });
 });

@@ -7,7 +7,14 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-from app.modules.catalog.models import PRODUCT_STATUSES, SKU_KINDS, SKU_STATUSES
+from app.modules.catalog.models import (
+    PRICE_TYPES,
+    PRODUCT_STATUSES,
+    SKU_KINDS,
+    SKU_STATUSES,
+)
+from app.modules.catalog.pricing import SkuPriceView
+from app.modules.catalog.profiles import ItemProfileView
 from app.modules.catalog.service import (
     BrandView,
     ProductView,
@@ -19,6 +26,7 @@ from app.modules.catalog.service import (
 _STATUS_PATTERN = f"^({'|'.join(SKU_STATUSES)})$"
 _PRODUCT_STATUS_PATTERN = f"^({'|'.join(PRODUCT_STATUSES)})$"
 _KIND_PATTERN = f"^({'|'.join(SKU_KINDS)})$"
+_PRICE_TYPE_PATTERN = f"^({'|'.join(PRICE_TYPES)})$"
 
 
 # ── 브랜드 ─────────────────────────────────────────────────────────────────
@@ -59,6 +67,8 @@ class ProductCreateRequest(BaseModel):
     name_en: str | None = Field(default=None, max_length=200)
     description: str | None = None
     status: str = Field(default="ACTIVE", pattern=_PRODUCT_STATUS_PATTERN)
+    #: 품목군 (§4.8). 선택이다 — 분류가 없어도 제품은 존재한다.
+    item_profile_id: int | None = None
 
 
 class ProductSummary(BaseModel):
@@ -71,6 +81,8 @@ class ProductSummary(BaseModel):
     brand_id: int
     brand_code: str
     brand_name_ko: str
+    item_profile_id: int | None
+    item_profile_name_ko: str | None
 
     @classmethod
     def of(cls, view: ProductView) -> ProductSummary:
@@ -84,6 +96,8 @@ class ProductSummary(BaseModel):
             brand_id=view.brand_id,
             brand_code=view.brand_code,
             brand_name_ko=view.brand_name_ko,
+            item_profile_id=view.item_profile_id,
+            item_profile_name_ko=view.item_profile_name_ko,
         )
 
 
@@ -100,6 +114,8 @@ class SkuCreateRequest(BaseModel):
     #: SINGLE은 필수, SET은 금지 — 짝 검증은 서비스가 한다(어느 칸이 틀렸는지
     #: 알려 주려면 필드 키가 붙은 오류여야 한다). 최종 판정자는 DB CHECK다.
     product_id: int | None = None
+    #: 품목군 (§4.8). 선택이다.
+    item_profile_id: int | None = None
 
     # 물류 (§4.1)
     barcode: str | None = Field(default=None, max_length=20)
@@ -135,6 +151,8 @@ class SkuSummary(BaseModel):
     product_code: str | None
     product_name_ko: str | None
     brand_name_ko: str | None
+    item_profile_id: int | None
+    item_profile_name_ko: str | None
     barcode: str | None
     unit_weight_g: Decimal | None
     box_qty: int | None
@@ -163,6 +181,8 @@ class SkuSummary(BaseModel):
             product_code=view.product_code,
             product_name_ko=view.product_name_ko,
             brand_name_ko=view.brand_name_ko,
+            item_profile_id=view.item_profile_id,
+            item_profile_name_ko=view.item_profile_name_ko,
             barcode=view.barcode,
             unit_weight_g=view.unit_weight_g,
             box_qty=view.box_qty,
@@ -253,4 +273,72 @@ class SetComponentSummary(BaseModel):
             component_name_ko=view.component_name_ko,
             component_shelf_life_months=view.component_shelf_life_months,
             quantity=view.quantity,
+        )
+
+
+# ── 단가 이력 (§4.1 / ADR-0017·0018) ───────────────────────────────────────
+
+
+class SkuPriceCreateRequest(BaseModel):
+    """단가 등록 요청.
+
+    ★ 금액은 **사람이 쓰는 표기**로 받는다(12000 / 12.34). 서버가 통화별
+      자릿수로 정수 최소단위로 바꾼다 — 화면마다 환산하면 그 규칙이 갈린다.
+    """
+
+    price_type: str = Field(pattern=_PRICE_TYPE_PATTERN)
+    currency: str = Field(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
+    #: Decimal로 받는다. float으로 받으면 12.34가 12.339999…로 들어온다(§2 ADR-02).
+    amount: Decimal = Field(ge=0)
+    effective_from: date
+    note: str | None = None
+
+
+class SkuPriceSummary(BaseModel):
+    id: int
+    sku_id: int
+    price_type: str
+    currency: str
+    #: 정수 최소단위. 표시 변환은 화면이 /v1/system/currencies의 자릿수로 한다.
+    amount: int
+    effective_from: date
+    note: str | None
+    is_current: bool
+
+    @classmethod
+    def of(cls, view: SkuPriceView) -> SkuPriceSummary:
+        return cls(
+            id=view.id,
+            sku_id=view.sku_id,
+            price_type=view.price_type,
+            currency=view.currency,
+            amount=view.amount,
+            effective_from=view.effective_from,
+            note=view.note,
+            is_current=view.is_current,
+        )
+
+
+# ── 품목군 프로파일 (§4.8 / ADR-0021) ──────────────────────────────────────
+
+
+class ItemProfileCreateRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=40)
+    name_ko: str = Field(min_length=1, max_length=100)
+    description: str | None = None
+
+
+class ItemProfileSummary(BaseModel):
+    id: int
+    code: str
+    name_ko: str
+    description: str | None
+
+    @classmethod
+    def of(cls, view: ItemProfileView) -> ItemProfileSummary:
+        return cls(
+            id=view.id,
+            code=view.code,
+            name_ko=view.name_ko,
+            description=view.description,
         )

@@ -7,6 +7,7 @@ const NAV = [
   { to: "/skus", label: "SKU" },
   { to: "/products", label: "제품(처방)" },
   { to: "/brands", label: "브랜드" },
+  { to: "/item-profiles", label: "품목군" },
 ] as const;
 
 export function AppShell() {

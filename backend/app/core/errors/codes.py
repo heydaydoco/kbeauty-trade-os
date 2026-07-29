@@ -33,6 +33,11 @@ class ErrorCode(StrEnum):
     # 신원·계정 (S0-2)
     IDENTITY_LAST_ADMIN_PROTECTED = "IDENTITY.ADMIN.LAST_ONE"
 
+    # 마스터 — 단가 (S1-1 / ADR-0017)
+    #: 기준일에 적용되는 단가가 없다. **0이나 null로 대신하지 않는다** —
+    #: 0을 돌려주면 금액 0원 전표가 조용히 확정된다(S3-1이 이 조회를 쓴다).
+    CATALOG_PRICE_NOT_EFFECTIVE = "CATALOG.PRICE.NOT_EFFECTIVE"
+
     # 동시성·멱등 (§17.2 / §17.4)
     CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"

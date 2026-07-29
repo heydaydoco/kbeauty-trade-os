@@ -20,7 +20,15 @@ from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.time import today_kst
-from app.modules.catalog.models import Brand, Product, SetComponent, Sku, SkuHsCode
+from app.modules.catalog.models import (
+    Brand,
+    ItemProfile,
+    Product,
+    SetComponent,
+    Sku,
+    SkuHsCode,
+)
+from app.modules.catalog.profiles import require_profile
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.outbox import service as outbox
@@ -57,6 +65,9 @@ class ProductView:
     brand_id: int
     brand_code: str
     brand_name_ko: str
+    #: 품목군 (§4.8 / ADR-0021) — 지금은 분류일 뿐이다.
+    item_profile_id: int | None
+    item_profile_name_ko: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +83,9 @@ class SkuView:
     product_code: str | None
     product_name_ko: str | None
     brand_name_ko: str | None
+    #: 품목군 (§4.8 / ADR-0021)
+    item_profile_id: int | None
+    item_profile_name_ko: str | None
     # 물류 (§4.1)
     barcode: str | None
     unit_weight_g: Decimal | None
@@ -110,7 +124,7 @@ def _serialize_brand(view: BrandView) -> dict[str, Any]:
     }
 
 
-def _product_view(product: Product, brand: Brand) -> ProductView:
+def _product_view(product: Product, brand: Brand, profile_name: str | None) -> ProductView:
     return ProductView(
         id=product.id,
         product_code=product.product_code,
@@ -121,6 +135,8 @@ def _product_view(product: Product, brand: Brand) -> ProductView:
         brand_id=brand.id,
         brand_code=brand.brand_code,
         brand_name_ko=brand.name_ko,
+        item_profile_id=product.item_profile_id,
+        item_profile_name_ko=profile_name,
     )
 
 
@@ -135,6 +151,8 @@ def _serialize_product(view: ProductView) -> dict[str, Any]:
         "brand_id": view.brand_id,
         "brand_code": view.brand_code,
         "brand_name_ko": view.brand_name_ko,
+        "item_profile_id": view.item_profile_id,
+        "item_profile_name_ko": view.item_profile_name_ko,
     }
 
 
@@ -143,6 +161,7 @@ def _sku_view(
     product_code: str | None,
     product_name_ko: str | None,
     brand_name_ko: str | None,
+    item_profile_name_ko: str | None,
 ) -> SkuView:
     return SkuView(
         id=sku.id,
@@ -155,6 +174,8 @@ def _sku_view(
         product_code=product_code,
         product_name_ko=product_name_ko,
         brand_name_ko=brand_name_ko,
+        item_profile_id=sku.item_profile_id,
+        item_profile_name_ko=item_profile_name_ko,
         barcode=sku.barcode,
         unit_weight_g=sku.unit_weight_g,
         box_qty=sku.box_qty,
@@ -194,6 +215,8 @@ def _serialize_sku(view: SkuView) -> dict[str, Any]:
         "product_code": view.product_code,
         "product_name_ko": view.product_name_ko,
         "brand_name_ko": view.brand_name_ko,
+        "item_profile_id": view.item_profile_id,
+        "item_profile_name_ko": view.item_profile_name_ko,
         "barcode": view.barcode,
         "unit_weight_g": _text(view.unit_weight_g),
         "box_qty": view.box_qty,
@@ -352,6 +375,8 @@ def create_product(
             return claim.replay.status_code, claim.replay.body
 
         brand = _live_brand(session, int(payload["brand_id"]))
+        profile_id = payload.get("item_profile_id")
+        profile = require_profile(session, int(profile_id)) if profile_id is not None else None
         product = Product(
             brand_id=brand.id,
             product_code=str(payload["product_code"]).strip(),
@@ -359,6 +384,7 @@ def create_product(
             name_en=payload.get("name_en"),
             description=payload.get("description"),
             status=payload.get("status") or "ACTIVE",
+            item_profile_id=profile.id if profile is not None else None,
             created_by_id=actor.id,
         )
         session.add(product)
@@ -375,7 +401,9 @@ def create_product(
             payload={"product_id": product.id, "product_code": product.product_code},
         )
 
-        body = _serialize_product(_product_view(product, brand))
+        body = _serialize_product(
+            _product_view(product, brand, profile.name_ko if profile is not None else None)
+        )
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=201, body=body)
         return 201, body
@@ -383,8 +411,9 @@ def create_product(
 
 def _product_select() -> Any:
     return (
-        select(Product, Brand)
+        select(Product, Brand, ItemProfile.name_ko)
         .join(Brand, Product.brand_id == Brand.id)
+        .outerjoin(ItemProfile, Product.item_profile_id == ItemProfile.id)
         .where(Product.deleted_at.is_(None))
     )
 
@@ -398,7 +427,9 @@ def list_products(*, offset: int, limit: int) -> tuple[list[ProductView], int]:
         rows = session.execute(
             _product_select().order_by(Product.product_code).offset(offset).limit(limit)
         ).all()
-        return [_product_view(product, brand) for product, brand in rows], total
+        return [
+            _product_view(product, brand, profile_name) for product, brand, profile_name in rows
+        ], total
 
 
 def get_product(product_id: int) -> ProductView:
@@ -406,8 +437,8 @@ def get_product(product_id: int) -> ProductView:
         row = uow.session.execute(_product_select().where(Product.id == product_id)).one_or_none()
         if row is None:
             raise NotFoundError(log_context={"product_id": product_id})
-        product, brand = row
-        return _product_view(product, brand)
+        product, brand, profile_name = row
+        return _product_view(product, brand, profile_name)
 
 
 def all_products_for_export() -> list[ProductView]:
@@ -418,7 +449,9 @@ def all_products_for_export() -> list[ProductView]:
         ).scalar_one()
         _guard_export_size(total)
         rows = session.execute(_product_select().order_by(Product.product_code)).all()
-        return [_product_view(product, brand) for product, brand in rows]
+        return [
+            _product_view(product, brand, profile_name) for product, brand, profile_name in rows
+        ]
 
 
 # ── SKU ────────────────────────────────────────────────────────────────────
@@ -565,6 +598,8 @@ def create_sku(
         # 최종 판정자는 DB의 CHECK와 FK다(ADR-0016). 여기서 보는 것은
         # 사용자에게 어느 칸이 잘못됐는지 알려 주기 위한 것이다.
         product = _live_product(session, int(product_id)) if product_id is not None else None
+        profile_id = payload.get("item_profile_id")
+        profile = require_profile(session, int(profile_id)) if profile_id is not None else None
 
         sku = Sku(
             sku_code=str(payload["sku_code"]).strip(),
@@ -573,6 +608,7 @@ def create_sku(
             status=payload.get("status") or "ACTIVE",
             kind=kind,
             product_id=product.id if product is not None else None,
+            item_profile_id=profile.id if profile is not None else None,
             barcode=payload.get("barcode"),
             unit_weight_g=_decimal(payload, "unit_weight_g", "중량"),
             box_qty=payload.get("box_qty"),
@@ -609,6 +645,7 @@ def create_sku(
             product.product_code if product is not None else None,
             product.name_ko if product is not None else None,
             brand.name_ko if brand is not None else None,
+            profile.name_ko if profile is not None else None,
         )
         body = _serialize_sku(view)
         assert claim.record is not None
@@ -619,9 +656,10 @@ def create_sku(
 def _sku_select() -> Any:
     """SKU + 처방 + 브랜드를 한 번에. SET은 처방이 없으므로 outer join이다."""
     return (
-        select(Sku, Product.product_code, Product.name_ko, Brand.name_ko)
+        select(Sku, Product.product_code, Product.name_ko, Brand.name_ko, ItemProfile.name_ko)
         .outerjoin(Product, Sku.product_id == Product.id)
         .outerjoin(Brand, Product.brand_id == Brand.id)
+        .outerjoin(ItemProfile, Sku.item_profile_id == ItemProfile.id)
         .where(Sku.deleted_at.is_(None))
     )
 
@@ -740,7 +778,7 @@ def _guard_verified_on(value: date) -> None:
         )
 
 
-def _live_sku(session: Session, sku_id: int) -> Sku:
+def require_sku(session: Session, sku_id: int) -> Sku:
     sku = session.execute(
         select(Sku).where(Sku.id == sku_id, Sku.deleted_at.is_(None))
     ).scalar_one_or_none()
@@ -769,7 +807,7 @@ def create_sku_hs_code(
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
 
-        sku = _live_sku(session, sku_id)
+        sku = require_sku(session, sku_id)
         # 스키마가 date로 검증했지만 model_dump(mode="json")을 거치며 ISO 문자열이
         # 됐다. 다른 엔드포인트와 같은 직렬화 경로를 쓰기 위한 값이라 여기서 되돌린다.
         verified_on = date.fromisoformat(str(payload["last_verified_on"]))
@@ -810,7 +848,7 @@ def create_sku_hs_code(
 def list_sku_hs_codes(*, sku_id: int, offset: int, limit: int) -> tuple[list[SkuHsCodeView], int]:
     with unit_of_work() as uow:
         session = uow.session
-        _live_sku(session, sku_id)
+        require_sku(session, sku_id)
         condition = (SkuHsCode.sku_id == sku_id, SkuHsCode.deleted_at.is_(None))
         total = session.execute(
             select(func.count()).select_from(SkuHsCode).where(*condition)
@@ -918,8 +956,8 @@ def add_set_component(
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
 
-        set_sku = _live_sku(session, set_sku_id)
-        component = _live_sku(session, int(payload["component_sku_id"]))
+        set_sku = require_sku(session, set_sku_id)
+        component = require_sku(session, int(payload["component_sku_id"]))
         _guard_set_composition(set_sku, component)
 
         # ★ 실패 경로에서 쓸 값은 flush **전에** 평범한 변수로 빼 둔다.
@@ -958,7 +996,7 @@ def list_set_components(
 ) -> tuple[list[SetComponentView], int]:
     with unit_of_work() as uow:
         session = uow.session
-        _live_sku(session, set_sku_id)
+        require_sku(session, set_sku_id)
         condition = (SetComponent.set_sku_id == set_sku_id, SetComponent.deleted_at.is_(None))
         total = session.execute(
             select(func.count()).select_from(SetComponent).where(*condition)
