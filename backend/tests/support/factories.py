@@ -9,6 +9,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.core.db.uow import unit_of_work
+from app.modules.catalog.models import Brand, Product
 from app.modules.identity.models import Role, RoleCode, User, UserRole
 from app.modules.identity.passwords import hash_password
 
@@ -42,3 +43,38 @@ def create_user(
             session.add(UserRole(user_id=user.id, role_id=role_id))
 
         return user.id
+
+
+def create_brand(brand_code: str = "BRD-001", *, name_ko: str = "테스트 브랜드") -> int:
+    """브랜드를 만들고 id를 돌려준다 (§4.1)."""
+    with unit_of_work() as uow:
+        brand = Brand(brand_code=brand_code, name_ko=name_ko)
+        uow.session.add(brand)
+        uow.session.flush()
+        return brand.id
+
+
+def create_product(
+    product_code: str = "PRD-001",
+    *,
+    name_ko: str = "테스트 처방",
+    brand_id: int | None = None,
+) -> int:
+    """제품(처방)을 만들고 id를 돌려준다.
+
+    ★ DB 레벨로 만든다 — API로 만들면 조회 역할처럼 등록 권한이 없는 사용자를
+      검증하는 테스트가 준비 단계에서 막힌다.
+    """
+    # ★ 브랜드는 트랜잭션 **밖에서** 먼저 만든다. unit_of_work를 중첩하면
+    #   §17.1의 "업무 동작 하나 = 트랜잭션 하나"가 테스트 준비 코드에서부터 깨진다.
+    if brand_id is None:
+        brand_id = create_brand()
+    with unit_of_work() as uow:
+        product = Product(
+            brand_id=brand_id,
+            product_code=product_code,
+            name_ko=name_ko,
+        )
+        uow.session.add(product)
+        uow.session.flush()
+        return product.id

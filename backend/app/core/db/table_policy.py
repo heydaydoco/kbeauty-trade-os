@@ -45,6 +45,9 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "custom_field_defs",
         "custom_field_values",
         "skus",  # 마스터 — 상태 전환·정보 수정(UPDATE)
+        # S1-1 — 제품 계층 (§4.1). 전부 마스터라 사람이 화면에서 고친다.
+        "brands",
+        "products",
     }
 )
 

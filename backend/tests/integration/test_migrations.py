@@ -85,3 +85,61 @@ def test_migration_runs_as_owner_role() -> None:
     with engine.connect() as connection:
         assert connection.execute(text("SELECT current_user")).scalar_one() == "kbos_owner"
     engine.dispose()
+
+
+# ── S1-1 백필 (ADR-0016 A2) ────────────────────────────────────────────────
+#
+# ★ 백필 코드는 "기존 행이 있을 때만" 도는데, 테스트 DB는 항상 비어 있어서
+#   평범하게 head까지 올리는 검사로는 **한 번도 실행되지 않는다**. 실행된 적
+#   없는 마이그레이션 코드는 실행된 적 없는 코드일 뿐이다(S0-1의 mako 필터가
+#   정확히 그렇게 새 나갔다 — PROGRESS 주의 인계). 그래서 직전 리비전까지만
+#   올려 행을 심고 나머지를 올린다.
+
+#: S0-2의 skus(최소 컬럼) 리비전.
+_BEFORE_PRODUCT_HIERARCHY = "65f7c2c5b6fa"
+
+
+def test_backfill_links_existing_skus_to_generated_products() -> None:
+    """S0-2에서 등록된 SKU가 있어도 S1-1 마이그레이션이 처방을 만들어 연결한다"""
+    command.upgrade(_config(), _BEFORE_PRODUCT_HIERARCHY)
+    engine = build_engine(_migration_check_url())
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO skus (sku_code, name_ko) VALUES ('LEG-001', '이월 세럼')")
+        )
+
+    command.upgrade(_config(), "head")
+
+    with engine.connect() as connection:
+        kind, product_name, description, brand_code = connection.execute(
+            text(
+                """
+                SELECT s.kind, p.name_ko, p.description, b.brand_code
+                FROM skus s
+                JOIN products p ON p.id = s.product_id
+                JOIN brands b ON b.id = p.brand_id
+                WHERE s.sku_code = 'LEG-001'
+                """
+            )
+        ).one()
+    engine.dispose()
+
+    assert kind == "SINGLE"
+    assert product_name == "이월 세럼"
+    assert brand_code == "UNCLASSIFIED"
+    # 생성 출처가 남아야 사람이 만든 마스터와 구분되고, 구분돼야 정리된다.
+    assert "자동 생성" in description
+    assert "LEG-001" in description
+
+
+def test_backfill_creates_nothing_on_an_empty_database() -> None:
+    """SKU가 없으면 백필은 아무 행도 만들지 않는다 (새 설치에 유령 마스터 금지)"""
+    command.upgrade(_config(), "head")
+
+    engine = build_engine(_migration_check_url())
+    with engine.connect() as connection:
+        brands = connection.execute(text("SELECT count(*) FROM brands")).scalar_one()
+        products = connection.execute(text("SELECT count(*) FROM products")).scalar_one()
+    engine.dispose()
+
+    assert (brands, products) == (0, 0)
