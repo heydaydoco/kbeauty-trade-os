@@ -38,6 +38,29 @@ CURRENCY_MINOR_UNITS: dict[str, int] = {
 }
 
 
+#: 금액을 담는 컬럼의 이름 (정확히 일치).
+#:
+#: ★ "이 컬럼이 돈인가"를 판정하는 **유일한 출처**다. 로그 마스킹의 민감 키
+#:   목록(redaction.SENSITIVE_KEYS)과는 다른 개념이라 따로 둔다 — 그쪽은
+#:   "가려야 하는가", 이쪽은 "돈인가"다. 예를 들어 판가는 가리지 않지만 돈이다.
+#:   두 개념을 한 목록으로 합치면 판가를 가리거나 원가를 노출하게 된다.
+MONEY_COLUMN_NAMES: frozenset[str] = frozenset({"amount", "price", "cost", "fee", "total"})
+
+#: 이 접미사로 끝나면 금액 컬럼으로 본다.
+MONEY_COLUMN_SUFFIXES: tuple[str, ...] = ("_amount", "_price", "_cost", "_fee", "_total")
+
+
+def is_money_column_name(name: str) -> bool:
+    """컬럼 이름이 금액을 담는 것처럼 보이는가.
+
+    §17.4의 멱등 키·유니크 키에 금액이 들어가면 PostgreSQL이 위반 시
+    `DETAIL: Key (…)=(…)`로 그 값을 뱉는다(ADR-0018 ㉠). 그 구조를 만들지
+    못하게 하는 아키텍처 테스트가 이 판정을 쓴다.
+    """
+    lowered = str(name).lower().strip("_")
+    return lowered in MONEY_COLUMN_NAMES or lowered.endswith(MONEY_COLUMN_SUFFIXES)
+
+
 class UnknownCurrencyError(ValueError):
     pass
 

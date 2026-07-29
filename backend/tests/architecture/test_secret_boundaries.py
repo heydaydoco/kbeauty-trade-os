@@ -3,7 +3,7 @@
 사람이 리뷰에서 기억해야 하는 규칙은 반드시 샌다. 'HS 자동판정 부재'를 CI가
 지키는 것과 같은 방식으로, **원가가 새는 두 구조**를 여기서 고정한다.
 
-  ① 원가·마진 계열 컬럼이 유니크 키에 들어가면 PostgreSQL이 위반 시
+  ① 민감·금액 계열 컬럼이 유니크 키에 들어가면 PostgreSQL이 위반 시
      `DETAIL: Key (…)=(…)`에 그 값을 실어 보낸다. 그 경로는 마스킹으로 지우지
      않기로 했으므로(진단 가치), 애초에 그런 키를 만들지 못하게 한다.
   ② 엔진이 build_engine 밖에서 만들어지면 hide_parameters가 빠진 엔진이 생기고,
@@ -20,6 +20,7 @@ from sqlalchemy import Index, UniqueConstraint
 
 from app.core.db.session import build_engine, engine
 from app.core.logging.redaction import is_sensitive_key
+from app.core.money import is_money_column_name
 from app.registry import Base
 
 pytestmark = [pytest.mark.group_k, pytest.mark.meta]
@@ -45,7 +46,22 @@ ALLOWED_SENSITIVE_UNIQUE_KEYS: dict[tuple[str, str], str] = {
 }
 
 
-# ── ① 유니크 키에 원가·마진 컬럼 금지 (ADR-0018 ㉠) ────────────────────────
+# ── ① 유니크 키에 민감·금액 컬럼 금지 (ADR-0018 ㉠) ────────────────────────
+
+
+def _must_not_be_unique(column: str) -> bool:
+    """유니크 키에 들어가면 안 되는 컬럼인가.
+
+    두 개념의 **합집합**이고, 각 개념은 각자 한 곳에서만 정의된다(이중 관리 아님).
+
+      · redaction.is_sensitive_key — "가려야 하는가"(원가·비밀 계열)
+      · money.is_money_column_name — "돈인가"(금액 계열)
+
+    ★ 둘을 하나로 합치면 안 된다. 판가는 **가리지 않지만 돈이고**, 실측으로
+      두 번 유출된 당사자 컬럼이 바로 그 `amount`였다. 이름 기준 민감 목록만
+      쓰면 ㉠이 막으려던 바로 그 경우가 판정 밖으로 빠진다.
+    """
+    return is_sensitive_key(column) or is_money_column_name(column)
 
 
 def _unique_column_names() -> list[tuple[str, str, str]]:
@@ -69,23 +85,22 @@ def test_the_unique_key_scan_is_not_vacuous() -> None:
 
 
 def test_no_unique_key_contains_a_cost_column() -> None:
-    """유니크 키에 원가·마진 계열 컬럼이 들어가지 않는다 (ADR-0018 ㉠)
+    """유니크 키에 민감·금액 계열 컬럼이 들어가지 않는다 (ADR-0018 ㉠)
 
-    ★ 판정 기준은 로그 마스킹과 **같은 출처**(redaction.is_sensitive_key)다.
-      목록을 두 벌 두면 한쪽만 갱신되고, 그 순간 "로그에서는 가리는데 유니크
-      키로는 새는" 상태가 된다.
+    유니크 위반 시 PostgreSQL은 `DETAIL: Key (…)=(…)`에 그 값을 실어 보낸다.
+    그 경로는 진단 가치 때문에 마스킹하지 않기로 했으므로(㉠), 애초에 그런
+    키를 만들지 못하게 한다.
 
-    ★ `amount`는 여기서 민감하지 않다 — 판가·전표 금액은 원가가 아니고, 그것을
-      가리면 진단이 불가능해진다는 판단이 마스킹 쪽과 동일하게 적용된다.
-      바꾸려면 두 곳이 아니라 is_sensitive_key 한 곳을 바꾸게 된다.
+    판정은 _must_not_be_unique — 민감 이름(마스킹 정의)과 금액 이름(money 정의)의
+    합집합이고, 각 개념은 각자 한 곳에서만 정의된다.
 
-    필요한 설계가 생기면 이 테스트를 고치고 ADR-0018 ㉠을 갱신할 것 —
-    그게 '재검토 트리거'의 기계적 형태다.
+    필요한 설계가 생기면 허용 목록에 **사유와 함께** 등록하고 ADR-0018 ㉠을
+    갱신할 것 — 그게 '재검토 트리거'의 기계적 형태다.
     """
     offenders = [
         f"{table}.{column} (in {key})"
         for table, key, column in _unique_column_names()
-        if is_sensitive_key(column) and (table, column) not in ALLOWED_SENSITIVE_UNIQUE_KEYS
+        if _must_not_be_unique(column) and (table, column) not in ALLOWED_SENSITIVE_UNIQUE_KEYS
     ]
 
     assert not offenders, (
@@ -109,12 +124,17 @@ def test_the_allowlist_has_no_dead_entries() -> None:
 
 
 def test_the_cost_column_detector_actually_detects() -> None:
-    """검사기가 원가 계열 이름을 실제로 잡는다 (자기검사)"""
-    assert is_sensitive_key("purchase_amount")
-    assert is_sensitive_key("unit_cost")
-    assert is_sensitive_key("landed_cost")
-    # 판가·일반 금액은 대상이 아니다 — 마스킹 쪽 판단과 같다.
-    assert not is_sensitive_key("amount")
+    """검사기가 민감·금액 이름을 실제로 잡는다 (자기검사)"""
+    # 가려야 하는 것들(마스킹 쪽 정의)
+    assert _must_not_be_unique("purchase_amount")
+    assert _must_not_be_unique("unit_cost")
+    # ★ 돈이지만 가리지는 않는 것들 — 실측 유출의 당사자가 여기 있다.
+    assert _must_not_be_unique("amount")
+    assert _must_not_be_unique("sales_price")
+    assert not is_sensitive_key("amount")  # 마스킹 대상은 아니다
+    # 관계없는 이름은 걸리지 않는다
+    assert not _must_not_be_unique("sku_code")
+    assert not _must_not_be_unique("price_type")
 
 
 # ── ② 엔진은 한 곳에서만 만든다 (ADR-0018 ③) ──────────────────────────────

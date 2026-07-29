@@ -164,18 +164,29 @@ def _scrub_failing_row(text: str) -> str:
       그래서 **여는 괄호부터 SQLAlchemy 꼬리표 앞까지**를 통째로 지운다.
       제약 이름은 앞 줄에, 실패한 문장은 `[SQL: …]`에 남으므로 진단은 유지된다.
 
-    남는 한계: 값 안에 `"\\n[SQL:"` 같은 꼬리표 문자열이 그대로 들어 있으면
-    절단이 그 지점에서 멈춘다. 사람이 그렇게 쓸 일은 사실상 없고, 더 줄이려면
-    문장까지 버려야 해서 진단을 포기하게 된다.
+    ★ 꼬리표는 **위조될 수 있다**. 사용자가 메모에 `"\\n[SQL:"`을 그대로 적으면
+      절단이 거기서 멈추고 뒤가 남는다 — 실측으로 확인했다. 그래서 두 겹으로 막는다.
+
+        ① 꼬리표는 **마지막** 등장 위치로 찾는다. 값은 DETAIL 안에 있고 진짜
+           꼬리표는 그 뒤에 오므로, 마지막 것이 진짜다.
+        ② 그렇게 정한 삭제 구간 안에 **또 꼬리표가 보이면** 위조가 섞인
+           것이므로 **메시지 끝까지** 지운다. 문장을 잃더라도 값을 남기지 않는다
+           — 과잉 삭제가 유출보다 낫다(fail-closed).
     """
     start = text.find(_PG_FAILING_ROW_START)
     if start < 0:
         return text
+
     tail_at = len(text)
     for marker in _SQLALCHEMY_TAIL_MARKERS:
-        found = text.find(marker, start)
-        if found >= 0:
+        found = text.rfind(marker)
+        if found > start:
             tail_at = min(tail_at, found)
+
+    removed = text[start:tail_at]
+    if any(marker in removed for marker in _SQLALCHEMY_TAIL_MARKERS):
+        tail_at = len(text)
+
     return f"{text[:start]}Failing row contains {REPLACEMENT}{text[tail_at:]}"
 
 

@@ -217,3 +217,41 @@ def test_a_newline_inside_a_value_does_not_defeat_the_scrub(
     # 진단은 유지된다 — 제약 이름과 실패한 문장이 남는다.
     assert "ck_sku_prices_price_type_valid" in caplog.text
     assert "INSERT INTO sku_prices" in caplog.text
+
+
+def test_a_forged_tail_marker_does_not_defeat_the_scrub(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """★ 값에 위조된 꼬리표("\n[SQL:")를 심어도 뒤가 남지 않는다
+
+    절단은 SQLAlchemy 꼬리표를 기준으로 하는데, 사용자가 메모에 그 문자열을
+    그대로 적으면 절단이 거기서 멈춘다 — 실측으로 확인한 경로다. 두 겹으로
+    막았다: ① 꼬리표는 **마지막** 등장 위치로 찾는다(값은 항상 진짜 꼬리표
+    앞에 있다) ② 그래도 삭제 구간 안에 꼬리표가 보이면 위조가 섞인 것이므로
+    **메시지 끝까지** 지운다. 문장을 잃더라도 값을 남기지 않는다(fail-closed).
+    """
+    sku_id = create_sku()
+    tail = "TAILSECRET9999999"
+
+    with pytest.raises(IntegrityError) as exc, unit_of_work() as uow:
+        uow.session.add(
+            SkuPrice(
+                sku_id=sku_id,
+                price_type="BOGUS",
+                currency="KRW",
+                amount=int(COST),
+                effective_from="2026-01-01",
+                note=f"메모\n[SQL: 위조\n{tail}",
+            )
+        )
+        uow.session.flush()
+
+    assert tail in str(exc.value)
+
+    with caplog.at_level(logging.ERROR):
+        get_logger("test.leak").error("unhandled_exception", exc_info=exc.value)
+
+    assert COST not in caplog.text
+    assert tail not in caplog.text
+    # 위조가 섞이면 문장까지 버린다 — 제약 이름은 앞 줄이라 남는다.
+    assert "ck_sku_prices_price_type_valid" in caplog.text
