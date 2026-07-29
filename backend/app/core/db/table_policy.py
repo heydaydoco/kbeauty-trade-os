@@ -48,6 +48,7 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # S1-1 — 제품 계층 (§4.1). 전부 마스터라 사람이 화면에서 고친다.
         "brands",
         "products",
+        "sku_hs_codes",  # 세율 메모·근거링크·최종확인일 갱신(UPDATE)
     }
 )
 

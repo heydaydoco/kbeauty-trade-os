@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
 from app.modules.catalog.models import PRODUCT_STATUSES, SKU_KINDS, SKU_STATUSES
-from app.modules.catalog.service import BrandView, ProductView, SkuView
+from app.modules.catalog.service import BrandView, ProductView, SkuHsCodeView, SkuView
 
 _STATUS_PATTERN = f"^({'|'.join(SKU_STATUSES)})$"
 _PRODUCT_STATUS_PATTERN = f"^({'|'.join(PRODUCT_STATUSES)})$"
@@ -170,4 +171,49 @@ class SkuSummary(BaseModel):
             is_aerosol=view.is_aerosol,
             is_limited_quantity=view.is_limited_quantity,
             msds_url=view.msds_url,
+        )
+
+
+# ── 국가별 HS 세번 (§4.1 / ADR-03 / ADR-0019) ──────────────────────────────
+
+
+class SkuHsCodeCreateRequest(BaseModel):
+    """HS 세번 **기록** 요청 — 시스템은 판정하지 않는다(§1 비범위)."""
+
+    #: ISO 3166-1 alpha-2. 소문자로 와도 서비스가 대문자로 정규화한다.
+    country_code: str = Field(min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
+    #: "HS2022" 형식. 값 목록이 아니라 형식만 본다(WCO 개정 대비).
+    hs_version: str = Field(max_length=10, pattern=r"^[Hh][Ss][0-9]{4}$")
+    #: 점·공백이 섞여 와도 받는다 — 서비스가 숫자만 남긴다.
+    hs_code: str = Field(min_length=6, max_length=20)
+    #: 세율 **메모**. 계산에 쓰지 않는다.
+    tariff_note: str | None = None
+    #: ADR-03: 근거링크 필수. 열어볼 수 없는 값(예: "확인함")이 들어오지 않게
+    #: http(s)로 제한한다 — 링크가 아니면 근거가 아니다.
+    source_url: str = Field(max_length=500, pattern=r"^https?://")
+    #: 최종확인일(업무 날짜). 미래 날짜는 서비스가 거절한다.
+    last_verified_on: date
+
+
+class SkuHsCodeSummary(BaseModel):
+    id: int
+    sku_id: int
+    country_code: str
+    hs_version: str
+    hs_code: str
+    tariff_note: str | None
+    source_url: str
+    last_verified_on: date
+
+    @classmethod
+    def of(cls, view: SkuHsCodeView) -> SkuHsCodeSummary:
+        return cls(
+            id=view.id,
+            sku_id=view.sku_id,
+            country_code=view.country_code,
+            hs_version=view.hs_version,
+            hs_code=view.hs_code,
+            tariff_note=view.tariff_note,
+            source_url=view.source_url,
+            last_verified_on=view.last_verified_on,
         )

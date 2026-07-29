@@ -8,7 +8,7 @@ UTC였는지 KST였는지 되돌릴 방법이 없다. 아키텍처 테스트가 
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 
 # 한국 표준시. DB에는 절대 이 시간대로 저장하지 않는다 — 표시 전용.
 KST = timezone(timedelta(hours=9), name="KST")
@@ -35,3 +35,14 @@ def ensure_aware_utc(value: datetime) -> datetime:
 def to_kst(value: datetime) -> datetime:
     """저장된 UTC 시각을 화면 표시용 KST로 바꾼다."""
     return ensure_aware_utc(value).astimezone(KST)
+
+
+def today_kst() -> date:
+    """업무 기준 '오늘'(한국 날짜).
+
+    ★ UTC 날짜로 "오늘"을 판단하면 안 된다. KST는 UTC+9라 한국의 00:00~09:00
+      사이에는 UTC 날짜가 아직 어제다 — 그 시간대에 사용자가 오늘 날짜를 적으면
+      "미래 날짜"로 거절당한다. 확인일·발효일처럼 사람이 KST로 적는 **업무
+      날짜**는 이 함수로 비교한다(저장은 여전히 날짜 그대로다).
+    """
+    return utcnow().astimezone(KST).date()

@@ -20,12 +20,14 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     ForeignKey,
     Integer,
     Numeric,
@@ -183,4 +185,56 @@ class Sku(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Ba
         positive("shelf_life_months"),
         in_range("alcohol_content_pct", 0, 100),
         unique_active("skus", "sku_code"),
+    )
+
+
+class SkuHsCode(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):
+    """국가별 HS 세번 (§4.1 / ADR-03 / ADR-0019).
+
+    ■ 시스템은 HS를 **판정하지 않는다** (§1 비범위)
+
+      여기 있는 것은 사람이 확인해 적어 넣은 값과 그 근거다. 자동 판정·추천
+      기능은 만들지 않으며, 그 부재를 아키텍처 테스트가 지킨다 — "없어야 하는
+      기능"은 사람이 지킬 수 없다(다음 세션이 편의 기능으로 추가한다).
+
+    ■ 세율은 메모다
+
+      `tariff_note`는 텍스트이고 계산에 쓰이지 않는다. 숫자 컬럼으로 두면
+      곧 관세 계산에 쓰이기 시작하고, 그 순간 §1이 비범위로 못박은 "자동 판정"에
+      들어선다. 실제 세액 계산은 §10.1 비용 원장이 근거를 갖고 한다.
+
+    ■ hs_version을 유일키에 넣는 이유 (GC-B3)
+
+      HS는 개정마다 코드가 바뀐다. 버전을 키에서 빼면 개정 때 기존 행을
+      덮어써야 하고, 덮어쓰는 순간 "과거 판정은 당시 버전으로 표시"(GC-B3)가
+      마스터 쪽에서 무너진다. 신·구 버전이 공존해야 감사에 답할 수 있다.
+    """
+
+    __tablename__ = "sku_hs_codes"
+
+    sku_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("skus.id", ondelete="RESTRICT"), nullable=False
+    )
+    #: ISO 3166-1 alpha-2. markets 테이블은 S2-1이라 아직 코드 문자열이다.
+    country_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    #: "HS2022" 형식. 값 목록을 못박지 않고 형식만 본다 — WCO 개정(HS2027)이
+    #: 오면 마이그레이션 없이 받되, 오타는 막는다.
+    hs_version: Mapped[str] = mapped_column(String(10), nullable=False)
+    #: 숫자만 6~12자리. 점·공백은 서비스가 지운다 — "3304.99"와 "330499"가
+    #: 다른 행으로 들어오면 유일키가 중복을 못 잡는다.
+    hs_code: Mapped[str] = mapped_column(String(12), nullable=False)
+    #: 세율 **메모**. 계산에 쓰지 않는다(§1 비범위).
+    tariff_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: ADR-03: 모든 요건·세율·기한 데이터는 근거링크와 최종확인일을 갖는다.
+    #: nullable로 두면 "나중에 채우겠다"가 영구 미확인 데이터가 된다.
+    source_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    #: 업무 날짜다(시각이 아니다) — §2 ADR-02의 UTC 규율은 timestamptz 대상.
+    last_verified_on: Mapped[date] = mapped_column(Date, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("country_code ~ '^[A-Z]{2}$'", name="country_code_format"),
+        CheckConstraint("hs_version ~ '^HS[0-9]{4}$'", name="hs_version_format"),
+        CheckConstraint("hs_code ~ '^[0-9]{6,12}$'", name="hs_code_digits"),
+        CheckConstraint("length(btrim(source_url)) > 0", name="source_url_not_blank"),
+        unique_active("sku_hs_codes", "sku_id", "country_code", "hs_version"),
     )

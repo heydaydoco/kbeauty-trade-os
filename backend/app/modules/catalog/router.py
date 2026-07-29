@@ -21,6 +21,8 @@ from app.modules.catalog.schemas import (
     ProductCreateRequest,
     ProductSummary,
     SkuCreateRequest,
+    SkuHsCodeCreateRequest,
+    SkuHsCodeSummary,
     SkuSummary,
 )
 from app.modules.identity.models import RoleCode
@@ -224,3 +226,42 @@ def export_skus_csv(current: CurrentUser) -> StreamingResponse:
 @router.get("/{sku_id}", summary="SKU 상세")
 def get_sku(sku_id: int, current: CurrentUser) -> SkuSummary:
     return SkuSummary.of(service.get_sku(sku_id))
+
+
+# ── 국가별 HS 세번 (§4.1 / ADR-03 / ADR-0019) ──────────────────────────────
+#
+# ★ 여기에 "HS 추천"·"자동 판정" 엔드포인트를 추가하지 않는다 (§1 비범위).
+#   부재는 tests/architecture/test_no_hs_auto_classification.py가 지킨다.
+
+
+@router.post(
+    "/{sku_id}/hs-codes",
+    summary="SKU 국가별 HS 세번 등록 (사람이 확인한 값의 기록)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_REGISTER)],
+)
+def create_sku_hs_code(
+    sku_id: int,
+    payload: SkuHsCodeCreateRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> SkuHsCodeSummary:
+    status_code, body = service.create_sku_hs_code(
+        actor=current,
+        idempotency_key=key,
+        sku_id=sku_id,
+        payload=payload.model_dump(mode="json"),
+    )
+    response.status_code = status_code
+    return SkuHsCodeSummary.model_validate(body)
+
+
+@router.get("/{sku_id}/hs-codes", summary="SKU 국가별 HS 세번 목록")
+def list_sku_hs_codes(
+    sku_id: int, current: CurrentUser, params: Annotated[PageParams, Depends()]
+) -> Page[SkuHsCodeSummary]:
+    views, total = service.list_sku_hs_codes(
+        sku_id=sku_id, offset=params.offset, limit=params.limit
+    )
+    return Page.of([SkuHsCodeSummary.of(view) for view in views], total, params)

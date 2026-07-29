@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -18,7 +19,8 @@ from sqlalchemy.orm import Session
 from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
-from app.modules.catalog.models import Brand, Product, Sku
+from app.core.time import today_kst
+from app.modules.catalog.models import Brand, Product, Sku, SkuHsCode
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.outbox import service as outbox
@@ -654,3 +656,170 @@ def all_skus_for_export() -> list[SkuView]:
         _guard_export_size(total)
         rows = session.execute(_sku_select().order_by(Sku.sku_code)).all()
         return [_sku_view(*row) for row in rows]
+
+
+# ── 국가별 HS 세번 (§4.1 / ADR-03 / ADR-0019) ──────────────────────────────
+
+
+HS_CODE_CREATE_ENDPOINT = "POST /api/v1/skus/{sku_id}/hs-codes"
+
+
+@dataclass(frozen=True, slots=True)
+class SkuHsCodeView:
+    id: int
+    sku_id: int
+    country_code: str
+    hs_version: str
+    hs_code: str
+    tariff_note: str | None
+    source_url: str
+    last_verified_on: date
+
+
+def _hs_view(row: SkuHsCode) -> SkuHsCodeView:
+    return SkuHsCodeView(
+        id=row.id,
+        sku_id=row.sku_id,
+        country_code=row.country_code,
+        hs_version=row.hs_version,
+        hs_code=row.hs_code,
+        tariff_note=row.tariff_note,
+        source_url=row.source_url,
+        last_verified_on=row.last_verified_on,
+    )
+
+
+def _serialize_hs(view: SkuHsCodeView) -> dict[str, Any]:
+    return {
+        "id": view.id,
+        "sku_id": view.sku_id,
+        "country_code": view.country_code,
+        "hs_version": view.hs_version,
+        "hs_code": view.hs_code,
+        "tariff_note": view.tariff_note,
+        "source_url": view.source_url,
+        "last_verified_on": view.last_verified_on.isoformat(),
+    }
+
+
+def _normalized_hs_code(raw: str) -> str:
+    """점·공백을 지우고 숫자만 남긴다.
+
+    ★ 국가마다 "3304.99.00"·"3304 99 0000"·"3304990000"으로 표기가 갈린다.
+      표기 그대로 저장하면 같은 세번이 다른 행으로 들어와 유일키가 중복을
+      못 잡고, 나중에 비교하는 쪽이 매번 정규화를 다시 짜게 된다.
+    """
+    digits = "".join(char for char in raw if char.isdigit())
+    if not 6 <= len(digits) <= 12:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                "hs_code": "HS 세번은 숫자 6~12자리입니다(점·공백은 지워도 됩니다). "
+                f"입력하신 값에서 숫자 {len(digits)}자리를 찾았습니다."
+            },
+            log_context={"hs_code": raw},
+        )
+    return digits
+
+
+def _guard_verified_on(value: date) -> None:
+    """최종확인일은 미래일 수 없다 (ADR-03 — 확인은 이미 한 일이다).
+
+    비교 기준은 **한국 날짜**다(§22 렌즈 6). UTC 날짜로 보면 한국의 00~09시에
+    적은 오늘 날짜가 미래로 걸린다.
+    """
+    today = today_kst()
+    if value > today:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                "last_verified_on": f"최종확인일이 미래({value.isoformat()})입니다. "
+                f"오늘({today.isoformat()}) 이전 날짜를 입력해 주세요."
+            },
+            log_context={"last_verified_on": value.isoformat()},
+        )
+
+
+def _live_sku(session: Session, sku_id: int) -> Sku:
+    sku = session.execute(
+        select(Sku).where(Sku.id == sku_id, Sku.deleted_at.is_(None))
+    ).scalar_one_or_none()
+    if sku is None:
+        raise NotFoundError(log_context={"sku_id": sku_id})
+    return sku
+
+
+def create_sku_hs_code(
+    *, actor: AuthenticatedUser, idempotency_key: str, sku_id: int, payload: dict[str, Any]
+) -> tuple[int, dict[str, Any]]:
+    """SKU에 국가별 HS 세번을 등록한다.
+
+    ★ 판정이 아니라 **기록**이다. 시스템은 HS를 추천하지도 계산하지도 않는다
+      (§1 비범위) — 사람이 확인한 값과 그 근거를 받아 적을 뿐이다.
+    """
+    with unit_of_work() as uow:
+        session = uow.session
+        claim = idempotency.claim(
+            session,
+            actor_user_id=actor.id,
+            endpoint=HS_CODE_CREATE_ENDPOINT,
+            key=idempotency_key,
+            request_body={**payload, "sku_id": sku_id},
+        )
+        if claim.replay is not None:
+            return claim.replay.status_code, claim.replay.body
+
+        sku = _live_sku(session, sku_id)
+        # 스키마가 date로 검증했지만 model_dump(mode="json")을 거치며 ISO 문자열이
+        # 됐다. 다른 엔드포인트와 같은 직렬화 경로를 쓰기 위한 값이라 여기서 되돌린다.
+        verified_on = date.fromisoformat(str(payload["last_verified_on"]))
+        _guard_verified_on(verified_on)
+        row = SkuHsCode(
+            sku_id=sku.id,
+            country_code=str(payload["country_code"]).strip().upper(),
+            hs_version=str(payload["hs_version"]).strip().upper(),
+            hs_code=_normalized_hs_code(str(payload["hs_code"])),
+            tariff_note=payload.get("tariff_note"),
+            source_url=str(payload["source_url"]).strip(),
+            last_verified_on=verified_on,
+            created_by_id=actor.id,
+        )
+        session.add(row)
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise AppError(
+                ErrorCode.VALIDATION_INVALID_FIELD,
+                detail={
+                    "country_code": "이 SKU에는 같은 국가·HS 버전의 세번이 이미 등록돼 "
+                    "있습니다. 기존 항목을 확인해 주세요."
+                },
+                log_context={
+                    "sku_id": sku_id,
+                    "country_code": payload.get("country_code"),
+                    "hs_version": payload.get("hs_version"),
+                },
+            ) from exc
+
+        body = _serialize_hs(_hs_view(row))
+        assert claim.record is not None
+        idempotency.complete(session, claim.record, status_code=201, body=body)
+        return 201, body
+
+
+def list_sku_hs_codes(*, sku_id: int, offset: int, limit: int) -> tuple[list[SkuHsCodeView], int]:
+    with unit_of_work() as uow:
+        session = uow.session
+        _live_sku(session, sku_id)
+        condition = (SkuHsCode.sku_id == sku_id, SkuHsCode.deleted_at.is_(None))
+        total = session.execute(
+            select(func.count()).select_from(SkuHsCode).where(*condition)
+        ).scalar_one()
+        rows = session.execute(
+            select(SkuHsCode)
+            .where(*condition)
+            .order_by(SkuHsCode.country_code, SkuHsCode.hs_version)
+            .offset(offset)
+            .limit(limit)
+        ).scalars()
+        return [_hs_view(row) for row in rows], total
