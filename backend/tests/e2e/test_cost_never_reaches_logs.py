@@ -178,3 +178,42 @@ def test_a_constraint_violation_does_not_leak_the_failing_row_into_logs(
     assert COST not in caplog.text
     # 진단은 유지된다 — 어떤 제약이 걸렸는지는 남는다.
     assert "ck_sku_prices_price_type_valid" in caplog.text
+
+
+def test_a_newline_inside_a_value_does_not_defeat_the_scrub(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """★ 값에 개행이 있어도 행 전체가 지워진다
+
+    PostgreSQL은 값 안의 개행을 **그대로 싣는다**(실측). 줄 끝으로 자르면 개행
+    앞만 지워지고 뒤가 남는다 — 지금 sku_prices는 금액이 메모보다 앞이라 당장
+    새지 않지만, 이 프로세서는 전역 관문이고 다른 테이블의 컬럼 순서는 보장되지
+    않는다(S3-1 비용·S6-2 원가가 재발 지점이다).
+    """
+    sku_id = create_sku()
+    tail = "TAILSECRET9999999"
+
+    with pytest.raises(IntegrityError) as exc, unit_of_work() as uow:
+        uow.session.add(
+            SkuPrice(
+                sku_id=sku_id,
+                price_type="BOGUS",
+                currency="KRW",
+                amount=int(COST),
+                effective_from="2026-01-01",
+                note=f"메모\n{tail}",
+            )
+        )
+        uow.session.flush()
+
+    # 서버가 보낸 원문에는 개행 뒤 값까지 들어 있다.
+    assert tail in str(exc.value)
+
+    with caplog.at_level(logging.ERROR):
+        get_logger("test.leak").error("unhandled_exception", exc_info=exc.value)
+
+    assert COST not in caplog.text
+    assert tail not in caplog.text
+    # 진단은 유지된다 — 제약 이름과 실패한 문장이 남는다.
+    assert "ck_sku_prices_price_type_valid" in caplog.text
+    assert "INSERT INTO sku_prices" in caplog.text

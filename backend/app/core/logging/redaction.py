@@ -104,10 +104,11 @@ _DSN_PASSWORD = re.compile(
 #   만든 문자열이라 SQLAlchemy의 hide_parameters로는 막히지 않는다(그건 우리가
 #   보낸 바인드 값만 가린다). 실측으로 확인한 유출 경로다:
 #       DETAIL:  Failing row contains (1, 1, BOGUS, KRW, 7654321, 2026-01-01, …)
-#
-#   줄 끝까지 지운다 — 값 안에 괄호가 들어 있을 수 있어 괄호 짝으로는 못 자른다.
-#   제약 이름은 바로 앞 줄에 있으므로 "무엇이 왜 실패했는지"는 남는다.
-_PG_FAILING_ROW = re.compile(r"Failing row contains \([^\n]*")
+_PG_FAILING_ROW_START = "Failing row contains ("
+
+# SQLAlchemy가 그 뒤에 붙이는 꼬리표들. 여기까지가 지울 구간이고, 이 뒤(문장·
+# 배경 링크)는 진단에 필요해서 남긴다.
+_SQLALCHEMY_TAIL_MARKERS = ("\n[SQL:", "\n[SQL parameters", "\n(Background on this error")
 
 _VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"),
@@ -152,10 +153,36 @@ def is_sensitive_key(key: object) -> bool:
     return normalized in SENSITIVE_KEYS or normalized.endswith(SENSITIVE_SUFFIXES)
 
 
+def _scrub_failing_row(text: str) -> str:
+    """PostgreSQL의 "Failing row contains (…)" 구간을 통째로 지운다.
+
+    ★ 줄 끝으로 자르면 안 된다. PostgreSQL은 값 안의 **개행을 그대로 싣는다**
+      — 실측: `Failing row contains (…, 1234, …, 메모\\nTAILSECRET…, …)`.
+      줄 끝 절단은 개행 앞만 지우고 뒤를 남겼다. 괄호 짝으로 자르는 것도 같은
+      이유(값 안의 괄호)로 안 된다.
+
+      그래서 **여는 괄호부터 SQLAlchemy 꼬리표 앞까지**를 통째로 지운다.
+      제약 이름은 앞 줄에, 실패한 문장은 `[SQL: …]`에 남으므로 진단은 유지된다.
+
+    남는 한계: 값 안에 `"\\n[SQL:"` 같은 꼬리표 문자열이 그대로 들어 있으면
+    절단이 그 지점에서 멈춘다. 사람이 그렇게 쓸 일은 사실상 없고, 더 줄이려면
+    문장까지 버려야 해서 진단을 포기하게 된다.
+    """
+    start = text.find(_PG_FAILING_ROW_START)
+    if start < 0:
+        return text
+    tail_at = len(text)
+    for marker in _SQLALCHEMY_TAIL_MARKERS:
+        found = text.find(marker, start)
+        if found >= 0:
+            tail_at = min(tail_at, found)
+    return f"{text[:start]}Failing row contains {REPLACEMENT}{text[tail_at:]}"
+
+
 def scrub_text(text: str) -> str:
     """문자열 안의 비밀을 지운다 (예외 트레이스백·SQL·URL 포함)."""
     cleaned = _DSN_PASSWORD.sub(rf"\g<head>{REPLACEMENT}\g<tail>", text)
-    cleaned = _PG_FAILING_ROW.sub(f"Failing row contains {REPLACEMENT}", cleaned)
+    cleaned = _scrub_failing_row(cleaned)
     for pattern in _VALUE_PATTERNS:
         cleaned = pattern.sub(REPLACEMENT, cleaned)
     for secret in _known_secrets:
