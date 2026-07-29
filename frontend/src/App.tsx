@@ -4,6 +4,7 @@ import { queryClient } from "./lib/queryClient";
 import { useSession } from "./lib/session";
 import { BrandsPage } from "./routes/brands";
 import { HealthPage } from "./routes/health";
+import { ItemProfilesPage } from "./routes/item-profiles";
 import { LoginPage } from "./routes/login";
 import { NotFoundPage } from "./routes/not-found";
 import { ProductsPage } from "./routes/products";
@@ -65,6 +66,7 @@ export function AppRoutes() {
         <Route path="/skus/:skuId" element={<SkuDetailPage />} />
         <Route path="/products" element={<ProductsPage />} />
         <Route path="/brands" element={<BrandsPage />} />
+        <Route path="/item-profiles" element={<ItemProfilesPage />} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

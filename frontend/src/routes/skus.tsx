@@ -14,6 +14,7 @@ import { kindLabel, orEmpty, statusLabel } from "../lib/labels";
 import { usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
+import { ITEM_PROFILES_QUERY_KEY, type ItemProfile } from "./item-profiles";
 import { PRODUCTS_QUERY_KEY, type Product } from "./products";
 
 export interface Sku {
@@ -27,6 +28,8 @@ export interface Sku {
   product_code: string | null;
   product_name_ko: string | null;
   brand_name_ko: string | null;
+  item_profile_id: number | null;
+  item_profile_name_ko: string | null;
   barcode: string | null;
   unit_weight_g: string | null;
   box_qty: number | null;
@@ -80,6 +83,7 @@ export function SkuListPage() {
   const [nameKo, setNameKo] = useState("");
   const [nameEn, setNameEn] = useState("");
   const [productId, setProductId] = useState("");
+  const [profileId, setProfileId] = useState("");
   const [dgFlag, setDgFlag] = useState(false);
   const [isAerosol, setIsAerosol] = useState(false);
   const [isLq, setIsLq] = useState(false);
@@ -89,6 +93,11 @@ export function SkuListPage() {
 
   const list = usePagedQuery<Sku>(SKUS_QUERY_KEY, "/v1/skus");
   const products = usePagedQuery<Product>(PRODUCTS_QUERY_KEY, "/v1/products", canRegister);
+  const profiles = usePagedQuery<ItemProfile>(
+    ITEM_PROFILES_QUERY_KEY,
+    "/v1/item-profiles",
+    canRegister,
+  );
 
   const register = useMutation({
     mutationFn: (input: Record<string, unknown>) =>
@@ -117,6 +126,8 @@ export function SkuListPage() {
       kind,
       // 세트는 처방을 갖지 않는다(§4.2) — 아예 보내지 않는다.
       product_id: isSet ? undefined : Number(productId),
+      // 품목군은 선택이다 — 안 고르면 아예 보내지 않는다.
+      item_profile_id: profileId === "" ? undefined : Number(profileId),
       barcode: optional(extra.barcode),
       unit_weight_g: optional(extra.unit_weight_g),
       box_qty: optionalNumber(extra.box_qty),
@@ -223,6 +234,22 @@ export function SkuListPage() {
                 onChange={(event) => setNameEn(event.target.value)}
                 className="rounded border border-gray-300 px-3 py-2"
               />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">품목군 (선택)</span>
+              <select
+                name="item_profile_id"
+                value={profileId}
+                onChange={(event) => setProfileId(event.target.value)}
+                className="rounded border border-gray-300 px-3 py-2"
+              >
+                <option value="">없음</option>
+                {profiles.data?.items.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name_ko}
+                  </option>
+                ))}
+              </select>
             </label>
 
             <button

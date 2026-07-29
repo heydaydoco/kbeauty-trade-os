@@ -9,6 +9,7 @@ import { Link, useParams } from "react-router";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
 import { kindLabel, orEmpty, statusLabel } from "../lib/labels";
+import { formatMoney, useCurrencies } from "../lib/money";
 import { usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
@@ -23,6 +24,22 @@ interface HsCode {
   source_url: string;
   last_verified_on: string;
 }
+
+interface SkuPriceRow {
+  id: number;
+  price_type: string;
+  currency: string;
+  /** 정수 최소단위. 표시 변환은 통화별 자릿수(서버 제공)로만 한다. */
+  amount: number;
+  effective_from: string;
+  note: string | null;
+  is_current: boolean;
+}
+
+const PRICE_TYPE_LABEL: Record<string, string> = {
+  SALES: "판가",
+  PURCHASE: "매입가",
+};
 
 interface SetComponentRow {
   id: number;
@@ -64,6 +81,26 @@ export function SkuDetailPage() {
     `/v1/skus/${skuId}/components`,
     isSet,
   );
+
+  const pricesKey = ["sku", skuId, "prices"] as const;
+  const prices = usePagedQuery<SkuPriceRow>(pricesKey, `/v1/skus/${skuId}/prices`);
+  const currencies = useCurrencies();
+
+  const [price, setPrice] = useState({
+    price_type: "SALES",
+    currency: "KRW",
+    amount: "",
+    effective_from: "",
+  });
+
+  const addPrice = useMutation({
+    mutationFn: () =>
+      apiFetch<SkuPriceRow>(`/v1/skus/${skuId}/prices`, { method: "POST", body: price }),
+    onSuccess: () => {
+      setPrice((previous) => ({ ...previous, amount: "", effective_from: "" }));
+      void client.invalidateQueries({ queryKey: pricesKey });
+    },
+  });
 
   const [hs, setHs] = useState({
     country_code: "",
@@ -271,6 +308,132 @@ export function SkuDetailPage() {
           </div>
         </div>
       )}
+
+      <div>
+        <h2 className="text-lg font-semibold">단가 이력</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          발효일부터 적용됩니다. 다음 발효일이 곧 이전 단가의 종료라, 기간이 겹칠 수 없습니다.
+          매입가는 원가라 조회 권한만 있는 사용자에게는 보이지 않습니다.
+        </p>
+
+        {canEdit && (
+          <form
+            className="mt-3 flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              addPrice.mutate();
+            }}
+          >
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">종류</span>
+              <select
+                name="price_type"
+                value={price.price_type}
+                onChange={(event) =>
+                  setPrice((previous) => ({ ...previous, price_type: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              >
+                <option value="SALES">판가</option>
+                <option value="PURCHASE">매입가</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">통화</span>
+              <select
+                name="currency"
+                value={price.currency}
+                onChange={(event) =>
+                  setPrice((previous) => ({ ...previous, currency: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              >
+                {currencies.data?.items.map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.code}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">금액</span>
+              {/* 사람이 쓰는 표기 그대로 보낸다(12000 / 12.34). 최소단위 환산은
+                  서버가 한다 — 화면마다 환산하면 그 규칙이 갈린다. */}
+              <input
+                name="amount"
+                required
+                inputMode="decimal"
+                value={price.amount}
+                onChange={(event) =>
+                  setPrice((previous) => ({ ...previous, amount: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">발효일</span>
+              <input
+                name="effective_from"
+                required
+                type="date"
+                value={price.effective_from}
+                onChange={(event) =>
+                  setPrice((previous) => ({ ...previous, effective_from: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={addPrice.isPending}
+              className="rounded bg-gray-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+            >
+              단가 등록
+            </button>
+            {fieldMessage(addPrice.error) && (
+              <p role="alert" className="w-full text-sm text-signal-red">
+                {fieldMessage(addPrice.error)}
+              </p>
+            )}
+          </form>
+        )}
+
+        <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
+          <ListState
+            isPending={prices.isPending || currencies.isPending}
+            error={prices.error ?? currencies.error}
+            isEmpty={prices.data?.items.length === 0}
+            emptyHint="등록된 단가가 없습니다. 종류·통화·금액과 발효일을 입력하세요."
+          >
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left">
+                <tr>
+                  <th className="cell-nowrap px-4 py-2 num">종류</th>
+                  <th className="cell-nowrap px-4 py-2 num">금액</th>
+                  <th className="cell-nowrap px-4 py-2 num">발효일</th>
+                  <th className="cell-nowrap px-4 py-2 num">현재 적용</th>
+                  <th className="px-4 py-2">비고</th>
+                </tr>
+              </thead>
+              <tbody>
+                {prices.data?.items.map((row) => (
+                  <tr key={row.id} className="border-t border-gray-100">
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {PRICE_TYPE_LABEL[row.price_type] ?? row.price_type}
+                    </td>
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {formatMoney(row.amount, row.currency, currencies.data?.items ?? [])}
+                    </td>
+                    <td className="cell-nowrap px-4 py-2 num">{row.effective_from}</td>
+                    <td className="cell-nowrap px-4 py-2 num">{row.is_current ? "○" : ""}</td>
+                    <td className="px-4 py-2">{orEmpty(row.note)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ListState>
+        </div>
+      </div>
 
       <div>
         <h2 className="text-lg font-semibold">국가별 HS 세번</h2>
