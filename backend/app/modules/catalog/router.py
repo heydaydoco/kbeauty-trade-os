@@ -14,10 +14,12 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.core.csv_export import csv_response
 from app.core.pagination import Page, PageParams
-from app.modules.catalog import pricing, service
+from app.modules.catalog import pricing, profiles, service
 from app.modules.catalog.schemas import (
     BrandCreateRequest,
     BrandSummary,
+    ItemProfileCreateRequest,
+    ItemProfileSummary,
     ProductCreateRequest,
     ProductSummary,
     SetComponentCreateRequest,
@@ -36,6 +38,7 @@ CAN_REGISTER = (RoleCode.TRADE,)
 
 brands_router = APIRouter(prefix="/brands", tags=["brands"])
 products_router = APIRouter(prefix="/products", tags=["products"])
+item_profiles_router = APIRouter(prefix="/item-profiles", tags=["item-profiles"])
 router = APIRouter(prefix="/skus", tags=["skus"])
 
 BRAND_CSV_HEADER = ("브랜드코드", "브랜드명(국문)", "브랜드명(영문)")
@@ -348,3 +351,41 @@ def list_sku_prices(
 def get_sku_price(sku_id: int, price_id: int, current: CurrentUser) -> SkuPriceSummary:
     """감춰야 하는 행은 403이 아니라 404다 — 403은 존재를 알려 준다(ADR-0018)."""
     return SkuPriceSummary.of(pricing.get_price(actor=current, sku_id=sku_id, price_id=price_id))
+
+
+# ── 품목군 프로파일 (§4.8 / ADR-0021) ──────────────────────────────────────
+#
+# ★ 여기 있는 것은 **분류를 만들고 고르는 것**뿐이다. §4.8의 요건·서류·마일스톤
+#   세트는 대상 테이블이 생기는 세션이 붙인다(요건 S2-1 / 서류 S1-3 / 마일스톤 S3-2).
+
+
+@item_profiles_router.post(
+    "",
+    summary="품목군 등록",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_REGISTER)],
+)
+def create_item_profile(
+    payload: ItemProfileCreateRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> ItemProfileSummary:
+    status_code, body = profiles.create_profile(
+        actor=current, idempotency_key=key, payload=payload.model_dump(mode="json")
+    )
+    response.status_code = status_code
+    return ItemProfileSummary.model_validate(body)
+
+
+@item_profiles_router.get("", summary="품목군 목록")
+def list_item_profiles(
+    current: CurrentUser, params: Annotated[PageParams, Depends()]
+) -> Page[ItemProfileSummary]:
+    views, total = profiles.list_profiles(offset=params.offset, limit=params.limit)
+    return Page.of([ItemProfileSummary.of(view) for view in views], total, params)
+
+
+@item_profiles_router.get("/{profile_id}", summary="품목군 상세")
+def get_item_profile(profile_id: int, current: CurrentUser) -> ItemProfileSummary:
+    return ItemProfileSummary.of(profiles.get_profile(profile_id))

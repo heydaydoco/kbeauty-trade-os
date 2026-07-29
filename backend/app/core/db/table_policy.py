@@ -53,6 +53,7 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # 마스터 이력이지 원장이 아니다 — 오타 정정은 수정/삭제로 한다.
         # (불변이 필요한 것은 §17.5의 stock_movements·확정 분개·audit_log다.)
         "sku_prices",
+        "item_profiles",  # 제품군 분류 — 이름·설명 수정
     }
 )
 

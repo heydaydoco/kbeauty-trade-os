@@ -93,6 +93,11 @@ class Product(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin
     #: 자유 메모. 마이그레이션이 자동 생성한 행은 여기에 출처를 남긴다(ADR-0016 A2).
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="ACTIVE")
+    #: 품목군 프로파일 (§4.8). 지금은 분류일 뿐이다 — 요건·서류·마일스톤 세트는
+    #: 대상 테이블이 생기는 세션이 붙인다(ADR-0021).
+    item_profile_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("item_profiles.id", ondelete="RESTRICT"), nullable=True
+    )
 
     __table_args__ = (
         value_in("status", PRODUCT_STATUSES),
@@ -116,6 +121,11 @@ class Sku(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Ba
     #: SINGLE의 처방. SET은 NULL이다(구성품이 각자의 처방을 갖는다 — §4.2).
     product_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("products.id", ondelete="RESTRICT"), nullable=True
+    )
+    #: 품목군 프로파일 (§4.8 / ADR-0021). 제품과 별도로 붙는다 — 요건은 처방
+    #: 단위지만 서류·마일스톤 세트는 SKU·선적 단위이기 때문이다.
+    item_profile_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("item_profiles.id", ondelete="RESTRICT"), nullable=True
     )
 
     # ── 물류 속성 (§4.1) ───────────────────────────────────────────────────
@@ -322,3 +332,27 @@ class SkuPrice(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixi
         CheckConstraint("currency = upper(currency)", name="currency_uppercase"),
         unique_active("sku_prices", "sku_id", "price_type", "currency", "effective_from"),
     )
+
+
+class ItemProfile(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):
+    """품목군 프로파일 (§4.8 / ADR-0021).
+
+    ★ 지금은 **헤더뿐이다.** §4.8이 말하는 "기본 요건 세트·서류 세트·마일스톤
+      세트"는 대상 테이블이 전부 후속 세션이라(요건 S2-1 / 서류 S1-3 /
+      마일스톤 S3-2) 연결할 것이 하나도 없다.
+
+      지금 연결 테이블을 만들면 참조할 대상이 없어 FK 없는 문자열 코드로 채우게
+      되고, 그 코드는 대상 테이블이 생겨도 FK로 바뀌지 않는다("이미 돌아가니까").
+      반대로 헤더까지 미루면 제품·SKU 화면이 제품군을 고를 자리를 못 갖고,
+      S2-1이 요건 세트를 만들면서 프로파일 자체를 새로 설계하게 된다.
+
+      §4.8의 "신규 등록 시 자동 적용"도 적용할 내용이 생긴 뒤다.
+    """
+
+    __tablename__ = "item_profiles"
+
+    code: Mapped[str] = mapped_column(String(40), nullable=False)
+    name_ko: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (unique_active("item_profiles", "code"),)
