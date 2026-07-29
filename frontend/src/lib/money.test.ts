@@ -68,8 +68,11 @@ const MINOR_ARITHMETIC = /\w\s*[/*]\s*100\b/;
  *   실제로 money.ts가 자기 설명(`1234 / 100`) 때문에 걸렸다. 규칙을 지키려고
  *   설명을 지우는 일이 생기면 그건 규칙이 잘못된 것이다.
  *
- * 문자열 안의 `//`(예: URL)도 함께 잘리지만, 잘라 내는 방향이라 없는 위반을
- * 만들지는 않는다(놓칠 수는 있고, 그건 감수한다).
+ * ★ 한계: 문자열 리터럴 안의 `//`(예: URL)나 `/*`도 주석으로 보고 잘라 낸다.
+ *   그 줄의 뒷부분이 스캔에서 빠지므로 **위반을 놓칠 수는 있다**(없는 위반을
+ *   만들지는 않는다 — 자르는 방향이라 그렇다). 정확히 하려면 파서를 붙여야
+ *   하는데, 이건 배포물이 아니라 **개발기 가드**라 위협 모델에 비해 과하다.
+ *   놓친 경우의 최종 방어는 서버가 주는 자릿수 하나뿐이라는 구조 자체다.
  */
 function stripComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
@@ -95,8 +98,16 @@ const SOURCES = Object.entries(
 ).filter(([path]) => !/\.test\.tsx?$/.test(path));
 
 describe("통화 자릿수 출처 단일화", () => {
-  it("스캔이 공회전이 아니다", () => {
-    expect(SOURCES.length).toBeGreaterThan(10);
+  it("스캔 집합이 살아 있다 (빈 스캔의 가짜 초록 차단)", () => {
+    const paths = SOURCES.map(([path]) => path);
+
+    expect(paths.length).toBeGreaterThan(10);
+    // ★ 개수만 세면 glob 패턴이 엉뚱한 곳을 가리켜도 통과한다. **금액을 다루는
+    //   파일이 실제로 집합 안에 있는지**까지 본다 — 그게 이 검사의 대상이다.
+    expect(paths.some((path) => path.endsWith("/money.ts"))).toBe(true);
+    expect(paths.some((path) => path.endsWith("/sku-detail.tsx"))).toBe(true);
+    // 테스트 파일은 대상이 아니다(자기 자신을 검사하면 예시 때문에 늘 빨갛다).
+    expect(paths.some((path) => path.endsWith(".test.ts"))).toBe(false);
   });
 
   it("★ 통화별 자릿수를 코드에 심어 두지 않는다", () => {
