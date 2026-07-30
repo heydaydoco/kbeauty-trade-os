@@ -8,7 +8,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
-import { kindLabel, orEmpty, statusLabel } from "../lib/labels";
+import { approvalStatusLabel, kindLabel, orEmpty, statusLabel } from "../lib/labels";
 import { formatMoney, useCurrencies } from "../lib/money";
 import { usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
@@ -40,6 +40,19 @@ const PRICE_TYPE_LABEL: Record<string, string> = {
   SALES: "판가",
   PURCHASE: "매입가",
 };
+
+interface LabelRow {
+  id: number;
+  country_code: string;
+  label_version: number;
+  language: string;
+  approval_status: string;
+  cut_in_date: string | null;
+  file_url: string | null;
+  inci_local_verified: boolean;
+  origin_mark_verified: boolean;
+  note: string | null;
+}
 
 interface SetComponentRow {
   id: number;
@@ -81,6 +94,47 @@ export function SkuDetailPage() {
     `/v1/skus/${skuId}/components`,
     isSet,
   );
+
+  const labelsKey = ["sku", skuId, "labels"] as const;
+  const labels = usePagedQuery<LabelRow>(labelsKey, `/v1/skus/${skuId}/labels`);
+
+  const [label, setLabel] = useState({
+    country_code: "",
+    label_version: "1",
+    language: "en",
+    approval_status: "DRAFT",
+    cut_in_date: "",
+    file_url: "",
+    inci_local_verified: false,
+    origin_mark_verified: false,
+  });
+
+  const addLabel = useMutation({
+    mutationFn: () =>
+      apiFetch<LabelRow>(`/v1/skus/${skuId}/labels`, {
+        method: "POST",
+        body: {
+          country_code: label.country_code,
+          label_version: Number(label.label_version),
+          language: label.language,
+          approval_status: label.approval_status,
+          // 빈 값은 "없음"이다 — 빈 문자열을 보내면 서버가 형식 오류로 본다.
+          cut_in_date: label.cut_in_date === "" ? undefined : label.cut_in_date,
+          file_url: label.file_url === "" ? undefined : label.file_url,
+          inci_local_verified: label.inci_local_verified,
+          origin_mark_verified: label.origin_mark_verified,
+        },
+      }),
+    onSuccess: () => {
+      setLabel((previous) => ({
+        ...previous,
+        country_code: "",
+        cut_in_date: "",
+        file_url: "",
+      }));
+      void client.invalidateQueries({ queryKey: labelsKey });
+    },
+  });
 
   const pricesKey = ["sku", skuId, "prices"] as const;
   const prices = usePagedQuery<SkuPriceRow>(pricesKey, `/v1/skus/${skuId}/prices`);
@@ -427,6 +481,183 @@ export function SkuDetailPage() {
                     <td className="cell-nowrap px-4 py-2 num">{row.effective_from}</td>
                     <td className="cell-nowrap px-4 py-2 num">{row.is_current ? "○" : ""}</td>
                     <td className="px-4 py-2">{orEmpty(row.note)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ListState>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-lg font-semibold">라벨·아트웍</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          시장(국가)×판번으로 관리합니다. 검증 항목은 <strong>사람이 확인했다는 기록</strong>이고,
+          시스템이 라벨을 읽어 판정하지 않습니다. 새 판이면 판번을 올려 등록하세요.
+        </p>
+
+        {canEdit && (
+          <form
+            className="mt-3 flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              addLabel.mutate();
+            }}
+          >
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">시장(2자리)</span>
+              <input
+                name="country_code"
+                required
+                maxLength={2}
+                value={label.country_code}
+                onChange={(event) =>
+                  setLabel((previous) => ({ ...previous, country_code: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">판번</span>
+              <input
+                name="label_version"
+                required
+                inputMode="numeric"
+                value={label.label_version}
+                onChange={(event) =>
+                  setLabel((previous) => ({ ...previous, label_version: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">언어</span>
+              <input
+                name="language"
+                required
+                maxLength={10}
+                value={label.language}
+                onChange={(event) =>
+                  setLabel((previous) => ({ ...previous, language: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">승인상태</span>
+              <select
+                name="approval_status"
+                value={label.approval_status}
+                onChange={(event) =>
+                  setLabel((previous) => ({ ...previous, approval_status: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              >
+                <option value="DRAFT">초안</option>
+                <option value="APPROVED">승인</option>
+                <option value="RETIRED">폐기</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">컷인일 (선택)</span>
+              <input
+                name="cut_in_date"
+                type="date"
+                value={label.cut_in_date}
+                onChange={(event) =>
+                  setLabel((previous) => ({ ...previous, cut_in_date: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="inci_local_verified"
+                checked={label.inci_local_verified}
+                onChange={(event) =>
+                  setLabel((previous) => ({
+                    ...previous,
+                    inci_local_verified: event.target.checked,
+                  }))
+                }
+              />
+              <span className="cell-nowrap text-gray-600">INCI 현지어 확인</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="origin_mark_verified"
+                checked={label.origin_mark_verified}
+                onChange={(event) =>
+                  setLabel((previous) => ({
+                    ...previous,
+                    origin_mark_verified: event.target.checked,
+                  }))
+                }
+              />
+              <span className="cell-nowrap text-gray-600">원산지 표기 확인</span>
+            </label>
+            <button
+              type="submit"
+              disabled={addLabel.isPending}
+              className="rounded bg-gray-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+            >
+              라벨 판 등록
+            </button>
+            {fieldMessage(addLabel.error) && (
+              <p role="alert" className="w-full text-sm text-signal-red">
+                {fieldMessage(addLabel.error)}
+              </p>
+            )}
+          </form>
+        )}
+
+        <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
+          <ListState
+            isPending={labels.isPending}
+            error={labels.error}
+            isEmpty={labels.data?.items.length === 0}
+            emptyHint="등록된 라벨 판이 없습니다. 시장·판번·언어를 입력해 등록하세요."
+          >
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left">
+                <tr>
+                  <th className="cell-nowrap px-4 py-2 num">시장</th>
+                  <th className="cell-nowrap px-4 py-2 num">판번</th>
+                  <th className="cell-nowrap px-4 py-2 num">언어</th>
+                  <th className="cell-nowrap px-4 py-2 num">승인상태</th>
+                  <th className="cell-nowrap px-4 py-2 num">컷인일</th>
+                  <th className="cell-nowrap px-4 py-2 num">INCI 현지어</th>
+                  <th className="cell-nowrap px-4 py-2 num">원산지 표기</th>
+                  <th className="px-4 py-2">파일</th>
+                </tr>
+              </thead>
+              <tbody>
+                {labels.data?.items.map((row) => (
+                  <tr key={row.id} className="border-t border-gray-100">
+                    <td className="cell-nowrap px-4 py-2 num">{row.country_code}</td>
+                    <td className="cell-nowrap px-4 py-2 num">{row.label_version}</td>
+                    <td className="cell-nowrap px-4 py-2 num">{row.language}</td>
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {approvalStatusLabel(row.approval_status)}
+                    </td>
+                    <td className="cell-nowrap px-4 py-2 num">{orEmpty(row.cut_in_date)}</td>
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {row.inci_local_verified ? "○" : ""}
+                    </td>
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {row.origin_mark_verified ? "○" : ""}
+                    </td>
+                    <td className="px-4 py-2">
+                      {row.file_url ? (
+                        <a href={row.file_url} className="underline" rel="noreferrer noopener">
+                          링크
+                        </a>
+                      ) : (
+                        orEmpty(null)
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

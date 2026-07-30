@@ -60,6 +60,12 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # 규칙은 규제 개정을 따라 사람이 갱신한다(ADR-03 최종확인일 갱신 포함).
         # 판정 스냅샷의 불변(§6.2)은 origin_determinations(S3-4) 몫이다.
         "ingredient_rules",
+        # S1-2 — 자재·BOM·라벨 (§4.4·§4.5). 전부 마스터다.
+        "materials",
+        # BOM 단가·소요량·원산지상태는 사람이 고친다. 판정 시점의 동결은
+        # origin_determinations의 BOM 스냅샷(§6.2·S3-4)이 맡는다.
+        "product_boms",
+        "labels",  # 승인상태 전환·검증 체크·컷인일 입력
     }
 )
 

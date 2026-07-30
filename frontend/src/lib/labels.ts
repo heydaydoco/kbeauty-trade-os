@@ -32,10 +32,37 @@ const CLASSIFICATION: Record<string, string> = {
   UNLISTED: "미등재",
 };
 
+// 자재 유형 (§4.4).
+const MATERIAL_TYPE: Record<string, string> = {
+  BULK: "벌크",
+  RAW_MATERIAL: "원료",
+  CONTAINER: "용기",
+  CARTON: "단상자",
+  LABEL: "라벨",
+  AUX: "부자재",
+};
+
+// BOM 라인의 원산지 상태 (§4.4). 미상은 판정 시 역외로 간주된다(S3-4).
+const ORIGIN_STATUS: Record<string, string> = {
+  DOMESTIC: "역내",
+  FOREIGN: "역외",
+  UNKNOWN: "미상",
+};
+
+// 라벨 승인 상태 (§4.5). 사용자가 정하는 워크플로 상태다 — 시스템 판정이 아니다.
+const APPROVAL_STATUS: Record<string, string> = {
+  DRAFT: "초안",
+  APPROVED: "승인",
+  RETIRED: "폐기",
+};
+
 export const statusLabel = (code: string): string => translate(STATUS, code);
 export const kindLabel = (code: string): string => translate(KIND, code);
 export const ruleTypeLabel = (code: string): string => translate(RULE_TYPE, code);
 export const classificationLabel = (code: string): string => translate(CLASSIFICATION, code);
+export const materialTypeLabel = (code: string): string => translate(MATERIAL_TYPE, code);
+export const originStatusLabel = (code: string): string => translate(ORIGIN_STATUS, code);
+export const approvalStatusLabel = (code: string): string => translate(APPROVAL_STATUS, code);
 
 /** 값이 없을 때 표에 넣는 표시. 빈칸은 "누락"과 "0"을 구분하지 못한다. */
 export const EMPTY = "—";

@@ -156,3 +156,29 @@ def create_ingredient_rule(
         uow.session.add(rule)
         uow.session.flush()
         return rule.id
+
+
+def create_material(
+    material_code: str = "MAT-001",
+    *,
+    name_ko: str = "테스트 자재",
+    material_type: str = "RAW_MATERIAL",
+    hs6: str | None = None,
+) -> int:
+    """자재를 만들고 id를 돌려준다 (§4.4).
+
+    ★ 코드는 사람이 정하는 자연키다 — 한 테스트가 자재를 둘 만들면 코드를
+      달리 넘겨야 한다(고정 코드값 함정: PROGRESS 주의 인계 ⑥).
+    """
+    from app.modules.materials.models import Material
+
+    with unit_of_work() as uow:
+        material = Material(
+            material_code=material_code,
+            name_ko=name_ko,
+            material_type=material_type,
+            hs6=hs6,
+        )
+        uow.session.add(material)
+        uow.session.flush()
+        return material.id
