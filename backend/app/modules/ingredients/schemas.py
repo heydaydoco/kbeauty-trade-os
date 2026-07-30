@@ -8,6 +8,11 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from app.modules.ingredients.models import INGREDIENT_RULE_TYPES
+from app.modules.ingredients.screening import (
+    CLASSIFICATION_OVER_LIMIT,
+    CLASSIFICATION_PROHIBITED,
+    CLASSIFICATION_UNLISTED,
+)
 from app.modules.ingredients.service import (
     IngredientRuleView,
     IngredientView,
@@ -113,3 +118,37 @@ class ProductIngredientSummary(BaseModel):
             concentration_pct=view.concentration_pct,
             display_order=view.display_order,
         )
+
+
+# ── 스크리닝 리포트 (§4.3 — 판정 아님·미저장) ──────────────────────────────
+
+_CLASSIFICATION_PATTERN = (
+    f"^({CLASSIFICATION_PROHIBITED}|{CLASSIFICATION_OVER_LIMIT}|{CLASSIFICATION_UNLISTED})$"
+)
+
+
+class ScreeningFindingSummary(BaseModel):
+    """3분류 검출 1건 — 금지 / 제한초과(함량 미입력 보수 분류 포함) / 미등재."""
+
+    classification: str = Field(pattern=_CLASSIFICATION_PATTERN)
+    country_code: str
+    ingredient_id: int
+    inci_name: str
+    ingredient_name_ko: str | None
+    display_order: int
+    concentration_pct: Decimal | None
+    max_concentration_pct: Decimal | None
+    source_url: str | None
+    last_verified_on: date | None
+    note: str | None
+
+
+class ScreeningReportSummary(BaseModel):
+    product_id: int
+    countries: list[str]
+    #: 고정 문구 "참고용·근거 확인" (§4.3) — 리포트가 판정이 아님을 응답이 말한다.
+    notice: str
+    checked_ingredient_count: int
+    #: 한도 이내였던 (성분×국가) 수 — 사실 서술이다. 판정 워딩을 쓰지 않는다.
+    within_limit_count: int
+    findings: list[ScreeningFindingSummary]

@@ -38,6 +38,11 @@ class ErrorCode(StrEnum):
     #: 0을 돌려주면 금액 0원 전표가 조용히 확정된다(S3-1이 이 조회를 쓴다).
     CATALOG_PRICE_NOT_EFFECTIVE = "CATALOG.PRICE.NOT_EFFECTIVE"
 
+    # 성분 — 스크리닝 (S1-2 / §4.3)
+    #: 전성분이 비어 있다. **빈 리포트로 대신하지 않는다** — "검출 0건"과
+    #: "검사할 것이 없었다"가 같은 모양이면 후자가 전자로 읽힌다(웹 세션 판정 D).
+    INGREDIENTS_FORMULA_EMPTY = "INGREDIENTS.FORMULA.EMPTY"
+
     # 동시성·멱등 (§17.2 / §17.4)
     CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"

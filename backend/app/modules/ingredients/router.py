@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.core.csv_export import csv_response
 from app.core.pagination import Page, PageParams
 from app.modules.identity.models import RoleCode
-from app.modules.ingredients import service
+from app.modules.ingredients import screening, service
 from app.modules.ingredients.schemas import (
     IngredientCreateRequest,
     IngredientRuleCreateRequest,
@@ -24,6 +24,7 @@ from app.modules.ingredients.schemas import (
     IngredientSummary,
     ProductIngredientCreateRequest,
     ProductIngredientSummary,
+    ScreeningReportSummary,
 )
 
 #: 마스터 등록은 무역이 한다(관리자는 항상 통과) — catalog와 같은 규약.
@@ -153,3 +154,21 @@ def list_product_ingredients(
         product_id=product_id, offset=params.offset, limit=params.limit
     )
     return Page.of([ProductIngredientSummary.of(view) for view in views], total, params)
+
+
+# ── 스크리닝 (§4.3 — 판정 아님·게이트 아님·미저장) ─────────────────────────
+
+
+@product_ingredients_router.get(
+    "/{product_id}/screening",
+    summary="성분 스크리닝 리포트 — 등록된 규칙과의 기계적 대조 (참고용·근거 확인)",
+)
+def screen_product(
+    product_id: int,
+    current: CurrentUser,
+    country: Annotated[
+        list[str], Query(description="대상국 코드(반복 지정). 예: ?country=US&country=EU")
+    ],
+) -> ScreeningReportSummary:
+    report = screening.screen_product(product_id=product_id, countries=country)
+    return ScreeningReportSummary.model_validate(screening.serialize_report(report))
