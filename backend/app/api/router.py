@@ -8,6 +8,7 @@ from app.api.v1 import system
 from app.modules.catalog import router as catalog_router
 from app.modules.handover import router as handover_router
 from app.modules.identity import router as identity_router
+from app.modules.ingredients import router as ingredients_router
 from app.modules.worklist import router as worklist_router
 
 api_router = APIRouter(prefix="/api/v1")
@@ -20,3 +21,5 @@ api_router.include_router(catalog_router.brands_router)
 api_router.include_router(catalog_router.item_profiles_router)
 api_router.include_router(catalog_router.products_router)
 api_router.include_router(catalog_router.router)
+api_router.include_router(ingredients_router.router)
+api_router.include_router(ingredients_router.product_ingredients_router)
