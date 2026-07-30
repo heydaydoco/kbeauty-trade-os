@@ -10,7 +10,7 @@
 - **PR-1 `s1-2-ingredients-screening`(성분 3테이블·스크리닝·제품 상세 화면) — 병합 완료.** PR #7(`8fccaa9`).
 - **PR-2 `s1-2-materials-labels`(자재·BOM·라벨·BOM 단가 마스킹) — 구현·검증 완료, 병합 대기.**
 - PR-1 실기동 관통(§22 렌즈 11, 실 HTTP): 로그인 → 브랜드·제품(한글 `--data-binary @file`) → 성분 4종 → 규칙 3건(`us`→`US` 정규화) → 전성분 4행(함량 미입력 1행 포함) → **스크리닝 US·EU**(금지 1 · 제한초과 1[함량 미입력 — 보수 분류 사유 표기] · 미등재 5 · 한도 이내 1 · 고정 문구 확인 · **판정 워딩 0건**) → **빈 전성분 422** `INGREDIENTS.FORMULA.EMPTY` → CSV(**BOM True·CRLF True·한글 무손실**) → **scheduled_jobs 0행** 실측.
-- PR-2 실기동 관통(§22 렌즈 11, 실 HTTP): 자재 3종(한글·HS6·재고/로트 조합) → **로트만 켠 자재 422**(CHECK 실측) → 제품·SKU → BOM 3라인(**원산지 미지정→UNKNOWN** · 역내 KRW 1250 · 역외 USD 0.85→**85 최소단위**) → 라벨 2판(`us`→`US`, 판번 1 RETIRED·2 APPROVED+컷인일+검증 2체크) → **TRADE 시야 단가 노출** → **VIEWER 시야: `unit_cost`·`currency` 키 부재·행 3건 그대로·본문 원가 값 0건** → 제품 라벨 롤업 2건 → 자재 CSV(**BOM True·CRLF True**, 원가 컬럼 없음) → **scheduled_jobs 0행** 재실측.
+- PR-2 실기동 관통(§22 렌즈 11, 실 HTTP): 자재 3종(한글·HS6·재고/로트 조합) → **로트만 켠 자재 422**(CHECK 실측) → 제품·SKU → BOM 3라인(**원산지 미지정→UNKNOWN** · 역내 KRW 1250 · 역외 USD 0.85→**85 최소단위**) → 라벨 2판(`us`→`US`, 판번 1 RETIRED·2 APPROVED+컷인일+검증 2체크) → **TRADE 시야 단가 노출** → **VIEWER 시야: `unit_cost`·`currency` 키 부재·행 3건 그대로·본문 원가 값 0건** → 제품 라벨 롤업 2건 → **다국어 라벨**(CA 영문 v1 201 · CA **불문 v1** 201[같은 판번·다른 언어] · CA 불문 v1 재등록 422) → 자재 CSV(**BOM True·CRLF True**, 원가 컬럼 없음) → **scheduled_jobs 0행** 재실측. (리뷰 수정 후 DB 초기화 상태에서 전건 재실행)
 
 ## S1-1 DoD (WBS) — 충족
 | DoD | 상태 | 증거 |
