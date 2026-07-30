@@ -54,6 +54,12 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # (불변이 필요한 것은 §17.5의 stock_movements·확정 분개·audit_log다.)
         "sku_prices",
         "item_profiles",  # 제품군 분류 — 이름·설명 수정
+        # S1-2 — 성분 (§4.3). 전부 마스터라 사람이 화면에서 고친다.
+        "ingredients",
+        "product_ingredients",  # 함량·표시순서 수정, 성분 제외(soft delete)
+        # 규칙은 규제 개정을 따라 사람이 갱신한다(ADR-03 최종확인일 갱신 포함).
+        # 판정 스냅샷의 불변(§6.2)은 origin_determinations(S3-4) 몫이다.
+        "ingredient_rules",
     }
 )
 
