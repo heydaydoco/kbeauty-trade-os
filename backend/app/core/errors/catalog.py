@@ -64,6 +64,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "해당 기준일에 적용되는 단가가 없습니다. 그 날짜 이전에 발효되는 단가를 먼저 등록해 주세요.",
     ),
+    ErrorCode.INGREDIENTS_FORMULA_EMPTY: ErrorSpec(
+        422,
+        "이 제품에는 등록된 전성분이 없습니다. 전성분을 먼저 등록한 뒤 스크리닝해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

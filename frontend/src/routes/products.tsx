@@ -2,6 +2,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Link } from "react-router";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
 import { orEmpty, statusLabel } from "../lib/labels";
@@ -190,7 +191,11 @@ export function ProductsPage() {
             <tbody>
               {list.data?.items.map((product) => (
                 <tr key={product.id} className="border-t border-gray-100">
-                  <td className="cell-nowrap px-4 py-2">{product.product_code}</td>
+                  <td className="cell-nowrap px-4 py-2">
+                    <Link to={`/products/${product.id}`} className="underline">
+                      {product.product_code}
+                    </Link>
+                  </td>
                   <td className="px-4 py-2">{product.name_ko}</td>
                   <td className="px-4 py-2">{orEmpty(product.name_en)}</td>
                   <td className="cell-nowrap px-4 py-2">{product.brand_name_ko}</td>

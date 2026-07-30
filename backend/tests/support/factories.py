@@ -103,3 +103,56 @@ def create_sku(
         uow.session.add(sku)
         uow.session.flush()
         return sku.id
+
+
+def create_ingredient(inci_name: str = "Aqua", *, name_ko: str | None = None) -> int:
+    """성분을 만들고 id를 돌려준다 (§4.3).
+
+    ★ INCI명이 자연키다 — 한 테스트가 성분을 둘 만들면 이름을 달리 넘겨야 한다
+      (고정 코드값 함정: PROGRESS 주의 인계 ⑥).
+    """
+    from app.modules.ingredients.models import Ingredient
+
+    display = " ".join(inci_name.split())
+    with unit_of_work() as uow:
+        ingredient = Ingredient(
+            inci_name=display,
+            inci_name_normalized=display.upper(),
+            name_ko=name_ko,
+        )
+        uow.session.add(ingredient)
+        uow.session.flush()
+        return ingredient.id
+
+
+def create_ingredient_rule(
+    ingredient_id: int,
+    *,
+    country_code: str = "US",
+    rule_type: str = "PROHIBITED",
+    max_concentration_pct: str | None = None,
+) -> int:
+    """성분×국가 규칙을 만들고 id를 돌려준다 (§4.3 / ADR-03).
+
+    근거링크·최종확인일은 NOT NULL이라 그럴듯한 기본값을 넣는다 — 규칙 내용이
+    아니라 존재가 필요한 테스트가 대부분이다.
+    """
+    from decimal import Decimal
+
+    from app.core.time import today_kst
+    from app.modules.ingredients.models import IngredientRule
+
+    with unit_of_work() as uow:
+        rule = IngredientRule(
+            ingredient_id=ingredient_id,
+            country_code=country_code,
+            rule_type=rule_type,
+            max_concentration_pct=(
+                None if max_concentration_pct is None else Decimal(max_concentration_pct)
+            ),
+            source_url="https://example.com/regulation",
+            last_verified_on=today_kst(),
+        )
+        uow.session.add(rule)
+        uow.session.flush()
+        return rule.id

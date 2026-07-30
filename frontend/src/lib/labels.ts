@@ -19,8 +19,23 @@ function translate(table: Record<string, string>, code: string): string {
   return table[code] ?? code;
 }
 
+const RULE_TYPE: Record<string, string> = {
+  PROHIBITED: "금지",
+  RESTRICTED: "제한",
+};
+
+// 스크리닝 3분류 (§4.3). ★ "적합/통과/합격" 류의 판정 워딩을 여기 추가하지
+// 않는다 — 스크리닝은 판정이 아니다(웹 세션 판정 D-②, 테스트가 부재를 지킨다).
+const CLASSIFICATION: Record<string, string> = {
+  PROHIBITED: "금지",
+  OVER_LIMIT: "제한초과",
+  UNLISTED: "미등재",
+};
+
 export const statusLabel = (code: string): string => translate(STATUS, code);
 export const kindLabel = (code: string): string => translate(KIND, code);
+export const ruleTypeLabel = (code: string): string => translate(RULE_TYPE, code);
+export const classificationLabel = (code: string): string => translate(CLASSIFICATION, code);
 
 /** 값이 없을 때 표에 넣는 표시. 빈칸은 "누락"과 "0"을 구분하지 못한다. */
 export const EMPTY = "—";
