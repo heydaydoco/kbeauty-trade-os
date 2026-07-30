@@ -255,3 +255,100 @@ def test_a_forged_tail_marker_does_not_defeat_the_scrub(
     assert tail not in caplog.text
     # 위조가 섞이면 문장까지 버린다 — 제약 이름은 앞 줄이라 남는다.
     assert "ck_sku_prices_price_type_valid" in caplog.text
+
+
+# ── BOM 단가 (S1-2 / ADR-0024) ─────────────────────────────────────────────
+#
+# sku_prices의 매입가와 **같은 지위의 원가**다. 마스킹 방식만 다르고(행 단위 대
+# 필드 부재) 로그에 남으면 안 된다는 규율은 똑같다 — 그 규율이 새 테이블에도
+# 실제로 적용되는지 여기서 본다.
+
+BOM_COST = "8765432"
+
+
+def _post_bom_cost(client: TestClient, product_id: int, material_id: int, *, key: str) -> Any:
+    return client.post(
+        f"/api/v1/products/{product_id}/boms",
+        json={
+            "material_id": material_id,
+            "quantity": "1",
+            "quantity_unit": "g",
+            "unit_cost": BOM_COST,
+            "currency": "KRW",
+        },
+        headers={"Idempotency-Key": key},
+    )
+
+
+def test_bom_cost_does_not_reach_logs_on_success(
+    trader: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """정상 등록 경로에서 BOM 단가가 로그에 남지 않는다 (§20 G)"""
+    from tests.support.factories import create_material, create_product
+
+    product_id = create_product("PRD-LOG")
+    material_id = create_material("MAT-LOG")
+
+    with caplog.at_level(logging.DEBUG):
+        created = _post_bom_cost(trader, product_id, material_id, key="log1")
+
+    assert created.status_code == 201, created.text
+    assert BOM_COST not in caplog.text
+
+
+def test_bom_cost_does_not_reach_logs_on_failure(
+    trader: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """실패 경로(중복)에서도 남지 않는다 — 예외·바인드 파라미터 경로 포함"""
+    from tests.support.factories import create_material, create_product
+
+    product_id = create_product("PRD-LOG2")
+    material_id = create_material("MAT-LOG2")
+    assert _post_bom_cost(trader, product_id, material_id, key="a").status_code == 201
+
+    with caplog.at_level(logging.DEBUG):
+        duplicate = _post_bom_cost(trader, product_id, material_id, key="b")
+
+    assert duplicate.status_code == 422, duplicate.text
+    assert BOM_COST not in caplog.text
+
+
+def test_a_bom_constraint_violation_does_not_leak_the_failing_row(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """★ PostgreSQL의 "Failing row contains (…)"에 실린 BOM 단가도 지워진다
+
+    ADR-0018 ㉠의 네 번째 경로다. 새 테이블이 생길 때마다 재발할 수 있어
+    (S1-1 인계 "재발 지점: S3-1 비용·S6-2 원가") 여기서 실측한다.
+    """
+    from decimal import Decimal
+
+    from app.modules.materials.models import ProductBom
+    from tests.support.factories import create_material, create_product
+
+    product_id = create_product("PRD-LOG3")
+    material_id = create_material("MAT-LOG3")
+
+    with pytest.raises(IntegrityError) as exc, unit_of_work() as uow:
+        uow.session.add(
+            ProductBom(
+                product_id=product_id,
+                material_id=material_id,
+                quantity=Decimal("1"),
+                quantity_unit="g",
+                unit_cost=int(BOM_COST),
+                currency="KRW",
+                origin_status="BOGUS",  # CHECK 위반 — 앱 검증을 우회해 직접 넣는다
+            )
+        )
+        uow.session.flush()
+
+    # 예외 문자열 자체에는 남아 있다 — PostgreSQL이 만든 문자열이기 때문이다.
+    assert BOM_COST in str(exc.value)
+
+    with caplog.at_level(logging.ERROR):
+        get_logger("test.leak").error("unhandled_exception", exc_info=exc.value)
+
+    assert BOM_COST not in caplog.text
+    # 진단은 유지된다 — 어떤 제약이 걸렸는지는 남는다.
+    assert "ck_product_boms_origin_status_valid" in caplog.text

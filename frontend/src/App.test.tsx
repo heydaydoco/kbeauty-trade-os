@@ -74,6 +74,13 @@ describe("라우팅", () => {
     expect(await screen.findByRole("heading", { name: "성분" })).toBeInTheDocument();
   });
 
+  it("/materials는 자재 화면을 연다 (S1-2 PR-2)", async () => {
+    stubLoggedIn();
+    renderWithProviders(<AppRoutes />, { route: "/materials" });
+
+    expect(await screen.findByRole("heading", { name: "자재" })).toBeInTheDocument();
+  });
+
   it("/products/1은 제품 상세를 연다 (S1-2 — 관찰 항목 재판정 이행)", async () => {
     vi.stubGlobal(
       "fetch",
@@ -143,6 +150,7 @@ describe("라우팅", () => {
     expect(await screen.findByRole("link", { name: "SKU" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "제품(처방)" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "성분" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "자재" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "브랜드" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "품목군" })).toBeInTheDocument();
   });

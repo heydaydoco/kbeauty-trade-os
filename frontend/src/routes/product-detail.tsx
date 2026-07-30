@@ -10,11 +10,20 @@ import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
-import { classificationLabel, orEmpty, statusLabel } from "../lib/labels";
+import {
+  approvalStatusLabel,
+  classificationLabel,
+  materialTypeLabel,
+  orEmpty,
+  originStatusLabel,
+  statusLabel,
+} from "../lib/labels";
+import { formatMoney, useCurrencies } from "../lib/money";
 import { usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import { INGREDIENTS_QUERY_KEY, type Ingredient } from "./ingredients";
+import { MATERIALS_QUERY_KEY, type Material } from "./materials";
 import type { Product } from "./products";
 
 interface FormulaLine {
@@ -49,6 +58,38 @@ interface ScreeningReport {
   findings: ScreeningFinding[];
 }
 
+interface BomLine {
+  id: number;
+  material_id: number;
+  material_code: string;
+  material_name_ko: string;
+  material_type: string;
+  hs6: string | null;
+  quantity: string;
+  quantity_unit: string;
+  /**
+   * 원가 — **권한이 없으면 필드 자체가 없다**(ADR-0024). null이 아니라 부재라
+   * 옵셔널로 선언한다. 화면은 `in` 검사가 아니라 undefined로 갈린다.
+   */
+  unit_cost?: number | null;
+  currency?: string | null;
+  origin_status: string;
+  note: string | null;
+}
+
+interface LabelRow {
+  id: number;
+  sku_id: number;
+  sku_code: string;
+  country_code: string;
+  label_version: number;
+  language: string;
+  approval_status: string;
+  cut_in_date: string | null;
+  inci_local_verified: boolean;
+  origin_mark_verified: boolean;
+}
+
 /** "us, eu" → ["US","EU"] (중복 제거·순서 보존). */
 function parseCountries(raw: string): string[] {
   const seen: string[] = [];
@@ -77,6 +118,8 @@ export function ProductDetailPage() {
   const productKey = ["product", productId] as const;
   const formulaKey = ["product", productId, "ingredients"] as const;
   const screeningPrefix = ["product", productId, "screening"] as const;
+  const bomKey = ["product", productId, "boms"] as const;
+  const labelsKey = ["product", productId, "labels"] as const;
 
   const product = useQuery({
     queryKey: productKey,
@@ -112,6 +155,51 @@ export function ProductDetailPage() {
       void client.invalidateQueries({ queryKey: screeningPrefix });
     },
   });
+
+  // 자재 BOM (§4.4). 단가는 권한에 따라 응답에서 빠진다(ADR-0024).
+  const bom = usePagedQuery<BomLine>(bomKey, `/v1/products/${productId}/boms`);
+  const materialOptions = usePagedQuery<Material>(
+    [...MATERIALS_QUERY_KEY, "options"] as const,
+    "/v1/materials?size=200",
+    canEdit,
+  );
+  const currencies = useCurrencies();
+  const [bomLine, setBomLine] = useState({
+    material_id: "",
+    quantity: "",
+    quantity_unit: "g",
+    unit_cost: "",
+    currency: "KRW",
+    origin_status: "UNKNOWN",
+  });
+
+  const addBomLine = useMutation({
+    mutationFn: () =>
+      apiFetch<BomLine>(`/v1/products/${productId}/boms`, {
+        method: "POST",
+        body: {
+          material_id: Number(bomLine.material_id),
+          quantity: bomLine.quantity,
+          quantity_unit: bomLine.quantity_unit,
+          // 단가는 통화와 한 쌍이다 — 비우면 "단가 미상"으로 등록된다.
+          unit_cost: bomLine.unit_cost === "" ? undefined : bomLine.unit_cost,
+          currency: bomLine.unit_cost === "" ? undefined : bomLine.currency,
+          origin_status: bomLine.origin_status,
+        },
+      }),
+    onSuccess: () => {
+      setBomLine((previous) => ({ ...previous, material_id: "", quantity: "", unit_cost: "" }));
+      void client.invalidateQueries({ queryKey: bomKey });
+    },
+  });
+
+  // 원가 열을 보일지는 **서버가 필드를 줬는지**로 정한다. 화면이 역할을 다시
+  // 판정하면 두 판정이 갈리고, 그때 화면 쪽이 틀리면 원가가 새거나 권한자에게
+  // 안 보인다(§18.1 "인가는 API에서 강제" — 화면은 그 결과를 따른다).
+  const showsCost = (bom.data?.items ?? []).some((line) => "unit_cost" in line);
+
+  // 라벨 롤업 — 읽기 전용이다(§14 ③). 등록·수정은 SKU 상세에서 한다(§4.5).
+  const labels = usePagedQuery<LabelRow>(labelsKey, `/v1/products/${productId}/labels`);
 
   // 스크리닝 — 대상국을 정하고 실행해야 조회한다(자동 실행하지 않는다).
   const [countryInput, setCountryInput] = useState("");
@@ -401,6 +489,245 @@ export function ProductDetailPage() {
             </div>
           </div>
         )}
+      </div>
+
+      <div>
+        <h2 className="text-lg font-semibold">자재 BOM</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          이 처방에 들어가는 자재와 소요량·원산지입니다. 원산지를 고르지 않으면{" "}
+          <strong>미상</strong>이고, 미상은 원산지 판정에서 역외로 간주됩니다. 매입 단가는 원가라
+          권한이 없으면 열이 보이지 않습니다.
+        </p>
+
+        {canEdit && (
+          <form
+            className="mt-3 flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              addBomLine.mutate();
+            }}
+          >
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">자재</span>
+              <select
+                name="material_id"
+                required
+                value={bomLine.material_id}
+                onChange={(event) =>
+                  setBomLine((previous) => ({ ...previous, material_id: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              >
+                <option value="">선택하세요</option>
+                {materialOptions.data?.items.map((material) => (
+                  <option key={material.id} value={material.id}>
+                    {material.name_ko} ({material.material_code})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">소요량</span>
+              <input
+                name="quantity"
+                required
+                inputMode="decimal"
+                value={bomLine.quantity}
+                onChange={(event) =>
+                  setBomLine((previous) => ({ ...previous, quantity: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">단위</span>
+              <input
+                name="quantity_unit"
+                required
+                maxLength={10}
+                value={bomLine.quantity_unit}
+                onChange={(event) =>
+                  setBomLine((previous) => ({ ...previous, quantity_unit: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">원산지</span>
+              <select
+                name="origin_status"
+                value={bomLine.origin_status}
+                onChange={(event) =>
+                  setBomLine((previous) => ({ ...previous, origin_status: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              >
+                <option value="UNKNOWN">미상 (판정 시 역외 간주)</option>
+                <option value="DOMESTIC">역내</option>
+                <option value="FOREIGN">역외</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">매입단가 (선택)</span>
+              {/* 사람이 쓰는 표기 그대로 보낸다 — 최소단위 환산은 서버가 한다. */}
+              <input
+                name="unit_cost"
+                inputMode="decimal"
+                value={bomLine.unit_cost}
+                onChange={(event) =>
+                  setBomLine((previous) => ({ ...previous, unit_cost: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">통화</span>
+              <select
+                name="currency"
+                value={bomLine.currency}
+                onChange={(event) =>
+                  setBomLine((previous) => ({ ...previous, currency: event.target.value }))
+                }
+                className="rounded border border-gray-300 px-3 py-2"
+              >
+                {currencies.data?.items.map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.code}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="submit"
+              disabled={addBomLine.isPending}
+              className="rounded bg-gray-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+            >
+              자재 추가
+            </button>
+            {materialOptions.data?.items.length === 0 && (
+              <p className="w-full text-sm text-gray-500">
+                먼저 자재 화면에서 자재를 등록하세요. BOM은 등록된 자재에서 고릅니다.
+              </p>
+            )}
+            {fieldMessage(addBomLine.error) && (
+              <p role="alert" className="w-full text-sm text-signal-red">
+                {fieldMessage(addBomLine.error)}
+              </p>
+            )}
+          </form>
+        )}
+
+        <p className="mt-3 text-sm text-gray-500">전체 {bom.data?.total ?? 0}건</p>
+
+        <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
+          <ListState
+            isPending={bom.isPending}
+            error={bom.error}
+            isEmpty={bom.data?.items.length === 0}
+            emptyHint="등록된 BOM이 없습니다. 자재와 소요량을 추가하세요."
+          >
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left">
+                <tr>
+                  <th className="cell-nowrap px-4 py-2">자재코드</th>
+                  <th className="px-4 py-2">자재명(국문)</th>
+                  <th className="cell-nowrap px-4 py-2">유형</th>
+                  <th className="cell-nowrap px-4 py-2 num">HS6</th>
+                  <th className="cell-nowrap px-4 py-2 num">소요량</th>
+                  <th className="cell-nowrap px-4 py-2 num">원산지</th>
+                  {/* 원가 열은 권한이 있을 때만 나온다 — 응답에 필드가 없으면
+                      열도 없다(빈 열을 두면 "0원"으로 읽힌다). */}
+                  {showsCost && <th className="cell-nowrap px-4 py-2 num">매입단가</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {bom.data?.items.map((line) => (
+                  <tr key={line.id} className="border-t border-gray-100">
+                    <td className="cell-nowrap px-4 py-2">{line.material_code}</td>
+                    <td className="px-4 py-2">{line.material_name_ko}</td>
+                    <td className="cell-nowrap px-4 py-2">
+                      {materialTypeLabel(line.material_type)}
+                    </td>
+                    <td className="cell-nowrap px-4 py-2 num">{orEmpty(line.hs6)}</td>
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {line.quantity} {line.quantity_unit}
+                    </td>
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {originStatusLabel(line.origin_status)}
+                    </td>
+                    {showsCost && (
+                      <td className="cell-nowrap px-4 py-2 num">
+                        {line.unit_cost === null || line.unit_cost === undefined
+                          ? orEmpty(null)
+                          : formatMoney(
+                              line.unit_cost,
+                              line.currency ?? "KRW",
+                              currencies.data?.items ?? [],
+                            )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ListState>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-lg font-semibold">라벨 (소속 SKU 롤업)</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          라벨은 SKU×시장 단위입니다 — 여기서는 이 처방에 속한 SKU들의 라벨 판을 모아 보여 줍니다.
+          등록·수정은 SKU 상세에서 합니다.
+        </p>
+
+        <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
+          <ListState
+            isPending={labels.isPending}
+            error={labels.error}
+            isEmpty={labels.data?.items.length === 0}
+            emptyHint="이 처방의 SKU에 등록된 라벨이 없습니다. SKU 상세에서 라벨 판을 등록하세요."
+          >
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left">
+                <tr>
+                  <th className="cell-nowrap px-4 py-2">품번</th>
+                  <th className="cell-nowrap px-4 py-2 num">시장</th>
+                  <th className="cell-nowrap px-4 py-2 num">판번</th>
+                  <th className="cell-nowrap px-4 py-2 num">언어</th>
+                  <th className="cell-nowrap px-4 py-2 num">승인상태</th>
+                  <th className="cell-nowrap px-4 py-2 num">컷인일</th>
+                  <th className="cell-nowrap px-4 py-2 num">INCI 현지어</th>
+                  <th className="cell-nowrap px-4 py-2 num">원산지 표기</th>
+                </tr>
+              </thead>
+              <tbody>
+                {labels.data?.items.map((label) => (
+                  <tr key={label.id} className="border-t border-gray-100">
+                    <td className="cell-nowrap px-4 py-2">
+                      <Link to={`/skus/${label.sku_id}`} className="underline">
+                        {label.sku_code}
+                      </Link>
+                    </td>
+                    <td className="cell-nowrap px-4 py-2 num">{label.country_code}</td>
+                    <td className="cell-nowrap px-4 py-2 num">{label.label_version}</td>
+                    <td className="cell-nowrap px-4 py-2 num">{label.language}</td>
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {approvalStatusLabel(label.approval_status)}
+                    </td>
+                    <td className="cell-nowrap px-4 py-2 num">{orEmpty(label.cut_in_date)}</td>
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {label.inci_local_verified ? "○" : ""}
+                    </td>
+                    <td className="cell-nowrap px-4 py-2 num">
+                      {label.origin_mark_verified ? "○" : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ListState>
+        </div>
       </div>
     </section>
   );
