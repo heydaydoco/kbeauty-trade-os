@@ -33,7 +33,7 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 
 ## 부채 (렌즈 미통과·보류 — 조용한 누락 금지)
 1. **병합 차단(DoD② 일부) — 미충족 확정**. GitHub Pro 미결제(ADR-0011). 폴백: pre-push 훅 + `merge-pr.sh` + 웹 Merge 버튼 금지. **재검토 트리거: 협업자 추가 또는 팀 배포**.
-2. **프런트 eslint — 재이월(2026-07-29 재확인)**. `typescript-eslint` 최신 `8.65.0`·canary `8.65.1-alpha.10` 모두 peer가 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`. `next` 태그 없음. **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** Phase 1 잔여 세션(S1-2/S1-3)에서 재확인. tsc strict가 현 게이트.
+2. **프런트 eslint — 재이월(2026-07-30 재확인, S1-2 PR-1 첫 프런트 커밋 시점 의무 이행)**. `typescript-eslint` 최신 `8.65.0`·canary `8.65.1-alpha.12` 모두 peer가 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`. `next` 태그 없음(dist-tags: rc-v8·latest·canary 실측). **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** S1-3에서 재확인. tsc strict가 현 게이트.
 3. ~~pgAdmin~~ — **종결**.
 4. ~~담당자 라우팅 미배정~~ — **종결**(ADR-0012 / WBS v1.2).
 5. **compose-smoke CI 잡** — `docker compose up --wait` → /healthz 200 회귀 검사. Free 분 예산 이유로 `config -q`만. Phase 1 이후 재검토.

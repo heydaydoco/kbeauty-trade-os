@@ -4,9 +4,12 @@ import { queryClient } from "./lib/queryClient";
 import { useSession } from "./lib/session";
 import { BrandsPage } from "./routes/brands";
 import { HealthPage } from "./routes/health";
+import { IngredientDetailPage } from "./routes/ingredient-detail";
+import { IngredientsPage } from "./routes/ingredients";
 import { ItemProfilesPage } from "./routes/item-profiles";
 import { LoginPage } from "./routes/login";
 import { NotFoundPage } from "./routes/not-found";
+import { ProductDetailPage } from "./routes/product-detail";
 import { ProductsPage } from "./routes/products";
 import { AppShell } from "./routes/shell";
 import { SkuDetailPage } from "./routes/sku-detail";
@@ -65,6 +68,9 @@ export function AppRoutes() {
         <Route path="/skus" element={<SkuListPage />} />
         <Route path="/skus/:skuId" element={<SkuDetailPage />} />
         <Route path="/products" element={<ProductsPage />} />
+        <Route path="/products/:productId" element={<ProductDetailPage />} />
+        <Route path="/ingredients" element={<IngredientsPage />} />
+        <Route path="/ingredients/:ingredientId" element={<IngredientDetailPage />} />
         <Route path="/brands" element={<BrandsPage />} />
         <Route path="/item-profiles" element={<ItemProfilesPage />} />
       </Route>
