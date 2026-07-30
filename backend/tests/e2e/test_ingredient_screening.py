@@ -60,6 +60,7 @@ def _screen(client: TestClient, product_id: int, *countries: str) -> Any:
 # ── 3분류 (GC v1.1 — 분류별 1건) ───────────────────────────────────────────
 
 
+@pytest.mark.golden
 def test_prohibited_ingredient_is_reported(trader: TestClient) -> None:
     """[GC] 금지 — 대상국에 PROHIBITED 규칙이 있으면 근거와 함께 검출된다"""
     product_id = create_product()
@@ -80,6 +81,7 @@ def test_prohibited_ingredient_is_reported(trader: TestClient) -> None:
     assert finding["last_verified_on"] is not None
 
 
+@pytest.mark.golden
 def test_over_limit_ingredient_is_reported(trader: TestClient) -> None:
     """[GC] 제한초과 — 함량이 한도를 넘으면 한도·함량이 함께 검출된다"""
     product_id = create_product()
@@ -97,6 +99,7 @@ def test_over_limit_ingredient_is_reported(trader: TestClient) -> None:
     assert body["within_limit_count"] == 0
 
 
+@pytest.mark.golden
 def test_unlisted_ingredient_is_reported(trader: TestClient) -> None:
     """[GC] 미등재 — 규칙 행이 없으면 "근거 없음·확인 필요"의 뜻으로 검출된다"""
     product_id = create_product()
@@ -129,6 +132,7 @@ def test_within_limit_is_counted_not_flagged(trader: TestClient) -> None:
 # ── fail-closed 2건 (GC v1.1) ──────────────────────────────────────────────
 
 
+@pytest.mark.golden
 def test_missing_concentration_on_a_restricted_ingredient_is_conservative(
     trader: TestClient,
 ) -> None:
@@ -147,6 +151,7 @@ def test_missing_concentration_on_a_restricted_ingredient_is_conservative(
     assert "함량 미입력" in finding["note"]
 
 
+@pytest.mark.golden
 def test_empty_formula_is_an_explicit_error(trader: TestClient) -> None:
     """[GC] 전성분 0건 = 명시적 오류 — 빈 리포트가 "문제 없음"으로 읽히면 안 된다"""
     product_id = create_product()
@@ -228,3 +233,92 @@ def test_multiple_countries_and_lowercase_are_normalized(trader: TestClient) -> 
 def test_screening_a_missing_product_is_404(trader: TestClient) -> None:
     missing = _screen(trader, 999999, "US")
     assert missing.status_code == 404, missing.text
+
+
+# ── 리뷰 보강 (S1-2 PR-1 적대적 리뷰 검출분) ────────────────────────────────
+
+
+def test_invalid_country_format_is_rejected(trader: TestClient) -> None:
+    """국가코드 형식 오류는 어느 값이 틀렸는지 짚어서 422다 (3자·숫자 혼입)"""
+    product_id = create_product()
+    for bad in ("USA", "U1"):
+        rejected = _screen(trader, product_id, bad)
+        assert rejected.status_code == 422, rejected.text
+        assert "영문 2자" in rejected.text
+
+
+def test_concentration_equal_to_the_limit_is_within_limit(trader: TestClient) -> None:
+    """함량 == 한도는 한도 이내다 — '이내'의 정의선을 여기서 고정한다 (초과만 검출)"""
+    product_id = create_product()
+    ingredient_id = create_ingredient("Salicylic Acid")
+    create_ingredient_rule(
+        ingredient_id, country_code="US", rule_type="RESTRICTED", max_concentration_pct="2.0"
+    )
+    _add_line(trader, product_id, ingredient_id, key="l1", concentration_pct="2.0")
+
+    body = _screen(trader, product_id, "US").json()
+    assert body["findings"] == []
+    assert body["within_limit_count"] == 1
+
+
+def test_archived_ingredient_master_is_still_screened(trader: TestClient) -> None:
+    """성분 마스터를 보관 처리해도 전성분 라인은 계속 검사된다 — fail-open 차단
+
+    마스터 soft delete가 검사 대상을 조용히 줄이면 금지 성분이 "문제 없음" 모양의
+    리포트로 샌다. 라인의 제외는 전성분에서 빼는 것으로만 일어난다 — 전성분
+    목록(list_product_ingredients)과 같은 기준이다(리뷰 검출·수정 고정).
+    """
+    from app.core.db.uow import unit_of_work
+    from app.core.time import utcnow
+    from app.modules.ingredients.models import Ingredient
+
+    product_id = create_product()
+    ingredient_id = create_ingredient("Hydroquinone")
+    create_ingredient_rule(ingredient_id, country_code="US", rule_type="PROHIBITED")
+    _add_line(trader, product_id, ingredient_id, key="l1", concentration_pct="1.0")
+
+    with unit_of_work() as uow:
+        row = uow.session.get(Ingredient, ingredient_id)
+        assert row is not None
+        row.deleted_at = utcnow()
+
+    report = _screen(trader, product_id, "US").json()
+    assert report["checked_ingredient_count"] == 1
+    assert report["findings"][0]["classification"] == "PROHIBITED"
+    # 전성분 목록도 같은 기준으로 그 라인을 계속 보여준다 — 두 읽기 경로의 일치.
+    listed = trader.get(f"{PRODUCTS}/{product_id}/ingredients").json()
+    assert listed["total"] == 1
+
+
+@pytest.mark.group_k
+def test_screening_changes_no_row_counts(trader: TestClient) -> None:
+    """스크리닝 전후 전 테이블 행 수가 그대로다 — '미저장'을 행 수로 실측한다
+
+    소스 스캔(test_screening_is_stateless)은 스크리닝 모듈 파일만 보므로, 다른
+    모듈을 경유한 쓰기는 여기서 잡는다.
+    """
+    from sqlalchemy import func, select, table
+
+    from app.core.db.uow import unit_of_work
+    from app.registry import Base
+
+    product_id = create_product()
+    ingredient_id = create_ingredient("Hydroquinone")
+    create_ingredient_rule(ingredient_id, country_code="US", rule_type="PROHIBITED")
+    _add_line(trader, product_id, ingredient_id, key="l1", concentration_pct="1.0")
+
+    def _counts() -> dict[str, int]:
+        with unit_of_work() as uow:
+            return {
+                name: uow.session.execute(
+                    select(func.count()).select_from(table(name))
+                ).scalar_one()
+                for name in Base.metadata.tables
+            }
+
+    before = _counts()
+    assert _screen(trader, product_id, "US").status_code == 200
+    after = _counts()
+    assert after == before, {
+        name: (before[name], after[name]) for name in before if before[name] != after[name]
+    }

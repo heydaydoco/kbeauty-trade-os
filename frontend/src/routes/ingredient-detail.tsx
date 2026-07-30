@@ -128,7 +128,14 @@ export function IngredientDetailPage() {
                 name="rule_type"
                 value={rule.rule_type}
                 onChange={(event) =>
-                  setRule((previous) => ({ ...previous, rule_type: event.target.value }))
+                  // 금지로 바꾸면 한도 입력칸이 사라진다 — 값을 함께 지우지
+                  // 않으면 보이지 않는 필드가 422를 만든다(리뷰 검출).
+                  setRule((previous) => ({
+                    ...previous,
+                    rule_type: event.target.value,
+                    max_concentration_pct:
+                      event.target.value === "RESTRICTED" ? previous.max_concentration_pct : "",
+                  }))
                 }
                 className="rounded border border-gray-300 px-3 py-2"
               >

@@ -94,8 +94,9 @@ class ProductIngredientCreateRequest(BaseModel):
     concentration_pct: Decimal | None = Field(
         default=None, gt=0, le=100, max_digits=7, decimal_places=4
     )
-    #: 전성분 표시순서(1부터).
-    display_order: int = Field(gt=0)
+    #: 전성분 표시순서(1부터). 상한이 없으면 int4 범위 밖 값이 DB에서 500으로
+    #: 터진다 — 전성분 수백 행이 실무 상한이라 9999면 충분하다.
+    display_order: int = Field(gt=0, le=9999)
 
 
 class ProductIngredientSummary(BaseModel):

@@ -76,15 +76,18 @@ export function ProductDetailPage() {
 
   const productKey = ["product", productId] as const;
   const formulaKey = ["product", productId, "ingredients"] as const;
+  const screeningPrefix = ["product", productId, "screening"] as const;
 
   const product = useQuery({
     queryKey: productKey,
     queryFn: () => apiFetch<Product>(`/v1/products/${productId}`),
   });
   const formula = usePagedQuery<FormulaLine>(formulaKey, `/v1/products/${productId}/ingredients`);
-  const ingredients = usePagedQuery<Ingredient>(
-    INGREDIENTS_QUERY_KEY,
-    "/v1/ingredients",
+  // 드롭다운은 첫 페이지(50건)로는 모자란다 — 통화 선례(money.ts)대로 상한을
+  // 명시해 받는다. 목록 화면의 키(INGREDIENTS_QUERY_KEY)와 섞이면 안 된다.
+  const ingredientOptions = usePagedQuery<Ingredient>(
+    [...INGREDIENTS_QUERY_KEY, "options"] as const,
+    "/v1/ingredients?size=200",
     canEdit,
   );
 
@@ -104,15 +107,19 @@ export function ProductDetailPage() {
     onSuccess: () => {
       setLine({ ingredient_id: "", concentration_pct: "", display_order: "" });
       void client.invalidateQueries({ queryKey: formulaKey });
+      // 전성분이 바뀌면 떠 있는 스크리닝 리포트는 낡은 것이다 — 무효화하지
+      // 않으면 "매 요청 계산"(ADR-0022)이 화면 캐시에서 무너진다(리뷰 검출).
+      void client.invalidateQueries({ queryKey: screeningPrefix });
     },
   });
 
   // 스크리닝 — 대상국을 정하고 실행해야 조회한다(자동 실행하지 않는다).
   const [countryInput, setCountryInput] = useState("");
   const [targets, setTargets] = useState<string[]>([]);
+  const [countryInputError, setCountryInputError] = useState<string | null>(null);
 
   const screening = useQuery({
-    queryKey: ["product", productId, "screening", targets] as const,
+    queryKey: [...screeningPrefix, targets] as const,
     queryFn: () => {
       const query = new URLSearchParams();
       for (const code of targets) query.append("country", code);
@@ -185,7 +192,7 @@ export function ProductDetailPage() {
                 className="rounded border border-gray-300 px-3 py-2"
               >
                 <option value="">선택하세요</option>
-                {ingredients.data?.items.map((ingredient) => (
+                {ingredientOptions.data?.items.map((ingredient) => (
                   <option key={ingredient.id} value={ingredient.id}>
                     {ingredient.inci_name}
                     {ingredient.name_ko ? ` (${ingredient.name_ko})` : ""}
@@ -225,7 +232,7 @@ export function ProductDetailPage() {
             >
               성분 추가
             </button>
-            {ingredients.data?.items.length === 0 && (
+            {ingredientOptions.data?.items.length === 0 && (
               <p className="w-full text-sm text-gray-500">
                 먼저 성분 화면에서 성분을 등록하세요. 전성분은 등록된 성분에서 고릅니다.
               </p>
@@ -237,6 +244,8 @@ export function ProductDetailPage() {
             )}
           </form>
         )}
+
+        <p className="mt-3 text-sm text-gray-500">전체 {formula.data?.total ?? 0}건</p>
 
         <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
           <ListState
@@ -280,7 +289,19 @@ export function ProductDetailPage() {
           className="mt-3 flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 p-4"
           onSubmit={(event) => {
             event.preventDefault();
-            setTargets(parseCountries(countryInput));
+            const parsed = parseCountries(countryInput);
+            if (parsed.length === 0) {
+              // 구분자만 넣으면 required는 통과한다 — 무반응으로 두면 사용자는
+              // 고장으로 읽는다(리뷰 검출).
+              setCountryInputError("국가코드는 영문 2자입니다. 예: US, EU");
+              return;
+            }
+            setCountryInputError(null);
+            setTargets(parsed);
+            // 같은 대상국 재실행도 새로 계산한다 — 키가 같으면 React Query는
+            // 다시 요청하지 않으므로, 실행 버튼이 곧 무효화다(ADR-0022 "매 요청
+            // 계산"의 화면 몫 — 리뷰 검출).
+            void client.invalidateQueries({ queryKey: screeningPrefix });
           }}
         >
           <label className="flex flex-col gap-1 text-sm">
@@ -301,9 +322,9 @@ export function ProductDetailPage() {
           >
             {screening.isFetching ? "대조 중…" : "스크리닝 실행"}
           </button>
-          {fieldMessage(screening.error) && (
+          {(countryInputError ?? fieldMessage(screening.error)) && (
             <p role="alert" className="w-full text-sm text-signal-red">
-              {fieldMessage(screening.error)}
+              {countryInputError ?? fieldMessage(screening.error)}
             </p>
           )}
         </form>
@@ -334,6 +355,7 @@ export function ProductDetailPage() {
                       <th className="cell-nowrap px-4 py-2 num">함량(%)</th>
                       <th className="cell-nowrap px-4 py-2 num">한도(%)</th>
                       <th className="px-4 py-2">근거</th>
+                      <th className="cell-nowrap px-4 py-2 num">최종확인일</th>
                       <th className="px-4 py-2">비고</th>
                     </tr>
                   </thead>
@@ -366,6 +388,9 @@ export function ProductDetailPage() {
                           ) : (
                             <span className="text-gray-500">근거 없음 — 확인 필요</span>
                           )}
+                        </td>
+                        <td className="cell-nowrap px-4 py-2 num">
+                          {orEmpty(finding.last_verified_on)}
                         </td>
                         <td className="px-4 py-2">{orEmpty(finding.note)}</td>
                       </tr>

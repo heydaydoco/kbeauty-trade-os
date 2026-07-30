@@ -260,3 +260,102 @@ def test_same_ingredient_twice_in_one_formula_is_rejected(
 def test_formula_of_a_missing_product_is_404(trader: TestClient, ingredient_id: int) -> None:
     missing = _add(trader, 999999, key="np", ingredient_id=ingredient_id)
     assert missing.status_code == 404, missing.text
+
+
+# ── 리뷰 보강 (S1-2 PR-1 적대적 리뷰 검출분) ────────────────────────────────
+
+
+@pytest.mark.group_k
+def test_viewer_cannot_record_a_rule(viewer: TestClient) -> None:
+    """조회 역할은 규칙을 적을 수 없다 (§18.1 — write 3종 전부 서버가 막는다)"""
+    from tests.support.factories import create_ingredient
+
+    ingredient_id = create_ingredient("Retinol")
+    denied = viewer.post(
+        f"{INGREDIENTS}/{ingredient_id}/rules",
+        json={
+            "country_code": "US",
+            "rule_type": "PROHIBITED",
+            "source_url": "https://www.fda.gov/cosmetics",
+            "last_verified_on": today_kst().isoformat(),
+        },
+        headers={"Idempotency-Key": "v-rule"},
+    )
+    assert denied.status_code == 403, denied.text
+
+
+@pytest.mark.group_k
+def test_viewer_cannot_add_a_formula_line(viewer: TestClient) -> None:
+    """조회 역할은 전성분을 추가할 수 없다 (§18.1)"""
+    from tests.support.factories import create_ingredient
+
+    product_id = create_product()
+    ingredient_id = create_ingredient("Aqua")
+    denied = viewer.post(
+        f"{PRODUCTS}/{product_id}/ingredients",
+        json={"ingredient_id": ingredient_id, "display_order": 1},
+        headers={"Idempotency-Key": "v-line"},
+    )
+    assert denied.status_code == 403, denied.text
+
+
+@pytest.mark.group_j
+def test_rule_same_key_replays_the_first_result(record_rule: Record, trader: TestClient) -> None:
+    """규칙 등록 더블클릭 → 1건 (§17.4 — 생성 3종 전부)"""
+    first = record_rule(key="rule-dup")
+    replay = record_rule(key="rule-dup")
+
+    assert first.status_code == 201 and replay.status_code == 201
+    assert replay.json()["id"] == first.json()["id"]
+
+
+@pytest.mark.group_j
+def test_formula_line_same_key_replays_the_first_result(
+    trader: TestClient, ingredient_id: int
+) -> None:
+    """전성분 추가 더블클릭 → 1건 (§17.4)"""
+    product_id = create_product()
+    first = _add(trader, product_id, key="line-dup", ingredient_id=ingredient_id)
+    replay = _add(trader, product_id, key="line-dup", ingredient_id=ingredient_id)
+
+    assert first.status_code == 201 and replay.status_code == 201
+    assert replay.json()["id"] == first.json()["id"]
+    assert trader.get(f"{PRODUCTS}/{product_id}/ingredients").json()["total"] == 1
+
+
+def test_duplicate_display_order_is_allowed(trader: TestClient) -> None:
+    """같은 표시순서 두 행은 허용된다 — 1% 이하 성분의 임의 순서 표기 관행"""
+    product_id = create_product()
+    water = _register(trader, key="do-a", inci_name="Aqua")
+    glycerin = _register(trader, key="do-b", inci_name="Glycerin")
+
+    first = _add(
+        trader, product_id, key="do-1", ingredient_id=int(water.json()["id"]), display_order=3
+    )
+    second = _add(
+        trader, product_id, key="do-2", ingredient_id=int(glycerin.json()["id"]), display_order=3
+    )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+
+
+def test_display_order_beyond_the_cap_is_rejected(trader: TestClient, ingredient_id: int) -> None:
+    """표시순서 상한(9999) 초과는 422 — int4 범위 밖 값이 500으로 새지 않는다"""
+    product_id = create_product()
+    rejected = _add(
+        trader, product_id, key="cap", ingredient_id=ingredient_id, display_order=100_000
+    )
+    assert rejected.status_code == 422, rejected.text
+
+
+@pytest.mark.group_k
+def test_ingredients_csv_export_has_bom_and_korean(trader: TestClient) -> None:
+    """성분 CSV — BOM으로 시작하고 한글이 무손실이다 (§12.2, 라우트 순서 함정 고정)"""
+    created = _register(trader)
+    assert created.status_code == 201, created.text
+
+    exported = trader.get(f"{INGREDIENTS}/export.csv")
+    assert exported.status_code == 200, exported.text  # /{id}보다 앞 선언이 무너지면 422가 된다
+    assert exported.headers["content-type"].startswith("text/csv")
+    assert exported.text.startswith("\ufeff")
+    assert "나이아신아마이드" in exported.text

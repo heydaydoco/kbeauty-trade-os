@@ -110,13 +110,17 @@ def screen_product(*, product_id: int, countries: Sequence[str]) -> ScreeningRep
         session = uow.session
         require_product(session, product_id)
 
+        # ★ 성분 마스터의 deleted_at은 여기서 거르지 않는다 — 전성분 목록
+        #   (service.list_product_ingredients)과 같은 기준이어야 한다. 마스터를
+        #   보관 처리했다고 처방 라인이 검사에서 조용히 빠지면, 금지 성분이
+        #   "문제 없음" 모양의 리포트로 새는 fail-open이다(리뷰 검출 — 라인
+        #   자체의 제외는 전성분에서 빼는 것(soft delete)으로만 일어난다).
         formula = session.execute(
             select(ProductIngredient, Ingredient)
             .join(Ingredient, ProductIngredient.ingredient_id == Ingredient.id)
             .where(
                 ProductIngredient.product_id == product_id,
                 ProductIngredient.deleted_at.is_(None),
-                Ingredient.deleted_at.is_(None),
             )
             .order_by(ProductIngredient.display_order, ProductIngredient.id)
         ).all()

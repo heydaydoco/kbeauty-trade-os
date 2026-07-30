@@ -134,4 +134,39 @@ describe("제품 상세 — 스크리닝", () => {
     // 집계는 사실 서술로만 나온다.
     expect(screen.getByText(/한도 이내 1건/)).toBeInTheDocument();
   });
+
+  it("같은 대상국으로 재실행하면 다시 요청한다 — 캐시 재사용 금지 (ADR-0022, 리뷰 검출)", async () => {
+    await runScreening();
+
+    const countCalls = () =>
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((call) =>
+        String(call[0]).includes("/screening"),
+      ).length;
+    const before = countCalls();
+
+    fireEvent.click(screen.getByRole("button", { name: "스크리닝 실행" }));
+    await waitFor(() => {
+      expect(countCalls()).toBe(before + 1);
+    });
+  });
+
+  it("구분자만 입력하면 요청 대신 안내를 보여준다 — 무반응 금지 (리뷰 검출)", async () => {
+    renderWithProviders(<AppRoutes />, { route: "/products/1" });
+    await screen.findByRole("heading", { name: "수분 세럼" });
+
+    fireEvent.change(screen.getByLabelText(/대상국/), { target: { value: " , " } });
+    fireEvent.click(screen.getByRole("button", { name: "스크리닝 실행" }));
+
+    expect(await screen.findByText(/국가코드는 영문 2자/)).toBeInTheDocument();
+    const screeningCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call) => String(call[0]).includes("/screening"),
+    );
+    expect(screeningCalls).toHaveLength(0);
+  });
+
+  it("검출 행에 규칙의 최종확인일이 보인다 (GC-C3 — 근거링크·확인일 짝)", async () => {
+    await runScreening();
+
+    expect(screen.getAllByText("2026-07-30").length).toBeGreaterThan(0);
+  });
 });
