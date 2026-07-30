@@ -552,8 +552,8 @@ def create_label(
             raise AppError(
                 ErrorCode.VALIDATION_INVALID_FIELD,
                 detail={
-                    "label_version": "이 SKU에는 같은 시장·판번의 라벨이 이미 있습니다. "
-                    "새 판이면 판번을 올려 주세요."
+                    "label_version": "이 SKU에는 같은 시장·언어·판번의 라벨이 이미 "
+                    "있습니다. 새 판이면 판번을 올려 주세요."
                 },
                 log_context={
                     "sku_id": sku_id,

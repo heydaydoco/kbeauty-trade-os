@@ -197,5 +197,9 @@ class Label(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, 
         CheckConstraint("country_code ~ '^[A-Z]{2}$'", name="country_code_format"),
         value_in("approval_status", LABEL_APPROVAL_STATUSES),
         positive("label_version"),
-        unique_active("labels", "sku_id", "country_code", "label_version"),
+        # ★ language가 키에 들어간다. 빼면 "한 시장에 다국어 라벨"(위 language
+        #   컬럼의 존재 이유)이 성립하지 않는다 — 캐나다 영문판 v1을 넣은 뒤
+        #   불문판을 v1로 못 넣어 판번을 올려야 하고, 그 순간 판번이 "아트웍
+        #   개정"이 아니라 "언어 추가"로도 증가해 §4.5 컷인의 기준이 흐려진다.
+        unique_active("labels", "sku_id", "country_code", "language", "label_version"),
     )

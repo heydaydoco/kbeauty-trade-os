@@ -90,6 +90,44 @@ describe("제품 상세 — BOM 원가 마스킹", () => {
     expect(document.body.textContent).not.toContain("12.34");
   });
 
+  it("★ 통화표가 실패해도 화면이 살아 있다 — 렌더 중 예외 금지 (리뷰 검출)", async () => {
+    // formatMoney는 모르는 통화에 예외를 던지도록 설계돼 있다(자릿수 추측 금지).
+    // 통화표를 기다리지 않고 원가 열을 그리면 그 예외가 렌더 중에 나서 트리가
+    // 통째로 언마운트되고, 화면이 백지가 된다.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.endsWith("/v1/products/1")) return Promise.resolve(jsonResponse(PRODUCT));
+        if (input.includes("/v1/products/1/boms"))
+          return Promise.resolve(jsonResponse(page([{ ...LINE_BASE, unit_cost: 1234, currency: "USD" }])));
+        if (input.includes("/v1/system/currencies"))
+          return Promise.resolve(
+            jsonResponse(
+              {
+                error: {
+                  code: "COMMON.INTERNAL.UNEXPECTED",
+                  message: "일시적인 오류입니다.",
+                  detail: {},
+                  request_id: null,
+                },
+              },
+              500,
+            ),
+          );
+        return Promise.resolve(jsonResponse(page([])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/products/1" });
+
+    // 제목·다른 섹션이 계속 보인다(백지가 아니다).
+    expect(await screen.findByRole("heading", { name: "수분 세럼" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "자재 BOM" })).toBeInTheDocument();
+    });
+    expect(document.body.textContent?.length ?? 0).toBeGreaterThan(100);
+  });
+
   it("원산지 미상이 '미상'으로 보인다 — 판정에서 역외로 간주된다는 설명과 함께", async () => {
     stubApi(TRADER, { ...LINE_BASE, origin_status: "UNKNOWN", unit_cost: null, currency: null });
     renderWithProviders(<AppRoutes />, { route: "/products/1" });

@@ -620,9 +620,13 @@ export function ProductDetailPage() {
         <p className="mt-3 text-sm text-gray-500">전체 {bom.data?.total ?? 0}건</p>
 
         <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
+          {/* ★ 통화표를 함께 기다린다(sku-detail의 단가 표와 같은 규율).
+              formatMoney는 모르는 통화에 예외를 던지도록 설계돼 있어서(자릿수를
+              추측하지 않는다), 통화표가 늦거나 실패한 사이에 원가 열을 그리면
+              렌더 중 예외 → 트리 언마운트로 화면이 통째로 백지가 된다. */}
           <ListState
-            isPending={bom.isPending}
-            error={bom.error}
+            isPending={bom.isPending || currencies.isPending}
+            error={bom.error ?? currencies.error}
             isEmpty={bom.data?.items.length === 0}
             emptyHint="등록된 BOM이 없습니다. 자재와 소요량을 추가하세요."
           >
@@ -657,12 +661,19 @@ export function ProductDetailPage() {
                     </td>
                     {showsCost && (
                       <td className="cell-nowrap px-4 py-2 num">
-                        {line.unit_cost === null || line.unit_cost === undefined
+                        {/* ★ 통화표가 아직 없으면 값을 만들지 않는다. formatMoney는
+                            모르는 통화에 예외를 던지고(자릿수 추측 금지), 그 예외가
+                            렌더 중에 나면 트리가 언마운트돼 화면이 백지가 된다.
+                            ListState의 isPending/error 가드만으로는 못 막는다 —
+                            children은 ListState가 그리지 않아도 이미 평가된다. */}
+                        {line.unit_cost === null ||
+                        line.unit_cost === undefined ||
+                        currencies.data === undefined
                           ? orEmpty(null)
                           : formatMoney(
                               line.unit_cost,
                               line.currency ?? "KRW",
-                              currencies.data?.items ?? [],
+                              currencies.data.items,
                             )}
                       </td>
                     )}

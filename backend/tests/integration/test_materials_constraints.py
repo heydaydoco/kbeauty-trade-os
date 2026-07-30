@@ -188,3 +188,54 @@ def test_business_version_is_independent_of_the_locking_version() -> None:
         assert row is not None
         assert row.label_version == 3  # 업무 판번은 그대로
         assert row.version == 2  # 잠금 카운터만 올라간다
+
+
+# ── 리뷰 보강 (PR-2 적대적 리뷰 검출: CHECK 3건이 테스트에 없었다) ──────────
+
+
+def test_negative_cost_is_rejected_by_the_database() -> None:
+    """음수 단가는 DB가 거부한다 (0은 허용 — 무상 자재가 실재한다)"""
+    with pytest.raises(IntegrityError) as exc:
+        _insert_bom(
+            product_id=create_product("PRD-NEG"),
+            material_id=create_material("MAT-NEG"),
+            unit_cost=-1,
+            currency="KRW",
+        )
+    assert "unit_cost_nonnegative" in str(exc.value)
+
+
+def test_lowercase_currency_is_rejected_by_the_database() -> None:
+    """소문자 통화는 DB가 거부한다 — 서비스 정규화를 우회한 경로도 막힌다"""
+    with pytest.raises(IntegrityError) as exc:
+        _insert_bom(
+            product_id=create_product("PRD-CUR"),
+            material_id=create_material("MAT-CUR"),
+            unit_cost=1000,
+            currency="usd",
+        )
+    assert "currency_uppercase" in str(exc.value)
+
+
+def test_unknown_approval_status_is_rejected_by_the_database() -> None:
+    """정해지지 않은 라벨 승인상태는 DB가 거부한다"""
+    with pytest.raises(IntegrityError) as exc:
+        _insert_label(sku_id=create_sku("SKU-AS"), approval_status="PENDING")
+    assert "approval_status_valid" in str(exc.value)
+
+
+def test_same_market_and_version_in_another_language_is_allowed() -> None:
+    """★ 같은 시장·판번이라도 **언어가 다르면** 별개 라벨이다
+
+    유일키에 language가 없으면 캐나다 영문판 v1을 넣은 뒤 불문판 v1을 못 넣어
+    판번을 올려야 하고, 그 순간 판번이 "아트웍 개정"이 아니라 "언어 추가"로도
+    증가해 §4.5 컷인의 기준이 흐려진다(리뷰 검출·수정 고정).
+    """
+    sku_id = create_sku("SKU-MULTILANG")
+    _insert_label(sku_id=sku_id, country_code="CA", label_version=1, language="en")
+    _insert_label(sku_id=sku_id, country_code="CA", label_version=1, language="fr")
+
+    # 같은 시장·언어·판번의 두 번째 행만 거부된다.
+    with pytest.raises(IntegrityError) as exc:
+        _insert_label(sku_id=sku_id, country_code="CA", label_version=1, language="fr")
+    assert "uq_labels_sku_id_country_code_language_label_version_active" in str(exc.value)

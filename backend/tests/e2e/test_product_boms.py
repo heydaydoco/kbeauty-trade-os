@@ -109,6 +109,7 @@ def test_unknown_origin_value_is_rejected(add_line: Add) -> None:
 # ── 원가 마스킹 (§2 / §20 G / ADR-0024) ────────────────────────────────────
 
 
+@pytest.mark.group_g
 def test_a_trader_sees_the_cost_fields(add_line: Add, trader: TestClient, product_id: int) -> None:
     """원가를 볼 수 있는 역할에게는 단가·통화가 그대로 온다"""
     created = add_line(unit_cost="12.34", currency="USD")
@@ -121,6 +122,7 @@ def test_a_trader_sees_the_cost_fields(add_line: Add, trader: TestClient, produc
     assert listed["items"][0]["currency"] == "USD"
 
 
+@pytest.mark.group_g
 def test_a_viewer_gets_no_cost_fields_at_all(
     add_line: Add, viewer: TestClient, product_id: int
 ) -> None:
@@ -140,6 +142,7 @@ def test_a_viewer_gets_no_cost_fields_at_all(
     assert "1234" not in listed.text
 
 
+@pytest.mark.group_g
 def test_a_viewer_still_sees_the_line_itself(
     add_line: Add, viewer: TestClient, product_id: int
 ) -> None:
@@ -159,6 +162,7 @@ def test_a_viewer_still_sees_the_line_itself(
     assert line["material_code"]
 
 
+@pytest.mark.group_g
 def test_a_cert_user_sees_the_cost(add_line: Add, cert: TestClient, product_id: int) -> None:
     """인증 역할은 원가를 본다 — 판정 계산이 단가를 쓰기 때문이다(§6.3)"""
     assert add_line(unit_cost="12.34", currency="USD").status_code == 201
@@ -257,3 +261,13 @@ def test_materials_csv_export_has_bom_and_korean(trader: TestClient) -> None:
     assert "정제수" in exported.text
     # 자재 마스터에는 단가 컬럼 자체가 없다 — CSV로도 원가가 나가지 않는다.
     assert "단가" not in exported.text
+
+
+def test_absurdly_large_cost_is_rejected_with_a_field_message(add_line: Add) -> None:
+    """★ 최소단위 환산이 BIGINT를 넘는 단가는 422다 — 500으로 새지 않는다
+
+    DB의 numeric overflow는 IntegrityError가 아니라 DataError라 서비스의
+    중복 처리 경로에 걸리지 않는다 — 스키마에서 막는다(리뷰 검출).
+    """
+    rejected = add_line(unit_cost="99999999999999999999", currency="KRW")
+    assert rejected.status_code == 422, rejected.text

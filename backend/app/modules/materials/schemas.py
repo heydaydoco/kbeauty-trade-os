@@ -80,7 +80,11 @@ class BomLineCreateRequest(BaseModel):
     quantity_unit: str = Field(min_length=1, max_length=10)
     #: 매입 단가 = 원가. 사람이 쓰는 표기(12.34)로 받고 서버가 최소단위로 바꾼다.
     #: 통화와 한 쌍이며, 둘 다 비우면 "단가 미상"으로 등록된다.
-    unit_cost: Decimal | None = Field(default=None, ge=0)
+    #: ★ 상한이 필요하다 — 없으면 최소단위 환산 뒤 BIGINT를 넘겨 DB가 DataError를
+    #:   내는데, 그건 IntegrityError가 아니라서 서비스가 못 잡고 500이 된다.
+    #:   15자리면 1조 단위 금액까지 담고, 최소단위 환산(최대 ×1000) 후에도
+    #:   BIGINT(19자리) 안이다.
+    unit_cost: Decimal | None = Field(default=None, ge=0, max_digits=15)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     #: 기본값은 **미상**이다 (§4.4 "미상은 판정 시 역외 간주" — GC-B2).
     origin_status: str = Field(default="UNKNOWN", pattern=_ORIGIN_STATUS_PATTERN)

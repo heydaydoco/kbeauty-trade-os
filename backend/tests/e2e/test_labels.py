@@ -237,3 +237,30 @@ def test_same_key_replays_the_first_result(
 def test_labels_of_a_missing_sku_is_404(trader: TestClient) -> None:
     missing = trader.get(f"{SKUS}/999999/labels")
     assert missing.status_code == 404, missing.text
+
+
+# ── 리뷰 보강 (PR-2 적대적 리뷰 검출) ──────────────────────────────────────
+
+
+def test_same_market_and_version_in_another_language_is_allowed(create_label: Create) -> None:
+    """★ 같은 시장·판번이라도 언어가 다르면 등록된다 (§4.5 "한 시장에 다국어 라벨")
+
+    판번은 아트웍 개정의 축이지 언어의 축이 아니다 — 언어를 추가하려고 판번을
+    올리면 §4.5 컷인(구라벨 소진)의 기준이 흐려진다.
+    """
+    english = create_label(key="ml-en", country_code="CA", label_version=1, language="en")
+    assert english.status_code == 201, english.text
+
+    french = create_label(key="ml-fr", country_code="CA", label_version=1, language="fr")
+    assert french.status_code == 201, french.text
+    assert french.json()["label_version"] == 1
+
+
+def test_same_market_language_and_version_is_still_rejected(create_label: Create) -> None:
+    """언어까지 같으면 여전히 거부된다 — 중복 방지는 살아 있다"""
+    first = create_label(key="ml-1", country_code="CA", label_version=1, language="fr")
+    assert first.status_code == 201, first.text
+
+    duplicate = create_label(key="ml-2", country_code="CA", label_version=1, language="fr")
+    assert duplicate.status_code == 422, duplicate.text
+    assert "시장·언어·판번" in duplicate.text
