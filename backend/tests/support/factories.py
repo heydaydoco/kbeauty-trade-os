@@ -158,6 +158,29 @@ def create_ingredient_rule(
         return rule.id
 
 
+def create_partner(
+    partner_code: str = "PTN-001",
+    *,
+    name_ko: str = "테스트 거래처",
+    types: tuple[str, ...] = ("SUPPLIER",),
+) -> int:
+    """거래처를 유형 링크까지 한 트랜잭션에 만들고 id를 돌려준다 (§4.6 / ADR-0026).
+
+    ★ 코드는 자연키다 — 한 테스트가 거래처를 둘 만들면 코드를 달리 넘겨야 한다
+      (고정 코드값 함정: PROGRESS 주의 인계 ⑥).
+    """
+    from app.modules.partners.models import Partner, PartnerTypeLink
+
+    with unit_of_work() as uow:
+        partner = Partner(partner_code=partner_code, name_ko=name_ko)
+        uow.session.add(partner)
+        uow.session.flush()
+        for code in types:
+            uow.session.add(PartnerTypeLink(partner_id=partner.id, type_code=code))
+        uow.session.flush()
+        return partner.id
+
+
 def create_material(
     material_code: str = "MAT-001",
     *,

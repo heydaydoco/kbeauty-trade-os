@@ -66,6 +66,11 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # origin_determinations의 BOM 스냅샷(§6.2·S3-4)이 맡는다.
         "product_boms",
         "labels",  # 승인상태 전환·검증 체크·컷인일 입력
+        # S1-3 — 거래처·서명권자 (§4.6·§4.7). 전부 마스터라 사람이 고친다.
+        "partners",  # 여신·DG 취급·메모 수정
+        "partner_type_links",  # 유형 해제 = soft delete(UPDATE)
+        "customer_item_codes",  # 매핑 정리 = soft delete(UPDATE)
+        "signatories",  # 최소 헤더 — 상세는 S4-4 재판정(ADR-0021 방식)
     }
 )
 
