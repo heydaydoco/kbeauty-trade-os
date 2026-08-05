@@ -22,7 +22,12 @@ from httpx2 import Response
 
 from app.main import app
 from app.modules.identity.models import RoleCode
-from tests.support.factories import DEFAULT_PASSWORD, create_product, create_user
+from tests.support.factories import (
+    DEFAULT_PASSWORD,
+    create_partner,
+    create_product,
+    create_user,
+)
 
 pytestmark = pytest.mark.group_k
 
@@ -65,13 +70,18 @@ def register(trader: TestClient) -> Register:
 
 
 def test_logistics_attributes_round_trip(register: Register) -> None:
-    """바코드·중량·박스입수·사용기한·제조사가 그대로 저장·반환된다"""
+    """바코드·중량·박스입수·사용기한·제조사가 그대로 저장·반환된다
+
+    제조사는 S1-3에서 거래처(유형 OEM) FK로 승격됐다(ADR-0020) — 응답의
+    manufacturer_name은 파트너명 조인 값이다.
+    """
+    partner_id = create_partner("PTN-KOLMAR", name_ko="한국콜마", types=("OEM",))
     response = register(
         barcode="8801234567890",
         unit_weight_g="132.500",
         box_qty=24,
         shelf_life_months=36,
-        manufacturer_name="한국콜마",
+        manufacturer_partner_id=partner_id,
     )
 
     assert response.status_code == 201, response.text
@@ -82,7 +92,21 @@ def test_logistics_attributes_round_trip(register: Register) -> None:
     assert body["unit_weight_g"] == "132.500"
     assert body["box_qty"] == 24
     assert body["shelf_life_months"] == 36
+    assert body["manufacturer_partner_id"] == partner_id
     assert body["manufacturer_name"] == "한국콜마"
+
+
+def test_manufacturer_must_be_an_oem_partner(register: Register) -> None:
+    """OEM 유형이 아닌 거래처는 제조사가 될 수 없다 ([M1] 보강(S1-3) ⑤)"""
+    partner_id = create_partner("PTN-FWD", name_ko="포워더만", types=("FORWARDER",))
+    response = register(manufacturer_partner_id=partner_id)
+    assert response.status_code == 422, response.text
+    assert "OEM 유형" in response.json()["error"]["detail"]["manufacturer_partner_id"]
+
+
+def test_unknown_manufacturer_partner_is_rejected(register: Register) -> None:
+    response = register(manufacturer_partner_id=999_999)
+    assert response.status_code == 422, response.text
 
 
 @pytest.mark.parametrize(
@@ -109,6 +133,7 @@ def test_omitted_optional_attributes_stay_empty(register: Register) -> None:
 
     assert body["unit_weight_g"] is None
     assert body["box_qty"] is None
+    assert body["manufacturer_partner_id"] is None
     assert body["manufacturer_name"] is None
     assert body["dg_flag"] is False
 

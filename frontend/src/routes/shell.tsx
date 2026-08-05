@@ -8,6 +8,7 @@ const NAV = [
   { to: "/products", label: "제품(처방)" },
   { to: "/ingredients", label: "성분" },
   { to: "/materials", label: "자재" },
+  { to: "/partners", label: "거래처" },
   { to: "/brands", label: "브랜드" },
   { to: "/item-profiles", label: "품목군" },
 ] as const;

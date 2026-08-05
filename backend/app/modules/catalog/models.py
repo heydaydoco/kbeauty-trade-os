@@ -139,8 +139,11 @@ class Sku(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Ba
     #: 제조일로부터의 사용기한(개월). 화장품 표기 관행이 개월이고,
     #: P4의 로트 유통기한 계산이 이 값을 입력으로 쓴다.
     shelf_life_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    #: S1-3에서 partners FK로 승격한다(ADR-0020).
-    manufacturer_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    #: 제조사 = 거래처(유형 OEM)다 — S1-3에서 문자열에서 승격했다(ADR-0020 /
+    #: [M1] 보강(S1-3) ⑤). NULL 허용 유지 — 차단 지점은 등록이 아니라 게이트다.
+    manufacturer_partner_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("partners.id", ondelete="RESTRICT"), nullable=True
+    )
 
     # ── DG 속성 (§4.1 / §7.7) ──────────────────────────────────────────────
     #

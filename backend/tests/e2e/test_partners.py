@@ -185,6 +185,46 @@ def test_duplicate_buyer_item_code_is_rejected(create: Create, trader: TestClien
     assert response.status_code == 422, response.text
 
 
+# ── 승격 소비처 — 자재 기본공급사 ([M1] 보강(S1-3) ⑤ / ADR-0020) ───────────
+
+
+def test_material_supplier_must_be_a_supplier_partner(
+    create: Create, trader: TestClient
+) -> None:
+    """기본공급사는 SUPPLIER 유형 거래처만 지정할 수 있다"""
+    buyer_id = create(key="sup1", type_codes=["BUYER"]).json()["id"]
+    response = trader.post(
+        "/api/v1/materials",
+        json={
+            "material_code": "MAT-SUP1",
+            "name_ko": "테스트 자재",
+            "material_type": "RAW_MATERIAL",
+            "default_supplier_partner_id": buyer_id,
+        },
+        headers={"Idempotency-Key": "mat-sup1"},
+    )
+    assert response.status_code == 422, response.text
+    assert "공급사 유형" in response.json()["error"]["detail"]["default_supplier_partner_id"]
+
+
+def test_material_carries_its_supplier_partner(create: Create, trader: TestClient) -> None:
+    supplier_id = create(key="sup2", type_codes=["SUPPLIER"], name_ko="원료상사").json()["id"]
+    response = trader.post(
+        "/api/v1/materials",
+        json={
+            "material_code": "MAT-SUP2",
+            "name_ko": "테스트 자재",
+            "material_type": "RAW_MATERIAL",
+            "default_supplier_partner_id": supplier_id,
+        },
+        headers={"Idempotency-Key": "mat-sup2"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["default_supplier_partner_id"] == supplier_id
+    assert body["default_supplier_name"] == "원료상사"
+
+
 # ── 서명권자 (§4.7 — 최소 헤더) ────────────────────────────────────────────
 
 

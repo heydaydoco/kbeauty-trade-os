@@ -36,8 +36,8 @@ class MaterialCreateRequest(BaseModel):
     material_type: str = Field(pattern=_MATERIAL_TYPE_PATTERN)
     #: HS6. 없이도 등록된다 — 결측 탐지는 §14 ⑭ 헬스체크(P6)의 일이다.
     hs6: str | None = Field(default=None, pattern=r"^[0-9]{6}$")
-    #: S1-3에서 partners FK로 승격한다(ADR-0020 부기).
-    default_supplier_name: str | None = Field(default=None, max_length=100)
+    #: 기본공급사 = 거래처(유형 SUPPLIER — ADR-0020 부기 승격). 검증은 서비스가 한다.
+    default_supplier_partner_id: int | None = None
     inventory_managed: bool = False
     #: 로트관리는 재고관리를 전제한다 — 짝 검증은 서비스·DB CHECK가 한다.
     lot_managed: bool = False
@@ -50,6 +50,8 @@ class MaterialSummary(BaseModel):
     name_ko: str
     material_type: str
     hs6: str | None
+    default_supplier_partner_id: int | None
+    #: 표시용 파트너명(조인 값) — 편집은 default_supplier_partner_id로 한다.
     default_supplier_name: str | None
     inventory_managed: bool
     lot_managed: bool
@@ -63,6 +65,7 @@ class MaterialSummary(BaseModel):
             name_ko=view.name_ko,
             material_type=view.material_type,
             hs6=view.hs6,
+            default_supplier_partner_id=view.default_supplier_partner_id,
             default_supplier_name=view.default_supplier_name,
             inventory_managed=view.inventory_managed,
             lot_managed=view.lot_managed,

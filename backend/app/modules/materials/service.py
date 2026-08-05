@@ -48,6 +48,8 @@ class MaterialView:
     name_ko: str
     material_type: str
     hs6: str | None
+    #: 기본공급사 = 거래처(유형 SUPPLIER — ADR-0020 부기 승격). 이름은 표시용 조인 값.
+    default_supplier_partner_id: int | None
     default_supplier_name: str | None
     inventory_managed: bool
     lot_managed: bool
@@ -93,14 +95,15 @@ class LabelView:
     note: str | None
 
 
-def _material_view(row: Material) -> MaterialView:
+def _material_view(row: Material, supplier_name_ko: str | None) -> MaterialView:
     return MaterialView(
         id=row.id,
         material_code=row.material_code,
         name_ko=row.name_ko,
         material_type=row.material_type,
         hs6=row.hs6,
-        default_supplier_name=row.default_supplier_name,
+        default_supplier_partner_id=row.default_supplier_partner_id,
+        default_supplier_name=supplier_name_ko,
         inventory_managed=row.inventory_managed,
         lot_managed=row.lot_managed,
         note=row.note,
@@ -154,6 +157,7 @@ def _serialize_material(view: MaterialView) -> dict[str, Any]:
         "name_ko": view.name_ko,
         "material_type": view.material_type,
         "hs6": view.hs6,
+        "default_supplier_partner_id": view.default_supplier_partner_id,
         "default_supplier_name": view.default_supplier_name,
         "inventory_managed": view.inventory_managed,
         "lot_managed": view.lot_managed,
@@ -304,6 +308,45 @@ def _guard_export_size(total: int) -> None:
 # ── 자재 마스터 (§4.4) ─────────────────────────────────────────────────────
 
 
+def _live_supplier(session: Session, partner_id: int) -> Any:
+    """기본공급사 거래처 검증 — 존재해야 하고 SUPPLIER 유형이어야 한다.
+
+    [M1] 보강(S1-3) ⑤가 기본공급사=SUPPLIER로 못박는다(catalog._live_manufacturer의
+    OEM 검증과 같은 꼴).
+    """
+    from app.modules.partners.models import Partner, PartnerTypeLink
+
+    partner = session.execute(
+        select(Partner).where(Partner.id == partner_id, Partner.deleted_at.is_(None))
+    ).scalar_one_or_none()
+    if partner is None:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                "default_supplier_partner_id": "존재하지 않는 거래처입니다. "
+                "거래처를 먼저 등록해 주세요."
+            },
+            log_context={"default_supplier_partner_id": partner_id},
+        )
+    has_type = session.execute(
+        select(PartnerTypeLink.id).where(
+            PartnerTypeLink.partner_id == partner_id,
+            PartnerTypeLink.type_code == "SUPPLIER",
+            PartnerTypeLink.deleted_at.is_(None),
+        )
+    ).scalar_one_or_none()
+    if has_type is None:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                "default_supplier_partner_id": "공급사 유형이 아닌 거래처입니다. "
+                "기본공급사는 SUPPLIER 유형을 가진 거래처만 지정할 수 있습니다."
+            },
+            log_context={"default_supplier_partner_id": partner_id},
+        )
+    return partner
+
+
 def create_material(
     *, actor: AuthenticatedUser, idempotency_key: str, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:
@@ -331,13 +374,15 @@ def create_material(
                     "켜거나 로트관리를 꺼 주세요."
                 },
             )
+        supplier_id = payload.get("default_supplier_partner_id")
+        supplier = _live_supplier(session, int(supplier_id)) if supplier_id is not None else None
 
         material = Material(
             material_code=str(payload["material_code"]).strip(),
             name_ko=str(payload["name_ko"]).strip(),
             material_type=str(payload["material_type"]),
             hs6=payload.get("hs6"),
-            default_supplier_name=payload.get("default_supplier_name"),
+            default_supplier_partner_id=supplier.id if supplier is not None else None,
             inventory_managed=inventory_managed,
             lot_managed=lot_managed,
             note=payload.get("note"),
@@ -361,10 +406,23 @@ def create_material(
             payload={"material_id": material.id, "material_code": material.material_code},
         )
 
-        body = _serialize_material(_material_view(material))
+        body = _serialize_material(
+            _material_view(material, supplier.name_ko if supplier is not None else None)
+        )
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=201, body=body)
         return 201, body
+
+
+def _material_select() -> Any:
+    """자재 + 기본공급사(거래처)를 한 번에. 없을 수 있어 outer join이다."""
+    from app.modules.partners.models import Partner
+
+    return (
+        select(Material, Partner.name_ko)
+        .outerjoin(Partner, Material.default_supplier_partner_id == Partner.id)
+        .where(Material.deleted_at.is_(None))
+    )
 
 
 def list_materials(*, offset: int, limit: int) -> tuple[list[MaterialView], int]:
@@ -374,13 +432,9 @@ def list_materials(*, offset: int, limit: int) -> tuple[list[MaterialView], int]
             select(func.count()).select_from(Material).where(Material.deleted_at.is_(None))
         ).scalar_one()
         rows = session.execute(
-            select(Material)
-            .where(Material.deleted_at.is_(None))
-            .order_by(Material.material_code)
-            .offset(offset)
-            .limit(limit)
-        ).scalars()
-        return [_material_view(row) for row in rows], total
+            _material_select().order_by(Material.material_code).offset(offset).limit(limit)
+        ).all()
+        return [_material_view(row, supplier_name) for row, supplier_name in rows], total
 
 
 def all_materials_for_export() -> list[MaterialView]:
@@ -390,15 +444,20 @@ def all_materials_for_export() -> list[MaterialView]:
             select(func.count()).select_from(Material).where(Material.deleted_at.is_(None))
         ).scalar_one()
         _guard_export_size(total)
-        rows = session.execute(
-            select(Material).where(Material.deleted_at.is_(None)).order_by(Material.material_code)
-        ).scalars()
-        return [_material_view(row) for row in rows]
+        rows = session.execute(_material_select().order_by(Material.material_code)).all()
+        return [_material_view(row, supplier_name) for row, supplier_name in rows]
 
 
 def get_material(material_id: int) -> MaterialView:
     with unit_of_work() as uow:
-        return _material_view(require_material(uow.session, material_id))
+        session = uow.session
+        row = session.execute(
+            _material_select().where(Material.id == material_id)
+        ).one_or_none()
+        if row is None:
+            raise NotFoundError(log_context={"material_id": material_id})
+        material, supplier_name = row
+        return _material_view(material, supplier_name)
 
 
 # ── 자재 BOM (§4.4 / GC-B1·B2) ─────────────────────────────────────────────

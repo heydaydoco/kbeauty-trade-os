@@ -38,7 +38,7 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 
 ## 부채 (렌즈 미통과·보류 — 조용한 누락 금지)
 1. **병합 차단(DoD② 일부) — 미충족 확정**. GitHub Pro 미결제(ADR-0011). 폴백: pre-push 훅 + `merge-pr.sh` + 웹 Merge 버튼 금지. **재검토 트리거: 협업자 추가 또는 팀 배포**.
-2. **프런트 eslint — 재이월(2026-07-30 재확인, S1-2 PR-1 첫 프런트 커밋 시점 의무 이행)**. `typescript-eslint` 최신 `8.65.0`·canary `8.65.1-alpha.12` 모두 peer가 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`. `next` 태그 없음(dist-tags: rc-v8·latest·canary 실측). **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** S1-3에서 재확인. tsc strict가 현 게이트.
+2. **프런트 eslint — 재이월(2026-08-05 재확인 — S1-3 PR-1 첫 프런트 커밋 의무 이행)**. `typescript-eslint` 최신 `8.66.0`·canary `8.66.1-alpha.4` 모두 peer가 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`(npm 실측, 승인 조건 ③). **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** 다음 프런트 세션에서 재확인. tsc strict(typecheck)가 현 게이트.
 3. ~~pgAdmin~~ — **종결**.
 4. ~~담당자 라우팅 미배정~~ — **종결**(ADR-0012 / WBS v1.2).
 5. **compose-smoke CI 잡** — `docker compose up --wait` → /healthz 200 회귀 검사. Free 분 예산 이유로 `config -q`만. Phase 1 이후 재검토.
@@ -50,9 +50,9 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 11. **아웃박스 디스패처 미구현** — events에 쌓이기만 하고 보내는 주체가 없다. **의도된 상태**(S2-3 알림 엔진). 그전까지 events는 단조 증가한다 — S2-3에서 디스패처와 함께 보존 정책도 정할 것.
 12. **scheduled_jobs 비어 있음** — 배치 레지스트리 테이블만 있고 등록된 배치가 0건이다. **실행기(S2-3) 구현 전 행 삽입 금지 — 위반 커밋은 반려 대상.** S1-1 종료 시점 실측 0행.
 13. ~~프런트 라우팅 없음~~ — **종결**(S1-1 PR-1). 6개 라우트 + 404, 운영 nginx SPA 폴백은 S0-1부터 있었다.
-14. **[S1-3] 승격 대상 임시 문자열 4건** — `skus.msds_url`·`labels.file_url`(→ §4.7 `documents`), `skus.manufacturer_name`·`materials.default_supplier_name`(→ §4.6 `partners` FK). 승격 시점과 사유가 같아 한 ADR로 묶었다(ADR-0020 + S1-2 부기). **안 하면 §7.7의 "MSDS 유효본 미첨부 차단"(P4)이 검증 불가로 남는다.** 필수화 여부는 승격 시 재판정.
+14. **[S1-3] 승격 대상 임시 문자열 4건 — 2/4 완료(PR-1), 2/4 잔여(PR-2)**. 완료: `skus.manufacturer_name`→`manufacturer_partner_id`(OEM)·`materials.default_supplier_name`→`default_supplier_partner_id`(SUPPLIER) — backfill(트림·공백 정규화 병합) 마이그레이션+실측 테스트, 문자열 컬럼 제거, NULL 허용 유지(승인 판정 — 차단은 §7.7 게이트). 잔여: `skus.msds_url`·`labels.file_url`(→ §4.7 `documents`, S1-3 PR-2). **안 하면 §7.7의 "MSDS 유효본 미첨부 차단"(P4)이 검증 불가로 남는다.** (ADR-0020)
 15. **item_profiles 내용 연결 미배정분** — S1-1은 헤더+적용 FK까지. 연결 테이블은 **서류=S1-3 / 요건=S2-1 / 마일스톤=S3-2**가 각각 추가하며, 각 세션 DoD에서 확인한다. §4.8의 "신규 등록 시 자동 적용"도 그 이후다. (ADR-0021)
-16. **[S1-2 PR-2 리뷰 검출·승인 범위 밖] SKU 상세 단가 표도 통화표 없이 `formatMoney`를 부른다** — `frontend/src/routes/sku-detail.tsx:479`. `/v1/system/currencies`가 늦거나 실패하면 렌더 중 `UnknownCurrencyError` → ErrorBoundary가 없어 트리 언마운트 → **화면 백지**. PR-2의 제품 상세에서 실측·수정한 것과 **같은 결함 클래스**다(ListState의 isPending/error 가드는 못 막는다 — children은 그리지 않아도 평가된다). S1-1 코드라 이번 PR 범위 밖이므로 **구현 없이 등재만** 한다. 수정은 셀에서 `currencies.data === undefined`면 값을 만들지 않는 한 줄. **재개: 웹 세션 판정.**
+16. ~~SKU 상세 단가 표 통화표 미도착 백지(`sku-detail.tsx:479`)~~ — **종결(S1-3 PR-1, 웹 세션 재개 승인 2026-08-05)**. 셀에서 `currencies.data === undefined`면 값을 만들지 않는 가드로 수정(제품 상세와 같은 패턴), vitest 회귀 테스트(`sku-detail-prices.test.tsx` — 통화 API 500에도 화면 생존) 추가.
 17. **[S1-2 리뷰 검출] CSV 수식 인젝션 미방어** — 전 목록 내보내기(S1-1 포함)가 자유 텍스트 셀(`=`·`+`·`-`·`@` 시작)을 이스케이프 없이 내보낸다. Excel이 수식으로 해석할 수 있다. 통로가 `core/csv_export` 하나라 고치는 곳은 한 곳이지만, **이스케이프는 §12.2 왕복 편집(S1-3)의 값 보존과 상충**해서 함께 설계해야 한다 — S1-3에서 판정. 그전까지 CSV는 신뢰 사용자(로그인 필수)만 받는다.
 
 ## 마스킹 원장 (원가·마진 마스킹 대상의 발견·판정 기록 — 2026-07-30 신설)
