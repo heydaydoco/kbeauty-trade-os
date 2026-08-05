@@ -11,6 +11,7 @@ import { materialTypeLabel, orEmpty } from "../lib/labels";
 import { usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
+import { PARTNERS_QUERY_KEY, PARTNERS_SELECT_PATH, type Partner } from "./partners";
 
 export interface Material {
   id: number;
@@ -18,6 +19,7 @@ export interface Material {
   name_ko: string;
   material_type: string;
   hs6: string | null;
+  default_supplier_partner_id: number | null;
   default_supplier_name: string | null;
   inventory_managed: boolean;
   lot_managed: boolean;
@@ -46,12 +48,15 @@ export function MaterialsPage() {
     name_ko: "",
     material_type: "RAW_MATERIAL",
     hs6: "",
-    default_supplier_name: "",
+    default_supplier_partner_id: "",
     inventory_managed: false,
     lot_managed: false,
   });
 
   const list = usePagedQuery<Material>(MATERIALS_QUERY_KEY, "/v1/materials");
+  const partners = usePagedQuery<Partner>(PARTNERS_QUERY_KEY, PARTNERS_SELECT_PATH, canRegister);
+  // 기본공급사는 SUPPLIER 유형 거래처만([M1] 보강(S1-3) ⑤) — 서버가 최종 판정.
+  const supplierPartners = partners.data?.items.filter((p) => p.type_codes.includes("SUPPLIER"));
 
   const register = useMutation({
     mutationFn: () =>
@@ -62,8 +67,10 @@ export function MaterialsPage() {
           name_ko: form.name_ko,
           material_type: form.material_type,
           hs6: form.hs6 === "" ? undefined : form.hs6,
-          default_supplier_name:
-            form.default_supplier_name === "" ? undefined : form.default_supplier_name,
+          default_supplier_partner_id:
+            form.default_supplier_partner_id === ""
+              ? undefined
+              : Number(form.default_supplier_partner_id),
           inventory_managed: form.inventory_managed,
           lot_managed: form.lot_managed,
         },
@@ -74,7 +81,7 @@ export function MaterialsPage() {
         material_code: "",
         name_ko: "",
         hs6: "",
-        default_supplier_name: "",
+        default_supplier_partner_id: "",
       }));
       void client.invalidateQueries({ queryKey: MATERIALS_QUERY_KEY });
     },
@@ -163,15 +170,24 @@ export function MaterialsPage() {
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="cell-nowrap text-gray-600">기본공급사 (선택)</span>
-            <input
-              name="default_supplier_name"
-              maxLength={100}
-              value={form.default_supplier_name}
+            <select
+              name="default_supplier_partner_id"
+              value={form.default_supplier_partner_id}
               onChange={(event) =>
-                setForm((previous) => ({ ...previous, default_supplier_name: event.target.value }))
+                setForm((previous) => ({
+                  ...previous,
+                  default_supplier_partner_id: event.target.value,
+                }))
               }
               className="rounded border border-gray-300 px-3 py-2"
-            />
+            >
+              <option value="">없음</option>
+              {supplierPartners?.map((partner) => (
+                <option key={partner.id} value={partner.id}>
+                  {partner.name_ko} ({partner.partner_code})
+                </option>
+              ))}
+            </select>
           </label>
           <label className="flex items-center gap-2 text-sm">
             <input

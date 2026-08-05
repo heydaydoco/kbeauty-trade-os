@@ -15,6 +15,7 @@ import { usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import { ITEM_PROFILES_QUERY_KEY, type ItemProfile } from "./item-profiles";
+import { PARTNERS_QUERY_KEY, PARTNERS_SELECT_PATH, type Partner } from "./partners";
 import { PRODUCTS_QUERY_KEY, type Product } from "./products";
 
 export interface Sku {
@@ -34,6 +35,7 @@ export interface Sku {
   unit_weight_g: string | null;
   box_qty: number | null;
   shelf_life_months: number | null;
+  manufacturer_partner_id: number | null;
   manufacturer_name: string | null;
   dg_flag: boolean;
   un_number: string | null;
@@ -53,7 +55,6 @@ const BLANK = {
   unit_weight_g: "",
   box_qty: "",
   shelf_life_months: "",
-  manufacturer_name: "",
   un_number: "",
   dg_class: "",
   packing_group: "",
@@ -84,6 +85,7 @@ export function SkuListPage() {
   const [nameEn, setNameEn] = useState("");
   const [productId, setProductId] = useState("");
   const [profileId, setProfileId] = useState("");
+  const [manufacturerId, setManufacturerId] = useState("");
   const [dgFlag, setDgFlag] = useState(false);
   const [isAerosol, setIsAerosol] = useState(false);
   const [isLq, setIsLq] = useState(false);
@@ -98,6 +100,10 @@ export function SkuListPage() {
     "/v1/item-profiles",
     canRegister,
   );
+  const partners = usePagedQuery<Partner>(PARTNERS_QUERY_KEY, PARTNERS_SELECT_PATH, canRegister);
+  // 제조사는 OEM 유형 거래처만 지정할 수 있다([M1] 보강(S1-3) ⑤) — 서버가
+  // 최종 판정하고, 화면은 후보를 미리 좁혀 실수를 줄인다.
+  const oemPartners = partners.data?.items.filter((p) => p.type_codes.includes("OEM"));
 
   const register = useMutation({
     mutationFn: (input: Record<string, unknown>) =>
@@ -107,6 +113,7 @@ export function SkuListPage() {
       setCode("");
       setNameKo("");
       setNameEn("");
+      setManufacturerId("");
       setDgFlag(false);
       setIsAerosol(false);
       setIsLq(false);
@@ -132,7 +139,7 @@ export function SkuListPage() {
       unit_weight_g: optional(extra.unit_weight_g),
       box_qty: optionalNumber(extra.box_qty),
       shelf_life_months: optionalNumber(extra.shelf_life_months),
-      manufacturer_name: optional(extra.manufacturer_name),
+      manufacturer_partner_id: manufacturerId === "" ? undefined : Number(manufacturerId),
       // 세트에는 위험물 정보를 담지 않는다(ADR-0016 부기 — P4 DG 게이트까지 미결).
       dg_flag: isSet ? false : dgFlag,
       un_number: isSet || !dgFlag ? undefined : optional(extra.un_number),
@@ -287,8 +294,20 @@ export function SkuListPage() {
                 />
               </label>
               <label className="flex flex-col gap-1 text-sm">
-                <span className="cell-nowrap text-gray-600">제조사</span>
-                <input name="manufacturer_name" maxLength={100} {...field("manufacturer_name")} />
+                <span className="cell-nowrap text-gray-600">제조사 (OEM 거래처)</span>
+                <select
+                  name="manufacturer_partner_id"
+                  value={manufacturerId}
+                  onChange={(event) => setManufacturerId(event.target.value)}
+                  className="rounded border border-gray-300 px-3 py-2"
+                >
+                  <option value="">없음</option>
+                  {oemPartners?.map((partner) => (
+                    <option key={partner.id} value={partner.id}>
+                      {partner.name_ko} ({partner.partner_code})
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
 

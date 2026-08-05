@@ -81,8 +81,11 @@ class Material(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixi
     #: HS6 (§4.4). NULL 허용 — 등록 문턱을 낮춘다. 결측 탐지는 §14 ⑭ 헬스체크
     #: 항목('HS6 없는 자재')이 P6에서 맡고, 소비자는 §6.3의 CTC 전수 대조다.
     hs6: Mapped[str | None] = mapped_column(String(6), nullable=True)
-    #: S1-3에서 partners FK로 승격한다(ADR-0020 부기).
-    default_supplier_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    #: 기본공급사 = 거래처(유형 SUPPLIER)다 — S1-3에서 문자열에서 승격했다
+    #: (ADR-0020 부기 / [M1] 보강(S1-3) ⑤). NULL 허용 유지.
+    default_supplier_partner_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("partners.id", ondelete="RESTRICT"), nullable=True
+    )
     #: 재고관리 대상인가(§4.4 "재고관리 플래그"). 원장 편입은 P4.
     inventory_managed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")

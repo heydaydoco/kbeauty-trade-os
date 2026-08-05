@@ -30,6 +30,7 @@ const SKU = {
   unit_weight_g: null,
   box_qty: null,
   shelf_life_months: null,
+  manufacturer_partner_id: null,
   manufacturer_name: null,
   dg_flag: false,
   un_number: null,

@@ -10,6 +10,7 @@ import { ItemProfilesPage } from "./routes/item-profiles";
 import { LoginPage } from "./routes/login";
 import { MaterialsPage } from "./routes/materials";
 import { NotFoundPage } from "./routes/not-found";
+import { PartnersPage } from "./routes/partners";
 import { ProductDetailPage } from "./routes/product-detail";
 import { ProductsPage } from "./routes/products";
 import { AppShell } from "./routes/shell";
@@ -73,6 +74,7 @@ export function AppRoutes() {
         <Route path="/ingredients" element={<IngredientsPage />} />
         <Route path="/ingredients/:ingredientId" element={<IngredientDetailPage />} />
         <Route path="/materials" element={<MaterialsPage />} />
+        <Route path="/partners" element={<PartnersPage />} />
         <Route path="/brands" element={<BrandsPage />} />
         <Route path="/item-profiles" element={<ItemProfilesPage />} />
       </Route>

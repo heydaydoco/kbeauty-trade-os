@@ -91,6 +91,8 @@ class SkuView:
     unit_weight_g: Decimal | None
     box_qty: int | None
     shelf_life_months: int | None
+    #: 제조사 = 거래처(유형 OEM — ADR-0020 승격). 이름은 표시용 조인 값이다.
+    manufacturer_partner_id: int | None
     manufacturer_name: str | None
     # DG (§4.1 / §7.7)
     dg_flag: bool
@@ -162,6 +164,7 @@ def _sku_view(
     product_name_ko: str | None,
     brand_name_ko: str | None,
     item_profile_name_ko: str | None,
+    manufacturer_name_ko: str | None,
 ) -> SkuView:
     return SkuView(
         id=sku.id,
@@ -180,7 +183,8 @@ def _sku_view(
         unit_weight_g=sku.unit_weight_g,
         box_qty=sku.box_qty,
         shelf_life_months=sku.shelf_life_months,
-        manufacturer_name=sku.manufacturer_name,
+        manufacturer_partner_id=sku.manufacturer_partner_id,
+        manufacturer_name=manufacturer_name_ko,
         dg_flag=sku.dg_flag,
         un_number=sku.un_number,
         dg_class=sku.dg_class,
@@ -221,6 +225,7 @@ def _serialize_sku(view: SkuView) -> dict[str, Any]:
         "unit_weight_g": _text(view.unit_weight_g),
         "box_qty": view.box_qty,
         "shelf_life_months": view.shelf_life_months,
+        "manufacturer_partner_id": view.manufacturer_partner_id,
         "manufacturer_name": view.manufacturer_name,
         "dg_flag": view.dg_flag,
         "un_number": view.un_number,
@@ -575,6 +580,44 @@ def _live_product(session: Session, product_id: int) -> Product:
     return product
 
 
+def _live_manufacturer(session: Session, partner_id: int) -> Any:
+    """제조사 거래처 검증 — 존재해야 하고 OEM 유형이어야 한다.
+
+    [M1] 보강(S1-3) ⑤가 제조사=OEM으로 못박는다. 유형 없는 연결을 허용하면
+    §7.7(DG)·§10.4(소싱)의 유형 필터가 제조사를 놓친다.
+    """
+    from app.modules.partners.models import Partner, PartnerTypeLink
+
+    partner = session.execute(
+        select(Partner).where(Partner.id == partner_id, Partner.deleted_at.is_(None))
+    ).scalar_one_or_none()
+    if partner is None:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                "manufacturer_partner_id": "존재하지 않는 거래처입니다. 거래처를 먼저 등록해 주세요."
+            },
+            log_context={"manufacturer_partner_id": partner_id},
+        )
+    has_oem = session.execute(
+        select(PartnerTypeLink.id).where(
+            PartnerTypeLink.partner_id == partner_id,
+            PartnerTypeLink.type_code == "OEM",
+            PartnerTypeLink.deleted_at.is_(None),
+        )
+    ).scalar_one_or_none()
+    if has_oem is None:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                "manufacturer_partner_id": "OEM 유형이 아닌 거래처입니다. 제조사는 "
+                "OEM 유형을 가진 거래처만 지정할 수 있습니다."
+            },
+            log_context={"manufacturer_partner_id": partner_id},
+        )
+    return partner
+
+
 def create_sku(
     *, actor: AuthenticatedUser, idempotency_key: str, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:
@@ -600,6 +643,12 @@ def create_sku(
         product = _live_product(session, int(product_id)) if product_id is not None else None
         profile_id = payload.get("item_profile_id")
         profile = require_profile(session, int(profile_id)) if profile_id is not None else None
+        manufacturer_id = payload.get("manufacturer_partner_id")
+        manufacturer = (
+            _live_manufacturer(session, int(manufacturer_id))
+            if manufacturer_id is not None
+            else None
+        )
 
         sku = Sku(
             sku_code=str(payload["sku_code"]).strip(),
@@ -613,7 +662,7 @@ def create_sku(
             unit_weight_g=_decimal(payload, "unit_weight_g", "중량"),
             box_qty=payload.get("box_qty"),
             shelf_life_months=payload.get("shelf_life_months"),
-            manufacturer_name=payload.get("manufacturer_name"),
+            manufacturer_partner_id=manufacturer.id if manufacturer is not None else None,
             dg_flag=bool(payload.get("dg_flag")),
             un_number=payload.get("un_number"),
             dg_class=payload.get("dg_class"),
@@ -646,6 +695,7 @@ def create_sku(
             product.name_ko if product is not None else None,
             brand.name_ko if brand is not None else None,
             profile.name_ko if profile is not None else None,
+            manufacturer.name_ko if manufacturer is not None else None,
         )
         body = _serialize_sku(view)
         assert claim.record is not None
@@ -654,12 +704,22 @@ def create_sku(
 
 
 def _sku_select() -> Any:
-    """SKU + 처방 + 브랜드를 한 번에. SET은 처방이 없으므로 outer join이다."""
+    """SKU + 처방 + 브랜드 + 제조사를 한 번에. 없을 수 있어 전부 outer join이다."""
+    from app.modules.partners.models import Partner
+
     return (
-        select(Sku, Product.product_code, Product.name_ko, Brand.name_ko, ItemProfile.name_ko)
+        select(
+            Sku,
+            Product.product_code,
+            Product.name_ko,
+            Brand.name_ko,
+            ItemProfile.name_ko,
+            Partner.name_ko,
+        )
         .outerjoin(Product, Sku.product_id == Product.id)
         .outerjoin(Brand, Product.brand_id == Brand.id)
         .outerjoin(ItemProfile, Sku.item_profile_id == ItemProfile.id)
+        .outerjoin(Partner, Sku.manufacturer_partner_id == Partner.id)
         .where(Sku.deleted_at.is_(None))
     )
 

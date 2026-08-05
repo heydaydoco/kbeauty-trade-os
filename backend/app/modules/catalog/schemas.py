@@ -123,7 +123,8 @@ class SkuCreateRequest(BaseModel):
     unit_weight_g: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=3)
     box_qty: int | None = Field(default=None, gt=0)
     shelf_life_months: int | None = Field(default=None, gt=0)
-    manufacturer_name: str | None = Field(default=None, max_length=100)
+    #: 제조사 = 거래처(유형 OEM — ADR-0020 승격). 존재·유형 검증은 서비스가 한다.
+    manufacturer_partner_id: int | None = None
 
     # DG (§4.1 / §7.7). 완결성·교차 정합은 P4 DG 게이트가 본다(ADR-0016 부기).
     dg_flag: bool = False
@@ -157,6 +158,8 @@ class SkuSummary(BaseModel):
     unit_weight_g: Decimal | None
     box_qty: int | None
     shelf_life_months: int | None
+    manufacturer_partner_id: int | None
+    #: 표시용 파트너명(조인 값) — 편집은 manufacturer_partner_id로 한다.
     manufacturer_name: str | None
     dg_flag: bool
     un_number: str | None
@@ -187,6 +190,7 @@ class SkuSummary(BaseModel):
             unit_weight_g=view.unit_weight_g,
             box_qty=view.box_qty,
             shelf_life_months=view.shelf_life_months,
+            manufacturer_partner_id=view.manufacturer_partner_id,
             manufacturer_name=view.manufacturer_name,
             dg_flag=view.dg_flag,
             un_number=view.un_number,

@@ -4,11 +4,13 @@
 - **S0-1 (리포 골격·인프라·CI) — 종결.** PR #1(`74aa173`).
 - **S0-2 (공통 테이블·인증·채번·수직 슬라이스) — 종결.** PR #3(`c236163`) + PR #4(`2070504`).
 - **S1-1 (제품 계층·DG·HS·세트·단가 이력·원가 마스킹·품목군) — 병합 완료·종결.** PR #5(`eecfa1f`) + PR #6(`1f6a573`).
+- **S1-2 (성분·자재 BOM·라벨) — 병합 완료·종결.** PR #7(`8fccaa9`) + PR #8(`1f96f12`). 계획은 2026-07-30 웹 세션 조건부 승인(A~G 승인, H 축소 — GC v1.1 스크리닝 5케이스 한정·라벨 케이스 보류).
 
 ## 현재
-- **S1-2 (성분·자재 BOM·라벨) — 진행.** 계획은 2026-07-30 웹 세션에서 조건부 승인(A~G 승인, H 축소 채택 — GC v1.1 스크리닝 5케이스 한정·라벨 케이스 보류).
-- **PR-1 `s1-2-ingredients-screening`(성분 3테이블·스크리닝·제품 상세 화면) — 병합 완료.** PR #7(`8fccaa9`).
-- **PR-2 `s1-2-materials-labels`(자재·BOM·라벨·BOM 단가 마스킹) — 구현·검증 완료, 병합 대기.**
+- **S1-3 (거래처·문서보관소·엑셀 코어) — 진행.** 계획 2026-08-05 웹 세션 조건부 승인(조건 9건: ①여신한도 비마스킹 판정+금액 규약 K 편입 확인 ②이스케이프 ADR 보증 범위 명기 ③backfill 트림·정규화+자동 생성 파트너 전량 보고 ④파일 보안 4항(서버 파일명·정적 경로 밖·attachment 고정·크기 상한 테스트) ⑤컬럼 제거 4건 잔존 참조 0건 명기 ⑥document_types 시드 추적성 ⑦F 그룹 CI 수집 증거 ⑧SKU 왕복 스트레치 ⑨유지 항목 재확인).
+- PR 3분할: **PR-1 `s1-3-partners`**(문서 커밋·거래처 4테이블·제조사/공급사 FK 승격·CSV 이스케이프·sku-detail 백지 수정) / **PR-2 `s1-3-documents`**(문서보관소·MSDS/라벨 파일 승격·품목군 서류 세트) / **PR-3 `s1-3-excel-core`**(임포트 레지스트리·왕복 diff·스테이징·오류 행 리포트).
+
+## S1-2 실기동 관통 기록 (종결 — 보존)
 - PR-1 실기동 관통(§22 렌즈 11, 실 HTTP): 로그인 → 브랜드·제품(한글 `--data-binary @file`) → 성분 4종 → 규칙 3건(`us`→`US` 정규화) → 전성분 4행(함량 미입력 1행 포함) → **스크리닝 US·EU**(금지 1 · 제한초과 1[함량 미입력 — 보수 분류 사유 표기] · 미등재 5 · 한도 이내 1 · 고정 문구 확인 · **판정 워딩 0건**) → **빈 전성분 422** `INGREDIENTS.FORMULA.EMPTY` → CSV(**BOM True·CRLF True·한글 무손실**) → **scheduled_jobs 0행** 실측.
 - PR-2 실기동 관통(§22 렌즈 11, 실 HTTP): 자재 3종(한글·HS6·재고/로트 조합) → **로트만 켠 자재 422**(CHECK 실측) → 제품·SKU → BOM 3라인(**원산지 미지정→UNKNOWN** · 역내 KRW 1250 · 역외 USD 0.85→**85 최소단위**) → 라벨 2판(`us`→`US`, 판번 1 RETIRED·2 APPROVED+컷인일+검증 2체크) → **TRADE 시야 단가 노출** → **VIEWER 시야: `unit_cost`·`currency` 키 부재·행 3건 그대로·본문 원가 값 0건** → 제품 라벨 롤업 2건 → **다국어 라벨**(CA 영문 v1 201 · CA **불문 v1** 201[같은 판번·다른 언어] · CA 불문 v1 재등록 422) → 자재 CSV(**BOM True·CRLF True**, 원가 컬럼 없음) → **scheduled_jobs 0행** 재실측. (리뷰 수정 후 DB 초기화 상태에서 전건 재실행)
 
@@ -36,7 +38,7 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 
 ## 부채 (렌즈 미통과·보류 — 조용한 누락 금지)
 1. **병합 차단(DoD② 일부) — 미충족 확정**. GitHub Pro 미결제(ADR-0011). 폴백: pre-push 훅 + `merge-pr.sh` + 웹 Merge 버튼 금지. **재검토 트리거: 협업자 추가 또는 팀 배포**.
-2. **프런트 eslint — 재이월(2026-07-30 재확인, S1-2 PR-1 첫 프런트 커밋 시점 의무 이행)**. `typescript-eslint` 최신 `8.65.0`·canary `8.65.1-alpha.12` 모두 peer가 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`. `next` 태그 없음(dist-tags: rc-v8·latest·canary 실측). **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** S1-3에서 재확인. tsc strict가 현 게이트.
+2. **프런트 eslint — 재이월(2026-08-05 재확인 — S1-3 PR-1 첫 프런트 커밋 의무 이행)**. `typescript-eslint` 최신 `8.66.0`·canary `8.66.1-alpha.4` 모두 peer가 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`(npm 실측, 승인 조건 ③). **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** 다음 프런트 세션에서 재확인. tsc strict(typecheck)가 현 게이트.
 3. ~~pgAdmin~~ — **종결**.
 4. ~~담당자 라우팅 미배정~~ — **종결**(ADR-0012 / WBS v1.2).
 5. **compose-smoke CI 잡** — `docker compose up --wait` → /healthz 200 회귀 검사. Free 분 예산 이유로 `config -q`만. Phase 1 이후 재검토.
@@ -48,9 +50,9 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 11. **아웃박스 디스패처 미구현** — events에 쌓이기만 하고 보내는 주체가 없다. **의도된 상태**(S2-3 알림 엔진). 그전까지 events는 단조 증가한다 — S2-3에서 디스패처와 함께 보존 정책도 정할 것.
 12. **scheduled_jobs 비어 있음** — 배치 레지스트리 테이블만 있고 등록된 배치가 0건이다. **실행기(S2-3) 구현 전 행 삽입 금지 — 위반 커밋은 반려 대상.** S1-1 종료 시점 실측 0행.
 13. ~~프런트 라우팅 없음~~ — **종결**(S1-1 PR-1). 6개 라우트 + 404, 운영 nginx SPA 폴백은 S0-1부터 있었다.
-14. **[S1-3] 승격 대상 임시 문자열 4건** — `skus.msds_url`·`labels.file_url`(→ §4.7 `documents`), `skus.manufacturer_name`·`materials.default_supplier_name`(→ §4.6 `partners` FK). 승격 시점과 사유가 같아 한 ADR로 묶었다(ADR-0020 + S1-2 부기). **안 하면 §7.7의 "MSDS 유효본 미첨부 차단"(P4)이 검증 불가로 남는다.** 필수화 여부는 승격 시 재판정.
+14. **[S1-3] 승격 대상 임시 문자열 4건 — 2/4 완료(PR-1), 2/4 잔여(PR-2)**. 완료: `skus.manufacturer_name`→`manufacturer_partner_id`(OEM)·`materials.default_supplier_name`→`default_supplier_partner_id`(SUPPLIER) — backfill(트림·공백 정규화 병합) 마이그레이션+실측 테스트, 문자열 컬럼 제거, NULL 허용 유지(승인 판정 — 차단은 §7.7 게이트). 잔여: `skus.msds_url`·`labels.file_url`(→ §4.7 `documents`, S1-3 PR-2). **안 하면 §7.7의 "MSDS 유효본 미첨부 차단"(P4)이 검증 불가로 남는다.** (ADR-0020)
 15. **item_profiles 내용 연결 미배정분** — S1-1은 헤더+적용 FK까지. 연결 테이블은 **서류=S1-3 / 요건=S2-1 / 마일스톤=S3-2**가 각각 추가하며, 각 세션 DoD에서 확인한다. §4.8의 "신규 등록 시 자동 적용"도 그 이후다. (ADR-0021)
-16. **[S1-2 PR-2 리뷰 검출·승인 범위 밖] SKU 상세 단가 표도 통화표 없이 `formatMoney`를 부른다** — `frontend/src/routes/sku-detail.tsx:479`. `/v1/system/currencies`가 늦거나 실패하면 렌더 중 `UnknownCurrencyError` → ErrorBoundary가 없어 트리 언마운트 → **화면 백지**. PR-2의 제품 상세에서 실측·수정한 것과 **같은 결함 클래스**다(ListState의 isPending/error 가드는 못 막는다 — children은 그리지 않아도 평가된다). S1-1 코드라 이번 PR 범위 밖이므로 **구현 없이 등재만** 한다. 수정은 셀에서 `currencies.data === undefined`면 값을 만들지 않는 한 줄. **재개: 웹 세션 판정.**
+16. ~~SKU 상세 단가 표 통화표 미도착 백지(`sku-detail.tsx:479`)~~ — **종결(S1-3 PR-1, 웹 세션 재개 승인 2026-08-05)**. 셀에서 `currencies.data === undefined`면 값을 만들지 않는 가드로 수정(제품 상세와 같은 패턴), vitest 회귀 테스트(`sku-detail-prices.test.tsx` — 통화 API 500에도 화면 생존) 추가.
 17. **[S1-2 리뷰 검출] CSV 수식 인젝션 미방어** — 전 목록 내보내기(S1-1 포함)가 자유 텍스트 셀(`=`·`+`·`-`·`@` 시작)을 이스케이프 없이 내보낸다. Excel이 수식으로 해석할 수 있다. 통로가 `core/csv_export` 하나라 고치는 곳은 한 곳이지만, **이스케이프는 §12.2 왕복 편집(S1-3)의 값 보존과 상충**해서 함께 설계해야 한다 — S1-3에서 판정. 그전까지 CSV는 신뢰 사용자(로그인 필수)만 받는다.
 
 ## 마스킹 원장 (원가·마진 마스킹 대상의 발견·판정 기록 — 2026-07-30 신설)
@@ -58,6 +60,7 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 
 1. **`product_boms.unit_cost`(자재 매입단가) — 판정 완료(2026-07-30) · 구현 완료(S1-2 PR-2).** 필드 부재 방식: VIEWER 응답에서 `unit_cost`·`currency` 필드 자체가 없다(응답 스키마 2종 분기 — `BomLineSummary` / `BomLineCostHiddenSummary`, 직렬화 후 삭제 없음). ADR-0024. 고정 장치: K 아키텍처 테스트 6건(두 스키마 차이가 정확히 원가 2필드·원가 없는 스키마에 금액성 이름 금지·판정 호출 1곳·역할 목록 재사용), G e2e 3건(정상·실패·PG DETAIL 경로 로그 0건). 원가 파생 합계·롤업은 이번 범위 밖이며 같은 부재 원칙을 ADR과 아키텍처 테스트가 예약해 둔다.
    - **실측 함정**: FastAPI가 `Page[A] | Page[B]` 반환 타입으로 응답 모델을 추론하면 **한 갈래로 재검증하며 원가 필드를 통째로 지웠다**. `response_model=None` + 명시적 스키마 선택으로 고정했다. 새 마스킹 엔드포인트에서 재발 지점이다.
+2. **`partners.credit_limit`(여신한도) — 판정 완료(2026-08-05 웹 세션): 마스킹 비대상.** 근거: ADR-0018·0024의 보호 대상은 원가·마진이고, 여신한도는 수주 게이트(§7.10)가 소비하는 운영 필요 데이터다. 조건: ①금액 아키텍처 전면 준수(정수 최소단위+통화 쌍 CHECK, K 검사 자동 편입 확인) ②**재판정 트리거: 여신 게이트 도입 세션(S3-1) 또는 역할 세분화 시.** [ADR-0026]
 
 ## 관찰 항목 (부채는 아니지만 지켜볼 것)
 - **SKU 용량(volume) 컬럼 부재** — §4.1은 SKU를 "용량·세트" 단위로 정의하면서 컬럼 목록에는 용량을 넣지 않았다. 추측 구현 금지로 목록 그대로만 만들었고, 지금은 품명(`수분 세럼 30ml`)·바코드가 용량을 구분한다. **재판정 트리거: S3-3(서류)·S5-1(채널 리스팅)·§7.7 DG 게이트 중 먼저 도달하는 세션의 계획 보고 안건.** 표현 방식(값+단위 vs 표기 문자열)은 그때 소비자 요구 기준으로 정한다.
@@ -136,11 +139,12 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 cd C:\Users\PC\orca\kbeauty-trade-os
 git checkout main
 git pull origin main
-git switch -c s1-2-<주제>
+git switch -c s1-3-documents
 docker compose up -d --build
 docker compose run --rm api pytest -q
 ```
 
 ## 영준이가 지금 할 것
-1. **[대기] S1-2 PR-1** — 완료 보고(증거 3종+평문)가 오면 검토 후 PowerShell에서
-   `& "C:\Program Files\Git\bin\bash.exe" scripts/merge-pr.sh <PR번호>`
+1. **[대기] S1-3 PR-1(#9)** — 완료 보고(증거: pytest 단일 실행 줄+vitest+ci-ok run+커밋 해시 전체)가 오면 검토 후 PowerShell에서
+   `& "C:\Program Files\Git\bin\bash.exe" scripts/merge-pr.sh 9`
+2. 병합 후 CC 세션에 "PR-2 착수"라고 알려 주면 문서보관소(documents·MSDS/라벨 파일 승격·품목군 서류 세트)로 진행한다.

@@ -476,7 +476,15 @@ export function SkuDetailPage() {
                       {PRICE_TYPE_LABEL[row.price_type] ?? row.price_type}
                     </td>
                     <td className="cell-nowrap px-4 py-2 num">
-                      {formatMoney(row.amount, row.currency, currencies.data?.items ?? [])}
+                      {/* ★ 통화표가 아직 없으면 값을 만들지 않는다. formatMoney는
+                          모르는 통화(빈 통화표 포함)에 예외를 던지고, 렌더 중
+                          예외는 트리 언마운트 = 화면 백지가 된다. ListState의
+                          isPending/error 가드는 못 막는다 — children은 그리지
+                          않아도 이미 평가된다. (부채 #16 — product-detail의
+                          수정과 같은 결함 클래스, 웹 세션 재개 승인 2026-08-05) */}
+                      {currencies.data === undefined
+                        ? orEmpty(null)
+                        : formatMoney(row.amount, row.currency, currencies.data.items)}
                     </td>
                     <td className="cell-nowrap px-4 py-2 num">{row.effective_from}</td>
                     <td className="cell-nowrap px-4 py-2 num">{row.is_current ? "○" : ""}</td>

@@ -140,6 +140,89 @@ def test_backfill_creates_nothing_on_an_empty_database() -> None:
     with engine.connect() as connection:
         brands = connection.execute(text("SELECT count(*) FROM brands")).scalar_one()
         products = connection.execute(text("SELECT count(*) FROM products")).scalar_one()
+        partners = connection.execute(text("SELECT count(*) FROM partners")).scalar_one()
     engine.dispose()
 
-    assert (brands, products) == (0, 0)
+    # partners까지 0 — S1-3 승격 백필도 빈 DB에 유령 거래처를 만들지 않는다.
+    assert (brands, products, partners) == (0, 0, 0)
+
+
+# ── S1-3 승격 백필 (ADR-0020 / [M1] 보강(S1-3) ⑤) ──────────────────────────
+#
+# ★ S1-1 백필과 같은 이유·같은 하네스 — 직전 리비전까지 올려 문자열 행을
+#   심은 뒤 head로 올려, 실제로 실행된 백필을 검증한다.
+
+#: 승격 직전 리비전(partners 테이블 생성까지).
+_BEFORE_PARTNER_PROMOTION = "81fe6e5c01cc"
+
+
+def test_promotion_backfill_merges_normalized_names_into_one_partner() -> None:
+    """트림·공백 정규화 후 같은 이름은 한 거래처가 되고 유형이 합쳐진다 (승인 조건 3)"""
+    command.upgrade(_config(), _BEFORE_PARTNER_PROMOTION)
+    engine = build_engine(_migration_check_url())
+    with engine.begin() as connection:
+        # SET SKU는 처방 없이 존재한다(ADR-0016) — 준비가 가장 가볍다.
+        connection.execute(
+            text(
+                "INSERT INTO skus (sku_code, name_ko, kind, manufacturer_name) "
+                "VALUES ('SET-MIG', '이월 세트', 'SET', '  한국  콜마 ')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO materials (material_code, name_ko, material_type, "
+                "default_supplier_name) "
+                "VALUES ('MAT-MIG', '이월 자재', 'RAW_MATERIAL', '한국 콜마')"
+            )
+        )
+
+    command.upgrade(_config(), "head")
+
+    with engine.connect() as connection:
+        partners = connection.execute(text("SELECT partner_code, name_ko FROM partners")).all()
+        assert len(partners) == 1, partners  # "한국  콜마"와 "한국 콜마"는 한 거래처다
+        assert partners[0] == ("MIG-0001", "한국 콜마")
+        types = {
+            row[0] for row in connection.execute(text("SELECT type_code FROM partner_type_links"))
+        }
+        assert types == {"OEM", "SUPPLIER"}  # 제조사 출처 + 공급사 출처
+        sku_partner = connection.execute(
+            text(
+                "SELECT p.name_ko FROM skus s JOIN partners p "
+                "ON p.id = s.manufacturer_partner_id WHERE s.sku_code = 'SET-MIG'"
+            )
+        ).scalar_one()
+        material_partner = connection.execute(
+            text(
+                "SELECT p.name_ko FROM materials m JOIN partners p "
+                "ON p.id = m.default_supplier_partner_id WHERE m.material_code = 'MAT-MIG'"
+            )
+        ).scalar_one()
+    engine.dispose()
+
+    assert sku_partner == "한국 콜마"
+    assert material_partner == "한국 콜마"
+
+
+def test_promotion_downgrade_restores_names_by_reverse_copy() -> None:
+    """downgrade는 역복사다 — 문자열 컬럼이 파트너명으로 복원된다 (승인 문면)"""
+    command.upgrade(_config(), _BEFORE_PARTNER_PROMOTION)
+    engine = build_engine(_migration_check_url())
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO skus (sku_code, name_ko, kind, manufacturer_name) "
+                "VALUES ('SET-DWN', '이월 세트', 'SET', '한국콜마')"
+            )
+        )
+
+    command.upgrade(_config(), "head")
+    command.downgrade(_config(), _BEFORE_PARTNER_PROMOTION)
+
+    with engine.connect() as connection:
+        restored = connection.execute(
+            text("SELECT manufacturer_name FROM skus WHERE sku_code = 'SET-DWN'")
+        ).scalar_one()
+    engine.dispose()
+
+    assert restored == "한국콜마"

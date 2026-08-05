@@ -56,6 +56,20 @@ const APPROVAL_STATUS: Record<string, string> = {
   RETIRED: "폐기",
 };
 
+// 거래처 유형 (§4.6 열거 10종 — ADR-0026).
+const PARTNER_TYPE: Record<string, string> = {
+  SUPPLIER: "공급사",
+  OEM: "OEM",
+  BUYER: "바이어",
+  RP: "RP",
+  IOR: "IOR",
+  DOMESTIC_RP: "경내책임자",
+  FORWARDER: "포워더",
+  CUSTOMS_BROKER: "관세사",
+  THREE_PL: "3PL",
+  CERT_AGENCY: "인증대행",
+};
+
 export const statusLabel = (code: string): string => translate(STATUS, code);
 export const kindLabel = (code: string): string => translate(KIND, code);
 export const ruleTypeLabel = (code: string): string => translate(RULE_TYPE, code);
@@ -63,6 +77,7 @@ export const classificationLabel = (code: string): string => translate(CLASSIFIC
 export const materialTypeLabel = (code: string): string => translate(MATERIAL_TYPE, code);
 export const originStatusLabel = (code: string): string => translate(ORIGIN_STATUS, code);
 export const approvalStatusLabel = (code: string): string => translate(APPROVAL_STATUS, code);
+export const partnerTypeLabel = (code: string): string => translate(PARTNER_TYPE, code);
 
 /** 값이 없을 때 표에 넣는 표시. 빈칸은 "누락"과 "0"을 구분하지 못한다. */
 export const EMPTY = "—";
