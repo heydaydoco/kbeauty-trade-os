@@ -139,11 +139,12 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 cd C:\Users\PC\orca\kbeauty-trade-os
 git checkout main
 git pull origin main
-git switch -c s1-2-<주제>
+git switch -c s1-3-documents
 docker compose up -d --build
 docker compose run --rm api pytest -q
 ```
 
 ## 영준이가 지금 할 것
-1. **[대기] S1-2 PR-1** — 완료 보고(증거 3종+평문)가 오면 검토 후 PowerShell에서
-   `& "C:\Program Files\Git\bin\bash.exe" scripts/merge-pr.sh <PR번호>`
+1. **[대기] S1-3 PR-1(#9)** — 완료 보고(증거: pytest 단일 실행 줄+vitest+ci-ok run+커밋 해시 전체)가 오면 검토 후 PowerShell에서
+   `& "C:\Program Files\Git\bin\bash.exe" scripts/merge-pr.sh 9`
+2. 병합 후 CC 세션에 "PR-2 착수"라고 알려 주면 문서보관소(documents·MSDS/라벨 파일 승격·품목군 서류 세트)로 진행한다.
