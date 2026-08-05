@@ -123,9 +123,7 @@ class CustomerItemCode(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, A
     buyer_item_code: Mapped[str] = mapped_column(String(100), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (
-        unique_active("customer_item_codes", "partner_id", "buyer_item_code"),
-    )
+    __table_args__ = (unique_active("customer_item_codes", "partner_id", "buyer_item_code"),)
 
 
 class Signatory(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):

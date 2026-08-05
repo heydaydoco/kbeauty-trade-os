@@ -188,9 +188,7 @@ def test_duplicate_buyer_item_code_is_rejected(create: Create, trader: TestClien
 # ── 승격 소비처 — 자재 기본공급사 ([M1] 보강(S1-3) ⑤ / ADR-0020) ───────────
 
 
-def test_material_supplier_must_be_a_supplier_partner(
-    create: Create, trader: TestClient
-) -> None:
+def test_material_supplier_must_be_a_supplier_partner(create: Create, trader: TestClient) -> None:
     """기본공급사는 SUPPLIER 유형 거래처만 지정할 수 있다"""
     buyer_id = create(key="sup1", type_codes=["BUYER"]).json()["id"]
     response = trader.post(

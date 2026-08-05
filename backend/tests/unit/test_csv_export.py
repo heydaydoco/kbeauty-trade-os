@@ -23,7 +23,7 @@ pytestmark = pytest.mark.group_k
 #: 실측 말뭉치 — 수식 4종·탭·CR·접두 문자 자신·일반 텍스트·한글·빈 문자열.
 ROUND_TRIP_CORPUS = (
     "=SUM(A1:A9)",
-    "=HYPERLINK(\"http://evil\",\"click\")",
+    '=HYPERLINK("http://evil","click")',
     "+82-10-0000-0000",
     "-감가 조정분",
     "@user",
@@ -33,7 +33,7 @@ ROUND_TRIP_CORPUS = (
     "''이중 접두처럼 보이는 원값",
     "'일반 텍스트에 붙은 접두",
     "일반 텍스트",
-    "앰플, \"고농축\" 50ml",
+    '앰플, "고농축" 50ml',
     "",
     "=",
     "'",

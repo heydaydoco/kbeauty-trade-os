@@ -33,8 +33,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = 'e45b79db6198'
-down_revision: str | None = '81fe6e5c01cc'
+revision: str = "e45b79db6198"
+down_revision: str | None = "81fe6e5c01cc"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -55,16 +55,24 @@ _SOURCES = f"""
 def upgrade() -> None:
     # 1) 새 FK 컬럼 (autogenerate 초안 그대로)
     op.add_column(
-        'materials', sa.Column('default_supplier_partner_id', sa.BigInteger(), nullable=True)
+        "materials", sa.Column("default_supplier_partner_id", sa.BigInteger(), nullable=True)
     )
     op.create_foreign_key(
-        op.f('fk_materials_default_supplier_partner_id_partners'),
-        'materials', 'partners', ['default_supplier_partner_id'], ['id'], ondelete='RESTRICT',
+        op.f("fk_materials_default_supplier_partner_id_partners"),
+        "materials",
+        "partners",
+        ["default_supplier_partner_id"],
+        ["id"],
+        ondelete="RESTRICT",
     )
-    op.add_column('skus', sa.Column('manufacturer_partner_id', sa.BigInteger(), nullable=True))
+    op.add_column("skus", sa.Column("manufacturer_partner_id", sa.BigInteger(), nullable=True))
     op.create_foreign_key(
-        op.f('fk_skus_manufacturer_partner_id_partners'),
-        'skus', 'partners', ['manufacturer_partner_id'], ['id'], ondelete='RESTRICT',
+        op.f("fk_skus_manufacturer_partner_id_partners"),
+        "skus",
+        "partners",
+        ["manufacturer_partner_id"],
+        ["id"],
+        ondelete="RESTRICT",
     )
 
     # 2) backfill — 이름당 거래처 1행. 이미 같은 이름의 활성 거래처가 있으면
@@ -140,16 +148,16 @@ def upgrade() -> None:
 
     # 5) 문자열 컬럼 제거 — 값은 위에서 전부 partners로 옮겨졌다(ADR-0020
     #    "'이미 값이 있으니까'로 넘어가는" 영구 잔류 경로의 차단).
-    op.drop_column('materials', 'default_supplier_name')
-    op.drop_column('skus', 'manufacturer_name')
+    op.drop_column("materials", "default_supplier_name")
+    op.drop_column("skus", "manufacturer_name")
 
 
 def downgrade() -> None:
     # 역복사(웹 세션 승인 문면) — 문자열 컬럼을 되살려 파트너명을 복사한 뒤
     # FK를 지운다. soft delete된 파트너의 이름도 복사한다(이름을 잃지 않는다).
     op.add_column(
-        'skus',
-        sa.Column('manufacturer_name', sa.VARCHAR(length=100), autoincrement=False, nullable=True),
+        "skus",
+        sa.Column("manufacturer_name", sa.VARCHAR(length=100), autoincrement=False, nullable=True),
     )
     op.execute(
         """
@@ -157,13 +165,13 @@ def downgrade() -> None:
         FROM partners p WHERE s.manufacturer_partner_id = p.id
         """
     )
-    op.drop_constraint(op.f('fk_skus_manufacturer_partner_id_partners'), 'skus', type_='foreignkey')
-    op.drop_column('skus', 'manufacturer_partner_id')
+    op.drop_constraint(op.f("fk_skus_manufacturer_partner_id_partners"), "skus", type_="foreignkey")
+    op.drop_column("skus", "manufacturer_partner_id")
 
     op.add_column(
-        'materials',
+        "materials",
         sa.Column(
-            'default_supplier_name', sa.VARCHAR(length=100), autoincrement=False, nullable=True
+            "default_supplier_name", sa.VARCHAR(length=100), autoincrement=False, nullable=True
         ),
     )
     op.execute(
@@ -173,6 +181,6 @@ def downgrade() -> None:
         """
     )
     op.drop_constraint(
-        op.f('fk_materials_default_supplier_partner_id_partners'), 'materials', type_='foreignkey'
+        op.f("fk_materials_default_supplier_partner_id_partners"), "materials", type_="foreignkey"
     )
-    op.drop_column('materials', 'default_supplier_partner_id')
+    op.drop_column("materials", "default_supplier_partner_id")

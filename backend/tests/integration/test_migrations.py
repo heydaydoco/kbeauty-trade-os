@@ -183,8 +183,7 @@ def test_promotion_backfill_merges_normalized_names_into_one_partner() -> None:
         assert len(partners) == 1, partners  # "한국  콜마"와 "한국 콜마"는 한 거래처다
         assert partners[0] == ("MIG-0001", "한국 콜마")
         types = {
-            row[0]
-            for row in connection.execute(text("SELECT type_code FROM partner_type_links"))
+            row[0] for row in connection.execute(text("SELECT type_code FROM partner_type_links"))
         }
         assert types == {"OEM", "SUPPLIER"}  # 제조사 출처 + 공급사 출처
         sku_partner = connection.execute(

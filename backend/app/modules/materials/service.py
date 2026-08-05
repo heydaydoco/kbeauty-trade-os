@@ -451,9 +451,7 @@ def all_materials_for_export() -> list[MaterialView]:
 def get_material(material_id: int) -> MaterialView:
     with unit_of_work() as uow:
         session = uow.session
-        row = session.execute(
-            _material_select().where(Material.id == material_id)
-        ).one_or_none()
+        row = session.execute(_material_select().where(Material.id == material_id)).one_or_none()
         if row is None:
             raise NotFoundError(log_context={"material_id": material_id})
         material, supplier_name = row
