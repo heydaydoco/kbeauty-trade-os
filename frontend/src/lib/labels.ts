@@ -70,6 +70,18 @@ const PARTNER_TYPE: Record<string, string> = {
   CERT_AGENCY: "인증대행",
 };
 
+// 문서 소유자 유형 (§4.7 — ADR-0028, 소비분 2종 한정).
+const DOCUMENT_OWNER_TYPE: Record<string, string> = {
+  SKU: "SKU",
+  LABEL: "라벨",
+};
+
+// 문서 저장 형태 (§4.7 — FILE/LINK 2형).
+const STORAGE_KIND: Record<string, string> = {
+  FILE: "파일",
+  LINK: "링크",
+};
+
 export const statusLabel = (code: string): string => translate(STATUS, code);
 export const kindLabel = (code: string): string => translate(KIND, code);
 export const ruleTypeLabel = (code: string): string => translate(RULE_TYPE, code);
@@ -78,6 +90,9 @@ export const materialTypeLabel = (code: string): string => translate(MATERIAL_TY
 export const originStatusLabel = (code: string): string => translate(ORIGIN_STATUS, code);
 export const approvalStatusLabel = (code: string): string => translate(APPROVAL_STATUS, code);
 export const partnerTypeLabel = (code: string): string => translate(PARTNER_TYPE, code);
+export const documentOwnerTypeLabel = (code: string): string =>
+  translate(DOCUMENT_OWNER_TYPE, code);
+export const storageKindLabel = (code: string): string => translate(STORAGE_KIND, code);
 
 /** 값이 없을 때 표에 넣는 표시. 빈칸은 "누락"과 "0"을 구분하지 못한다. */
 export const EMPTY = "—";

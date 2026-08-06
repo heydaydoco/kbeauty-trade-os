@@ -181,6 +181,21 @@ def create_partner(
         return partner.id
 
 
+def create_item_profile(code: str = "PRF-001", *, name_ko: str = "테스트 품목군") -> int:
+    """품목군 프로파일을 만들고 id를 돌려준다 (§4.8 / ADR-0021).
+
+    ★ 코드는 자연키다 — 한 테스트가 품목군을 둘 만들면 코드를 달리 넘겨야 한다
+      (고정 코드값 함정: PROGRESS 주의 인계 ⑥).
+    """
+    from app.modules.catalog.models import ItemProfile
+
+    with unit_of_work() as uow:
+        profile = ItemProfile(code=code, name_ko=name_ko)
+        uow.session.add(profile)
+        uow.session.flush()
+        return profile.id
+
+
 def create_material(
     material_code: str = "MAT-001",
     *,

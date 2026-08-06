@@ -8,7 +8,8 @@
 
 ## 현재
 - **S1-3 (거래처·문서보관소·엑셀 코어) — 진행.** 계획 2026-08-05 웹 세션 조건부 승인(조건 9건: ①여신한도 비마스킹 판정+금액 규약 K 편입 확인 ②이스케이프 ADR 보증 범위 명기 ③backfill 트림·정규화+자동 생성 파트너 전량 보고 ④파일 보안 4항(서버 파일명·정적 경로 밖·attachment 고정·크기 상한 테스트) ⑤컬럼 제거 4건 잔존 참조 0건 명기 ⑥document_types 시드 추적성 ⑦F 그룹 CI 수집 증거 ⑧SKU 왕복 스트레치 ⑨유지 항목 재확인).
-- PR 3분할: **PR-1 `s1-3-partners`**(문서 커밋·거래처 4테이블·제조사/공급사 FK 승격·CSV 이스케이프·sku-detail 백지 수정) / **PR-2 `s1-3-documents`**(문서보관소·MSDS/라벨 파일 승격·품목군 서류 세트) / **PR-3 `s1-3-excel-core`**(임포트 레지스트리·왕복 diff·스테이징·오류 행 리포트).
+- PR 3분할: **PR-1 `s1-3-partners`(#9) — 병합 완료·판정 승인.** / **PR-2 `s1-3-documents`(#10) — 구현 완료·병합 대기.** / **PR-3 `s1-3-excel-core`**(임포트 레지스트리·왕복 diff·스테이징·오류 행 리포트) — 미착수.
+- PR-2 실기동 관통(§22 렌즈 11, 실 HTTP): 로그인 → SET SKU·품목군 준비 → **MSDS 한글 파일명 업로드**(multipart 본문 파일 경유 — argv 함정 ⑤ 우회, sha256·크기 실측) → 같은 키 재생=동일 id → 다른 키 같은 파일 422(해시 중복) → .exe 422(`DOCUMENTS.FILE.TYPE_NOT_ALLOWED`) → **다운로드**(attachment+RFC5987 한글 파일명+octet-stream+nosniff, 바이트 왕복 일치) → 20MiB+1 업로드 **413** → SET SKU MSDS **422**(`DOCUMENTS.MSDS.SET_SKU_FORBIDDEN`)·SET SKU 인증서 201(가드 협소 자기검사) → 원산지 증빙(발급일 2026-03-15 → **보존기한 2031-03-15 자동**) → 삭제 시도 **409**(`DOCUMENTS.DOCUMENT.RETENTION_LOCKED`) → 잠금 없는 문서 삭제 204 → 라벨 아트웍 업로드 → 라벨 목록 documents 표시 → 품목군 서류 세트(추가 201·중복 422·목록 1건) → 문서 CSV(**BOM True·CRLF True·한글 헤더**) → **scheduled_jobs 0행** 재실측. 저장 볼륨 실측: 실물 2건 전부 서버 생성 hex 파일명, 재생 버림·초과 부분 파일 잔존 0.
 
 ## S1-2 실기동 관통 기록 (종결 — 보존)
 - PR-1 실기동 관통(§22 렌즈 11, 실 HTTP): 로그인 → 브랜드·제품(한글 `--data-binary @file`) → 성분 4종 → 규칙 3건(`us`→`US` 정규화) → 전성분 4행(함량 미입력 1행 포함) → **스크리닝 US·EU**(금지 1 · 제한초과 1[함량 미입력 — 보수 분류 사유 표기] · 미등재 5 · 한도 이내 1 · 고정 문구 확인 · **판정 워딩 0건**) → **빈 전성분 422** `INGREDIENTS.FORMULA.EMPTY` → CSV(**BOM True·CRLF True·한글 무손실**) → **scheduled_jobs 0행** 실측.
@@ -38,7 +39,7 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 
 ## 부채 (렌즈 미통과·보류 — 조용한 누락 금지)
 1. **병합 차단(DoD② 일부) — 미충족 확정**. GitHub Pro 미결제(ADR-0011). 폴백: pre-push 훅 + `merge-pr.sh` + 웹 Merge 버튼 금지. **재검토 트리거: 협업자 추가 또는 팀 배포**.
-2. **프런트 eslint — 재이월(2026-08-05 재확인 — S1-3 PR-1 첫 프런트 커밋 의무 이행)**. `typescript-eslint` 최신 `8.66.0`·canary `8.66.1-alpha.4` 모두 peer가 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`(npm 실측, 승인 조건 ③). **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** 다음 프런트 세션에서 재확인. tsc strict(typecheck)가 현 게이트.
+2. **프런트 eslint — 재이월(2026-08-06 재확인 — S1-3 PR-2 프런트 세션 의무 이행)**. `typescript-eslint` 최신·canary 모두 peer가 여전히 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`(npm 실측). **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** 다음 프런트 세션에서 재확인. tsc strict(typecheck)가 현 게이트.
 3. ~~pgAdmin~~ — **종결**.
 4. ~~담당자 라우팅 미배정~~ — **종결**(ADR-0012 / WBS v1.2).
 5. **compose-smoke CI 잡** — `docker compose up --wait` → /healthz 200 회귀 검사. Free 분 예산 이유로 `config -q`만. Phase 1 이후 재검토.
@@ -50,7 +51,7 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 11. **아웃박스 디스패처 미구현** — events에 쌓이기만 하고 보내는 주체가 없다. **의도된 상태**(S2-3 알림 엔진). 그전까지 events는 단조 증가한다 — S2-3에서 디스패처와 함께 보존 정책도 정할 것.
 12. **scheduled_jobs 비어 있음** — 배치 레지스트리 테이블만 있고 등록된 배치가 0건이다. **실행기(S2-3) 구현 전 행 삽입 금지 — 위반 커밋은 반려 대상.** S1-1 종료 시점 실측 0행.
 13. ~~프런트 라우팅 없음~~ — **종결**(S1-1 PR-1). 6개 라우트 + 404, 운영 nginx SPA 폴백은 S0-1부터 있었다.
-14. **[S1-3] 승격 대상 임시 문자열 4건 — 2/4 완료(PR-1), 2/4 잔여(PR-2)**. 완료: `skus.manufacturer_name`→`manufacturer_partner_id`(OEM)·`materials.default_supplier_name`→`default_supplier_partner_id`(SUPPLIER) — backfill(트림·공백 정규화 병합) 마이그레이션+실측 테스트, 문자열 컬럼 제거, NULL 허용 유지(승인 판정 — 차단은 §7.7 게이트). 잔여: `skus.msds_url`·`labels.file_url`(→ §4.7 `documents`, S1-3 PR-2). **안 하면 §7.7의 "MSDS 유효본 미첨부 차단"(P4)이 검증 불가로 남는다.** (ADR-0020)
+14. ~~[S1-3] 승격 대상 임시 문자열 4건~~ — **4/4 종결(S1-3 PR-2, ADR-0020 완제)**. PR-1: `manufacturer_name`→OEM FK·`default_supplier_name`→SUPPLIER FK. PR-2: `skus.msds_url`→documents(SKU×MSDS, LINK)·`labels.file_url`→documents(LABEL×LABEL_ARTWORK, LINK) — backfill(트림·MIG: 출처 표식)+downgrade 역복사, `set_has_no_dg` CHECK 수기 재정의(함정 ①)+정의문 실재 테스트, 문자열 컬럼 제거(잔존 참조 grep 0건). §7.7의 "MSDS 유효본 미첨부 차단"(P4)이 documents 유효기간으로 검증 가능해졌다.
 15. **item_profiles 내용 연결 미배정분** — S1-1은 헤더+적용 FK까지. 연결 테이블은 **서류=S1-3 / 요건=S2-1 / 마일스톤=S3-2**가 각각 추가하며, 각 세션 DoD에서 확인한다. §4.8의 "신규 등록 시 자동 적용"도 그 이후다. (ADR-0021)
 16. ~~SKU 상세 단가 표 통화표 미도착 백지(`sku-detail.tsx:479`)~~ — **종결(S1-3 PR-1, 웹 세션 재개 승인 2026-08-05)**. 셀에서 `currencies.data === undefined`면 값을 만들지 않는 가드로 수정(제품 상세와 같은 패턴), vitest 회귀 테스트(`sku-detail-prices.test.tsx` — 통화 API 500에도 화면 생존) 추가.
 17. **[S1-2 리뷰 검출] CSV 수식 인젝션 미방어** — 전 목록 내보내기(S1-1 포함)가 자유 텍스트 셀(`=`·`+`·`-`·`@` 시작)을 이스케이프 없이 내보낸다. Excel이 수식으로 해석할 수 있다. 통로가 `core/csv_export` 하나라 고치는 곳은 한 곳이지만, **이스케이프는 §12.2 왕복 편집(S1-3)의 값 보존과 상충**해서 함께 설계해야 한다 — S1-3에서 판정. 그전까지 CSV는 신뢰 사용자(로그인 필수)만 받는다.
@@ -72,6 +73,8 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 - **[S1-2] §4.4 "OEM 생산 발주 마일스톤 프로파일"** — PO는 S3-1·마일스톤은 S3-2라 이월(조용한 누락 방지 명시). **재판정 트리거: S3-1/S3-2 계획 보고.**
 - **[S1-2] 라벨·BOM·규칙 목록 CSV** — 마스터 목록(ingredients·materials)에만 CSV, 하위 자원 CSV는 §12.2 엑셀 코어로. **재판정 트리거: S1-3.**
 - **[S1-2] GC 라벨 케이스 보류** — GC v1.1은 스크리닝 5케이스 한정(웹 세션 판정 H 축소). 라벨 케이스는 보류·관찰 유지. **재판정 트리거: 라벨 소진 리포트(P4) 또는 라벨 관련 사고 시.**
+- **[S1-3] soft delete된 문서의 실물 잔존·저장소 용량 모니터링** — 문서 soft delete는 행만 지우고 실물은 남긴다(복원 가능성·보존 정책이 실물 정리에 선행해야 한다 — ADR-0029). §18.4의 "첨부 스토리지 용량 모니터링+임계 알림"도 미구현. **재판정 트리거: S2-4(백업·복원 — files/ 세트 정책과 함께) 또는 S2-3(알림 엔진).**
+- **[S1-3] 문서 유효기간 기일 스캔 부재** — §4.7 "유효기간 있는 모든 문서가 기일 엔진 스캔 대상"은 기일 엔진(S2-3)의 일이다. 이번 세션은 컬럼까지만 — scheduled_jobs 0행 유지(승인 유지 항목). **재판정 트리거: S2-3 계획 보고.**
 - **[S1-2 리뷰 검출] 목록 화면 50건 표시 한계** — 페이지 이동 UI가 리포 전체에 아직 없어(paging.ts가 봉투만 통일) 51건째부터 표에 안 보인다. 드롭다운(전성분의 성분 선택)은 통화 선례대로 `?size=200` 우회 적용, 표에는 "전체 N건"을 표기해 잘림이 보이게 했다. **재판정 트리거: 어느 마스터든 실데이터 50건 도달 또는 S1-3 엑셀 코어(왕복이 대량 편집 경로를 제공).**
 
 ## 주의 인계 (발견한 함정·결정)
@@ -119,6 +122,13 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 `-> Page[A] | Page[B]`처럼 반환 타입으로 응답 모델을 추론시키면, FastAPI가 두 갈래 중 하나로 **다시 검증**하며 우리가 고른 스키마를 덮어쓴다 — 원가 **포함** 응답이 원가 없는 스키마로 재검증돼 `unit_cost`가 통째로 사라졌다(테스트가 잡았다).
 → **규칙**: 역할에 따라 응답 스키마가 갈리는 엔드포인트는 `response_model=None`을 명시하고, 우리가 만든 스키마 인스턴스를 그대로 반환한다(문서화는 `responses={200: {"model": …}}`). 재발 지점: S6-2 원가·S3-1 비용의 마스킹 엔드포인트.
 
+### ⑩ 시드 테이블에 users FK가 있으면 PRESERVED_TABLES가 무력화된다 (S1-3 PR-2 실측)
+테스트 정리는 더러워진 테이블을 `TRUNCATE … CASCADE`로 비우는데, CASCADE는 **그 테이블을 FK로 참조하는 모든 테이블**을 무조건 함께 비운다. 사용자 생성 테스트 하나가 users를 더럽히면, ActorMixin(created_by→users)을 단 시드 테이블이 통째로 비워진다 — PRESERVED_TABLES에 넣어 둔 것과 무관하게. 전체 실행에서만 45건이 빨개지고 파일 단독 실행은 초록이라 순서 의존처럼 보인다.
+→ **규칙**: 마이그레이션 소유 시드 테이블(roles·document_types)은 **truncate 대상 테이블로의 FK를 갖지 않는다** — Version·Actor 믹스인을 달지 않는다(roles가 원형). 재발 지점: S2-1 요건 템플릿 시드, S3-4 FTA 시드.
+
+### ⑪ 손으로 쓰는 `op.drop_constraint`에는 `op.f()`가 필수다 (S1-3 PR-2 실측)
+naming convention이 걸린 리포에서 평문 이름을 주면 규약이 한 번 더 접두된다 — `drop_constraint("ck_skus_set_has_no_dg", …)`가 `ck_skus_ck_skus_set_has_no_dg`를 지우려다 실패했다. `op.f()`는 "이미 최종 이름"이라는 표식이다. create 쪽은 기존 마이그레이션들이 전부 op.f()를 쓰고 있어 drop에서만 새는 함정이다.
+
 ### ⑨ 이전 세션 인계 (유효)
 - **마이그레이션이 시드를 넣는 테이블은 `tests/conftest.py`의 `PRESERVED_TABLES`에 반드시 추가**(S2-1 요건 템플릿, S3-4 FTA 시드 등).
 - **픽스처 순서를 autouse에 기대지 말고 인자로 명시한다. "빈 목록"은 정상이 아니라 오류로 취급한다.**
@@ -139,12 +149,12 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 cd C:\Users\PC\orca\kbeauty-trade-os
 git checkout main
 git pull origin main
-git switch -c s1-3-documents
+git switch -c s1-3-excel-core
 docker compose up -d --build
 docker compose run --rm api pytest -q
 ```
 
 ## 영준이가 지금 할 것
-1. **[대기] S1-3 PR-1(#9)** — 완료 보고(증거: pytest 단일 실행 줄+vitest+ci-ok run+커밋 해시 전체)가 오면 검토 후 PowerShell에서
-   `& "C:\Program Files\Git\bin\bash.exe" scripts/merge-pr.sh 9`
-2. 병합 후 CC 세션에 "PR-2 착수"라고 알려 주면 문서보관소(documents·MSDS/라벨 파일 승격·품목군 서류 세트)로 진행한다.
+1. **[대기] S1-3 PR-2(#10)** — 완료 보고(증거: pytest 단일 실행 줄+vitest+ci-ok run+커밋 해시 전체)가 오면 검토 후 PowerShell에서
+   `& "C:\Program Files\Git\bin\bash.exe" scripts/merge-pr.sh 10`
+2. 병합 후 CC 세션에 "PR-3 착수"라고 알려 주면 엑셀 코어(임포트 레지스트리·왕복 diff·스테이징·오류 행 리포트 — §12.2, F 그룹)로 진행한다.

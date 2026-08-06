@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { queryClient } from "./lib/queryClient";
 import { useSession } from "./lib/session";
 import { BrandsPage } from "./routes/brands";
+import { DocumentsPage } from "./routes/documents";
 import { HealthPage } from "./routes/health";
 import { IngredientDetailPage } from "./routes/ingredient-detail";
 import { IngredientsPage } from "./routes/ingredients";
@@ -75,6 +76,7 @@ export function AppRoutes() {
         <Route path="/ingredients/:ingredientId" element={<IngredientDetailPage />} />
         <Route path="/materials" element={<MaterialsPage />} />
         <Route path="/partners" element={<PartnersPage />} />
+        <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/brands" element={<BrandsPage />} />
         <Route path="/item-profiles" element={<ItemProfilesPage />} />
       </Route>

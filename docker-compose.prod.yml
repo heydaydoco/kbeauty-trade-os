@@ -102,6 +102,13 @@ services:
       # 운영 DB 이름도 kbos_dev를 재사용하지 않는다면 여기서 바꾼다.
       DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_dev
       MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_dev
+      # 업로드 실물 저장 루트 (§4.7 / ADR-0029) — 정적 서빙 경로 밖.
+      FILE_STORAGE_ROOT: /data/files
+    volumes:
+      # 업로드 파일 저장소. named volume이 없으면 컨테이너 재생성 때 파일이
+      # 소실된다. 이미지의 /data/files(appuser 소유)가 첫 마운트에 복사되어
+      # 비root 실행(uid 10001)에서도 쓰기가 된다. S2-4가 pg_dump와 세트 백업.
+      - files_data:/data/files
     # 포트 미게시 — nginx(web)를 통해서만 접근한다.
     restart: unless-stopped
 
@@ -121,3 +128,4 @@ services:
 
 volumes:
   pgdata:
+  files_data:

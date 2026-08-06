@@ -148,12 +148,20 @@ class LabelCreateRequest(BaseModel):
     approval_status: str = Field(default="DRAFT", pattern=_APPROVAL_STATUS_PATTERN)
     #: 컷인일. 승인 전 선입력을 허용한다(일정이 먼저 잡히는 실무).
     cut_in_date: date | None = None
-    #: S1-3에서 documents 링크로 승격한다(ADR-0020 부기).
-    file_url: str | None = Field(default=None, max_length=500)
+    # 라벨 파일은 §4.7 documents로 승격 완료(ADR-0020 부기) — 등록 항목이 아니다.
     #: §4.5 검증 항목 — 사람이 확인했다는 기록이다.
     inci_local_verified: bool = False
     origin_mark_verified: bool = False
     note: str | None = None
+
+
+class LabelDocumentSummary(BaseModel):
+    """라벨에 붙은 문서 요약 — 구 file_url의 후신(§4.7 승격, ADR-0020 부기)."""
+
+    document_id: int
+    storage_kind: str
+    url: str | None
+    original_filename: str | None
 
 
 class LabelSummary(BaseModel):
@@ -165,7 +173,7 @@ class LabelSummary(BaseModel):
     language: str
     approval_status: str
     cut_in_date: date | None
-    file_url: str | None
+    documents: list[LabelDocumentSummary]
     inci_local_verified: bool
     origin_mark_verified: bool
     note: str | None
@@ -181,7 +189,15 @@ class LabelSummary(BaseModel):
             language=view.language,
             approval_status=view.approval_status,
             cut_in_date=view.cut_in_date,
-            file_url=view.file_url,
+            documents=[
+                LabelDocumentSummary(
+                    document_id=doc.document_id,
+                    storage_kind=doc.storage_kind,
+                    url=doc.url,
+                    original_filename=doc.original_filename,
+                )
+                for doc in view.documents
+            ],
             inci_local_verified=view.inci_local_verified,
             origin_mark_verified=view.origin_mark_verified,
             note=view.note,

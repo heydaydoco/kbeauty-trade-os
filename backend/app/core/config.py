@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     # ── 보안 ─────────────────────────────────────────────────────────────
     secret_key: SecretStr
 
+    # ── 파일 저장소 (§4.7 documents / §18.1 / ADR-0029) ──────────────────
+    # 업로드 실물의 저장 루트. **정적 서빙 경로 밖**이어야 한다 — 접근은 권한
+    # 검증 다운로드 엔드포인트 하나뿐이다. 컨테이너에서는 compose가 named
+    # volume(/data/files)을 주입하고, 기본값은 CI·컨테이너 밖 pytest용 폴백이다.
+    # S2-4 백업이 이 루트를 pg_dump와 세트로 통째 백업한다(§2 "files/ 세트").
+    file_storage_root: str = "var/files"
+
     # ── DB 접속 (역할별로 분리 — ADR-0002) ───────────────────────────────
     # 런타임(kbos_app): 테이블을 만들 수 없다.
     database_url: SecretStr

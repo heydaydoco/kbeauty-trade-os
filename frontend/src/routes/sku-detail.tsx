@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { ListState } from "../components/list-state";
-import { apiFetch } from "../lib/api";
+import { apiFetch, apiUpload } from "../lib/api";
 import { approvalStatusLabel, kindLabel, orEmpty, statusLabel } from "../lib/labels";
 import { formatMoney, useCurrencies } from "../lib/money";
 import { usePagedQuery } from "../lib/paging";
@@ -41,6 +41,14 @@ const PRICE_TYPE_LABEL: Record<string, string> = {
   PURCHASE: "매입가",
 };
 
+/** 라벨에 붙은 문서 — 구 file_url의 후신 (§4.7 승격, ADR-0020 부기). */
+interface LabelDocumentRef {
+  document_id: number;
+  storage_kind: string;
+  url: string | null;
+  original_filename: string | null;
+}
+
 interface LabelRow {
   id: number;
   country_code: string;
@@ -48,10 +56,21 @@ interface LabelRow {
   language: string;
   approval_status: string;
   cut_in_date: string | null;
-  file_url: string | null;
+  documents: LabelDocumentRef[];
   inci_local_verified: boolean;
   origin_mark_verified: boolean;
   note: string | null;
+}
+
+/** SKU 소유 문서 (§4.7) — MSDS 섹션이 소비한다. */
+interface SkuDocumentRow {
+  id: number;
+  document_type: string;
+  document_type_name: string;
+  storage_kind: string;
+  original_filename: string | null;
+  url: string | null;
+  valid_until: string | null;
 }
 
 interface SetComponentRow {
@@ -104,7 +123,6 @@ export function SkuDetailPage() {
     language: "en",
     approval_status: "DRAFT",
     cut_in_date: "",
-    file_url: "",
     inci_local_verified: false,
     origin_mark_verified: false,
   });
@@ -120,7 +138,8 @@ export function SkuDetailPage() {
           approval_status: label.approval_status,
           // 빈 값은 "없음"이다 — 빈 문자열을 보내면 서버가 형식 오류로 본다.
           cut_in_date: label.cut_in_date === "" ? undefined : label.cut_in_date,
-          file_url: label.file_url === "" ? undefined : label.file_url,
+          // 라벨 파일은 documents 승격 완료(ADR-0020 부기) — 행 등록 후
+          // 표의 "파일 올리기"로 붙인다.
           inci_local_verified: label.inci_local_verified,
           origin_mark_verified: label.origin_mark_verified,
         },
@@ -130,11 +149,31 @@ export function SkuDetailPage() {
         ...previous,
         country_code: "",
         cut_in_date: "",
-        file_url: "",
       }));
       void client.invalidateQueries({ queryKey: labelsKey });
     },
   });
+
+  // 라벨 아트웍 파일 업로드 — 소유자는 라벨 행이다(§4.7 owner LABEL).
+  const uploadLabelFile = useMutation({
+    mutationFn: ({ labelId, file }: { labelId: number; file: File }) => {
+      const data = new FormData();
+      data.append("file", file);
+      data.append("owner_type", "LABEL");
+      data.append("owner_id", String(labelId));
+      data.append("document_type", "LABEL_ARTWORK");
+      return apiUpload<SkuDocumentRow>("/v1/documents/files", data);
+    },
+    onSuccess: () => void client.invalidateQueries({ queryKey: labelsKey }),
+  });
+
+  // SKU 소유 MSDS 문서 (§4.7 승격 — 구 msds_url 자리). 세트에는 MSDS가 없다.
+  const msdsKey = ["sku", skuId, "msds-documents"] as const;
+  const msdsDocs = usePagedQuery<SkuDocumentRow>(
+    msdsKey,
+    `/v1/documents?owner_type=SKU&owner_id=${skuId}&document_type=MSDS`,
+    sku.data !== undefined && !isSet,
+  );
 
   const pricesKey = ["sku", skuId, "prices"] as const;
   const prices = usePagedQuery<SkuPriceRow>(pricesKey, `/v1/skus/${skuId}/prices`);
@@ -264,7 +303,38 @@ export function SkuDetailPage() {
             <Row label="알코올함량(%)">{orEmpty(item.alcohol_content_pct)}</Row>
             <Row label="에어로졸">{item.is_aerosol ? "예" : "아니오"}</Row>
             <Row label="LQ">{item.is_limited_quantity ? "예" : "아니오"}</Row>
-            <Row label="MSDS 링크">{orEmpty(item.msds_url)}</Row>
+            <Row label="MSDS 문서">
+              {/* §4.7 documents 승격분(ADR-0020) — 구 msds_url 자리. 등록은
+                  문서보관소에서 한다(소유 SKU × 종류 MSDS). */}
+              {msdsDocs.data === undefined || msdsDocs.data.items.length === 0 ? (
+                <span className="text-gray-500">
+                  없음 — 문서보관소에서 종류 ‘MSDS’로 등록하세요.
+                </span>
+              ) : (
+                <span className="flex flex-wrap gap-3">
+                  {msdsDocs.data.items.map((doc) =>
+                    doc.storage_kind === "FILE" ? (
+                      <a
+                        key={doc.id}
+                        href={`/api/v1/documents/${doc.id}/download`}
+                        className="underline"
+                      >
+                        {orEmpty(doc.original_filename)}
+                      </a>
+                    ) : (
+                      <a
+                        key={doc.id}
+                        href={doc.url ?? "#"}
+                        className="underline"
+                        rel="noreferrer noopener"
+                      >
+                        링크 열기
+                      </a>
+                    ),
+                  )}
+                </span>
+              )}
+            </Row>
           </div>
         </div>
       )}
@@ -658,13 +728,48 @@ export function SkuDetailPage() {
                       {row.origin_mark_verified ? "○" : ""}
                     </td>
                     <td className="px-4 py-2">
-                      {row.file_url ? (
-                        <a href={row.file_url} className="underline" rel="noreferrer noopener">
-                          링크
-                        </a>
-                      ) : (
-                        orEmpty(null)
-                      )}
+                      {/* 라벨 파일 = documents(소유 LABEL — §4.7 승격, ADR-0020 부기).
+                          FILE은 다운로드, LINK(이관분)는 외부 링크다. */}
+                      <span className="flex flex-wrap items-center gap-3">
+                        {row.documents.map((doc) =>
+                          doc.storage_kind === "FILE" ? (
+                            <a
+                              key={doc.document_id}
+                              href={`/api/v1/documents/${doc.document_id}/download`}
+                              className="underline"
+                            >
+                              {orEmpty(doc.original_filename)}
+                            </a>
+                          ) : (
+                            <a
+                              key={doc.document_id}
+                              href={doc.url ?? "#"}
+                              className="underline"
+                              rel="noreferrer noopener"
+                            >
+                              링크
+                            </a>
+                          ),
+                        )}
+                        {row.documents.length === 0 && !canEdit && orEmpty(null)}
+                        {canEdit && (
+                          <label className="cell-nowrap cursor-pointer text-gray-500 underline">
+                            파일 올리기
+                            <input
+                              type="file"
+                              className="hidden"
+                              aria-label={`라벨 ${row.country_code} v${row.label_version} 파일 올리기`}
+                              onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                if (file) {
+                                  uploadLabelFile.mutate({ labelId: row.id, file });
+                                  event.target.value = "";
+                                }
+                              }}
+                            />
+                          </label>
+                        )}
+                      </span>
                     </td>
                   </tr>
                 ))}
@@ -672,6 +777,11 @@ export function SkuDetailPage() {
             </table>
           </ListState>
         </div>
+        {fieldMessage(uploadLabelFile.error) && (
+          <p role="alert" className="mt-2 text-sm text-signal-red">
+            {fieldMessage(uploadLabelFile.error)}
+          </p>
+        )}
       </div>
 
       <div>

@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.core.db.base import Base
 from app.modules.audit import models as audit_models
 from app.modules.catalog import models as catalog_models
+from app.modules.documents import models as documents_models
 from app.modules.idempotency import models as idempotency_models
 from app.modules.identity import models as identity_models
 from app.modules.ingredients import models as ingredients_models
@@ -24,6 +25,7 @@ __all__ = [
     "Base",
     "audit_models",
     "catalog_models",
+    "documents_models",
     "idempotency_models",
     "identity_models",
     "ingredients_models",

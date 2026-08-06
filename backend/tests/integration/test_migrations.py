@@ -13,6 +13,7 @@ from alembic.config import Config as AlembicConfig
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from app.core.config import settings
 from app.core.db.session import build_engine
@@ -141,10 +142,14 @@ def test_backfill_creates_nothing_on_an_empty_database() -> None:
         brands = connection.execute(text("SELECT count(*) FROM brands")).scalar_one()
         products = connection.execute(text("SELECT count(*) FROM products")).scalar_one()
         partners = connection.execute(text("SELECT count(*) FROM partners")).scalar_one()
+        documents = connection.execute(text("SELECT count(*) FROM documents")).scalar_one()
+        # 시드는 예외다 — document_types는 마이그레이션이 채우는 참조 데이터다.
+        doc_types = connection.execute(text("SELECT count(*) FROM document_types")).scalar_one()
     engine.dispose()
 
-    # partners까지 0 — S1-3 승격 백필도 빈 DB에 유령 거래처를 만들지 않는다.
-    assert (brands, products, partners) == (0, 0, 0)
+    # partners·documents까지 0 — 승격 백필들이 빈 DB에 유령 행을 만들지 않는다.
+    assert (brands, products, partners, documents) == (0, 0, 0, 0)
+    assert doc_types == 10  # §4.7 열거 9종 + LABEL_ARTWORK(추론분)
 
 
 # ── S1-3 승격 백필 (ADR-0020 / [M1] 보강(S1-3) ⑤) ──────────────────────────
@@ -226,3 +231,120 @@ def test_promotion_downgrade_restores_names_by_reverse_copy() -> None:
     engine.dispose()
 
     assert restored == "한국콜마"
+
+
+# ── S1-3 PR-2 문서 승격 백필 (ADR-0020 잔여 2건 / [M1] 보강(S1-3) ⑤ 말미) ──
+
+#: 문서 3테이블+시드 생성 리비전 — 승격(d5e8f2a6c4b9) 직전이다.
+_BEFORE_DOCUMENT_PROMOTION = "c9a2e4f7b1d3"
+
+
+def _plant_url_rows(engine: Engine) -> None:
+    """msds_url·file_url 값이 있는 행을 심는다 — SINGLE SKU는 처방이 필요하다."""
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO brands (brand_code, name_ko) VALUES ('B-DOC', '문서 브랜드')")
+        )
+        connection.execute(
+            text(
+                "INSERT INTO products (brand_id, product_code, name_ko) "
+                "SELECT id, 'P-DOC', '문서 처방' FROM brands WHERE brand_code = 'B-DOC'"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO skus (sku_code, name_ko, kind, product_id, msds_url) "
+                "SELECT 'SKU-DOC', '문서 세럼', 'SINGLE', id, ' https://example.com/msds.pdf ' "
+                "FROM products WHERE product_code = 'P-DOC'"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO labels (sku_id, country_code, label_version, language, "
+                "approval_status, inci_local_verified, origin_mark_verified, file_url) "
+                "SELECT id, 'US', 1, 'en', 'DRAFT', false, false, "
+                "'https://example.com/artwork.pdf' FROM skus WHERE sku_code = 'SKU-DOC'"
+            )
+        )
+
+
+def test_document_promotion_backfill_moves_urls_into_link_documents() -> None:
+    """msds_url·file_url 값이 LINK형 documents로 이관되고 문자열 컬럼은 사라진다"""
+    command.upgrade(_config(), _BEFORE_DOCUMENT_PROMOTION)
+    engine = build_engine(_migration_check_url())
+    _plant_url_rows(engine)
+
+    command.upgrade(_config(), "head")
+
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT d.owner_type, t.code, d.storage_kind, d.url, d.note
+                FROM documents d JOIN document_types t ON t.id = d.document_type_id
+                ORDER BY d.owner_type
+                """
+            )
+        ).all()
+        sku_columns = {
+            row[0]
+            for row in connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'skus'"
+                )
+            )
+        }
+        label_columns = {
+            row[0]
+            for row in connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'labels'"
+                )
+            )
+        }
+    engine.dispose()
+
+    assert len(rows) == 2, rows
+    label_row, sku_row = rows
+    # 라벨 파일 → LABEL×LABEL_ARTWORK. 출처 표식(MIG:)이 dev 전량 보고의 근거다.
+    assert label_row[0:3] == ("LABEL", "LABEL_ARTWORK", "LINK")
+    assert label_row[3] == "https://example.com/artwork.pdf"
+    assert label_row[4].startswith("MIG:")
+    # MSDS → SKU×MSDS. 트림되어 이관된다(승인 조건 3의 정규화 규율).
+    assert sku_row[0:3] == ("SKU", "MSDS", "LINK")
+    assert sku_row[3] == "https://example.com/msds.pdf"
+    assert sku_row[4].startswith("MIG:")
+    # 문자열 컬럼은 제거됐다 — 영구 잔류 경로의 차단(ADR-0020).
+    assert "msds_url" not in sku_columns
+    assert "file_url" not in label_columns
+
+
+def test_document_promotion_downgrade_restores_urls_by_reverse_copy() -> None:
+    """downgrade는 역복사다 — 두 문자열 컬럼이 LINK 문서의 URL로 복원된다 (승인 문면)"""
+    command.upgrade(_config(), _BEFORE_DOCUMENT_PROMOTION)
+    engine = build_engine(_migration_check_url())
+    _plant_url_rows(engine)
+
+    command.upgrade(_config(), "head")
+    command.downgrade(_config(), _BEFORE_DOCUMENT_PROMOTION)
+
+    with engine.connect() as connection:
+        msds = connection.execute(
+            text("SELECT msds_url FROM skus WHERE sku_code = 'SKU-DOC'")
+        ).scalar_one()
+        artwork = connection.execute(text("SELECT file_url FROM labels")).scalar_one()
+        set_check = connection.execute(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conrelid = 'public.skus'::regclass "
+                "AND conname = 'ck_skus_set_has_no_dg'"
+            )
+        ).scalar_one()
+    engine.dispose()
+
+    assert msds == "https://example.com/msds.pdf"
+    assert artwork == "https://example.com/artwork.pdf"
+    # 구 CHECK(msds_url 포함)도 복원됐다 — 함정 ①의 왕복 대상.
+    assert "msds_url" in set_check

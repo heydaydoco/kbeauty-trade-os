@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import system
 from app.modules.catalog import router as catalog_router
+from app.modules.documents import router as documents_router
 from app.modules.handover import router as handover_router
 from app.modules.identity import router as identity_router
 from app.modules.ingredients import router as ingredients_router
@@ -30,3 +31,6 @@ api_router.include_router(materials_router.product_boms_router)
 api_router.include_router(materials_router.sku_labels_router)
 api_router.include_router(partners_router.router)
 api_router.include_router(partners_router.signatories_router)
+api_router.include_router(documents_router.router)
+api_router.include_router(documents_router.document_types_router)
+api_router.include_router(documents_router.profile_document_types_router)

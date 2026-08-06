@@ -40,7 +40,6 @@ const SKU = {
   alcohol_content_pct: null,
   is_aerosol: false,
   is_limited_quantity: false,
-  msds_url: null,
 };
 
 /** /auth/me·/products·/skus를 한 번에 흉내 낸다. */

@@ -45,7 +45,7 @@ export interface Sku {
   alcohol_content_pct: string | null;
   is_aerosol: boolean;
   is_limited_quantity: boolean;
-  msds_url: string | null;
+  // MSDS는 §4.7 documents로 승격 완료(ADR-0020) — SKU 필드가 아니다.
 }
 
 export const SKUS_QUERY_KEY = ["skus"] as const;
@@ -60,7 +60,6 @@ const BLANK = {
   packing_group: "",
   flash_point_c: "",
   alcohol_content_pct: "",
-  msds_url: "",
 };
 
 /** 빈 문자열은 보내지 않는다 — 서버가 "값 없음"과 "빈 값"을 구분하게. */
@@ -149,7 +148,6 @@ export function SkuListPage() {
       alcohol_content_pct: isSet ? undefined : optional(extra.alcohol_content_pct),
       is_aerosol: isSet ? false : isAerosol,
       is_limited_quantity: isSet || !dgFlag ? false : isLq,
-      msds_url: isSet ? undefined : optional(extra.msds_url),
     });
   }
 
@@ -347,10 +345,8 @@ export function SkuListPage() {
                   />
                   <span className="cell-nowrap text-gray-600">에어로졸</span>
                 </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="cell-nowrap text-gray-600">MSDS 링크</span>
-                  <input name="msds_url" maxLength={500} {...field("msds_url")} />
-                </label>
+                {/* MSDS는 문서보관소(§4.7)에서 파일·링크로 등록한다 — SKU 등록
+                    항목이 아니다(ADR-0020 승격 완료). */}
 
                 {/* UN번호·Class·포장등급·LQ는 위험물일 때만 의미가 있다(ADR-0016 정정).
                     인화점·알코올함량·에어로졸은 "왜 위험물이 아닌지"의 근거라 위에 둔다. */}

@@ -37,7 +37,6 @@ const SKU = {
   alcohol_content_pct: null,
   is_aerosol: false,
   is_limited_quantity: false,
-  msds_url: null,
 };
 
 const PRICE_ROW = {
