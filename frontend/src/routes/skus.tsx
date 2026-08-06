@@ -162,9 +162,17 @@ export function SkuListPage() {
     <section>
       <header className="flex items-baseline justify-between">
         <h1 className="text-2xl font-bold">SKU</h1>
-        <a href="/api/v1/skus/export.csv" className="cell-nowrap text-sm text-gray-700 underline">
-          CSV 내보내기
-        </a>
+        <div className="flex items-baseline gap-4">
+          <a href="/api/v1/skus/export.csv" className="cell-nowrap text-sm text-gray-700 underline">
+            CSV 내보내기
+          </a>
+          <a
+            href="/api/v1/labels/export.csv"
+            className="cell-nowrap text-sm text-gray-700 underline"
+          >
+            라벨 CSV 내보내기
+          </a>
+        </div>
       </header>
 
       {canRegister && (

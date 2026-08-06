@@ -68,12 +68,20 @@ export function ProductsPage() {
             인증·원산지 판정은 처방 단위입니다. 용량이 다른 SKU도 처방이 같으면 한 건입니다.
           </p>
         </div>
-        <a
-          href="/api/v1/products/export.csv"
-          className="cell-nowrap text-sm text-gray-700 underline"
-        >
-          CSV 내보내기
-        </a>
+        <div className="flex items-baseline gap-4">
+          <a
+            href="/api/v1/products/export.csv"
+            className="cell-nowrap text-sm text-gray-700 underline"
+          >
+            CSV 내보내기
+          </a>
+          <a
+            href="/api/v1/product-boms/export.csv"
+            className="cell-nowrap text-sm text-gray-700 underline"
+          >
+            BOM CSV 내보내기
+          </a>
+        </div>
       </header>
 
       {canRegister && (
