@@ -36,7 +36,11 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload
 # 소스를 이미지에 굽고 비root로 실행한다.
 FROM deps AS prod
 COPY . /app
+# /data/files: 업로드 저장 루트(ADR-0029). 이미지에 appuser 소유로 미리 만들어
+# 두면 named volume 첫 마운트가 이 소유권을 복사해 비root 쓰기가 성립한다.
 RUN useradd --system --uid 10001 --no-create-home appuser \
- && chown -R appuser:appuser /app
+ && chown -R appuser:appuser /app \
+ && mkdir -p /data/files \
+ && chown -R appuser:appuser /data/files
 USER appuser
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

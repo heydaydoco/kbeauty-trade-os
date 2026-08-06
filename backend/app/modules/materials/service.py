@@ -80,6 +80,20 @@ class BomLineView:
 
 
 @dataclass(frozen=True, slots=True)
+class LabelFileView:
+    """라벨에 붙은 문서 요약 (§4.7 승격 — 구 file_url의 후신).
+
+    파일의 실체는 documents가 갖고, 라벨 응답은 표시·다운로드에 필요한
+    최소만 싣는다(FILE이면 다운로드 엔드포인트, LINK면 url).
+    """
+
+    document_id: int
+    storage_kind: str
+    url: str | None
+    original_filename: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class LabelView:
     id: int
     sku_id: int
@@ -89,7 +103,8 @@ class LabelView:
     language: str
     approval_status: str
     cut_in_date: date | None
-    file_url: str | None
+    #: 라벨 파일(§4.5) — documents 승격분(ADR-0020 부기). 없으면 빈 튜플.
+    documents: tuple[LabelFileView, ...]
     inci_local_verified: bool
     origin_mark_verified: bool
     note: str | None
@@ -128,7 +143,9 @@ def _bom_view(row: ProductBom, material: Material) -> BomLineView:
     )
 
 
-def _label_view(row: Label, sku_code: str) -> LabelView:
+def _label_view(
+    row: Label, sku_code: str, documents: tuple[LabelFileView, ...] = ()
+) -> LabelView:
     return LabelView(
         id=row.id,
         sku_id=row.sku_id,
@@ -138,11 +155,39 @@ def _label_view(row: Label, sku_code: str) -> LabelView:
         language=row.language,
         approval_status=row.approval_status,
         cut_in_date=row.cut_in_date,
-        file_url=row.file_url,
+        documents=documents,
         inci_local_verified=row.inci_local_verified,
         origin_mark_verified=row.origin_mark_verified,
         note=row.note,
     )
+
+
+def _documents_by_label(session: Session, label_ids: list[int]) -> dict[int, tuple[LabelFileView, ...]]:
+    """페이지 분량 라벨의 문서를 한 번에 가져온다 — 행마다 조회하면 N+1이다(§18.4)."""
+    from app.modules.documents.models import Document
+
+    if not label_ids:
+        return {}
+    rows = session.execute(
+        select(Document)
+        .where(
+            Document.owner_type == "LABEL",
+            Document.owner_id.in_(label_ids),
+            Document.deleted_at.is_(None),
+        )
+        .order_by(Document.owner_id, Document.id)
+    ).scalars()
+    grouped: dict[int, list[LabelFileView]] = {}
+    for doc in rows:
+        grouped.setdefault(doc.owner_id, []).append(
+            LabelFileView(
+                document_id=doc.id,
+                storage_kind=doc.storage_kind,
+                url=doc.url,
+                original_filename=doc.original_filename,
+            )
+        )
+    return {label_id: tuple(views) for label_id, views in grouped.items()}
 
 
 def _text(value: Decimal | None) -> str | None:
@@ -201,7 +246,15 @@ def _serialize_label(view: LabelView) -> dict[str, Any]:
         "language": view.language,
         "approval_status": view.approval_status,
         "cut_in_date": None if view.cut_in_date is None else view.cut_in_date.isoformat(),
-        "file_url": view.file_url,
+        "documents": [
+            {
+                "document_id": doc.document_id,
+                "storage_kind": doc.storage_kind,
+                "url": doc.url,
+                "original_filename": doc.original_filename,
+            }
+            for doc in view.documents
+        ],
         "inci_local_verified": view.inci_local_verified,
         "origin_mark_verified": view.origin_mark_verified,
         "note": view.note,
@@ -596,7 +649,7 @@ def create_label(
             language=str(payload["language"]).strip(),
             approval_status=payload.get("approval_status") or "DRAFT",
             cut_in_date=None if cut_in is None else date.fromisoformat(str(cut_in)),
-            file_url=payload.get("file_url"),
+            # 라벨 파일은 documents 승격 완료(ADR-0020 부기) — 라벨 행에는 없다.
             inci_local_verified=bool(payload.get("inci_local_verified")),
             origin_mark_verified=bool(payload.get("origin_mark_verified")),
             note=payload.get("note"),
@@ -633,14 +686,17 @@ def list_sku_labels(*, sku_id: int, offset: int, limit: int) -> tuple[list[Label
         total = session.execute(
             select(func.count()).select_from(Label).where(*condition)
         ).scalar_one()
-        rows = session.execute(
-            select(Label)
-            .where(*condition)
-            .order_by(Label.country_code, Label.label_version.desc())
-            .offset(offset)
-            .limit(limit)
-        ).scalars()
-        return [_label_view(row, sku.sku_code) for row in rows], total
+        rows = list(
+            session.execute(
+                select(Label)
+                .where(*condition)
+                .order_by(Label.country_code, Label.label_version.desc())
+                .offset(offset)
+                .limit(limit)
+            ).scalars()
+        )
+        docs = _documents_by_label(session, [row.id for row in rows])
+        return [_label_view(row, sku.sku_code, docs.get(row.id, ())) for row in rows], total
 
 
 def list_product_labels(*, product_id: int, offset: int, limit: int) -> tuple[list[LabelView], int]:
@@ -672,4 +728,5 @@ def list_product_labels(*, product_id: int, offset: int, limit: int) -> tuple[li
             .offset(offset)
             .limit(limit)
         ).all()
-        return [_label_view(row, sku_code) for row, sku_code in rows], total
+        docs = _documents_by_label(session, [row.id for row, _ in rows])
+        return [_label_view(row, sku_code, docs.get(row.id, ())) for row, sku_code in rows], total

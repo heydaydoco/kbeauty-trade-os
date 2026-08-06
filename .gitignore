@@ -10,6 +10,11 @@
 docker-compose.override.yml
 docker-compose.override.yaml
 
+# ── 업로드 파일 저장소 (ADR-0029) ──
+# 컨테이너에서는 named volume(/data/files)이고, 이 경로는 컨테이너 밖 실행
+# (CI·로컬 pytest)의 폴백 루트다 — 실물은 리포에 들어오면 안 된다.
+backend/var/
+
 # ── Python ──
 __pycache__/
 *.py[cod]

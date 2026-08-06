@@ -68,6 +68,26 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "이 제품에는 등록된 전성분이 없습니다. 전성분을 먼저 등록한 뒤 스크리닝해 주세요.",
     ),
+    ErrorCode.DOCUMENTS_FILE_TOO_LARGE: ErrorSpec(
+        413,
+        "파일이 너무 큽니다(최대 20MB). 파일 크기를 줄인 뒤 다시 업로드해 주세요.",
+    ),
+    ErrorCode.DOCUMENTS_FILE_TYPE_NOT_ALLOWED: ErrorSpec(
+        422,
+        "허용되지 않는 파일 형식입니다. PDF·이미지·엑셀·워드·텍스트·ZIP·AI 형식의 파일로 다시 올려 주세요.",
+    ),
+    ErrorCode.DOCUMENTS_RETENTION_LOCKED: ErrorSpec(
+        409,
+        "보존기한이 지나지 않은 문서는 삭제할 수 없습니다(파기 잠금). 보존기한이 지난 뒤 다시 시도해 주세요.",
+    ),
+    ErrorCode.DOCUMENTS_SET_SKU_MSDS_FORBIDDEN: ErrorSpec(
+        422,
+        "세트 SKU에는 MSDS 문서를 연결할 수 없습니다. 위험물 판정은 구성품 단위로 하니 구성품 SKU에 등록해 주세요.",
+    ),
+    ErrorCode.DOCUMENTS_DOWNLOAD_NOT_A_FILE: ErrorSpec(
+        409,
+        "링크형 문서에는 내려받을 파일이 없습니다. 문서의 링크 주소로 이동해 확인해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

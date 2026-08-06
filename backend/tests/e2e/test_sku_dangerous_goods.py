@@ -180,18 +180,18 @@ def test_classification_without_the_dg_flag_is_rejected(
 
 
 def test_non_dg_sku_may_record_the_evidence_that_made_it_non_dg(register: Register) -> None:
-    """★ 비DG 단품도 인화점·알코올함량·에어로졸·MSDS는 적을 수 있다
+    """★ 비DG 단품도 인화점·알코올함량·에어로졸은 적을 수 있다
 
     이 셋은 "왜 DG가 아닌지"의 근거 입력값이다. 여기까지 잠그면 비DG 증빙을
     시스템에 남길 자리가 사라지고, 사람은 그 값을 엑셀로 되돌아간다.
-    (ADR-0016 정정의 핵심 통과 케이스)
+    (ADR-0016 정정의 핵심 통과 케이스. MSDS는 §4.7 documents로 승격 완료 —
+    ADR-0020, SKU 등록 항목이 아니다.)
     """
     response = register(
         dg_flag=False,
         flash_point_c="65.0",
         alcohol_content_pct="4.50",
         is_aerosol=True,
-        msds_url="https://example.com/msds.pdf",
     )
 
     assert response.status_code == 201, response.text
@@ -200,7 +200,7 @@ def test_non_dg_sku_may_record_the_evidence_that_made_it_non_dg(register: Regist
     assert body["flash_point_c"] == "65.0"
     assert body["alcohol_content_pct"] == "4.50"
     assert body["is_aerosol"] is True
-    assert body["msds_url"] == "https://example.com/msds.pdf"
+    assert "msds_url" not in body  # 승격 뒤 응답에도 키가 없다
 
 
 # ── DG: 정상 등록 ──────────────────────────────────────────────────────────
@@ -218,7 +218,6 @@ def test_dangerous_goods_sku_registers_with_full_classification(register: Regist
         alcohol_content_pct="55.00",
         is_aerosol=True,
         is_limited_quantity=True,
-        msds_url="https://example.com/msds.pdf",
     )
 
     assert response.status_code == 201, response.text

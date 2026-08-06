@@ -164,8 +164,9 @@ class Sku(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Ba
     is_limited_quantity: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
-    #: S1-3에서 documents 링크로 승격한다(ADR-0020).
-    msds_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # MSDS는 §4.7 documents(소유 SKU×종류 MSDS)로 승격 완료 — 컬럼 없음
+    # (ADR-0020 / S1-3 PR-2). "SET SKU에 MSDS 금지"는 documents 서비스 가드가
+    # 잇는다(웹 세션 승인 — 다른 테이블이라 CHECK로 표현 불가).
 
     __table_args__ = (
         value_in("status", SKU_STATUSES),
@@ -176,12 +177,14 @@ class Sku(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Ba
             name="kind_product_link",
         ),
         # ① 세트는 DG 속성을 하나도 갖지 않는다 (ADR-0016 부기 — P4까지 미결).
+        #    msds_url 절은 documents 승격(S1-3 PR-2)과 함께 빠졌다 — 마이그레이션
+        #    d5e8f2a6c4b9가 이 정의로 수기 재생성했다(함정 ①).
         CheckConstraint(
             "kind <> 'SET' OR ("
             " dg_flag = false AND un_number IS NULL AND dg_class IS NULL"
             " AND packing_group IS NULL AND flash_point_c IS NULL"
             " AND alcohol_content_pct IS NULL AND is_aerosol = false"
-            " AND is_limited_quantity = false AND msds_url IS NULL)",
+            " AND is_limited_quantity = false)",
             name="set_has_no_dg",
         ),
         # ② 비DG 행에는 DG 분류가 있어야만 의미가 생기는 값이 남아 있으면 안 된다.

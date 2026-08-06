@@ -136,11 +136,16 @@ services:
       # Windows 바인드마운트는 파일 변경 이벤트(inotify)가 컨테이너로 전달되지
       # 않는다. 폴링으로 바꿔야 --reload가 실제로 동작한다.
       WATCHFILES_FORCE_POLLING: "true"
+      # 업로드 실물 저장 루트 (§4.7 / ADR-0029). ./backend가 /app에 바인드마운트라
+      # /app 아래에 쓰면 리포가 오염된다 — named volume으로 리포 밖에 둔다.
+      FILE_STORAGE_ROOT: /data/files
     volumes:
       - ./backend:/app
       # CI 계약 메타 테스트(test_ci_contract.py)가 읽을 수 있게 read-only 마운트.
       # 컨테이너는 ./backend만 보므로 리포 루트의 .github가 따로 필요하다.
       - ./.github:/repo/.github:ro
+      # 업로드 파일 저장소 — 정적 서빙 경로 밖(§18.1), S2-4가 pg_dump와 세트 백업.
+      - files_data:/data/files
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -206,3 +211,4 @@ volumes:
   pgdata:
   web_node_modules:
   pgadmin_data:
+  files_data:

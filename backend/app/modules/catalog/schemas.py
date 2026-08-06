@@ -138,7 +138,7 @@ class SkuCreateRequest(BaseModel):
     )
     is_aerosol: bool = False
     is_limited_quantity: bool = False
-    msds_url: str | None = Field(default=None, max_length=500)
+    # MSDS는 §4.7 documents로 승격 완료(ADR-0020) — SKU 등록 항목이 아니다.
 
 
 class SkuSummary(BaseModel):
@@ -169,7 +169,6 @@ class SkuSummary(BaseModel):
     alcohol_content_pct: Decimal | None
     is_aerosol: bool
     is_limited_quantity: bool
-    msds_url: str | None
 
     @classmethod
     def of(cls, view: SkuView) -> SkuSummary:
@@ -200,7 +199,6 @@ class SkuSummary(BaseModel):
             alcohol_content_pct=view.alcohol_content_pct,
             is_aerosol=view.is_aerosol,
             is_limited_quantity=view.is_limited_quantity,
-            msds_url=view.msds_url,
         )
 
 

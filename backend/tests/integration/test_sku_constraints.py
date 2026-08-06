@@ -162,10 +162,11 @@ def test_valid_pairings_are_accepted() -> None:
 
 
 def test_non_dg_row_may_keep_its_evidence_values() -> None:
-    """비DG 행도 인화점·알코올함량·에어로졸·MSDS를 갖는다 (ADR-0016 정정의 핵심)
+    """비DG 행도 인화점·알코올함량·에어로졸을 갖는다 (ADR-0016 정정의 핵심)
 
-    이 넷은 "왜 DG가 아닌지"의 근거 입력값이다. DB가 여기까지 잠그면 비DG
-    증빙을 남길 자리가 사라진다.
+    이 셋은 "왜 DG가 아닌지"의 근거 입력값이다. DB가 여기까지 잠그면 비DG
+    증빙을 남길 자리가 사라진다. (MSDS는 §4.7 documents로 승격 완료 —
+    ADR-0020, 컬럼이 없다.)
     """
     _insert_sku(
         sku_code="TON-001",
@@ -176,8 +177,51 @@ def test_non_dg_row_may_keep_its_evidence_values() -> None:
         flash_point_c=Decimal("65.0"),
         alcohol_content_pct=Decimal("4.50"),
         is_aerosol=True,
-        msds_url="https://example.com/msds.pdf",
     )
+
+
+def test_set_has_no_dg_check_no_longer_references_msds() -> None:
+    """재정의된 set_has_no_dg CHECK가 실재하고 msds_url을 참조하지 않는다 (함정 ①)
+
+    이름만 같은 구 정의가 남아 있으면(재정의 누락) 컬럼이 없는 식이 되어
+    있거나, 반대로 CHECK 자체가 사라졌을 수 있다 — 정의문을 직접 읽어 둘 다
+    잡는다(웹 세션 승인 문면: 수기 재정의 + 제약 실재 테스트).
+    """
+    with unit_of_work() as uow:
+        definition = uow.session.execute(
+            text(
+                """
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conrelid = 'public.skus'::regclass
+                  AND conname = 'ck_skus_set_has_no_dg'
+                """
+            )
+        ).scalar_one()
+    assert "msds_url" not in definition
+    assert "is_limited_quantity" in definition  # 나머지 잠금은 그대로다
+
+
+def test_the_msds_url_column_is_gone() -> None:
+    """skus.msds_url 컬럼이 없다 (documents 승격 — ADR-0020, 잔존 컬럼 검출)
+
+    승격 뒤 문자열 컬럼이 남아 있으면 "이미 값이 있으니까"의 영구 잔류 경로가
+    되살아난다 — 부재 자체를 고정한다. set_has_no_dg CHECK의 수기 재정의
+    (함정 ①)가 실재하는지는 위 _DECLARED_SKU_CHECKS 대조가 함께 지킨다.
+    """
+    with unit_of_work() as uow:
+        columns = set(
+            uow.session.execute(
+                text(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'skus'
+                    """
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert "msds_url" not in columns
 
 
 def test_dangerous_goods_row_without_classification_is_accepted() -> None:

@@ -52,7 +52,7 @@ CSV_HEADER = [
     "알코올함량(%)",
     "에어로졸",
     "LQ",
-    "MSDS링크",
+    # MSDS링크 칸은 documents 승격(S1-3 PR-2)으로 빠졌다 — 문서 목록 CSV가 담는다.
 ]
 
 Register = Callable[..., Response]

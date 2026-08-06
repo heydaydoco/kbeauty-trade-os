@@ -103,7 +103,6 @@ class SkuView:
     alcohol_content_pct: Decimal | None
     is_aerosol: bool
     is_limited_quantity: bool
-    msds_url: str | None
 
 
 def _brand_view(brand: Brand) -> BrandView:
@@ -193,7 +192,6 @@ def _sku_view(
         alcohol_content_pct=sku.alcohol_content_pct,
         is_aerosol=sku.is_aerosol,
         is_limited_quantity=sku.is_limited_quantity,
-        msds_url=sku.msds_url,
     )
 
 
@@ -235,7 +233,6 @@ def _serialize_sku(view: SkuView) -> dict[str, Any]:
         "alcohol_content_pct": _text(view.alcohol_content_pct),
         "is_aerosol": view.is_aerosol,
         "is_limited_quantity": view.is_limited_quantity,
-        "msds_url": view.msds_url,
     }
 
 
@@ -496,7 +493,8 @@ _DG_FIELDS = (
     ("alcohol_content_pct", "알코올 함량"),
     ("is_aerosol", "에어로졸"),
     ("is_limited_quantity", "LQ"),
-    ("msds_url", "MSDS 링크"),
+    # MSDS는 documents 승격으로 SKU 컬럼에서 빠졌다 — SET 금지는 documents
+    # 서비스 가드가 잇는다(웹 세션 승인).
 )
 
 #: DG 분류가 있어야만 의미가 생기는 값들. 인화점·알코올함량·에어로졸·MSDS는
@@ -671,7 +669,6 @@ def create_sku(
             alcohol_content_pct=_decimal(payload, "alcohol_content_pct", "알코올 함량"),
             is_aerosol=bool(payload.get("is_aerosol")),
             is_limited_quantity=bool(payload.get("is_limited_quantity")),
-            msds_url=payload.get("msds_url"),
             created_by_id=actor.id,
         )
         session.add(sku)

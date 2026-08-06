@@ -55,6 +55,8 @@ PRESERVED_TABLES = frozenset(
     {
         "alembic_version",  # alembic이 소유·관리
         "roles",  # 역할 5종 시드 — 마이그레이션 소유, 앱·테스트는 읽기만 (S0-2)
+        # 문서 종류 시드 — 마이그레이션 소유(§4.7 열거), 앱·테스트는 읽기만 (S1-3)
+        "document_types",
     }
 )
 

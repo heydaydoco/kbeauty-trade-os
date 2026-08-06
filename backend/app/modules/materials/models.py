@@ -185,8 +185,8 @@ class Label(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, 
     approval_status: Mapped[str] = mapped_column(String(10), nullable=False, server_default="DRAFT")
     #: 컷인일(업무 날짜). 승인 전 선입력을 허용한다 — 일정이 먼저 잡히는 실무가 있다.
     cut_in_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    #: S1-3에서 documents 링크로 승격한다(ADR-0020 부기).
-    file_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 라벨 파일은 §4.7 documents(소유 LABEL×종류 LABEL_ARTWORK)로 승격 완료 —
+    # 컬럼 없음 (ADR-0020 부기 / S1-3 PR-2 마이그레이션 d5e8f2a6c4b9).
     #: §4.5 검증 항목 — 사람이 확인했다는 기록이다.
     inci_local_verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")

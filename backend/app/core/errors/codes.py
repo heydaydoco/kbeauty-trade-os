@@ -43,6 +43,19 @@ class ErrorCode(StrEnum):
     #: "검사할 것이 없었다"가 같은 모양이면 후자가 전자로 읽힌다(웹 세션 판정 D).
     INGREDIENTS_FORMULA_EMPTY = "INGREDIENTS.FORMULA.EMPTY"
 
+    # 문서 보관소 (S1-3 / §4.7 / ADR-0028·0029)
+    #: 업로드 크기 상한 초과 — 상한 수치는 documents.service.MAX_UPLOAD_BYTES가
+    #: 유일 출처이고 테스트가 고정한다(웹 세션 승인 조건 4-④).
+    DOCUMENTS_FILE_TOO_LARGE = "DOCUMENTS.FILE.TOO_LARGE"
+    #: 허용 목록 밖 확장자 — 실행물(§18.1 "실행 불가")과 인라인 렌더 가능물을 막는다.
+    DOCUMENTS_FILE_TYPE_NOT_ALLOWED = "DOCUMENTS.FILE.TYPE_NOT_ALLOWED"
+    #: 보존기한 내 삭제 시도 — 파기 잠금(§4.7). 강제 삭제 액션은 없다(승인 문면).
+    DOCUMENTS_RETENTION_LOCKED = "DOCUMENTS.DOCUMENT.RETENTION_LOCKED"
+    #: 세트 SKU에 MSDS 연결 시도 — DB CHECK 대신 서비스 가드다(웹 세션 승인).
+    DOCUMENTS_SET_SKU_MSDS_FORBIDDEN = "DOCUMENTS.MSDS.SET_SKU_FORBIDDEN"
+    #: LINK형 문서의 다운로드 시도 — 내려받을 실물이 없다.
+    DOCUMENTS_DOWNLOAD_NOT_A_FILE = "DOCUMENTS.DOWNLOAD.NOT_A_FILE"
+
     # 동시성·멱등 (§17.2 / §17.4)
     CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"

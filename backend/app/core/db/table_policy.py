@@ -71,6 +71,12 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "partner_type_links",  # 유형 해제 = soft delete(UPDATE)
         "customer_item_codes",  # 매핑 정리 = soft delete(UPDATE)
         "signatories",  # 최소 헤더 — 상세는 S4-4 재판정(ADR-0021 방식)
+        # S1-3 — 문서 보관소 (§4.7·§4.8). 마스터다 — 문서의 불변이 필요한 지점은
+        # 원본이 아니라 §6.2의 판정 스냅샷(S3-4)이고, 파기 잠금은 서비스가
+        # soft delete를 거부하는 방식이라 UPDATE 권한이 있어야 성립한다.
+        "document_types",  # 시드 + 마이그레이션·관리 화면(P6)으로만 확장
+        "documents",  # soft delete(UPDATE)·메모 수정
+        "item_profile_document_types",  # 세트 해제 = soft delete(UPDATE)
     }
 )
 
