@@ -54,7 +54,7 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 14. ~~[S1-3] 승격 대상 임시 문자열 4건~~ — **4/4 종결(S1-3 PR-2, ADR-0020 완제)**. PR-1: `manufacturer_name`→OEM FK·`default_supplier_name`→SUPPLIER FK. PR-2: `skus.msds_url`→documents(SKU×MSDS, LINK)·`labels.file_url`→documents(LABEL×LABEL_ARTWORK, LINK) — backfill(트림·MIG: 출처 표식)+downgrade 역복사, `set_has_no_dg` CHECK 수기 재정의(함정 ①)+정의문 실재 테스트, 문자열 컬럼 제거(잔존 참조 grep 0건). §7.7의 "MSDS 유효본 미첨부 차단"(P4)이 documents 유효기간으로 검증 가능해졌다.
 15. **item_profiles 내용 연결 미배정분** — S1-1은 헤더+적용 FK까지. 연결 테이블은 **서류=S1-3 / 요건=S2-1 / 마일스톤=S3-2**가 각각 추가하며, 각 세션 DoD에서 확인한다. §4.8의 "신규 등록 시 자동 적용"도 그 이후다. (ADR-0021)
 16. ~~SKU 상세 단가 표 통화표 미도착 백지(`sku-detail.tsx:479`)~~ — **종결(S1-3 PR-1, 웹 세션 재개 승인 2026-08-05)**. 셀에서 `currencies.data === undefined`면 값을 만들지 않는 가드로 수정(제품 상세와 같은 패턴), vitest 회귀 테스트(`sku-detail-prices.test.tsx` — 통화 API 500에도 화면 생존) 추가.
-17. **[S1-2 리뷰 검출] CSV 수식 인젝션 미방어** — 전 목록 내보내기(S1-1 포함)가 자유 텍스트 셀(`=`·`+`·`-`·`@` 시작)을 이스케이프 없이 내보낸다. Excel이 수식으로 해석할 수 있다. 통로가 `core/csv_export` 하나라 고치는 곳은 한 곳이지만, **이스케이프는 §12.2 왕복 편집(S1-3)의 값 보존과 상충**해서 함께 설계해야 한다 — S1-3에서 판정. 그전까지 CSV는 신뢰 사용자(로그인 필수)만 받는다.
+17. ~~[S1-2 리뷰 검출] CSV 수식 인젝션 미방어~~ — **종결(S1-3: PR-1 내보내기 이스케이프 + PR-3 왕복 파서 역변환 — ADR-0027 전단사 완성)**. 통로는 여전히 둘뿐(`core/csv_export.escape_formula_cell` / `unescape_formula_cell`)이고, 전단사 왕복은 F 그룹이 고정한다(단위: 트리거 전수 escape∘unescape=항등 / e2e: 무수정 왕복 diff 0·이스케이프 값 보존).
 
 ## 마스킹 원장 (원가·마진 마스킹 대상의 발견·판정 기록 — 2026-07-30 신설)
 > 신설 사유: 상시 수칙 "마스킹 신규 발견분은 구현 없이 원장 등재만, 재개는 웹 세션 판정"이 등재할 원장을 특정하지 않아 이 섹션을 만들었다. 발견분은 여기 등재하고, 구현은 웹 세션 판정 후에만.
@@ -71,7 +71,7 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 - **[S1-2] 컷인 시 구라벨 재고 소진 리포트** — §4.5 명문이나 재고 원장이 없어 불가. **재판정 트리거: P4(재고 원장).**
 - **[S1-2] `labels`·`ingredient_rules`·`sku_hs_codes`의 country_code → markets FK 승격** — markets 테이블은 S2-1. **재판정 트리거: S2-1 계획 보고.**
 - **[S1-2] §4.4 "OEM 생산 발주 마일스톤 프로파일"** — PO는 S3-1·마일스톤은 S3-2라 이월(조용한 누락 방지 명시). **재판정 트리거: S3-1/S3-2 계획 보고.**
-- **[S1-2] 라벨·BOM·규칙 목록 CSV** — 마스터 목록(ingredients·materials)에만 CSV, 하위 자원 CSV는 §12.2 엑셀 코어로. **재판정 트리거: S1-3.**
+- ~~**[S1-2] 라벨·BOM·규칙 목록 CSV**~~ — **종결(S1-3 PR-3)**: `/labels`·`/ingredient-rules`·`/product-boms`의 `export.csv` 3종 신설. BOM CSV는 **원가 열 미포함**(웹 세션 승인 문면 — 전용 뷰에 원가 필드 자체가 없다, ADR-0024 부재 규율).
 - **[S1-2] GC 라벨 케이스 보류** — GC v1.1은 스크리닝 5케이스 한정(웹 세션 판정 H 축소). 라벨 케이스는 보류·관찰 유지. **재판정 트리거: 라벨 소진 리포트(P4) 또는 라벨 관련 사고 시.**
 - **[S1-3] soft delete된 문서의 실물 잔존·저장소 용량 모니터링** — 문서 soft delete는 행만 지우고 실물은 남긴다(복원 가능성·보존 정책이 실물 정리에 선행해야 한다 — ADR-0029). §18.4의 "첨부 스토리지 용량 모니터링+임계 알림"도 미구현. **재판정 트리거: S2-4(백업·복원 — files/ 세트 정책과 함께) 또는 S2-3(알림 엔진).**
 - **[S1-3] 문서 유효기간 기일 스캔 부재** — §4.7 "유효기간 있는 모든 문서가 기일 엔진 스캔 대상"은 기일 엔진(S2-3)의 일이다. 이번 세션은 컬럼까지만 — scheduled_jobs 0행 유지(승인 유지 항목). **재판정 트리거: S2-3 계획 보고.**
