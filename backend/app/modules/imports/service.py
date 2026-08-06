@@ -265,6 +265,21 @@ def _diff_rows(
             for column in target.columns
             if payload[column.field] != snapshot.payload[column.field]
         ]
+        # 불변 칸(어댑터 선언 — 예: SKU 종류·제품코드)이 변경 diff에 잡히면
+        # 오류 행이다(S1.5 판정 ① "종류 전환=오류 행"). 반영 단계가 아니라
+        # 여기서 잡아야 검토자가 diff에서 보는 것과 반영이 일치한다.
+        blocked = [field for field in changed_fields if field in target.immutable_fields]
+        if blocked:
+            labels = ", ".join(field_to_header[field] for field in blocked)
+            drafts.append(
+                _RowDraft(
+                    row_no=raw.row_no,
+                    kind="ERROR",
+                    error_reason=f"{labels}은(는) 왕복 편집으로 변경할 수 없습니다. "
+                    "목록을 다시 내려받아 해당 칸을 원래 값으로 되돌려 주세요.",
+                )
+            )
+            continue
         if not changed_fields:
             unchanged += 1  # 파일과 같은 행 — 저장하지 않는다(§12.2 "변경분만").
             continue

@@ -94,6 +94,8 @@ class SkuView:
     #: 제조사 = 거래처(유형 OEM — ADR-0020 승격). 이름은 표시용 조인 값이다.
     manufacturer_partner_id: int | None
     manufacturer_name: str | None
+    #: 왕복 CSV용 조인 값 — 표시명은 유일키가 아니라 왕복 결정성이 없다(§12.2 보강 ②).
+    manufacturer_code: str | None
     # DG (§4.1 / §7.7)
     dg_flag: bool
     un_number: str | None
@@ -164,6 +166,7 @@ def _sku_view(
     brand_name_ko: str | None,
     item_profile_name_ko: str | None,
     manufacturer_name_ko: str | None,
+    manufacturer_code: str | None,
 ) -> SkuView:
     return SkuView(
         id=sku.id,
@@ -184,6 +187,7 @@ def _sku_view(
         shelf_life_months=sku.shelf_life_months,
         manufacturer_partner_id=sku.manufacturer_partner_id,
         manufacturer_name=manufacturer_name_ko,
+        manufacturer_code=manufacturer_code,
         dg_flag=sku.dg_flag,
         un_number=sku.un_number,
         dg_class=sku.dg_class,
@@ -693,6 +697,7 @@ def create_sku(
             brand.name_ko if brand is not None else None,
             profile.name_ko if profile is not None else None,
             manufacturer.name_ko if manufacturer is not None else None,
+            manufacturer.partner_code if manufacturer is not None else None,
         )
         body = _serialize_sku(view)
         assert claim.record is not None
@@ -712,6 +717,7 @@ def _sku_select() -> Any:
             Brand.name_ko,
             ItemProfile.name_ko,
             Partner.name_ko,
+            Partner.partner_code,
         )
         .outerjoin(Product, Sku.product_id == Product.id)
         .outerjoin(Brand, Product.brand_id == Brand.id)

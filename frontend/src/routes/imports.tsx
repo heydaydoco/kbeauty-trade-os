@@ -62,6 +62,8 @@ export const IMPORT_STAGINGS_QUERY_KEY = ["import-stagings"] as const;
 const EXPORT_CSV_BY_CODE: Record<string, string> = {
   partners: "/api/v1/partners/export.csv",
   materials: "/api/v1/materials/export.csv",
+  // SKU만 왕복 내보내기가 표시용 목록 CSV와 분리다(S1.5 판정 ① — ADR-0030 부기).
+  skus: "/api/v1/skus/roundtrip.csv",
 };
 
 /** 분류 badge — 신호등 팔레트(theme.css §5.3 토큰) 재사용. 모르는 값은 회색. */
