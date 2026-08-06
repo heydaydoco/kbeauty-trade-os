@@ -52,7 +52,7 @@ from app.core.db.mixins import (
 #: 임포트 레지스트리 코드 — 실체는 modules/imports/registry.py의 어댑터다.
 #: 어댑터는 대상 모델에 결합된 코드라 데이터로 옮길 수 없다(ADR-11의
 #: "검증 골격은 코드 고정" 쪽). 대상이 늘면 여기와 registry.py가 같이 는다.
-IMPORT_REGISTRY_CODES = ("materials", "partners")
+IMPORT_REGISTRY_CODES = ("materials", "partners", "skus")
 
 #: 스테이징 상태 — 검토 대기 / 확정 완료. 취소는 soft delete다(별도 상태 없음).
 IMPORT_STAGING_STATUSES = ("PENDING", "CONFIRMED")

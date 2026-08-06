@@ -46,14 +46,38 @@ def test_string_columns_are_a_subset_of_the_header() -> None:
 
 def test_export_routers_reuse_the_registry_header() -> None:
     """내보내기 라우터의 헤더가 레지스트리 상수 그 자체다(복사본이 아니다)"""
-    from app.modules.imports.registry import MATERIALS_CSV_HEADER, PARTNERS_CSV_HEADER
+    from app.modules.catalog import router as catalog_router
+    from app.modules.imports.registry import (
+        MATERIALS_CSV_HEADER,
+        PARTNERS_CSV_HEADER,
+        SKUS_ROUNDTRIP_CSV_HEADER,
+    )
     from app.modules.materials.router import MATERIAL_CSV_HEADER
     from app.modules.partners.router import PARTNER_CSV_HEADER
 
     assert PARTNER_CSV_HEADER is PARTNERS_CSV_HEADER
     assert MATERIAL_CSV_HEADER is MATERIALS_CSV_HEADER
+    assert catalog_router.SKUS_ROUNDTRIP_CSV_HEADER is SKUS_ROUNDTRIP_CSV_HEADER
     assert IMPORT_TARGETS["partners"].header == PARTNERS_CSV_HEADER
     assert IMPORT_TARGETS["materials"].header == MATERIALS_CSV_HEADER
+    assert IMPORT_TARGETS["skus"].header == SKUS_ROUNDTRIP_CSV_HEADER
+
+
+def test_sku_roundtrip_form_carries_no_derived_display_columns() -> None:
+    """SKU 왕복 양식 = 기록 가능 필드+ID만 (S1.5 판정 ① — 구조적 부재의 고정)
+
+    파생 표시 2칸(제품명·브랜드명)과 제조사 **표시명**은 왕복 결정성이 없어
+    양식에 없다 — 표시 수요는 목록 CSV(SKU_CSV_HEADER)가 맡는다(ADR-0030 부기).
+    """
+    from app.modules.catalog.router import SKU_CSV_HEADER
+
+    roundtrip = IMPORT_TARGETS["skus"].header
+    assert "제품명(국문)" not in roundtrip
+    assert "브랜드명(국문)" not in roundtrip
+    assert "제조사" not in roundtrip  # 표시명 칸 — 코드 칸(제조사코드)만 있다
+    assert "제조사코드" in roundtrip
+    assert "제품명(국문)" in SKU_CSV_HEADER
+    assert "브랜드명(국문)" in SKU_CSV_HEADER
 
 
 def test_no_auto_confirm_code_path_exists() -> None:

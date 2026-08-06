@@ -32,6 +32,7 @@ from app.modules.catalog.schemas import (
     SkuSummary,
 )
 from app.modules.identity.models import RoleCode
+from app.modules.imports.registry import SKUS_ROUNDTRIP_CSV_HEADER
 
 #: 마스터 등록은 무역이 한다(관리자는 항상 통과 — require_roles 규약).
 CAN_REGISTER = (RoleCode.TRADE,)
@@ -230,6 +231,51 @@ def export_skus_csv(current: CurrentUser) -> StreamingResponse:
     )
 
 
+@router.get(
+    "/roundtrip.csv",
+    summary="SKU 왕복 내보내기 (§12.2 — 기록 가능 필드+ID만, S1.5 판정 ①)",
+)
+def export_skus_roundtrip_csv(current: CurrentUser) -> StreamingResponse:
+    """왕복 편집의 출발점 — 헤더는 임포트 레지스트리와 한 상수다.
+
+    표시용 목록 CSV(`/export.csv`)와 다른 점: ID 1열이 있고, 파생 표시 2칸
+    (제품명·브랜드명)이 없고, 제조사가 표시명이 아니라 **코드**다(표시명은
+    유일키가 아니라 왕복 결정성이 없다 — §12.2 보강 ② 선례). SKU만 이 분리를
+    갖는 이유는 ADR-0030 부기에 있다.
+    """
+    views = service.all_skus_for_export()
+    return csv_response(
+        "SKU왕복.csv",
+        SKUS_ROUNDTRIP_CSV_HEADER,
+        [
+            (
+                view.id,
+                view.sku_code,
+                view.name_ko,
+                view.name_en,
+                view.kind,
+                view.product_code,
+                view.status,
+                view.barcode,
+                view.unit_weight_g,
+                view.box_qty,
+                view.shelf_life_months,
+                view.manufacturer_code,
+                view.dg_flag,
+                view.un_number,
+                view.dg_class,
+                view.packing_group,
+                view.flash_point_c,
+                view.alcohol_content_pct,
+                view.is_aerosol,
+                view.is_limited_quantity,
+            )
+            for view in views
+        ],
+    )
+
+
+# ★ `/{sku_id}`는 `/export.csv`·`/roundtrip.csv`보다 **뒤에** 선언해야 한다.
 @router.get("/{sku_id}", summary="SKU 상세")
 def get_sku(sku_id: int, current: CurrentUser) -> SkuSummary:
     return SkuSummary.of(service.get_sku(sku_id))

@@ -151,3 +151,31 @@ def test_duplicate_row_numbers_are_rejected_within_a_staging() -> None:
     with pytest.raises(IntegrityError) as exc:
         _insert_row(staging_id, row_no=2)
     assert "uq_import_staging_rows_staging_id_row_no_active" in str(exc.value)
+
+
+# ── CHECK 재정의 실재 (S1.5 PR-1 — 함정 ①·⑪) ─────────────────────────────
+
+
+def test_registry_code_check_definition_includes_skus() -> None:
+    """registry_code CHECK의 **정의문**에 skus가 실재한다 (마이그레이션 a7c3e9f2d4b8)
+
+    기존 테이블 CHECK 변경은 autogenerate가 감지하지 못해(함정 ①) 수기
+    재정의였다 — 이름만 있고 구 정의가 남는 실패 모양을 정의문 실측으로
+    잡는다(PR-2 선례: ck_skus_set_has_no_dg 정의문 테스트와 같은 양식).
+    """
+    from sqlalchemy import text
+
+    from app.modules.imports.models import IMPORT_REGISTRY_CODES
+
+    with unit_of_work() as uow:
+        definition = uow.session.execute(
+            text(
+                """
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conrelid = 'public.import_staging'::regclass
+                  AND conname = 'ck_import_staging_registry_code_valid'
+                """
+            )
+        ).scalar_one()
+    for code in IMPORT_REGISTRY_CODES:
+        assert f"'{code}'" in definition, definition
