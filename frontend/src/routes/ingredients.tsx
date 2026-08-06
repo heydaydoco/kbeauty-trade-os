@@ -51,12 +51,20 @@ export function IngredientsPage() {
             봅니다. 국가별 금지·제한 규칙은 성분을 눌러 안에서 적습니다.
           </p>
         </div>
-        <a
-          href="/api/v1/ingredients/export.csv"
-          className="cell-nowrap text-sm text-gray-700 underline"
-        >
-          CSV 내보내기
-        </a>
+        <div className="flex items-baseline gap-4">
+          <a
+            href="/api/v1/ingredients/export.csv"
+            className="cell-nowrap text-sm text-gray-700 underline"
+          >
+            CSV 내보내기
+          </a>
+          <a
+            href="/api/v1/ingredient-rules/export.csv"
+            className="cell-nowrap text-sm text-gray-700 underline"
+          >
+            성분규칙 CSV 내보내기
+          </a>
+        </div>
       </header>
 
       {canRegister && (

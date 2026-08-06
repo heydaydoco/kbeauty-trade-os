@@ -48,9 +48,12 @@ class MaterialView:
     name_ko: str
     material_type: str
     hs6: str | None
-    #: 기본공급사 = 거래처(유형 SUPPLIER — ADR-0020 부기 승격). 이름은 표시용 조인 값.
+    #: 기본공급사 = 거래처(유형 SUPPLIER — ADR-0020 부기 승격). 이름은 표시용
+    #: 조인 값이고, 코드는 CSV 왕복(§12.2)이 쓴다 — 이름은 유일키가 아니라
+    #: 왕복 결정성이 없다.
     default_supplier_partner_id: int | None
     default_supplier_name: str | None
+    default_supplier_code: str | None
     inventory_managed: bool
     lot_managed: bool
     note: str | None
@@ -110,7 +113,9 @@ class LabelView:
     note: str | None
 
 
-def _material_view(row: Material, supplier_name_ko: str | None) -> MaterialView:
+def _material_view(
+    row: Material, supplier_name_ko: str | None, supplier_code: str | None
+) -> MaterialView:
     return MaterialView(
         id=row.id,
         material_code=row.material_code,
@@ -119,6 +124,7 @@ def _material_view(row: Material, supplier_name_ko: str | None) -> MaterialView:
         hs6=row.hs6,
         default_supplier_partner_id=row.default_supplier_partner_id,
         default_supplier_name=supplier_name_ko,
+        default_supplier_code=supplier_code,
         inventory_managed=row.inventory_managed,
         lot_managed=row.lot_managed,
         note=row.note,
@@ -460,7 +466,11 @@ def create_material(
         )
 
         body = _serialize_material(
-            _material_view(material, supplier.name_ko if supplier is not None else None)
+            _material_view(
+                material,
+                supplier.name_ko if supplier is not None else None,
+                supplier.partner_code if supplier is not None else None,
+            )
         )
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=201, body=body)
@@ -472,7 +482,7 @@ def _material_select() -> Any:
     from app.modules.partners.models import Partner
 
     return (
-        select(Material, Partner.name_ko)
+        select(Material, Partner.name_ko, Partner.partner_code)
         .outerjoin(Partner, Material.default_supplier_partner_id == Partner.id)
         .where(Material.deleted_at.is_(None))
     )
@@ -487,7 +497,10 @@ def list_materials(*, offset: int, limit: int) -> tuple[list[MaterialView], int]
         rows = session.execute(
             _material_select().order_by(Material.material_code).offset(offset).limit(limit)
         ).all()
-        return [_material_view(row, supplier_name) for row, supplier_name in rows], total
+        return [
+            _material_view(row, supplier_name, supplier_code)
+            for row, supplier_name, supplier_code in rows
+        ], total
 
 
 def all_materials_for_export() -> list[MaterialView]:
@@ -498,7 +511,10 @@ def all_materials_for_export() -> list[MaterialView]:
         ).scalar_one()
         _guard_export_size(total)
         rows = session.execute(_material_select().order_by(Material.material_code)).all()
-        return [_material_view(row, supplier_name) for row, supplier_name in rows]
+        return [
+            _material_view(row, supplier_name, supplier_code)
+            for row, supplier_name, supplier_code in rows
+        ]
 
 
 def get_material(material_id: int) -> MaterialView:
@@ -507,8 +523,8 @@ def get_material(material_id: int) -> MaterialView:
         row = session.execute(_material_select().where(Material.id == material_id)).one_or_none()
         if row is None:
             raise NotFoundError(log_context={"material_id": material_id})
-        material, supplier_name = row
-        return _material_view(material, supplier_name)
+        material, supplier_name, supplier_code = row
+        return _material_view(material, supplier_name, supplier_code)
 
 
 # ── 자재 BOM (§4.4 / GC-B1·B2) ─────────────────────────────────────────────
@@ -730,3 +746,67 @@ def list_product_labels(*, product_id: int, offset: int, limit: int) -> tuple[li
         ).all()
         docs = _documents_by_label(session, [row.id for row, _ in rows])
         return [_label_view(row, sku_code, docs.get(row.id, ())) for row, sku_code in rows], total
+
+
+# ── 목록 CSV (§12.2 엑셀 코어 — S1-2 관찰 항목 "라벨·BOM·규칙 목록 CSV" 종결분) ──
+
+
+@dataclass(frozen=True, slots=True)
+class BomLineExportView:
+    """BOM CSV 전용 뷰 — **원가 필드 자체가 없다** (웹 세션 승인 문면 "BOM=원가
+    열 미포함"). 파일은 역할 분기 없이 한 모양이므로, 원가가 담긴 뷰를 들고
+    와서 열만 빼는 방식 대신 애초에 담기지 않는 뷰를 쓴다(ADR-0024의 부재 규율).
+    """
+
+    id: int
+    product_code: str
+    material_code: str
+    material_name_ko: str
+    quantity: Decimal
+    quantity_unit: str
+    origin_status: str
+
+
+def all_labels_for_export() -> list[LabelView]:
+    """전 SKU 라벨 — 파일 열은 documents 몫이라 CSV에는 싣지 않는다."""
+    with unit_of_work() as uow:
+        session = uow.session
+        total = session.execute(
+            select(func.count()).select_from(Label).where(Label.deleted_at.is_(None))
+        ).scalar_one()
+        _guard_export_size(total)
+        rows = session.execute(
+            select(Label, Sku.sku_code)
+            .join(Sku, Label.sku_id == Sku.id)
+            .where(Label.deleted_at.is_(None))
+            .order_by(Sku.sku_code, Label.country_code, Label.language, Label.label_version)
+        ).all()
+        return [_label_view(row, sku_code) for row, sku_code in rows]
+
+
+def all_bom_lines_for_export() -> list[BomLineExportView]:
+    with unit_of_work() as uow:
+        session = uow.session
+        total = session.execute(
+            select(func.count()).select_from(ProductBom).where(ProductBom.deleted_at.is_(None))
+        ).scalar_one()
+        _guard_export_size(total)
+        rows = session.execute(
+            select(ProductBom, Material, Product.product_code)
+            .join(Material, ProductBom.material_id == Material.id)
+            .join(Product, ProductBom.product_id == Product.id)
+            .where(ProductBom.deleted_at.is_(None))
+            .order_by(Product.product_code, Material.material_code, ProductBom.id)
+        ).all()
+        return [
+            BomLineExportView(
+                id=row.id,
+                product_code=product_code,
+                material_code=material.material_code,
+                material_name_ko=material.name_ko,
+                quantity=row.quantity,
+                quantity_unit=row.quantity_unit,
+                origin_status=row.origin_status,
+            )
+            for row, material, product_code in rows
+        ]

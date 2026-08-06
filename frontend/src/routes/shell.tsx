@@ -10,6 +10,7 @@ const NAV = [
   { to: "/materials", label: "자재" },
   { to: "/partners", label: "거래처" },
   { to: "/documents", label: "문서보관소" },
+  { to: "/imports", label: "엑셀 임포트" },
   { to: "/brands", label: "브랜드" },
   { to: "/item-profiles", label: "품목군" },
 ] as const;

@@ -5,6 +5,7 @@ import { useSession } from "./lib/session";
 import { BrandsPage } from "./routes/brands";
 import { DocumentsPage } from "./routes/documents";
 import { HealthPage } from "./routes/health";
+import { ImportsPage } from "./routes/imports";
 import { IngredientDetailPage } from "./routes/ingredient-detail";
 import { IngredientsPage } from "./routes/ingredients";
 import { ItemProfilesPage } from "./routes/item-profiles";
@@ -77,6 +78,7 @@ export function AppRoutes() {
         <Route path="/materials" element={<MaterialsPage />} />
         <Route path="/partners" element={<PartnersPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
+        <Route path="/imports" element={<ImportsPage />} />
         <Route path="/brands" element={<BrandsPage />} />
         <Route path="/item-profiles" element={<ItemProfilesPage />} />
       </Route>

@@ -17,6 +17,10 @@ from app.core.csv_export import csv_response
 from app.core.money import Money
 from app.core.pagination import Page, PageParams
 from app.modules.identity.models import RoleCode
+
+# 헤더는 임포트 레지스트리와 한 상수다 — 내보내기와 왕복 양식이 갈라지면
+# "내려받아 그대로 올리면 변화 0"(§12.2)이 그 자리에서 깨진다.
+from app.modules.imports.registry import PARTNERS_CSV_HEADER as PARTNER_CSV_HEADER
 from app.modules.partners import service
 from app.modules.partners.schemas import (
     ItemCodeCreateRequest,
@@ -33,17 +37,6 @@ CAN_REGISTER = (RoleCode.TRADE,)
 
 router = APIRouter(prefix="/partners", tags=["partners"])
 signatories_router = APIRouter(prefix="/signatories", tags=["signatories"])
-
-PARTNER_CSV_HEADER = (
-    "거래처코드",
-    "거래처명",
-    "유형",
-    "여신한도",
-    "여신통화",
-    "DG취급",
-    "강점",
-    "약점",
-)
 
 
 def _credit_limit_text(view: PartnerView) -> str | None:
@@ -83,14 +76,16 @@ def list_partners(
     return Page.of([PartnerSummary.of(view) for view in views], total, params)
 
 
-@router.get("/export.csv", summary="거래처 목록 CSV 내보내기 (UTF-8 BOM)")
+@router.get("/export.csv", summary="거래처 목록 CSV 내보내기 (UTF-8 BOM · 왕복 §12.2)")
 def export_partners_csv(current: CurrentUser) -> StreamingResponse:
+    """1열은 ID다 — 왕복 diff의 키(빈 ID=신규 / ID 있는 행=변경분만)."""
     views = service.all_partners_for_export()
     return csv_response(
         "거래처목록.csv",
         PARTNER_CSV_HEADER,
         [
             (
+                view.id,
                 view.partner_code,
                 view.name_ko,
                 "|".join(view.type_codes),

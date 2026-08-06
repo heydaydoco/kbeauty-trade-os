@@ -13,6 +13,7 @@ from app.modules.catalog import models as catalog_models
 from app.modules.documents import models as documents_models
 from app.modules.idempotency import models as idempotency_models
 from app.modules.identity import models as identity_models
+from app.modules.imports import models as imports_models
 from app.modules.ingredients import models as ingredients_models
 from app.modules.materials import models as materials_models
 from app.modules.numbering import models as numbering_models
@@ -28,6 +29,7 @@ __all__ = [
     "documents_models",
     "idempotency_models",
     "identity_models",
+    "imports_models",
     "ingredients_models",
     "materials_models",
     "numbering_models",

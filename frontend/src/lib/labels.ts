@@ -82,6 +82,19 @@ const STORAGE_KIND: Record<string, string> = {
   LINK: "링크",
 };
 
+// 임포트 스테이징 상태 (§12.2). 확정은 사람 1클릭 — 자동 확정이 없다(§15 L2).
+const IMPORT_STATUS: Record<string, string> = {
+  PENDING: "검토 대기",
+  CONFIRMED: "확정",
+};
+
+// 임포트 행 분류 (§12.2 — diff 결과 3종. 무변경 행은 스테이징되지 않는다).
+const IMPORT_ROW_KIND: Record<string, string> = {
+  NEW: "신규",
+  CHANGED: "변경",
+  ERROR: "오류",
+};
+
 export const statusLabel = (code: string): string => translate(STATUS, code);
 export const kindLabel = (code: string): string => translate(KIND, code);
 export const ruleTypeLabel = (code: string): string => translate(RULE_TYPE, code);
@@ -93,6 +106,8 @@ export const partnerTypeLabel = (code: string): string => translate(PARTNER_TYPE
 export const documentOwnerTypeLabel = (code: string): string =>
   translate(DOCUMENT_OWNER_TYPE, code);
 export const storageKindLabel = (code: string): string => translate(STORAGE_KIND, code);
+export const importStatusLabel = (code: string): string => translate(IMPORT_STATUS, code);
+export const importRowKindLabel = (code: string): string => translate(IMPORT_ROW_KIND, code);
 
 /** 값이 없을 때 표에 넣는 표시. 빈칸은 "누락"과 "0"을 구분하지 못한다. */
 export const EMPTY = "—";

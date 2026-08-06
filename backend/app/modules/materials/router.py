@@ -17,6 +17,10 @@ from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.core.csv_export import csv_response
 from app.core.pagination import Page, PageParams
 from app.modules.identity.models import RoleCode
+
+# 헤더는 임포트 레지스트리와 한 상수다 — 내보내기와 왕복 양식이 갈라지면
+# "내려받아 그대로 올리면 변화 0"(§12.2)이 그 자리에서 깨진다.
+from app.modules.imports.registry import MATERIALS_CSV_HEADER as MATERIAL_CSV_HEADER
 from app.modules.materials import service
 from app.modules.materials.schemas import (
     BomLineCostHiddenSummary,
@@ -35,15 +39,32 @@ router = APIRouter(prefix="/materials", tags=["materials"])
 #: BOM은 제품(처방)의 하위 자원, 라벨은 SKU의 하위 자원이다.
 product_boms_router = APIRouter(prefix="/products", tags=["products"])
 sku_labels_router = APIRouter(prefix="/skus", tags=["skus"])
+#: 전체 목록 CSV는 하위 자원 경로에 얹을 수 없어 별도 접두를 쓴다 (§12.2 —
+#: S1-2 관찰 항목 "라벨·BOM·규칙 목록 CSV" 종결분).
+labels_router = APIRouter(prefix="/labels", tags=["labels"])
+bom_export_router = APIRouter(prefix="/product-boms", tags=["products"])
 
-MATERIAL_CSV_HEADER = (
+LABEL_CSV_HEADER = (
+    "ID",
+    "SKU코드",
+    "국가",
+    "언어",
+    "판번",
+    "승인상태",
+    "컷인일",
+    "INCI현지검증",
+    "원산지표기검증",
+)
+
+#: 원가 열 없음 — 웹 세션 승인 문면("BOM=원가 열 미포함", 마스킹 계보 준수).
+BOM_CSV_HEADER = (
+    "ID",
+    "제품코드",
     "자재코드",
     "자재명(국문)",
-    "유형",
-    "HS6",
-    "기본공급사",
-    "재고관리",
-    "로트관리",
+    "소요량",
+    "단위",
+    "원산지상태",
 )
 
 
@@ -77,20 +98,25 @@ def list_materials(
     return Page.of([MaterialSummary.of(view) for view in views], total, params)
 
 
-@router.get("/export.csv", summary="자재 목록 CSV 내보내기 (UTF-8 BOM)")
+@router.get("/export.csv", summary="자재 목록 CSV 내보내기 (UTF-8 BOM · 왕복 §12.2)")
 def export_materials_csv(current: CurrentUser) -> StreamingResponse:
-    """★ 단가는 자재 마스터에 없다(BOM 라인의 값이다) — 이 CSV에 원가는 없다."""
+    """★ 단가는 자재 마스터에 없다(BOM 라인의 값이다) — 이 CSV에 원가는 없다.
+
+    1열은 ID(왕복 diff의 키), 기본공급사는 **코드**다 — 표시명은 유일키가
+    아니라 왕복 결정성이 없다(임포트 레지스트리 문서화 참조).
+    """
     views = service.all_materials_for_export()
     return csv_response(
         "자재목록.csv",
         MATERIAL_CSV_HEADER,
         [
             (
+                view.id,
                 view.material_code,
                 view.name_ko,
                 view.material_type,
                 view.hs6,
-                view.default_supplier_name,
+                view.default_supplier_code,
                 view.inventory_managed,
                 view.lot_managed,
             )
@@ -218,3 +244,54 @@ def list_product_labels(
         product_id=product_id, offset=params.offset, limit=params.limit
     )
     return Page.of([LabelSummary.of(view) for view in views], total, params)
+
+
+# ── 목록 CSV (§12.2 — S1-2 관찰 항목 "라벨·BOM·규칙 목록 CSV" 종결분) ─────────
+
+
+@labels_router.get("/export.csv", summary="라벨 목록 CSV 내보내기 (UTF-8 BOM)")
+def export_labels_csv(current: CurrentUser) -> StreamingResponse:
+    """라벨 파일(아트웍)은 documents의 것이라 CSV에는 싣지 않는다."""
+    views = service.all_labels_for_export()
+    return csv_response(
+        "라벨목록.csv",
+        LABEL_CSV_HEADER,
+        [
+            (
+                view.id,
+                view.sku_code,
+                view.country_code,
+                view.language,
+                view.label_version,
+                view.approval_status,
+                view.cut_in_date,
+                view.inci_local_verified,
+                view.origin_mark_verified,
+            )
+            for view in views
+        ],
+    )
+
+
+@bom_export_router.get("/export.csv", summary="BOM 목록 CSV 내보내기 (UTF-8 BOM · 원가 열 없음)")
+def export_boms_csv(current: CurrentUser) -> StreamingResponse:
+    """★ 원가 열이 없다 — 역할 분기 없이 전 역할이 같은 파일을 받는다(웹 세션
+    승인 문면 "BOM=원가 열 미포함"). 뷰(BomLineExportView)에 원가 필드 자체가
+    없어 실수로 실릴 자리도 없다(ADR-0024의 부재 규율)."""
+    views = service.all_bom_lines_for_export()
+    return csv_response(
+        "BOM목록.csv",
+        BOM_CSV_HEADER,
+        [
+            (
+                view.id,
+                view.product_code,
+                view.material_code,
+                view.material_name_ko,
+                view.quantity,
+                view.quantity_unit,
+                view.origin_status,
+            )
+            for view in views
+        ],
+    )

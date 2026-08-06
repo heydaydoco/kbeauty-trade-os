@@ -88,6 +88,38 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "링크형 문서에는 내려받을 파일이 없습니다. 문서의 링크 주소로 이동해 확인해 주세요.",
     ),
+    ErrorCode.IMPORTS_FILE_TOO_LARGE: ErrorSpec(
+        413,
+        "파일이 너무 큽니다(최대 20MB). 파일을 나누어 다시 업로드해 주세요.",
+    ),
+    ErrorCode.IMPORTS_FILE_TYPE_NOT_ALLOWED: ErrorSpec(
+        422,
+        "CSV 파일만 업로드할 수 있습니다. 표준 양식을 내려받아 CSV 형식 그대로 저장한 뒤 다시 올려 주세요.",
+    ),
+    ErrorCode.IMPORTS_FILE_ENCODING_INVALID: ErrorSpec(
+        422,
+        "파일의 문자 인코딩을 읽지 못했습니다. 엑셀에서 'CSV UTF-8' 형식으로 저장한 뒤 다시 올려 주세요.",
+    ),
+    ErrorCode.IMPORTS_FILE_HEADER_MISMATCH: ErrorSpec(
+        422,
+        "파일 첫 행(컬럼 제목)이 표준 양식과 다릅니다. 표준 양식을 내려받아 컬럼을 그대로 두고 작성해 주세요.",
+    ),
+    ErrorCode.IMPORTS_FILE_EMPTY: ErrorSpec(
+        422,
+        "파일에 데이터 행이 없습니다. 내용을 채운 뒤 다시 올려 주세요.",
+    ),
+    ErrorCode.IMPORTS_STAGING_DUPLICATE_PENDING: ErrorSpec(
+        422,
+        "같은 내용의 파일이 이미 검토 대기 중입니다. 기존 검토 건을 확정하거나 삭제한 뒤 다시 올려 주세요.",
+    ),
+    ErrorCode.IMPORTS_STAGING_NOT_PENDING: ErrorSpec(
+        409,
+        "검토 대기 상태가 아닌 건입니다. 목록을 새로 고쳐 처리 상태를 확인해 주세요.",
+    ),
+    ErrorCode.IMPORTS_CONFIRM_VERSION_CONFLICT: ErrorSpec(
+        409,
+        "검토 등록 후 다른 사용자가 대상 행을 먼저 수정하거나 삭제했습니다. 목록을 다시 내려받아 변경분을 새로 올려 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

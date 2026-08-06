@@ -9,6 +9,7 @@ from app.modules.catalog import router as catalog_router
 from app.modules.documents import router as documents_router
 from app.modules.handover import router as handover_router
 from app.modules.identity import router as identity_router
+from app.modules.imports import router as imports_router
 from app.modules.ingredients import router as ingredients_router
 from app.modules.materials import router as materials_router
 from app.modules.partners import router as partners_router
@@ -26,9 +27,13 @@ api_router.include_router(catalog_router.products_router)
 api_router.include_router(catalog_router.router)
 api_router.include_router(ingredients_router.router)
 api_router.include_router(ingredients_router.product_ingredients_router)
+api_router.include_router(ingredients_router.ingredient_rules_router)
 api_router.include_router(materials_router.router)
 api_router.include_router(materials_router.product_boms_router)
 api_router.include_router(materials_router.sku_labels_router)
+api_router.include_router(materials_router.labels_router)
+api_router.include_router(materials_router.bom_export_router)
+api_router.include_router(imports_router.router)
 api_router.include_router(partners_router.router)
 api_router.include_router(partners_router.signatories_router)
 api_router.include_router(documents_router.router)

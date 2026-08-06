@@ -77,6 +77,10 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "document_types",  # 시드 + 마이그레이션·관리 화면(P6)으로만 확장
         "documents",  # soft delete(UPDATE)·메모 수정
         "item_profile_document_types",  # 세트 해제 = soft delete(UPDATE)
+        # S1-3 — 엑셀 왕복 임포트 (§12.2·ADR-09). 확정이 상태를 바꾸고(UPDATE)
+        # 파기가 soft delete다. 원장이 아니다 — 반영 결과는 대상 마스터에 남는다.
+        "import_staging",
+        "import_staging_rows",
     }
 )
 
