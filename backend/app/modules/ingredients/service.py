@@ -482,3 +482,48 @@ def list_product_ingredients(
             )
             for row, inci_name, name_ko in rows
         ], total
+
+
+# ── 규칙 목록 CSV (§12.2 — S1-2 관찰 항목 "라벨·BOM·규칙 목록 CSV" 종결분) ────
+
+
+@dataclass(frozen=True, slots=True)
+class RuleExportView:
+    """규칙 CSV 전용 뷰 — 성분은 INCI명으로 보인다(id만으로는 사람이 못 읽는다)."""
+
+    id: int
+    inci_name: str
+    country_code: str
+    rule_type: str
+    max_concentration_pct: Decimal | None
+    source_url: str
+    last_verified_on: date
+
+
+def all_rules_for_export() -> list[RuleExportView]:
+    with unit_of_work() as uow:
+        session = uow.session
+        total = session.execute(
+            select(func.count())
+            .select_from(IngredientRule)
+            .where(IngredientRule.deleted_at.is_(None))
+        ).scalar_one()
+        _guard_export_size(total)
+        rows = session.execute(
+            select(IngredientRule, Ingredient.inci_name)
+            .join(Ingredient, IngredientRule.ingredient_id == Ingredient.id)
+            .where(IngredientRule.deleted_at.is_(None))
+            .order_by(Ingredient.inci_name_normalized, IngredientRule.country_code)
+        ).all()
+        return [
+            RuleExportView(
+                id=row.id,
+                inci_name=inci_name,
+                country_code=row.country_code,
+                rule_type=row.rule_type,
+                max_concentration_pct=row.max_concentration_pct,
+                source_url=row.source_url,
+                last_verified_on=row.last_verified_on,
+            )
+            for row, inci_name in rows
+        ]

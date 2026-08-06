@@ -124,11 +124,12 @@ def _serialize_signatory(view: SignatoryView) -> dict[str, Any]:
 # ── 공통 ───────────────────────────────────────────────────────────────────
 
 
-def _credit_limit(payload: dict[str, Any]) -> tuple[int | None, str | None]:
+def parse_credit_limit(payload: dict[str, Any]) -> tuple[int | None, str | None]:
     """사람이 쓰는 표기(12.34)를 정수 최소단위로 (§2 ADR-02).
 
     materials._minor_amount와 같은 꼴이다. 여신한도는 원가가 아니지만(마스킹
     원장 2번) 금액 규약은 동일하게 지킨다 — 정수 최소단위+통화 쌍.
+    공개 함수다 — 왕복 임포트(§12.2)가 같은 검증·같은 문구를 재사용한다.
     """
     raw = payload.get("credit_limit")
     currency = payload.get("credit_limit_currency")
@@ -167,8 +168,10 @@ def _credit_limit(payload: dict[str, Any]) -> tuple[int | None, str | None]:
     return int(scaled), code
 
 
-def _normalized_types(payload: dict[str, Any]) -> list[str]:
+def normalized_type_codes(payload: dict[str, Any]) -> list[str]:
     """유형 목록 정규화 — 중복 제거·정렬. 최소 1개는 있어야 한다.
+
+    공개 함수다 — 왕복 임포트(§12.2)가 같은 검증·같은 문구를 재사용한다.
 
     §4.6이 거래처를 유형으로 정의한다 — 유형 없는 거래처는 어떤 화면(§7.7
     소싱 제외, §7.4 바이어 게이트)에도 걸리지 않는 유령 행이 된다. 자식 행
@@ -268,8 +271,8 @@ def create_partner(
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
 
-        type_codes = _normalized_types(payload)
-        credit_amount, credit_currency = _credit_limit(payload)
+        type_codes = normalized_type_codes(payload)
+        credit_amount, credit_currency = parse_credit_limit(payload)
 
         partner = Partner(
             partner_code=str(payload["partner_code"]).strip(),

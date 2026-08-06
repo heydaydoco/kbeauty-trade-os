@@ -33,8 +33,21 @@ CAN_REGISTER = (RoleCode.TRADE,)
 router = APIRouter(prefix="/ingredients", tags=["ingredients"])
 #: 전성분은 제품(처방)의 하위 자원이다 — 경로는 /products 밑, 코드는 이 모듈.
 product_ingredients_router = APIRouter(prefix="/products", tags=["products"])
+#: 규칙 전체 목록 CSV — /ingredients/{id}/rules 밑에 얹으면 경로 매개변수와
+#: 충돌하므로 별도 접두다 (§12.2 — S1-2 관찰 항목 종결분).
+ingredient_rules_router = APIRouter(prefix="/ingredient-rules", tags=["ingredients"])
 
 INGREDIENT_CSV_HEADER = ("INCI명", "표시명(국문)", "비고")
+
+RULE_CSV_HEADER = (
+    "ID",
+    "INCI명",
+    "국가",
+    "규칙유형",
+    "최대함량(%)",
+    "근거링크",
+    "최종확인일",
+)
 
 
 # ── 성분 마스터 ─────────────────────────────────────────────────────────────
@@ -172,3 +185,29 @@ def screen_product(
 ) -> ScreeningReportSummary:
     report = screening.screen_product(product_id=product_id, countries=country)
     return ScreeningReportSummary.model_validate(screening.serialize_report(report))
+
+
+# ── 규칙 목록 CSV (§12.2 — S1-2 관찰 항목 "라벨·BOM·규칙 목록 CSV" 종결분) ────
+
+
+@ingredient_rules_router.get("/export.csv", summary="성분 규칙 목록 CSV 내보내기 (UTF-8 BOM)")
+def export_ingredient_rules_csv(current: CurrentUser) -> StreamingResponse:
+    """규칙은 판정이 아니라 사람이 확인해 적은 기록이다(§1 비범위) — 근거링크·
+    최종확인일까지 실어 확인 이력이 파일에도 남게 한다(ADR-03)."""
+    views = service.all_rules_for_export()
+    return csv_response(
+        "성분규칙목록.csv",
+        RULE_CSV_HEADER,
+        [
+            (
+                view.id,
+                view.inci_name,
+                view.country_code,
+                view.rule_type,
+                view.max_concentration_pct,
+                view.source_url,
+                view.last_verified_on,
+            )
+            for view in views
+        ],
+    )

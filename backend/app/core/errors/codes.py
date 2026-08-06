@@ -56,6 +56,26 @@ class ErrorCode(StrEnum):
     #: LINK형 문서의 다운로드 시도 — 내려받을 실물이 없다.
     DOCUMENTS_DOWNLOAD_NOT_A_FILE = "DOCUMENTS.DOWNLOAD.NOT_A_FILE"
 
+    # 엑셀 임포트 (S1-3 / §12.2 / ADR-09·0027)
+    #: 업로드 크기 상한 초과 — 수치는 imports.service.MAX_UPLOAD_BYTES가 유일
+    #: 출처(documents와 같은 20MiB — ADR-0029의 nginx 25m 안쪽).
+    IMPORTS_FILE_TOO_LARGE = "IMPORTS.FILE.TOO_LARGE"
+    #: 왕복 임포트는 CSV만 받는다 — 파서가 곧 왕복 보증 범위다(ADR-0027).
+    IMPORTS_FILE_TYPE_NOT_ALLOWED = "IMPORTS.FILE.TYPE_NOT_ALLOWED"
+    #: UTF-8(BOM)도 CP949도 아니어서 본문을 읽지 못했다.
+    IMPORTS_FILE_ENCODING_INVALID = "IMPORTS.FILE.ENCODING_INVALID"
+    #: 첫 행(컬럼 제목)이 표준 양식과 다르다 — 열 어긋난 채 파싱하지 않는다.
+    IMPORTS_FILE_HEADER_MISMATCH = "IMPORTS.FILE.HEADER_MISMATCH"
+    #: 데이터 행이 0건 — "올릴 것이 없었다"를 성공으로 착각하게 두지 않는다.
+    IMPORTS_FILE_EMPTY = "IMPORTS.FILE.EMPTY"
+    #: 같은 파일(해시 일치)이 이미 검토 대기 중이다 — ADR-09 파일 해시 멱등.
+    IMPORTS_STAGING_DUPLICATE_PENDING = "IMPORTS.STAGING.DUPLICATE_PENDING"
+    #: 확정·삭제는 검토 대기(PENDING) 상태에서만 가능하다.
+    IMPORTS_STAGING_NOT_PENDING = "IMPORTS.STAGING.NOT_PENDING"
+    #: 스테이징 후 확정 전에 대상 행이 먼저 수정·삭제됐다 — 부분 반영 없이
+    #: 전체를 거부한다(사람이 검토한 diff와 다른 결과를 만들지 않는다).
+    IMPORTS_CONFIRM_VERSION_CONFLICT = "IMPORTS.CONFIRM.VERSION_CONFLICT"
+
     # 동시성·멱등 (§17.2 / §17.4)
     CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"
