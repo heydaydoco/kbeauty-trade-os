@@ -47,6 +47,24 @@ export interface RequestOptions {
   idempotencyKey?: string;
 }
 
+async function throwFromEnvelope(response: Response): Promise<never> {
+  // 서버 봉투는 snake_case(request_id)로 온다.
+  interface WireError {
+    code?: string;
+    message?: string;
+    detail?: Record<string, unknown>;
+    request_id?: string | null;
+  }
+  const parsed = await response.json().catch(() => null);
+  const err = (parsed as { error?: WireError } | null)?.error;
+  throw new ApiError(response.status, {
+    code: err?.code ?? "CLIENT.RESPONSE.UNKNOWN",
+    message: err?.message ?? "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+    detail: err?.detail ?? {},
+    requestId: err?.request_id ?? null,
+  });
+}
+
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = options.method ?? "GET";
   const headers: Record<string, string> = { Accept: "application/json" };
@@ -71,22 +89,56 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   }
 
   if (!response.ok) {
-    // 서버 봉투는 snake_case(request_id)로 온다.
-    interface WireError {
-      code?: string;
-      message?: string;
-      detail?: Record<string, unknown>;
-      request_id?: string | null;
-    }
-    const parsed = await response.json().catch(() => null);
-    const err = (parsed as { error?: WireError } | null)?.error;
-    throw new ApiError(response.status, {
-      code: err?.code ?? "CLIENT.RESPONSE.UNKNOWN",
-      message: err?.message ?? "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
-      detail: err?.detail ?? {},
-      requestId: err?.request_id ?? null,
-    });
+    await throwFromEnvelope(response);
   }
 
   return (await response.json()) as T;
+}
+
+/**
+ * 파일 업로드(multipart) 전용 — apiFetch는 본문을 JSON으로 고정하므로 못 쓴다.
+ * Content-Type을 직접 넣지 않는다(브라우저가 boundary를 붙여야 한다).
+ * 멱등 키·에러 봉투 규칙은 apiFetch와 동일하다.
+ */
+export async function apiUpload<T>(
+  path: string,
+  form: FormData,
+  options: { idempotencyKey?: string } = {},
+): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Idempotency-Key": options.idempotencyKey ?? newIdempotencyKey(),
+      },
+      body: form,
+    });
+  } catch {
+    throw new ApiError(0, NETWORK_ERROR);
+  }
+
+  if (!response.ok) {
+    await throwFromEnvelope(response);
+  }
+
+  return (await response.json()) as T;
+}
+
+/** 204 응답용 삭제 요청 — 본문이 없어 apiFetch의 json() 고정을 못 쓴다. */
+export async function apiDelete(path: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      method: "DELETE",
+      headers: { Accept: "application/json", "Idempotency-Key": newIdempotencyKey() },
+    });
+  } catch {
+    throw new ApiError(0, NETWORK_ERROR);
+  }
+
+  if (!response.ok) {
+    await throwFromEnvelope(response);
+  }
 }
