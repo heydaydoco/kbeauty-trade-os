@@ -721,8 +721,12 @@ class SkusImportTarget:
         problems: list[str] = []
 
         sku_code = _required_text(cells["품번"], "품번", max_length=40, problems=problems)
-        name_ko = _required_text(cells["품명(국문)"], "품명(국문)", max_length=200, problems=problems)
-        name_en = _optional_text(cells["품명(영문)"], "품명(영문)", max_length=200, problems=problems)
+        name_ko = _required_text(
+            cells["품명(국문)"], "품명(국문)", max_length=200, problems=problems
+        )
+        name_en = _optional_text(
+            cells["품명(영문)"], "품명(영문)", max_length=200, problems=problems
+        )
 
         kind = cells["종류"].strip()
         if kind not in SKU_KINDS:
@@ -786,11 +790,15 @@ class SkusImportTarget:
             problems.append(dg_problem)
         un_number = _optional_text(cells["UN번호"], "UN번호", max_length=10, problems=problems)
         dg_class = _optional_text(cells["Class"], "Class", max_length=10, problems=problems)
-        packing_group = _optional_text(cells["포장등급"], "포장등급", max_length=3, problems=problems)
+        packing_group = _optional_text(
+            cells["포장등급"], "포장등급", max_length=3, problems=problems
+        )
         flash_point_c, flash_problem = _parse_decimal(cells["인화점(℃)"], "인화점(℃)")
         if flash_problem:
             problems.append(flash_problem)
-        alcohol_content_pct, alcohol_problem = _parse_decimal(cells["알코올함량(%)"], "알코올함량(%)")
+        alcohol_content_pct, alcohol_problem = _parse_decimal(
+            cells["알코올함량(%)"], "알코올함량(%)"
+        )
         if alcohol_problem:
             problems.append(alcohol_problem)
         elif alcohol_content_pct is not None and not (
@@ -976,8 +984,14 @@ class SkusImportTarget:
                 setattr(target, field, payload[field])
         if "manufacturer_code" in changed_fields:
             target.manufacturer_partner_id = payload["manufacturer_partner_id"]
-        for field in ("dg_flag", "un_number", "dg_class", "packing_group", "is_aerosol",
-                      "is_limited_quantity"):
+        for field in (
+            "dg_flag",
+            "un_number",
+            "dg_class",
+            "packing_group",
+            "is_aerosol",
+            "is_limited_quantity",
+        ):
             if field in changed_fields:
                 setattr(target, field, payload[field])
         target.updated_by_id = actor_id
@@ -993,9 +1007,7 @@ class SkusImportTarget:
         없이 반영하면 확정 경로만 [M1] 보강(S1-3) ⑤(제조사=OEM)를 우회한다.
         """
         product_ids = {
-            payload["product_id"]
-            for _, payload in rows
-            if payload.get("product_id") is not None
+            payload["product_id"] for _, payload in rows if payload.get("product_id") is not None
         }
         manufacturer_ids = {
             payload["manufacturer_partner_id"]

@@ -216,9 +216,26 @@ def test_blank_id_creates_a_new_sku(trader: TestClient) -> None:
     create_product("PRD-NEW")
     header = _rows(trader.get(ROUNDTRIP_EXPORT).text)[0]
     new_row = [
-        "", "SKU-NEW1", "신규 세럼", "New Serum", "SINGLE", "PRD-NEW", "ACTIVE",
-        "8801111111111", "30.000", "12", "24", "OEM-NEW", "False", "", "", "", "",
-        "", "False", "False",
+        "",
+        "SKU-NEW1",
+        "신규 세럼",
+        "New Serum",
+        "SINGLE",
+        "PRD-NEW",
+        "ACTIVE",
+        "8801111111111",
+        "30.000",
+        "12",
+        "24",
+        "OEM-NEW",
+        "False",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "False",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="snew1")
     assert staged.status_code == 201, staged.text
@@ -230,9 +247,7 @@ def test_blank_id_creates_a_new_sku(trader: TestClient) -> None:
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["created_rows"] == 1
     with unit_of_work() as uow:
-        sku = uow.session.execute(
-            select(Sku).where(Sku.sku_code == "SKU-NEW1")
-        ).scalar_one()
+        sku = uow.session.execute(select(Sku).where(Sku.sku_code == "SKU-NEW1")).scalar_one()
         assert sku.kind == "SINGLE"
         assert sku.product_id is not None
         assert sku.manufacturer_partner_id is not None
@@ -259,8 +274,26 @@ def test_formula_prefixed_name_survives_the_roundtrip(trader: TestClient) -> Non
     create_product("PRD-ESC")
     header = _rows(trader.get(ROUNDTRIP_EXPORT).text)[0]
     new_row = [
-        "", "SKU-ESC1", "=HYPERLINK(\"x\") 세럼", "", "SINGLE", "PRD-ESC", "ACTIVE",
-        "", "", "", "", "", "False", "", "", "", "", "", "False", "False",
+        "",
+        "SKU-ESC1",
+        '=HYPERLINK("x") 세럼',
+        "",
+        "SINGLE",
+        "PRD-ESC",
+        "ACTIVE",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "False",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="sesc1")
     assert staged.status_code == 201, staged.text
@@ -271,7 +304,7 @@ def test_formula_prefixed_name_survives_the_roundtrip(trader: TestClient) -> Non
         name = uow.session.execute(
             select(Sku.name_ko).where(Sku.sku_code == "SKU-ESC1")
         ).scalar_one()
-    assert name == "=HYPERLINK(\"x\") 세럼"
+    assert name == '=HYPERLINK("x") 세럼'
     # 내보내기에는 이스케이프된 형태로 실리고(`'=`), 재업로드하면 diff 0이다.
     export = trader.get(ROUNDTRIP_EXPORT).text
     assert "'=HYPERLINK" in export
@@ -285,9 +318,17 @@ def test_formula_prefixed_name_survives_the_roundtrip(trader: TestClient) -> Non
 def test_kind_change_is_an_error_row(trader: TestClient) -> None:
     """종류 전환은 왕복으로 불가 — DG CHECK·처방 결합을 깨므로 오류 행이다 (판정 ①)"""
     product_id = create_product("PRD-KD")
-    _create_full_sku("SKU-KD1", product_id=product_id, dg_flag=False, un_number=None,
-                     dg_class=None, packing_group=None, flash_point_c=None,
-                     alcohol_content_pct=None, is_limited_quantity=False)
+    _create_full_sku(
+        "SKU-KD1",
+        product_id=product_id,
+        dg_flag=False,
+        un_number=None,
+        dg_class=None,
+        packing_group=None,
+        flash_point_c=None,
+        alcohol_content_pct=None,
+        is_limited_quantity=False,
+    )
     rows = _rows(trader.get(ROUNDTRIP_EXPORT).text)
     header = rows[0]
     kind_col = header.index("종류")
@@ -322,8 +363,26 @@ def test_product_reassignment_is_an_error_row(trader: TestClient) -> None:
 def test_single_without_product_is_an_error(trader: TestClient) -> None:
     header = _rows(trader.get(ROUNDTRIP_EXPORT).text)[0]
     new_row = [
-        "", "SKU-NP1", "처방 없는 단품", "", "SINGLE", "", "ACTIVE",
-        "", "", "", "", "", "False", "", "", "", "", "", "False", "False",
+        "",
+        "SKU-NP1",
+        "처방 없는 단품",
+        "",
+        "SINGLE",
+        "",
+        "ACTIVE",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "False",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="snp1")
     row = _staging_rows(trader, staged.json()["id"])[0]
@@ -333,8 +392,26 @@ def test_single_without_product_is_an_error(trader: TestClient) -> None:
 def test_set_with_dg_values_is_an_error(trader: TestClient) -> None:
     header = _rows(trader.get(ROUNDTRIP_EXPORT).text)[0]
     new_row = [
-        "", "SKU-SD1", "DG 세트", "", "SET", "", "ACTIVE",
-        "", "", "", "", "", "True", "UN1266", "", "", "", "", "False", "False",
+        "",
+        "SKU-SD1",
+        "DG 세트",
+        "",
+        "SET",
+        "",
+        "ACTIVE",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "True",
+        "UN1266",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "False",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="ssd1")
     row = _staging_rows(trader, staged.json()["id"])[0]
@@ -346,8 +423,26 @@ def test_dg_classification_without_flag_is_an_error(trader: TestClient) -> None:
     create_product("PRD-DG")
     header = _rows(trader.get(ROUNDTRIP_EXPORT).text)[0]
     new_row = [
-        "", "SKU-DG1", "비DG인데 UN번호", "", "SINGLE", "PRD-DG", "ACTIVE",
-        "", "", "", "", "", "False", "UN1266", "", "", "", "", "False", "False",
+        "",
+        "SKU-DG1",
+        "비DG인데 UN번호",
+        "",
+        "SINGLE",
+        "PRD-DG",
+        "ACTIVE",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "UN1266",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "False",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="sdg1")
     row = _staging_rows(trader, staged.json()["id"])[0]
@@ -360,12 +455,48 @@ def test_unknown_and_non_oem_manufacturer_codes_are_errors(trader: TestClient) -
     create_product("PRD-MF")
     header = _rows(trader.get(ROUNDTRIP_EXPORT).text)[0]
     unknown = [
-        "", "SKU-MF1", "미등록 제조사", "", "SINGLE", "PRD-MF", "ACTIVE",
-        "", "", "", "", "NO-SUCH", "False", "", "", "", "", "", "False", "False",
+        "",
+        "SKU-MF1",
+        "미등록 제조사",
+        "",
+        "SINGLE",
+        "PRD-MF",
+        "ACTIVE",
+        "",
+        "",
+        "",
+        "",
+        "NO-SUCH",
+        "False",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "False",
     ]
     non_oem = [
-        "", "SKU-MF2", "비OEM 제조사", "", "SINGLE", "PRD-MF", "ACTIVE",
-        "", "", "", "", "SUP-ONLY", "False", "", "", "", "", "", "False", "False",
+        "",
+        "SKU-MF2",
+        "비OEM 제조사",
+        "",
+        "SINGLE",
+        "PRD-MF",
+        "ACTIVE",
+        "",
+        "",
+        "",
+        "",
+        "SUP-ONLY",
+        "False",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "False",
     ]
     staged = _upload(trader, _to_file([header, unknown, non_oem]), key="smf1")
     rows = _staging_rows(trader, staged.json()["id"])
@@ -416,8 +547,26 @@ def test_oem_type_removal_between_staging_and_confirm_is_rejected(
     create_product("PRD-VR")
     header = _rows(trader.get(ROUNDTRIP_EXPORT).text)[0]
     new_row = [
-        "", "SKU-VR1", "재검증 세럼", "", "SINGLE", "PRD-VR", "ACTIVE",
-        "", "", "", "", "OEM-GONE", "False", "", "", "", "", "", "False", "False",
+        "",
+        "SKU-VR1",
+        "재검증 세럼",
+        "",
+        "SINGLE",
+        "PRD-VR",
+        "ACTIVE",
+        "",
+        "",
+        "",
+        "",
+        "OEM-GONE",
+        "False",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "False",
+        "False",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="svr1")
     assert staged.json()["error_rows"] == 0
