@@ -6,7 +6,7 @@
 // ★ 화면의 역할 게이트는 표시일 뿐이다 — 실제 차단은 서버가 한다(§18.1).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ListState } from "../components/list-state";
 import { ApiError, apiDelete, apiFetch, apiUpload } from "../lib/api";
 import { toKstDisplay } from "../lib/datetime";
@@ -79,14 +79,17 @@ function payloadSummary(payload: Record<string, unknown>): string {
     .join(" · ");
 }
 
-/** 서버 message 그대로 + 충돌 행 설명(detail.rows)이 있으면 함께 (§18.4). */
+/** 서버 message 그대로 + detail의 부가 설명(충돌 행·실패 행 등) 전부 함께 (§18.4). */
 function actionErrorText(error: unknown): string | null {
   if (!error) return null;
   if (!(error instanceof ApiError)) {
     return "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.";
   }
-  const rows = error.detail.rows;
-  return typeof rows === "string" && rows !== "" ? `${error.message} — ${rows}` : error.message;
+  // detail 키를 고르지 않는다 — rows(충돌 행)든 row(실패 행)든 사용자용 문장이다.
+  const parts = Object.values(error.detail).filter(
+    (value): value is string => typeof value === "string" && value !== "",
+  );
+  return parts.length > 0 ? `${error.message} — ${parts.join(" / ")}` : error.message;
 }
 
 export function ImportsPage() {
@@ -127,15 +130,22 @@ export function ImportsPage() {
     onSuccess: (staging) => {
       setFile(null);
       setFileInputKey((previous) => previous + 1);
-      setSelectedId(staging.id);
+      // selectStaging을 거쳐야 이전 스테이징의 확정 결과·오류 잔상이 지워진다.
+      selectStaging(staging.id);
       void client.invalidateQueries({ queryKey: IMPORT_STAGINGS_QUERY_KEY });
     },
   });
+
+  // 확정 키는 선택된 스테이징마다 하나로 고정한다 — 클릭마다 새 키면 성공 직후
+  // 재클릭이 "이미 PENDING이 아니다" 409로 보인다. 같은 키 재수신은 최초 결과
+  // 재생이다(§17.4 — 서버 멱등이 더블클릭을 흡수하는 전제).
+  const confirmKey = useMemo(() => crypto.randomUUID(), [selectedId]);
 
   const confirm = useMutation({
     mutationFn: (stagingId: number) =>
       apiFetch<ImportConfirmResult>(`/v1/imports/staging/${stagingId}/confirm`, {
         method: "POST",
+        idempotencyKey: confirmKey,
       }),
     onSuccess: () => void client.invalidateQueries({ queryKey: IMPORT_STAGINGS_QUERY_KEY }),
   });
@@ -343,6 +353,14 @@ export function ImportsPage() {
           {actionMessage && (
             <p role="alert" className="mt-2 text-sm text-signal-red">
               {actionMessage}
+            </p>
+          )}
+
+          {rows.data && rows.data.total > rows.data.items.length && (
+            <p role="alert" className="mt-2 text-sm text-signal-red">
+              검토 행 전체 {rows.data.total}건 중 {rows.data.items.length}건만 표시 중입니다 —
+              표시되지 않은 행도 확정하면 함께 반영됩니다. 전부 눈으로 검토하려면 파일을 나눠
+              올리세요.
             </p>
           )}
 

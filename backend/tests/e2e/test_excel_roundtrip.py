@@ -357,9 +357,7 @@ def test_confirm_after_someone_edited_is_rejected_atomically(trader: TestClient)
 
     # 스테이징과 확정 사이에 다른 사용자가 먼저 고쳤다(version 증가).
     with unit_of_work() as uow:
-        partner = uow.session.execute(
-            select(Partner).where(Partner.id == partner_id)
-        ).scalar_one()
+        partner = uow.session.execute(select(Partner).where(Partner.id == partner_id)).scalar_one()
         partner.name_ko = "다른 사용자가 먼저 수정"
 
     conflicted = _confirm(trader, staged.json()["id"], key="vc1c")
@@ -545,3 +543,172 @@ def test_template_header_equals_export_header(trader: TestClient) -> None:
 def test_unknown_registry_is_not_found(trader: TestClient) -> None:
     assert trader.get("/api/v1/imports/mystery/template.csv").status_code == 404
     assert _upload(trader, "/api/v1/imports/mystery/staging", b"x", key="u1").status_code == 404
+
+
+# ── 리뷰 검출 보강 (2026-08-06 적대적 리뷰 — 수정 회귀 고정) ────────────────
+
+
+def test_type_only_change_still_conflicts_a_stale_staging(trader: TestClient) -> None:
+    """유형만 바꿔도 version이 오른다 — 겹친 스테이징의 확정이 409로 잡힌다 (§17.2)
+
+    리뷰 검출(high): 유형 변경은 partners 행이 아니라 링크 행만 건드려 version이
+    그대로였고, 뒤따르는 확정이 선행 확정분을 조용히 덮어썼다. apply_changes가
+    부모 행을 반드시 dirty로 만드는 수정의 회귀 고정이다.
+    """
+    create_partner("PTN-TO", name_ko="유형 전용", types=("SUPPLIER",))
+    export = _rows(trader.get(PARTNERS_EXPORT).text)
+    type_col = export[0].index("유형")
+
+    file_a = [list(row) for row in export]
+    file_a[1][type_col] = "FORWARDER|SUPPLIER"
+    file_b = [list(row) for row in export]
+    file_b[1][type_col] = "BUYER"
+
+    staged_a = _upload(trader, STAGE_PARTNERS, _to_file(file_a), key="to-a")
+    staged_b = _upload(trader, STAGE_PARTNERS, _to_file(file_b), key="to-b")
+    assert staged_a.json()["changed_rows"] == 1
+    assert staged_b.json()["changed_rows"] == 1
+
+    assert _confirm(trader, staged_a.json()["id"], key="to-ac").status_code == 200
+    conflicted = _confirm(trader, staged_b.json()["id"], key="to-bc")
+    assert conflicted.status_code == 409, conflicted.text
+    assert conflicted.json()["error"]["code"] == "IMPORTS.CONFIRM.VERSION_CONFLICT"
+
+    partners = trader.get("/api/v1/partners", params={"size": 200}).json()["items"]
+    types = next(row["type_codes"] for row in partners if row["partner_code"] == "PTN-TO")
+    # 선행 확정분이 보존됐다 — 뒤 스테이징이 덮어쓰지 못했다.
+    assert types == ["FORWARDER", "SUPPLIER"]
+
+
+def test_supplier_type_loss_before_confirm_is_rejected(trader: TestClient) -> None:
+    """스테이징~확정 사이에 공급사 유형이 사라지면 확정 전체 409 (리뷰 검출 TOCTOU)"""
+    create_partner("SUP-T", name_ko="한때 공급사", types=("SUPPLIER",))
+    create_material("MAT-T", name_ko="공급사 붙일 자재")
+
+    material_rows = _rows(trader.get(MATERIALS_EXPORT).text)
+    material_rows[1][5] = "SUP-T"  # 기본공급사코드
+    staged_material = _upload(trader, STAGE_MATERIALS, _to_file(material_rows), key="tc-m")
+    assert staged_material.json()["changed_rows"] == 1
+
+    # 그 사이 거래처 왕복이 SUP-T의 SUPPLIER 유형을 해제한다.
+    partner_rows = _rows(trader.get(PARTNERS_EXPORT).text)
+    type_col = partner_rows[0].index("유형")
+    partner_rows[1][type_col] = "BUYER"
+    staged_partner = _upload(trader, STAGE_PARTNERS, _to_file(partner_rows), key="tc-p")
+    assert _confirm(trader, staged_partner.json()["id"], key="tc-pc").status_code == 200
+
+    conflicted = _confirm(trader, staged_material.json()["id"], key="tc-mc")
+    assert conflicted.status_code == 409, conflicted.text
+    assert "공급사 유형이 아님" in conflicted.json()["error"]["detail"]["rows"]
+    materials = trader.get("/api/v1/materials", params={"size": 200}).json()["items"]
+    assert materials[0]["default_supplier_partner_id"] is None  # 아무것도 반영되지 않았다
+
+
+def test_superscript_digit_id_is_an_error_row_not_a_crash(trader: TestClient) -> None:
+    """'²' 같은 유사 숫자 ID는 500이 아니라 오류 행이다 (리뷰 검출 — isdecimal 판정)"""
+    rows = _rows(trader.get(PARTNERS_EXPORT).text)
+    weird = ["²", "PTN-SUP2", "위첨자 ID", "SUPPLIER", "", "", "", "", ""]
+    underscore = ["1_0", "PTN-UND", "밑줄 ID", "SUPPLIER", "", "", "", "", ""]
+    staged = _upload(trader, STAGE_PARTNERS, _to_file([rows[0], weird, underscore]), key="sup2")
+    assert staged.status_code == 201, staged.text
+    assert staged.json()["error_rows"] == 2
+    reasons = [row["error_reason"] for row in _staging_rows(trader, staged.json()["id"])]
+    assert all("ID를 읽을 수 없습니다" in reason for reason in reasons)
+
+
+def test_confirm_integrity_race_rolls_back_everything(trader: TestClient) -> None:
+    """확정 중 제약 위반(스테이징 후 선점된 코드) → 422·전량 롤백 (원자성의 나머지 반쪽)"""
+    create_partner("PTN-RN", name_ko="개명 대상", types=("SUPPLIER",))
+    rows = _rows(trader.get(PARTNERS_EXPORT).text)
+    rows[1][2] = "개명 완료"  # CHANGED
+    rows.append(["", "PTN-RACE", "레이스 신규", "SUPPLIER", "", "", "", "", ""])  # NEW
+    staged = _upload(trader, STAGE_PARTNERS, _to_file(rows), key="race1")
+    assert staged.json()["changed_rows"] == 1
+    assert staged.json()["new_rows"] == 1
+
+    # 스테이징과 확정 사이에 다른 경로가 같은 코드를 선점한다.
+    raced = trader.post(
+        "/api/v1/partners",
+        json={"partner_code": "PTN-RACE", "name_ko": "먼저 등록", "type_codes": ["BUYER"]},
+        headers={"Idempotency-Key": "race-api"},
+    )
+    assert raced.status_code == 201, raced.text
+
+    failed = _confirm(trader, staged.json()["id"], key="race1c")
+    assert failed.status_code == 422, failed.text
+    assert "반영하지 못했습니다" in failed.json()["error"]["detail"]["row"]
+
+    partners = {
+        row["partner_code"]: row
+        for row in trader.get("/api/v1/partners", params={"size": 200}).json()["items"]
+    }
+    # CHANGED 행까지 전량 롤백됐고, 스테이징은 PENDING으로 남는다.
+    assert partners["PTN-RN"]["name_ko"] == "개명 대상"
+    assert partners["PTN-RACE"]["name_ko"] == "먼저 등록"
+    assert trader.get(f"{STAGING}/{staged.json()['id']}").json()["status"] == "PENDING"
+
+
+def test_clearing_values_roundtrips_to_none(trader: TestClient) -> None:
+    """값을 지우는 방향의 변경 — 빈 셀이 None·유형 해제로 반영된다 (리뷰 갭 고정)"""
+    created = trader.post(
+        "/api/v1/partners",
+        json={
+            "partner_code": "PTN-CLR",
+            "name_ko": "지울 값들",
+            "type_codes": ["BUYER", "SUPPLIER"],
+            "credit_limit": "9999.99",
+            "credit_limit_currency": "USD",
+            "dg_capable": True,
+            "strengths": "지워질 강점",
+        },
+        headers={"Idempotency-Key": "clr"},
+    )
+    assert created.status_code == 201, created.text
+
+    rows = _rows(trader.get(PARTNERS_EXPORT).text)
+    header, row = rows[0], rows[1]
+    for column in ("여신한도", "여신통화", "DG취급", "강점"):
+        row[header.index(column)] = ""
+    row[header.index("유형")] = "SUPPLIER"
+    staged = _upload(trader, STAGE_PARTNERS, _to_file([header, row]), key="clr1")
+    assert staged.json()["changed_rows"] == 1
+    assert _confirm(trader, staged.json()["id"], key="clr1c").status_code == 200
+
+    partner = trader.get("/api/v1/partners", params={"size": 200}).json()["items"][0]
+    assert partner["credit_limit_amount"] is None
+    assert partner["credit_limit_currency"] is None
+    assert partner["dg_capable"] is None
+    assert partner["strengths"] is None
+    assert partner["type_codes"] == ["SUPPLIER"]
+
+
+def test_natural_key_rename_roundtrips(trader: TestClient) -> None:
+    """거래처코드 자체의 변경도 왕복된다 — ID 키라 rename이 삭제+신규로 오검출되지 않는다"""
+    create_partner("PTN-OLD", name_ko="개코 거래처", types=("SUPPLIER",))
+    rows = _rows(trader.get(PARTNERS_EXPORT).text)
+    rows[1][1] = "PTN-NEWCODE"
+    staged = _upload(trader, STAGE_PARTNERS, _to_file(rows), key="rn1")
+    body = staged.json()
+    assert body["changed_rows"] == 1
+    assert body["new_rows"] == 0  # 신규로 오검출되지 않았다
+    assert _confirm(trader, body["id"], key="rn1c").status_code == 200
+
+    codes = [
+        row["partner_code"]
+        for row in trader.get("/api/v1/partners", params={"size": 200}).json()["items"]
+    ]
+    assert "PTN-NEWCODE" in codes
+    assert "PTN-OLD" not in codes
+
+
+@pytest.mark.group_j
+def test_stage_upload_replays_with_the_same_key(trader: TestClient) -> None:
+    """업로드 더블클릭 → 스테이징 1건, 같은 키 재수신은 최초 결과 반환 (§17.4)"""
+    create_partner("PTN-UPK", name_ko="업로드 멱등", types=("SUPPLIER",))
+    content = _to_file(_rows(trader.get(PARTNERS_EXPORT).text))
+    first = _upload(trader, STAGE_PARTNERS, content, key="upk")
+    replay = _upload(trader, STAGE_PARTNERS, content, key="upk")
+    assert first.status_code == 201 and replay.status_code == 201
+    assert replay.json() == first.json()
+    listed = trader.get(STAGING, params={"size": 200}).json()
+    assert listed["total"] == 1

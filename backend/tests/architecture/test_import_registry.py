@@ -52,8 +52,8 @@ def test_export_routers_reuse_the_registry_header() -> None:
 
     assert PARTNER_CSV_HEADER is PARTNERS_CSV_HEADER
     assert MATERIAL_CSV_HEADER is MATERIALS_CSV_HEADER
-    assert PARTNERS_CSV_HEADER == IMPORT_TARGETS["partners"].header
-    assert MATERIALS_CSV_HEADER == IMPORT_TARGETS["materials"].header
+    assert IMPORT_TARGETS["partners"].header == PARTNERS_CSV_HEADER
+    assert IMPORT_TARGETS["materials"].header == MATERIALS_CSV_HEADER
 
 
 def test_no_auto_confirm_code_path_exists() -> None:

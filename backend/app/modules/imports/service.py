@@ -165,7 +165,11 @@ def _diff_rows(
         if cell == "":
             ids.append(None)
             id_problems.append(None)
-        elif cell.isdigit():
+            continue
+        # ★ isdigit() 판정 금지(리뷰 검출) — '²'는 isdigit()이 True인데 int()가
+        #   거부해 오류 행 대신 500이 난다. isdecimal()은 십진 숫자(Nd)만 참이라
+        #   int()와 도메인이 일치하고, int()가 몰래 받는 '1_0' 같은 표기도 거른다.
+        if cell.isdecimal():
             ids.append(int(cell))
             id_problems.append(None)
         else:
@@ -575,6 +579,11 @@ def confirm_staging(
                 conflicts.append(f"{row.row_no}행(대상이 삭제됨)")
             elif current.version != row.expected_version:
                 conflicts.append(f"{row.row_no}행(다른 사용자가 먼저 수정함)")
+        # 참조 재검증(리뷰 검출 TOCTOU) — 스테이징이 굳힌 참조가 그 사이 무효해졌으면
+        # 같은 409로 전체 거부한다(부분 반영 없음의 같은 원칙).
+        conflicts.extend(
+            target.verify_references(session, [(row.row_no, row.payload) for row in rows])
+        )
         if conflicts:
             raise AppError(
                 ErrorCode.IMPORTS_CONFIRM_VERSION_CONFLICT,
@@ -586,6 +595,9 @@ def confirm_staging(
         created = 0
         updated = 0
         for row in rows:
+            # 실패 경로에서 쓸 값은 flush **전에** 평범한 변수로 빼 둔다(함정 ② —
+            # 실패한 flush 뒤 ORM 속성을 읽으면 PendingRollbackError로 원인이 바뀐다).
+            row_no = row.row_no
             try:
                 if row.kind == "NEW":
                     target.create(session, actor.id, row.payload)
@@ -604,10 +616,10 @@ def confirm_staging(
                 raise AppError(
                     ErrorCode.VALIDATION_INVALID_FIELD,
                     detail={
-                        "row": f"{row.row_no}행을 반영하지 못했습니다(코드 중복 등 제약 위반). "
+                        "row": f"{row_no}행을 반영하지 못했습니다(코드 중복 등 제약 위반). "
                         "목록을 다시 내려받아 변경분을 새로 올려 주세요."
                     },
-                    log_context={"staging_id": staging_id, "row_no": row.row_no},
+                    log_context={"staging_id": staging_id, "row_no": row_no},
                 ) from exc
 
         staging.status = "CONFIRMED"

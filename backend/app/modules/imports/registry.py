@@ -291,8 +291,14 @@ class PartnersImportTarget:
         for field in scalar_fields:
             if field in changed_fields:
                 setattr(target, field, payload[field])
-        if changed_fields - {"type_codes"}:
-            target.updated_by_id = actor_id
+        # ★ 유형만 바뀌어도 부모 행을 **반드시** dirty로 만든다(리뷰 검출).
+        #   version_id_col은 partners 행 자신의 UPDATE에서만 증가하므로, 여기서
+        #   행을 안 건드리면 유형 전용 변경이 version을 안 올리고 — 겹쳐 있던
+        #   다른 스테이징의 확정 대조(§17.2 전체 409)가 그 변경을 못 본다.
+        #   updated_at 명시 대입은 항상 dirty를 보장한다(같은 actor 재수정 시
+        #   updated_by_id만으로는 값이 같아 UPDATE가 안 나갈 수 있다).
+        target.updated_by_id = actor_id
+        target.updated_at = utcnow()
         if "type_codes" in changed_fields:
             # 유형 해제는 soft delete, 재부여는 신규 행(§17.4 — 모델 관례 그대로).
             wanted = set(payload["type_codes"])
@@ -315,6 +321,12 @@ class PartnersImportTarget:
                     )
                 )
         session.flush()
+
+    def verify_references(
+        self, session: Session, rows: list[tuple[int, dict[str, Any]]]
+    ) -> list[str]:
+        """확정 시점 참조 재검증 — 거래처 왕복에는 외부 참조가 없다."""
+        return []
 
 
 class MaterialsImportTarget:
@@ -528,6 +540,47 @@ class MaterialsImportTarget:
                 setattr(target, field, payload[field])
         target.updated_by_id = actor_id
         session.flush()
+
+    def verify_references(
+        self, session: Session, rows: list[tuple[int, dict[str, Any]]]
+    ) -> list[str]:
+        """확정 시점의 기본공급사 재검증 — 스테이징~확정 사이 창을 닫는다(리뷰 검출).
+
+        스테이징이 굳혀 둔 partner id는 그 시점의 검증 결과다. PENDING은 무기한
+        대기할 수 있고, 그 사이 거래처 왕복이 SUPPLIER 유형을 해제할 수 있다 —
+        재검증 없이 반영하면 확정 경로만 [M1] ⑤(기본공급사=SUPPLIER)를 우회한다.
+        """
+        wanted = {
+            payload["default_supplier_partner_id"]
+            for _, payload in rows
+            if payload.get("default_supplier_partner_id") is not None
+        }
+        if not wanted:
+            return []
+        live = set(
+            session.execute(
+                select(Partner.id).where(Partner.id.in_(wanted), Partner.deleted_at.is_(None))
+            ).scalars()
+        )
+        supplier_ids = set(
+            session.execute(
+                select(PartnerTypeLink.partner_id).where(
+                    PartnerTypeLink.partner_id.in_(wanted),
+                    PartnerTypeLink.type_code == "SUPPLIER",
+                    PartnerTypeLink.deleted_at.is_(None),
+                )
+            ).scalars()
+        )
+        problems: list[str] = []
+        for row_no, payload in rows:
+            partner_id = payload.get("default_supplier_partner_id")
+            if partner_id is None:
+                continue
+            if partner_id not in live:
+                problems.append(f"{row_no}행(기본공급사 거래처가 삭제됨)")
+            elif partner_id not in supplier_ids:
+                problems.append(f"{row_no}행(기본공급사가 더 이상 공급사 유형이 아님)")
+        return problems
 
 
 ImportTarget = PartnersImportTarget | MaterialsImportTarget

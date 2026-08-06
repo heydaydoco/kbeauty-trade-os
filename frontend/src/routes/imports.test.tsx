@@ -132,6 +132,28 @@ describe("엑셀 임포트", () => {
     });
   });
 
+  it("행 표가 잘리면 잘림을 숨기지 않는다 — 전체 건수와 미표시 경고 (리뷰 검출)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.includes("/v1/imports/registry")) return Promise.resolve(jsonResponse(REGISTRY));
+        if (input.includes("/v1/imports/staging/1/rows"))
+          // 250행 중 200행만 내려온 상황 — total이 items보다 크다.
+          return Promise.resolve(jsonResponse({ items: ROWS, total: 250, page: 1, size: 200 }));
+        if (input.includes("/v1/imports/staging"))
+          return Promise.resolve(jsonResponse(page([STAGING])));
+        return Promise.resolve(jsonResponse(page([])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/imports" });
+
+    await openStaging();
+    expect(
+      await screen.findByText(/전체 250건 중 3건만 표시 중입니다/),
+    ).toBeInTheDocument();
+  });
+
   it("조회 역할에게는 업로드 폼·확정 버튼이 없다 (표시일 뿐, 차단은 서버 — §18.1)", async () => {
     stubApi(VIEWER);
     renderWithProviders(<AppRoutes />, { route: "/imports" });
