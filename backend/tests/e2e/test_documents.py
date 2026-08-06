@@ -135,9 +135,7 @@ def test_document_types_list_serves_the_seed(trader: TestClient) -> None:
 # ── 업로드·다운로드 왕복 (§22 렌즈 11) ─────────────────────────────────────
 
 
-def test_upload_then_list_then_download(
-    trader: TestClient, upload: Upload, sku_id: int
-) -> None:
+def test_upload_then_list_then_download(trader: TestClient, upload: Upload, sku_id: int) -> None:
     """한글 파일명 업로드 → 목록 → 다운로드가 바이트 그대로 왕복한다"""
     content = "한글 MSDS 내용 — 왕복 검증".encode()
     created = upload(filename="수분세럼 MSDS.pdf", content=content)
@@ -205,9 +203,7 @@ def test_the_size_limit_is_pinned_and_enforced(upload: Upload) -> None:
 
 
 @pytest.mark.group_k
-def test_oversize_upload_leaves_no_file_behind(
-    upload: Upload, _isolated_storage: Path
-) -> None:
+def test_oversize_upload_leaves_no_file_behind(upload: Upload, _isolated_storage: Path) -> None:
     """거부된 업로드는 쓰다 만 실물을 지운다 — 행 없는 파일은 유령이다"""
     upload(content=b"0" * (documents_service.MAX_UPLOAD_BYTES + 1))
     leftovers = list(_isolated_storage.iterdir()) if _isolated_storage.exists() else []
@@ -321,9 +317,7 @@ def test_an_explicit_retention_date_wins(link: Link) -> None:
     assert created.json()["retention_until"] == "2040-01-01"
 
 
-def test_deleting_inside_the_retention_period_is_refused(
-    trader: TestClient, link: Link
-) -> None:
+def test_deleting_inside_the_retention_period_is_refused(trader: TestClient, link: Link) -> None:
     """파기 잠금 — 보존기한 내 soft delete는 409로 거부된다 (§4.7)"""
     created = link(document_type="ORIGIN_EVIDENCE", issued_on=today_kst().isoformat())
     document_id = created.json()["id"]

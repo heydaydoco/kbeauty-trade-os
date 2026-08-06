@@ -270,9 +270,7 @@ def _label_display(sku_code: str, country_code: str, label_version: int, languag
     return f"{sku_code} · {country_code} v{label_version}({language})"
 
 
-def _owner_displays(
-    session: Session, keys: set[tuple[str, int]]
-) -> dict[tuple[str, int], str]:
+def _owner_displays(session: Session, keys: set[tuple[str, int]]) -> dict[tuple[str, int], str]:
     """페이지 분량의 소유자 표시를 한 번에 가져온다 — 행마다 조회하면 N+1이다(§18.4).
 
     소유자가 soft delete된 뒤에도 문서는 남으므로 삭제 필터를 걸지 않는다 —
@@ -288,9 +286,7 @@ def _owner_displays(
     label_ids = [owner_id for owner_type, owner_id in keys if owner_type == "LABEL"]
     if label_ids:
         for label_id, sku_code, country, version, language in session.execute(
-            select(
-                Label.id, Sku.sku_code, Label.country_code, Label.label_version, Label.language
-            )
+            select(Label.id, Sku.sku_code, Label.country_code, Label.label_version, Label.language)
             .join(Sku, Label.sku_id == Sku.id)
             .where(Label.id.in_(label_ids))
         ):
@@ -630,9 +626,7 @@ def list_documents(
             .offset(offset)
             .limit(limit)
         ).all()
-        displays = _owner_displays(
-            session, {(row.owner_type, row.owner_id) for row, _ in rows}
-        )
+        displays = _owner_displays(session, {(row.owner_type, row.owner_id) for row, _ in rows})
         return [
             _document_view(row, doc_type, displays.get((row.owner_type, row.owner_id)))
             for row, doc_type in rows
@@ -652,9 +646,7 @@ def all_documents_for_export() -> list[DocumentView]:
             .where(Document.deleted_at.is_(None))
             .order_by(Document.id.desc())
         ).all()
-        displays = _owner_displays(
-            session, {(row.owner_type, row.owner_id) for row, _ in rows}
-        )
+        displays = _owner_displays(session, {(row.owner_type, row.owner_id) for row, _ in rows})
         return [
             _document_view(row, doc_type, displays.get((row.owner_type, row.owner_id)))
             for row, doc_type in rows

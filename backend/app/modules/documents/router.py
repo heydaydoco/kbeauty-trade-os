@@ -201,9 +201,7 @@ def delete_document(document_id: int, current: CurrentUser) -> None:
 # ── 품목군 서류 세트 (§4.8) ────────────────────────────────────────────────
 
 
-@profile_document_types_router.get(
-    "/{profile_id}/document-types", summary="품목군 서류 세트 목록"
-)
+@profile_document_types_router.get("/{profile_id}/document-types", summary="품목군 서류 세트 목록")
 def list_item_profile_document_types(
     profile_id: int, current: CurrentUser, params: Annotated[PageParams, Depends()]
 ) -> Page[ProfileDocumentTypeSummary]:
@@ -242,7 +240,5 @@ def add_item_profile_document_type(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[require_roles(*CAN_MANAGE)],
 )
-def remove_item_profile_document_type(
-    profile_id: int, link_id: int, current: CurrentUser
-) -> None:
+def remove_item_profile_document_type(profile_id: int, link_id: int, current: CurrentUser) -> None:
     service.remove_profile_document_type(actor=current, profile_id=profile_id, link_id=link_id)

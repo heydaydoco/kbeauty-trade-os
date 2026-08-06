@@ -143,9 +143,7 @@ def _bom_view(row: ProductBom, material: Material) -> BomLineView:
     )
 
 
-def _label_view(
-    row: Label, sku_code: str, documents: tuple[LabelFileView, ...] = ()
-) -> LabelView:
+def _label_view(row: Label, sku_code: str, documents: tuple[LabelFileView, ...] = ()) -> LabelView:
     return LabelView(
         id=row.id,
         sku_id=row.sku_id,
@@ -162,7 +160,9 @@ def _label_view(
     )
 
 
-def _documents_by_label(session: Session, label_ids: list[int]) -> dict[int, tuple[LabelFileView, ...]]:
+def _documents_by_label(
+    session: Session, label_ids: list[int]
+) -> dict[int, tuple[LabelFileView, ...]]:
     """페이지 분량 라벨의 문서를 한 번에 가져온다 — 행마다 조회하면 N+1이다(§18.4)."""
     from app.modules.documents.models import Document
 

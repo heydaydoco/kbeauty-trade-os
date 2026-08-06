@@ -27,13 +27,11 @@ _STORED = "b" * 32
 
 def _seed_type_id(code: str = "MSDS") -> int:
     with unit_of_work() as uow:
-        return (
-            uow.session.execute(
-                select(DocumentType.id).where(
-                    DocumentType.code == code, DocumentType.deleted_at.is_(None)
-                )
-            ).scalar_one()
-        )
+        return uow.session.execute(
+            select(DocumentType.id).where(
+                DocumentType.code == code, DocumentType.deleted_at.is_(None)
+            )
+        ).scalar_one()
 
 
 def _insert_document(**overrides: Any) -> int:
@@ -99,7 +97,7 @@ def test_origin_evidence_carries_the_five_year_retention() -> None:
                 DocumentType.deleted_at.is_(None)
             )
         ).all()
-    years = {code: retention for code, retention in rows}
+    years = dict(rows)
     assert years.pop("ORIGIN_EVIDENCE") == 5
     assert all(value is None for value in years.values())
 
