@@ -348,3 +348,77 @@ def test_document_promotion_downgrade_restores_urls_by_reverse_copy() -> None:
     assert artwork == "https://example.com/artwork.pdf"
     # 구 CHECK(msds_url 포함)도 복원됐다 — 함정 ①의 왕복 대상.
     assert "msds_url" in set_check
+
+
+# ── S2-1 country_code → markets FK 승격 백필 (판정 §0-1 ② — 조건 3·4) ───────
+
+#: FK 승격(b3ed5c8a5801) 직전 리비전 — markets 테이블 생성까지.
+_BEFORE_MARKET_FK_PROMOTION = "5df0df5da551"
+
+
+def test_market_fk_backfill_registers_every_code_including_soft_deleted() -> None:
+    """백필이 소프트 삭제 행 포함 전 코드에 MIG 표식 시장을 만든다 (조건 4)
+
+    FK는 deleted_at을 보지 않고 전 행을 검증한다 — 소프트 삭제된 규칙의
+    코드가 markets에 빠지면 FK 생성 자체가 실패한다. 그 경계까지 심는다.
+    """
+    command.upgrade(_config(), _BEFORE_MARKET_FK_PROMOTION)
+    engine = build_engine(_migration_check_url())
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO ingredients (inci_name, inci_name_normalized) VALUES ('Aqua', 'AQUA')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO ingredient_rules "
+                "(ingredient_id, country_code, rule_type, source_url, last_verified_on) "
+                "SELECT id, 'US', 'PROHIBITED', 'https://example.com/reg', '2026-08-01' "
+                "FROM ingredients WHERE inci_name = 'Aqua'"
+            )
+        )
+        # 소프트 삭제된 규칙 — 이 코드(EU)도 백필 대상이어야 FK가 선다.
+        connection.execute(
+            text(
+                "INSERT INTO ingredient_rules "
+                "(ingredient_id, country_code, rule_type, source_url, last_verified_on, "
+                "deleted_at) "
+                "SELECT id, 'EU', 'PROHIBITED', 'https://example.com/reg', '2026-08-01', "
+                "now() FROM ingredients WHERE inci_name = 'Aqua'"
+            )
+        )
+        # HS 세번 축 — SET SKU는 처방 없이 존재한다(준비가 가장 가볍다).
+        connection.execute(
+            text("INSERT INTO skus (sku_code, name_ko, kind) VALUES ('SET-MKT', '세트', 'SET')")
+        )
+        connection.execute(
+            text(
+                "INSERT INTO sku_hs_codes "
+                "(sku_id, country_code, hs_version, hs_code, source_url, last_verified_on) "
+                "SELECT id, 'CA', 'HS2022', '330499', 'https://example.com/t', '2026-08-01' "
+                "FROM skus WHERE sku_code = 'SET-MKT'"
+            )
+        )
+
+    command.upgrade(_config(), "head")
+
+    with engine.connect() as connection:
+        markets = connection.execute(
+            text("SELECT code, name_ko, note FROM markets ORDER BY code")
+        ).all()
+        fk_count = connection.execute(
+            text(
+                "SELECT count(*) FROM pg_constraint WHERE conname IN ("
+                "'fk_labels_country_code_markets',"
+                "'fk_ingredient_rules_country_code_markets',"
+                "'fk_sku_hs_codes_country_code_markets')"
+            )
+        ).scalar_one()
+    engine.dispose()
+
+    assert [row[0] for row in markets] == ["CA", "EU", "US"]
+    for code, name_ko, note in markets:
+        assert name_ko == code  # 이름 정식화는 화면 몫(MIG 계보)
+        assert note is not None and note.startswith("MIG:")
+    assert fk_count == 3

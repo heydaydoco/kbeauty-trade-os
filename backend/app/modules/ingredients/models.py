@@ -136,9 +136,12 @@ class IngredientRule(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, Act
     ingredient_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("ingredients.id", ondelete="RESTRICT"), nullable=False
     )
-    #: ISO 3166-1 alpha-2. markets 테이블은 S2-1이라 아직 코드 문자열이다
-    #: (sku_hs_codes와 같은 처지 — 승격 재판정은 S2-1 계획 보고, PROGRESS 관찰).
-    country_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    #: 시장 코드 — markets.code를 **값으로** 참조한다(S2-1 승격 — ADR-0023 종착,
+    #: 판정 조건 3: 컬럼·유일키·CSV 불변, FK만 얹는다). 미등록 시장의 사용자
+    #: 안내(422)는 서비스 가드(조건 6), FK는 안전망이다.
+    country_code: Mapped[str] = mapped_column(
+        String(2), ForeignKey("markets.code", ondelete="RESTRICT"), nullable=False
+    )
     rule_type: Mapped[str] = mapped_column(String(10), nullable=False)
     #: 농도 한도(%). RESTRICTED 전용.
     max_concentration_pct: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)

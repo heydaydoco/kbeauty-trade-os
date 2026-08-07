@@ -83,6 +83,30 @@ def test_soft_deleted_code_still_occupies_the_key() -> None:
     assert "uq_markets_code" in str(exc.value)
 
 
+def test_country_code_fk_definitions_match_the_model() -> None:
+    """FK 승격 3건의 정의문이 DB에 실재한다 (판정 조건 5 — pg_get_constraintdef)
+
+    코드 컬럼 유지 + markets.code 값 참조(조건 3 확정 방식)가 그대로 DB 제약으로
+    존재하는지 — 세 건 모두 (country_code) → markets(code) RESTRICT여야 한다.
+    """
+    expected = (
+        "fk_labels_country_code_markets",
+        "fk_ingredient_rules_country_code_markets",
+        "fk_sku_hs_codes_country_code_markets",
+    )
+    with unit_of_work() as uow:
+        for name in expected:
+            definition = uow.session.execute(
+                text(
+                    f"SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = '{name}'"
+                )
+            ).scalar_one_or_none()
+            assert definition is not None, f"{name}가 DB에 없습니다."
+            assert "FOREIGN KEY (country_code)" in definition, (name, definition)
+            assert "REFERENCES markets(code)" in definition, (name, definition)
+            assert "ON DELETE RESTRICT" in definition, (name, definition)
+
+
 def test_unique_is_a_constraint_not_a_partial_index() -> None:
     """uq_markets_code가 부분 인덱스가 아닌 전면 UNIQUE 제약으로 실재한다
 

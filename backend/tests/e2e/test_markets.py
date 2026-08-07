@@ -18,7 +18,13 @@ from httpx2 import Response
 
 from app.main import app
 from app.modules.identity.models import RoleCode
-from tests.support.factories import DEFAULT_PASSWORD, create_user
+from tests.support.factories import (
+    DEFAULT_PASSWORD,
+    create_ingredient,
+    create_market,
+    create_sku,
+    create_user,
+)
 
 pytestmark = pytest.mark.group_k
 
@@ -170,6 +176,69 @@ def test_trade_cannot_update(create: Create, trader: TestClient) -> None:
         f"{MARKETS}/{body['id']}", json={"version": body["version"], "name_ko": "호주 수정"}
     )
     assert response.status_code == 403, response.text
+
+
+# ── 시장 선등록 가드 (판정 조건 6 — 라벨·규칙·HS 3경로) ─────────────────────
+
+
+def test_label_for_unregistered_market_is_rejected_with_guidance(trader: TestClient) -> None:
+    """미등록 시장 라벨 등록 = 422 + 선등록 안내 (FK는 안전망, 안내는 서비스)"""
+    sku_id = create_sku("SKU-MKT-L1")
+    response = trader.post(
+        f"/api/v1/skus/{sku_id}/labels",
+        json={"country_code": "ZZ", "label_version": 1, "language": "en"},
+        headers={"Idempotency-Key": "mkt-guard-l"},
+    )
+    assert response.status_code == 422, response.text
+    body = response.json()["error"]
+    assert body["code"] == "MARKETS.MARKET.NOT_REGISTERED"
+    assert "등록되지 않은 시장" in body["detail"]["country_code"]
+    assert "먼저 등록" in body["detail"]["country_code"]
+
+
+def test_rule_for_unregistered_market_is_rejected_with_guidance(trader: TestClient) -> None:
+    ingredient_id = create_ingredient("Guardium")
+    response = trader.post(
+        f"/api/v1/ingredients/{ingredient_id}/rules",
+        json={
+            "country_code": "ZZ",
+            "rule_type": "PROHIBITED",
+            "source_url": "https://example.com/reg",
+            "last_verified_on": "2026-08-01",
+        },
+        headers={"Idempotency-Key": "mkt-guard-r"},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "MARKETS.MARKET.NOT_REGISTERED"
+
+
+def test_hs_code_for_unregistered_market_is_rejected_with_guidance(trader: TestClient) -> None:
+    sku_id = create_sku("SKU-MKT-H1")
+    response = trader.post(
+        f"/api/v1/skus/{sku_id}/hs-codes",
+        json={
+            "country_code": "ZZ",
+            "hs_version": "HS2022",
+            "hs_code": "3304990000",
+            "source_url": "https://example.com/tariff",
+            "last_verified_on": "2026-08-01",
+        },
+        headers={"Idempotency-Key": "mkt-guard-h"},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "MARKETS.MARKET.NOT_REGISTERED"
+
+
+def test_registered_market_unblocks_the_same_request(trader: TestClient) -> None:
+    """같은 요청이 시장 등록 후에는 통과한다 — 가드가 시장 존재만 본다는 증명"""
+    create_market("ZZ", name_ko="가드 검증 시장")
+    sku_id = create_sku("SKU-MKT-OK")
+    response = trader.post(
+        f"/api/v1/skus/{sku_id}/labels",
+        json={"country_code": "ZZ", "label_version": 1, "language": "en"},
+        headers={"Idempotency-Key": "mkt-guard-ok"},
+    )
+    assert response.status_code == 201, response.text
 
 
 # ── CSV (§12.2 — BOM·CRLF·표시용 목록) ─────────────────────────────────────

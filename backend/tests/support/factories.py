@@ -142,6 +142,9 @@ def create_ingredient_rule(
     from app.core.time import today_kst
     from app.modules.ingredients.models import IngredientRule
 
+    # 시장은 트랜잭션 밖에서 먼저 보장한다(S2-1 FK 승격 — create_product의
+    # 브랜드 선생성과 같은 이유: unit_of_work 중첩 금지).
+    create_market(country_code)
     with unit_of_work() as uow:
         rule = IngredientRule(
             ingredient_id=ingredient_id,
