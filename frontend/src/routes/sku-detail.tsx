@@ -6,11 +6,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiFetch, apiUpload } from "../lib/api";
 import { approvalStatusLabel, kindLabel, orEmpty, statusLabel } from "../lib/labels";
 import { formatMoney, useCurrencies } from "../lib/money";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import type { Sku } from "./skus";
@@ -106,16 +107,16 @@ export function SkuDetailPage() {
     queryFn: () => apiFetch<Sku>(`/v1/skus/${skuId}`),
   });
 
-  const hsCodes = usePagedQuery<HsCode>(hsKey, `/v1/skus/${skuId}/hs-codes`);
+  const hsCodes = usePagedList<HsCode>(hsKey, `/v1/skus/${skuId}/hs-codes`);
   const isSet = sku.data?.kind === "SET";
-  const components = usePagedQuery<SetComponentRow>(
+  const components = usePagedList<SetComponentRow>(
     componentsKey,
     `/v1/skus/${skuId}/components`,
     isSet,
   );
 
   const labelsKey = ["sku", skuId, "labels"] as const;
-  const labels = usePagedQuery<LabelRow>(labelsKey, `/v1/skus/${skuId}/labels`);
+  const labels = usePagedList<LabelRow>(labelsKey, `/v1/skus/${skuId}/labels`);
 
   const [label, setLabel] = useState({
     country_code: "",
@@ -176,7 +177,7 @@ export function SkuDetailPage() {
   );
 
   const pricesKey = ["sku", skuId, "prices"] as const;
-  const prices = usePagedQuery<SkuPriceRow>(pricesKey, `/v1/skus/${skuId}/prices`);
+  const prices = usePagedList<SkuPriceRow>(pricesKey, `/v1/skus/${skuId}/prices`);
   const currencies = useCurrencies();
 
   const [price, setPrice] = useState({
@@ -399,6 +400,13 @@ export function SkuDetailPage() {
             </form>
           )}
 
+          <ListPager
+            data={components.data}
+            page={components.page}
+            onPageChange={components.setPage}
+            className="mt-3"
+          />
+
           <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
             <ListState
               isPending={components.isPending}
@@ -521,6 +529,13 @@ export function SkuDetailPage() {
             )}
           </form>
         )}
+
+        <ListPager
+          data={prices.data}
+          page={prices.page}
+          onPageChange={prices.setPage}
+          className="mt-3"
+        />
 
         <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
           <ListState
@@ -691,6 +706,13 @@ export function SkuDetailPage() {
           </form>
         )}
 
+        <ListPager
+          data={labels.data}
+          page={labels.page}
+          onPageChange={labels.setPage}
+          className="mt-3"
+        />
+
         <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
           <ListState
             isPending={labels.isPending}
@@ -848,6 +870,13 @@ export function SkuDetailPage() {
             )}
           </form>
         )}
+
+        <ListPager
+          data={hsCodes.data}
+          page={hsCodes.page}
+          onPageChange={hsCodes.setPage}
+          className="mt-3"
+        />
 
         <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
           <ListState

@@ -8,10 +8,11 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiDelete, apiUpload, apiFetch } from "../lib/api";
 import { documentOwnerTypeLabel, orEmpty, storageKindLabel } from "../lib/labels";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import type { Sku } from "./skus";
@@ -70,7 +71,7 @@ export function DocumentsPage() {
   const listKey = ["documents", typeFilter] as const;
   const listPath =
     typeFilter === "" ? "/v1/documents" : `/v1/documents?document_type=${typeFilter}`;
-  const list = usePagedQuery<DocumentRow>(listKey, listPath);
+  const list = usePagedList<DocumentRow>(listKey, listPath);
   const types = usePagedQuery<DocumentTypeRow>(
     DOCUMENT_TYPES_QUERY_KEY,
     "/v1/document-types?size=200",
@@ -254,7 +255,7 @@ export function DocumentsPage() {
             ))}
           </select>
         </label>
-        <p className="text-sm text-gray-500">전체 {list.data?.total ?? 0}건</p>
+        <ListPager data={list.data} page={list.page} onPageChange={list.setPage} />
       </div>
 
       {removeMessage && (

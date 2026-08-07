@@ -8,6 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
 import {
@@ -19,7 +20,7 @@ import {
   statusLabel,
 } from "../lib/labels";
 import { formatMoney, useCurrencies } from "../lib/money";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import { INGREDIENTS_QUERY_KEY, type Ingredient } from "./ingredients";
@@ -125,7 +126,7 @@ export function ProductDetailPage() {
     queryKey: productKey,
     queryFn: () => apiFetch<Product>(`/v1/products/${productId}`),
   });
-  const formula = usePagedQuery<FormulaLine>(formulaKey, `/v1/products/${productId}/ingredients`);
+  const formula = usePagedList<FormulaLine>(formulaKey, `/v1/products/${productId}/ingredients`);
   // 드롭다운은 첫 페이지(50건)로는 모자란다 — 통화 선례(money.ts)대로 상한을
   // 명시해 받는다. 목록 화면의 키(INGREDIENTS_QUERY_KEY)와 섞이면 안 된다.
   const ingredientOptions = usePagedQuery<Ingredient>(
@@ -157,7 +158,7 @@ export function ProductDetailPage() {
   });
 
   // 자재 BOM (§4.4). 단가는 권한에 따라 응답에서 빠진다(ADR-0024).
-  const bom = usePagedQuery<BomLine>(bomKey, `/v1/products/${productId}/boms`);
+  const bom = usePagedList<BomLine>(bomKey, `/v1/products/${productId}/boms`);
   const materialOptions = usePagedQuery<Material>(
     [...MATERIALS_QUERY_KEY, "options"] as const,
     "/v1/materials?size=200",
@@ -199,7 +200,7 @@ export function ProductDetailPage() {
   const showsCost = (bom.data?.items ?? []).some((line) => "unit_cost" in line);
 
   // 라벨 롤업 — 읽기 전용이다(§14 ③). 등록·수정은 SKU 상세에서 한다(§4.5).
-  const labels = usePagedQuery<LabelRow>(labelsKey, `/v1/products/${productId}/labels`);
+  const labels = usePagedList<LabelRow>(labelsKey, `/v1/products/${productId}/labels`);
 
   // 스크리닝 — 대상국을 정하고 실행해야 조회한다(자동 실행하지 않는다).
   const [countryInput, setCountryInput] = useState("");
@@ -333,7 +334,12 @@ export function ProductDetailPage() {
           </form>
         )}
 
-        <p className="mt-3 text-sm text-gray-500">전체 {formula.data?.total ?? 0}건</p>
+        <ListPager
+          data={formula.data}
+          page={formula.page}
+          onPageChange={formula.setPage}
+          className="mt-3"
+        />
 
         <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
           <ListState
@@ -617,7 +623,7 @@ export function ProductDetailPage() {
           </form>
         )}
 
-        <p className="mt-3 text-sm text-gray-500">전체 {bom.data?.total ?? 0}건</p>
+        <ListPager data={bom.data} page={bom.page} onPageChange={bom.setPage} className="mt-3" />
 
         <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
           {/* ★ 통화표를 함께 기다린다(sku-detail의 단가 표와 같은 규율).
@@ -691,6 +697,13 @@ export function ProductDetailPage() {
           라벨은 SKU×시장 단위입니다 — 여기서는 이 처방에 속한 SKU들의 라벨 판을 모아 보여 줍니다.
           등록·수정은 SKU 상세에서 합니다.
         </p>
+
+        <ListPager
+          data={labels.data}
+          page={labels.page}
+          onPageChange={labels.setPage}
+          className="mt-3"
+        />
 
         <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
           <ListState

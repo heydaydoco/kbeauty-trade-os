@@ -6,10 +6,11 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiDelete, apiFetch } from "../lib/api";
 import { orEmpty } from "../lib/labels";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import type { DocumentTypeRow } from "./documents";
@@ -160,10 +161,11 @@ export function ItemProfilesPage() {
 
   const [code, setCode] = useState("");
   const [nameKo, setNameKo] = useState("");
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // 선택은 행 객체로 보관한다 — 현재 쪽 items에서 매번 찾으면 목록 쪽 이동만으로
+  // 편집 패널이 조용히 닫힌다(리뷰 확정 발견). 패널 내용은 id로 따로 조회한다.
+  const [selected, setSelected] = useState<ItemProfile | null>(null);
 
-  const list = usePagedQuery<ItemProfile>(ITEM_PROFILES_QUERY_KEY, "/v1/item-profiles");
-  const selected = list.data?.items.find((profile) => profile.id === selectedId) ?? null;
+  const list = usePagedList<ItemProfile>(ITEM_PROFILES_QUERY_KEY, "/v1/item-profiles");
 
   const register = useMutation({
     mutationFn: (input: { code: string; name_ko: string }) =>
@@ -231,7 +233,7 @@ export function ItemProfilesPage() {
         </form>
       )}
 
-      <p className="mt-6 text-sm text-gray-500">전체 {list.data?.total ?? 0}건</p>
+      <ListPager data={list.data} page={list.page} onPageChange={list.setPage} className="mt-6" />
 
       <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
         <ListState
@@ -263,13 +265,11 @@ export function ItemProfilesPage() {
                     <button
                       type="button"
                       onClick={() =>
-                        setSelectedId((previous) =>
-                          previous === profile.id ? null : profile.id,
-                        )
+                        setSelected((previous) => (previous?.id === profile.id ? null : profile))
                       }
                       className="text-sm text-gray-700 underline"
                     >
-                      {selectedId === profile.id ? "서류 세트 닫기" : "서류 세트"}
+                      {selected?.id === profile.id ? "서류 세트 닫기" : "서류 세트"}
                     </button>
                   </td>
                 </tr>

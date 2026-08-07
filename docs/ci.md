@@ -2,7 +2,7 @@
 
 ## 구조
 
-`.github/workflows/ci.yml` — push마다 5잡:
+`.github/workflows/ci.yml` — push마다 6잡:
 
 | 잡 | 하는 일 |
 |---|---|
@@ -10,10 +10,12 @@
 | backend | init SQL 실행 → ruff·mypy → 마이그레이션 드라이런 4종 → pytest(+커버리지) |
 | frontend | npm ci → typecheck → vitest → build |
 | compose | dev·prod compose 문법 검증 |
+| compose-smoke | dev compose 실기동 회귀 — 스택 기동→readyz 200→비인증 401→파일 업로드 왕복 1건 (부채 #5 종결 — S1.5 판정 ⑦) |
 | ci-ok | 위 전부 성공했는지 확인하는 **단일 게이트** |
 
 > S0-1의 `scope-guard` 잡(마이그레이션 리비전 1개 제한)은 S0-2 시작과 함께 제거했다 —
-> S0-2가 리비전을 여러 개 추가한다. 6잡 → **5잡**.
+> S0-2가 리비전을 여러 개 추가한다. 6잡 → **5잡**. S1.5 PR-2가 compose-smoke를 더해
+> 다시 **6잡**(실측: 잡 1분25초 — backend 크리티컬 패스 안에 병렬 흡수, 벽시계 증가 0).
 
 ## required check는 `ci-ok` 하나만
 

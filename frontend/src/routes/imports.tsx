@@ -7,11 +7,12 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { ApiError, apiDelete, apiFetch, apiUpload } from "../lib/api";
 import { toKstDisplay } from "../lib/datetime";
 import { importRowKindLabel, importStatusLabel, orEmpty } from "../lib/labels";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 
@@ -114,10 +115,12 @@ export function ImportsPage() {
     enabled: canImport,
   });
 
-  const list = usePagedQuery<ImportStagingSummary>(IMPORT_STAGINGS_QUERY_KEY, "/v1/imports/staging");
+  const list = usePagedList<ImportStagingSummary>(IMPORT_STAGINGS_QUERY_KEY, "/v1/imports/staging");
   const selected = list.data?.items.find((staging) => staging.id === selectedId) ?? null;
 
-  const rows = usePagedQuery<ImportStagingRow>(
+  // 검토 표는 한 쪽에 200행(리뷰 밀도 유지 — PR-3 리뷰 수정 ④)이고, 초과분은
+  // 쪽 이동으로 본다. 스테이징이 바뀌면 경로가 바뀌어 1쪽으로 돌아간다.
+  const rows = usePagedList<ImportStagingRow>(
     [...IMPORT_STAGINGS_QUERY_KEY, selectedId, "rows"] as const,
     `/v1/imports/staging/${selectedId}/rows?size=200`,
     selectedId !== null,
@@ -134,6 +137,9 @@ export function ImportsPage() {
       setFileInputKey((previous) => previous + 1);
       // selectStaging을 거쳐야 이전 스테이징의 확정 결과·오류 잔상이 지워진다.
       selectStaging(staging.id);
+      // 신규 스테이징은 항상 1쪽(id 내림차순)이다 — 목록이 다른 쪽에 있으면
+      // 선택 행이 현재 쪽에 없어 검토 패널이 안 뜬다(리뷰 확정 발견 — 1쪽 복귀).
+      list.setPage(1);
       void client.invalidateQueries({ queryKey: IMPORT_STAGINGS_QUERY_KEY });
     },
   });
@@ -257,9 +263,10 @@ export function ImportsPage() {
       )}
 
       <h2 className="mt-8 text-lg font-semibold">검토 대기·이력</h2>
-      <p className="mt-1 text-sm text-gray-500">
-        전체 {list.data?.total ?? 0}건 — 행을 누르면 아래에서 신규·변경·오류 행을 검토합니다.
-      </p>
+      <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-gray-500">
+        <ListPager data={list.data} page={list.page} onPageChange={list.setPage} />
+        <span>행을 누르면 아래에서 신규·변경·오류 행을 검토합니다.</span>
+      </div>
 
       <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
         <ListState
@@ -358,13 +365,21 @@ export function ImportsPage() {
             </p>
           )}
 
+          {/* 잘림 은닉 금지(리뷰 검출)의 후신 — 이제 초과분은 쪽 이동으로 다 볼 수
+              있지만, 확정 범위가 "보이는 쪽"이 아니라 전체라는 사실은 계속 말한다. */}
           {rows.data && rows.data.total > rows.data.items.length && (
-            <p role="alert" className="mt-2 text-sm text-signal-red">
-              검토 행 전체 {rows.data.total}건 중 {rows.data.items.length}건만 표시 중입니다 —
-              표시되지 않은 행도 확정하면 함께 반영됩니다. 전부 눈으로 검토하려면 파일을 나눠
-              올리세요.
+            <p className="mt-2 text-sm text-gray-500">
+              검토 행이 여러 쪽입니다 — 확정은 화면에 표시된 쪽만이 아니라 전체{" "}
+              {rows.data.total}건에 반영됩니다.
             </p>
           )}
+
+          <ListPager
+            data={rows.data}
+            page={rows.page}
+            onPageChange={rows.setPage}
+            className="mt-3"
+          />
 
           <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
             <ListState

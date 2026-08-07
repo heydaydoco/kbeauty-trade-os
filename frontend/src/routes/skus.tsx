@@ -8,10 +8,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
 import { kindLabel, orEmpty, statusLabel } from "../lib/labels";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import { ITEM_PROFILES_QUERY_KEY, type ItemProfile } from "./item-profiles";
@@ -92,7 +93,7 @@ export function SkuListPage() {
 
   const isSet = kind === "SET";
 
-  const list = usePagedQuery<Sku>(SKUS_QUERY_KEY, "/v1/skus");
+  const list = usePagedList<Sku>(SKUS_QUERY_KEY, "/v1/skus");
   const products = usePagedQuery<Product>(PRODUCTS_QUERY_KEY, "/v1/products", canRegister);
   const profiles = usePagedQuery<ItemProfile>(
     ITEM_PROFILES_QUERY_KEY,
@@ -401,10 +402,7 @@ export function SkuListPage() {
         </form>
       )}
 
-      <p className="mt-6 text-sm text-gray-500">
-        전체 {list.data?.total ?? 0}건
-        {list.data ? ` (${list.data.page}쪽 · ${list.data.size}건씩)` : ""}
-      </p>
+      <ListPager data={list.data} page={list.page} onPageChange={list.setPage} className="mt-6" />
 
       <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
         <ListState

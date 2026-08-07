@@ -132,26 +132,47 @@ describe("엑셀 임포트", () => {
     });
   });
 
-  it("행 표가 잘리면 잘림을 숨기지 않는다 — 전체 건수와 미표시 경고 (리뷰 검출)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: string) => {
-        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
-        if (input.includes("/v1/imports/registry")) return Promise.resolve(jsonResponse(REGISTRY));
-        if (input.includes("/v1/imports/staging/1/rows"))
-          // 250행 중 200행만 내려온 상황 — total이 items보다 크다.
-          return Promise.resolve(jsonResponse({ items: ROWS, total: 250, page: 1, size: 200 }));
-        if (input.includes("/v1/imports/staging"))
-          return Promise.resolve(jsonResponse(page([STAGING])));
-        return Promise.resolve(jsonResponse(page([])));
-      }),
-    );
+  it("행 표가 여러 쪽이어도 잘림을 숨기지 않는다 — 총계·쪽 이동과 전체 반영 안내 (리뷰 검출 후신)", async () => {
+    const PAGE_2_ROW = {
+      id: 99,
+      row_no: 201,
+      kind: "NEW",
+      target_id: null,
+      payload: { partner_code: "PTN-201", name_ko: "이월 거래처" },
+      changes: null,
+      error_reason: null,
+    };
+    const fetchMock = vi.fn((input: string) => {
+      if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+      if (input.includes("/v1/imports/registry")) return Promise.resolve(jsonResponse(REGISTRY));
+      if (input.includes("/v1/imports/staging/1/rows")) {
+        if (input.includes("page=2"))
+          return Promise.resolve(
+            jsonResponse({ items: [PAGE_2_ROW], total: 250, page: 2, size: 200 }),
+          );
+        // 250행 중 첫 쪽(200행 상한) — total이 items보다 크다.
+        return Promise.resolve(jsonResponse({ items: ROWS, total: 250, page: 1, size: 200 }));
+      }
+      if (input.includes("/v1/imports/staging"))
+        return Promise.resolve(jsonResponse(page([STAGING])));
+      return Promise.resolve(jsonResponse(page([])));
+    });
+    vi.stubGlobal("fetch", fetchMock);
     renderWithProviders(<AppRoutes />, { route: "/imports" });
 
     await openStaging();
-    expect(
-      await screen.findByText(/전체 250건 중 3건만 표시 중입니다/),
-    ).toBeInTheDocument();
+    // 총계·쪽 표시 — 은닉되던 초과분이 쪽 이동으로 닿는다.
+    expect(await screen.findByText("전체 250건")).toBeInTheDocument();
+    expect(screen.getByText("1/2쪽")).toBeInTheDocument();
+    // 확정 범위는 보이는 쪽이 아니라 전체라는 사실은 계속 말한다.
+    expect(screen.getByText(/전체 250건에 반영됩니다/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "다음" }));
+    expect(await screen.findByText(/PTN-201/)).toBeInTheDocument();
+    const pagedCall = fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .find((url) => url.includes("page=2"));
+    expect(pagedCall).toBe("/api/v1/imports/staging/1/rows?size=200&page=2");
   });
 
   it("조회 역할에게는 업로드 폼·확정 버튼이 없다 (표시일 뿐, 차단은 서버 — §18.1)", async () => {

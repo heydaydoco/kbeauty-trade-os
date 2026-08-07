@@ -6,11 +6,12 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
 import { orEmpty, partnerTypeLabel } from "../lib/labels";
 import { formatMoney, useCurrencies } from "../lib/money";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 
@@ -63,7 +64,7 @@ export function PartnersPage() {
   });
   const [types, setTypes] = useState<string[]>([]);
 
-  const list = usePagedQuery<Partner>(PARTNERS_QUERY_KEY, "/v1/partners");
+  const list = usePagedList<Partner>(PARTNERS_QUERY_KEY, "/v1/partners");
   const currencies = useCurrencies();
 
   const register = useMutation({
@@ -232,7 +233,7 @@ export function PartnersPage() {
         </form>
       )}
 
-      <p className="mt-6 text-sm text-gray-500">전체 {list.data?.total ?? 0}건</p>
+      <ListPager data={list.data} page={list.page} onPageChange={list.setPage} className="mt-6" />
 
       <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
         <ListState
