@@ -196,6 +196,70 @@ jobs:
           docker compose -f docker-compose.prod.yml --env-file .env.prod.example config -q
           rm -f .env
 
+  # ── compose 스모크 (부채 #5 종결 — S1.5 판정 ⑦, 범위 최소 4항) ──────────
+  # `docker compose up` 한 번으로 서는가(영준이의 첫 실행 경로)의 회귀 검사.
+  # 검사는 4항뿐이다: 스택 기동 · 준비 확인(readyz) · 비인증 401 · 파일 업로드
+  # 왕복 1건. 기능 검증은 pytest(백엔드 잡)의 몫이고 여기서는 조립만 본다.
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 스택 기동 (dev compose 그대로)
+        run: |
+          cp .env.example .env
+          docker compose up -d --build
+
+      - name: 준비 확인 (readyz 200 — DB 연결+마이그레이션 최신까지 포함하는 게이트)
+        run: |
+          code=000
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/v1/system/readyz || true)
+            [ "$code" = "200" ] && break
+            sleep 2
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::readyz가 120초 안에 200이 되지 않았습니다(마지막 응답 $code)."
+            docker compose ps
+            docker compose logs db-init migrate api | tail -80
+            exit 1
+          fi
+          # web은 단언 없이 기동 여부만 본다 — 스택 기동 항목의 일부다.
+          state=$(docker compose ps web --format '{{.State}}')
+          [ "$state" = "running" ] || { echo "::error::web 컨테이너 상태: $state"; exit 1; }
+
+      - name: 비인증 401 (§18.1 — 공개 경로 밖은 전부 인증)
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/v1/documents)
+          if [ "$code" != "401" ]; then
+            echo "::error::비인증 documents 응답이 $code (401이어야 함)"
+            exit 1
+          fi
+
+      - name: 파일 업로드 왕복 1건 (§4.7 — 업로드→다운로드 바이트 일치)
+        run: |
+          set -euo pipefail
+          # --no-deps: 스택은 이미 떠 있다 — 원샷(db-init·migrate) 재기동을 피한다.
+          docker compose run --rm --no-deps api python -m app.cli create-admin \
+            --email smoke@ci.local --password 'smoke-ci-password-1234' --display-name smoke
+          curl -sf -c /tmp/cj -X POST http://localhost:8000/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"smoke@ci.local","password":"smoke-ci-password-1234"}' > /dev/null
+          post() { curl -sf -b /tmp/cj -X POST "http://localhost:8000/api/v1/$1" \
+                     -H 'Content-Type: application/json' -H "Idempotency-Key: smk-$1" -d "$2"; }
+          brand_id=$(post brands '{"brand_code":"SMK-CI-B1","name_ko":"스모크 브랜드"}' | jq .id)
+          product_id=$(post products "{\"brand_id\":$brand_id,\"product_code\":\"SMK-CI-P1\",\"name_ko\":\"스모크 제품\"}" | jq .id)
+          sku_id=$(post skus "{\"sku_code\":\"SMK-CI-S1\",\"name_ko\":\"스모크 SKU\",\"kind\":\"SINGLE\",\"product_id\":$product_id}" | jq .id)
+          printf '%%PDF-1.4 compose-smoke roundtrip payload' > /tmp/smoke-msds.pdf
+          doc_id=$(curl -sf -b /tmp/cj -X POST http://localhost:8000/api/v1/documents/files \
+            -H 'Idempotency-Key: smk-doc1' \
+            -F 'file=@/tmp/smoke-msds.pdf;type=application/pdf' \
+            -F owner_type=SKU -F owner_id="$sku_id" -F document_type=MSDS | jq .id)
+          curl -sf -b /tmp/cj "http://localhost:8000/api/v1/documents/$doc_id/download" -o /tmp/roundtrip.pdf
+          cmp /tmp/smoke-msds.pdf /tmp/roundtrip.pdf
+          echo "업로드 왕복 바이트 일치 (document id=$doc_id)"
+
   # ── 단일 게이트 ────────────────────────────────────────────────────────
   # 룰셋의 required check는 이 하나만 지정한다. 잡을 추가/이름변경해도
   # 룰셋을 건드릴 필요가 없다. (test_ci_contract.py가 needs 누락을 검사)
@@ -203,11 +267,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     if: always()
-    needs: [hygiene, backend, frontend, compose]
+    needs: [hygiene, backend, frontend, compose, compose-smoke]
     steps:
       - name: 모든 잡이 성공했는지
         run: |
-          results="${{ needs.hygiene.result }} ${{ needs.backend.result }} ${{ needs.frontend.result }} ${{ needs.compose.result }}"
+          results="${{ needs.hygiene.result }} ${{ needs.backend.result }} ${{ needs.frontend.result }} ${{ needs.compose.result }} ${{ needs.compose-smoke.result }}"
           echo "결과: $results"
           for r in $results; do
             if [ "$r" != "success" ]; then
