@@ -42,12 +42,14 @@ function withPage(path: string, page: number): string {
  * 부분 일치라 그대로 걸린다.
  */
 export function usePagedList<T>(key: readonly unknown[], path: string, enabled = true) {
-  const [page, setPage] = useState(1);
-
-  // 경로(필터)가 바뀌면 1쪽으로 — 남은 쪽 번호로 새 필터를 조회하면 빈 표가 된다.
-  useEffect(() => {
-    setPage(1);
-  }, [path]);
+  // 쪽 상태는 경로와 한 쌍이다 — 경로(필터·선택 대상)가 바뀌면 **같은 렌더에서**
+  // 1쪽으로 돌아간다. effect로 미루면 '새 경로+옛 쪽 번호' 조회가 한 번 나간다
+  // (리뷰 확정 발견 — 렌더 단계 상태 보정 패턴으로 낭비 요청 0).
+  const [pager, setPager] = useState({ path, page: 1 });
+  if (pager.path !== path) {
+    setPager({ path, page: 1 });
+  }
+  const page = pager.path === path ? pager.page : 1;
 
   const query = useQuery({
     queryKey: [...key, { page }],
@@ -60,8 +62,16 @@ export function usePagedList<T>(key: readonly unknown[], path: string, enabled =
   useEffect(() => {
     if (data === undefined) return;
     const lastPage = Math.max(1, Math.ceil(data.total / data.size));
-    if (page > lastPage) setPage(lastPage);
-  }, [data, page]);
+    if (page > lastPage) setPager({ path, page: lastPage });
+  }, [data, page, path]);
 
-  return { ...query, page, setPage };
+  // 스프레드 반환 금지 — 전 속성 접근으로 기록돼 react-query v5의 추적 렌더
+  // 최적화(읽은 속성만 구독)가 꺼진다(리뷰 확정 발견). 화면이 쓰는 필드만 낸다.
+  return {
+    data,
+    isPending: query.isPending,
+    error: query.error,
+    page,
+    setPage: (next: number) => setPager({ path, page: next }),
+  };
 }

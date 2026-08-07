@@ -215,7 +215,9 @@ jobs:
         run: |
           code=000
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/v1/system/readyz || true)
+            # --max-time: 연결 후 응답이 행에 걸리면 이 한 번의 curl이 잡 타임아웃까지
+            # 매달려 아래 진단 출력이 통째로 소실된다(리뷰 확정 발견).
+            code=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://localhost:8000/api/v1/system/readyz || true)
             [ "$code" = "200" ] && break
             sleep 2
           done

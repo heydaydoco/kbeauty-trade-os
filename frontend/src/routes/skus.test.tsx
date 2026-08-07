@@ -50,10 +50,11 @@ function stubApi(options: { me?: unknown; skus?: unknown[]; onPost?: () => Respo
       return Promise.resolve(options.onPost ? options.onPost() : jsonResponse(SKU));
     }
     if (input.includes("/products")) return Promise.resolve(jsonResponse(page([PRODUCT])));
-    // 제조사 드롭다운(/v1/partners?size=200)이 폴백(SKU 모양 행)으로 떨어지면
-    // type_codes가 없어 OEM 필터에서 터진다 — 거래처 모양으로 따로 답한다.
-    if (input.includes("/v1/partners")) return Promise.resolve(jsonResponse(page([])));
-    return Promise.resolve(jsonResponse(page(options.skus ?? [])));
+    // ★ 폴백이 SKU 행을 돌려주면 다른 모양의 목록(거래처 type_codes 등)을 쓰는
+    //   드롭다운이 우연 통과하거나 터진다(리뷰 확정 발견) — SKU 목록만 SKU 행으로
+    //   답하고 나머지는 전부 빈 목록이 기본이다.
+    if (input.includes("/v1/skus")) return Promise.resolve(jsonResponse(page(options.skus ?? [])));
+    return Promise.resolve(jsonResponse(page([])));
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;

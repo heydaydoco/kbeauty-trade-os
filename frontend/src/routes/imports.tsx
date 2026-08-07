@@ -137,6 +137,9 @@ export function ImportsPage() {
       setFileInputKey((previous) => previous + 1);
       // selectStaging을 거쳐야 이전 스테이징의 확정 결과·오류 잔상이 지워진다.
       selectStaging(staging.id);
+      // 신규 스테이징은 항상 1쪽(id 내림차순)이다 — 목록이 다른 쪽에 있으면
+      // 선택 행이 현재 쪽에 없어 검토 패널이 안 뜬다(리뷰 확정 발견 — 1쪽 복귀).
+      list.setPage(1);
       void client.invalidateQueries({ queryKey: IMPORT_STAGINGS_QUERY_KEY });
     },
   });
