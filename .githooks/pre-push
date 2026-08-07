@@ -34,6 +34,25 @@ if git grep -nE 'sk-ant-[A-Za-z0-9]{12}|ghp_[A-Za-z0-9]{20}|gho_[A-Za-z0-9]{20}'
   note "API 키/토큰으로 보이는 문자열이 있습니다."
 fi
 
+# ⑤ backend 포맷 (ruff format --check) — 같은 실수 3회 차단(PR #10 2회·PR #12 1회):
+#    포맷 누락 push → CI backend 잡 실패 → 포맷 전용 정정 커밋이 반복됐다. push 전에 막는다.
+#    호스트 ruff는 requirements-dev.txt 고정판과 버전이 같을 때만 신뢰(포맷 규칙이 버전에
+#    따라 달라 드리프트가 곧 오탐·누락이다). 아니면 api 이미지(고정판 설치본)로 검사하고,
+#    수단이 없으면 실패한다(fail-closed — 검사 없이 통과시키지 않는다).
+ruff_pin=$(grep -oE '^ruff==[0-9][0-9.]*' backend/requirements-dev.txt | head -n1 | cut -d= -f3 || true)
+if command -v ruff >/dev/null 2>&1 && [ -n "$ruff_pin" ] \
+   && [ "$(ruff --version 2>/dev/null | awk '{print $2}')" = "$ruff_pin" ]; then
+  if ! (cd backend && ruff format --check .); then
+    note "backend 포맷이 ruff format과 다릅니다 — 'cd backend && ruff format .' 후 커밋하세요."
+  fi
+elif docker info >/dev/null 2>&1; then
+  if ! docker compose run --rm --no-deps -T api ruff format --check .; then
+    note "backend 포맷이 ruff format과 다릅니다(api 이미지 검사) — 'docker compose run --rm --no-deps api ruff format .' 후 커밋하세요."
+  fi
+else
+  note "ruff format 검사 수단이 없습니다 — 'pip install ruff==${ruff_pin:-<requirements-dev.txt 참조>}' 또는 docker 기동 후 다시 push하세요."
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo ""
   echo "  push를 중단했습니다. 위 항목을 고치고 다시 push하세요."
