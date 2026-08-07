@@ -148,9 +148,9 @@ jobs:
           alembic upgrade head
           alembic check
 
-      - name: 테스트 (커버리지 측정만 — 임계 게이트는 Phase 1 이후)
+      - name: 테스트 (커버리지 게이트 94% — ADR-0031, S2-1 판정 조건 10)
         working-directory: backend
-        run: pytest -ra --cov=app --cov-report=xml --cov-report=term-missing
+        run: pytest -ra --cov=app --cov-fail-under=94 --cov-report=xml --cov-report=term-missing
 
       - uses: actions/upload-artifact@v4
         if: always()

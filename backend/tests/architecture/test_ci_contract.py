@@ -69,3 +69,19 @@ def test_triggers_on_push(workflow: dict) -> None:
     triggers = workflow.get("on") or workflow.get(True)
     assert triggers is not None
     assert "push" in triggers
+
+
+def test_coverage_gate_is_armed(workflow: dict) -> None:
+    """backend 잡의 pytest에 커버리지 게이트가 걸려 있다 (ADR-0031 채택 — 94%)
+
+    게이트를 제거·완화하는 커밋이 조용히 통과하면 커버리지 하락을 다시 아무도
+    못 본다. 임계 조정은 ADR-0031의 실측 절차(전체 실행 → 실측−2%p) 재적용 +
+    이 테스트 갱신이 세트다.
+    """
+    steps = workflow["jobs"]["backend"]["steps"]
+    pytest_runs = [step.get("run", "") for step in steps if "pytest" in step.get("run", "")]
+    assert pytest_runs, "backend 잡에 pytest 스텝이 없습니다."
+    assert any("--cov-fail-under=94" in run for run in pytest_runs), (
+        "backend 잡의 pytest에 --cov-fail-under=94가 없습니다 (ADR-0031 채택 문면). "
+        "임계를 바꾸려면 ADR-0031 절차를 따르고 이 테스트를 함께 갱신하세요."
+    )
