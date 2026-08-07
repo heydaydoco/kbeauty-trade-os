@@ -6,10 +6,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
 import { orEmpty, ruleTypeLabel } from "../lib/labels";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import type { Ingredient } from "./ingredients";
@@ -36,7 +37,7 @@ export function IngredientDetailPage() {
     queryKey: ingredientKey,
     queryFn: () => apiFetch<Ingredient>(`/v1/ingredients/${ingredientId}`),
   });
-  const rules = usePagedQuery<IngredientRule>(rulesKey, `/v1/ingredients/${ingredientId}/rules`);
+  const rules = usePagedList<IngredientRule>(rulesKey, `/v1/ingredients/${ingredientId}/rules`);
 
   const [rule, setRule] = useState({
     country_code: "",
@@ -202,6 +203,13 @@ export function IngredientDetailPage() {
             )}
           </form>
         )}
+
+        <ListPager
+          data={rules.data}
+          page={rules.page}
+          onPageChange={rules.setPage}
+          className="mt-3"
+        />
 
         <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
           <ListState

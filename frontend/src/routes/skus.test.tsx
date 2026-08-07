@@ -50,6 +50,9 @@ function stubApi(options: { me?: unknown; skus?: unknown[]; onPost?: () => Respo
       return Promise.resolve(options.onPost ? options.onPost() : jsonResponse(SKU));
     }
     if (input.includes("/products")) return Promise.resolve(jsonResponse(page([PRODUCT])));
+    // 제조사 드롭다운(/v1/partners?size=200)이 폴백(SKU 모양 행)으로 떨어지면
+    // type_codes가 없어 OEM 필터에서 터진다 — 거래처 모양으로 따로 답한다.
+    if (input.includes("/v1/partners")) return Promise.resolve(jsonResponse(page([])));
     return Promise.resolve(jsonResponse(page(options.skus ?? [])));
   });
   vi.stubGlobal("fetch", fetchMock);

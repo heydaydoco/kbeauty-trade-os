@@ -3,10 +3,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
 import { orEmpty } from "../lib/labels";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 
@@ -27,7 +28,7 @@ export function IngredientsPage() {
   const [inciName, setInciName] = useState("");
   const [nameKo, setNameKo] = useState("");
 
-  const list = usePagedQuery<Ingredient>(INGREDIENTS_QUERY_KEY, "/v1/ingredients");
+  const list = usePagedList<Ingredient>(INGREDIENTS_QUERY_KEY, "/v1/ingredients");
 
   const register = useMutation({
     mutationFn: (input: Record<string, unknown>) =>
@@ -115,7 +116,7 @@ export function IngredientsPage() {
         </form>
       )}
 
-      <p className="mt-6 text-sm text-gray-500">전체 {list.data?.total ?? 0}건</p>
+      <ListPager data={list.data} page={list.page} onPageChange={list.setPage} className="mt-6" />
 
       <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
         <ListState

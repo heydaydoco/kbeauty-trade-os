@@ -5,10 +5,11 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
 import { materialTypeLabel, orEmpty } from "../lib/labels";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import { PARTNERS_QUERY_KEY, PARTNERS_SELECT_PATH, type Partner } from "./partners";
@@ -53,7 +54,7 @@ export function MaterialsPage() {
     lot_managed: false,
   });
 
-  const list = usePagedQuery<Material>(MATERIALS_QUERY_KEY, "/v1/materials");
+  const list = usePagedList<Material>(MATERIALS_QUERY_KEY, "/v1/materials");
   const partners = usePagedQuery<Partner>(PARTNERS_QUERY_KEY, PARTNERS_SELECT_PATH, canRegister);
   // 기본공급사는 SUPPLIER 유형 거래처만([M1] 보강(S1-3) ⑤) — 서버가 최종 판정.
   const supplierPartners = partners.data?.items.filter((p) => p.type_codes.includes("SUPPLIER"));
@@ -235,7 +236,7 @@ export function MaterialsPage() {
         </form>
       )}
 
-      <p className="mt-6 text-sm text-gray-500">전체 {list.data?.total ?? 0}건</p>
+      <ListPager data={list.data} page={list.page} onPageChange={list.setPage} className="mt-6" />
 
       <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
         <ListState

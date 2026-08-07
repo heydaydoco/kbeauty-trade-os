@@ -6,10 +6,11 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiDelete, apiFetch } from "../lib/api";
 import { orEmpty } from "../lib/labels";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 import type { DocumentTypeRow } from "./documents";
@@ -162,7 +163,7 @@ export function ItemProfilesPage() {
   const [nameKo, setNameKo] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
-  const list = usePagedQuery<ItemProfile>(ITEM_PROFILES_QUERY_KEY, "/v1/item-profiles");
+  const list = usePagedList<ItemProfile>(ITEM_PROFILES_QUERY_KEY, "/v1/item-profiles");
   const selected = list.data?.items.find((profile) => profile.id === selectedId) ?? null;
 
   const register = useMutation({
@@ -231,7 +232,7 @@ export function ItemProfilesPage() {
         </form>
       )}
 
-      <p className="mt-6 text-sm text-gray-500">전체 {list.data?.total ?? 0}건</p>
+      <ListPager data={list.data} page={list.page} onPageChange={list.setPage} className="mt-6" />
 
       <div className="mt-3 overflow-x-auto rounded-lg border border-gray-200">
         <ListState
