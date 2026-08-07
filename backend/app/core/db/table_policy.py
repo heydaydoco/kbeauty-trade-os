@@ -81,6 +81,8 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # 파기가 soft delete다. 원장이 아니다 — 반영 결과는 대상 마스터에 남는다.
         "import_staging",
         "import_staging_rows",
+        # S2-1 — 시장 (§5.1). 마스터다 — MIG 계보 백필 행의 정식화 편집(UPDATE).
+        "markets",
     }
 )
 

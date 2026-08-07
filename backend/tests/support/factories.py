@@ -158,6 +158,29 @@ def create_ingredient_rule(
         return rule.id
 
 
+def create_market(code: str = "US", *, name_ko: str | None = None) -> int:
+    """시장을 만들고 id를 돌려준다 (§5.1 / S2-1). **이미 있으면 재사용한다.**
+
+    ★ get-or-create인 이유: code는 전역 UNIQUE(코드 FK 대상 — S2-1 판정
+      조건 3)인데, 라벨·규칙·HS를 준비하는 픽스처 여럿이 같은 시장(US)을
+      전제한다. 재호출이 준비 실패가 되면 그 실패가 기능 결함처럼 보인다
+      (고정 코드값 함정 — 주의 인계 ⑥ — 의 시장판 처방).
+    """
+    from app.modules.markets.models import Market
+
+    normalized = code.strip().upper()
+    with unit_of_work() as uow:
+        existing = uow.session.execute(
+            select(Market.id).where(Market.code == normalized, Market.deleted_at.is_(None))
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing
+        market = Market(code=normalized, name_ko=name_ko or normalized)
+        uow.session.add(market)
+        uow.session.flush()
+        return market.id
+
+
 def create_partner(
     partner_code: str = "PTN-001",
     *,
