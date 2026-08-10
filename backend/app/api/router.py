@@ -14,6 +14,7 @@ from app.modules.ingredients import router as ingredients_router
 from app.modules.markets import router as markets_router
 from app.modules.materials import router as materials_router
 from app.modules.partners import router as partners_router
+from app.modules.requirements import router as requirements_router
 from app.modules.worklist import router as worklist_router
 
 api_router = APIRouter(prefix="/api/v1")
@@ -27,6 +28,8 @@ api_router.include_router(catalog_router.item_profiles_router)
 api_router.include_router(catalog_router.products_router)
 api_router.include_router(catalog_router.router)
 api_router.include_router(markets_router.router)
+api_router.include_router(requirements_router.router)
+api_router.include_router(requirements_router.profile_requirement_templates_router)
 api_router.include_router(ingredients_router.router)
 api_router.include_router(ingredients_router.product_ingredients_router)
 api_router.include_router(ingredients_router.ingredient_rules_router)

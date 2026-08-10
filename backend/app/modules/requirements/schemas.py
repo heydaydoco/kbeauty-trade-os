@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import date
 from typing import Literal
 
@@ -116,7 +117,7 @@ class RequirementTemplateSummary(BaseModel):
 
     @classmethod
     def of(cls, view: RequirementTemplateView) -> RequirementTemplateSummary:
-        return cls(**view.__dict__)
+        return cls(**asdict(view))
 
 
 class ChecklistItemSummary(BaseModel):
@@ -133,7 +134,7 @@ class ChecklistItemSummary(BaseModel):
 
     @classmethod
     def of(cls, view: ChecklistItemView) -> ChecklistItemSummary:
-        return cls(**view.__dict__)
+        return cls(**asdict(view))
 
 
 class PrerequisiteSummary(BaseModel):
@@ -146,7 +147,7 @@ class PrerequisiteSummary(BaseModel):
 
     @classmethod
     def of(cls, view: PrerequisiteView) -> PrerequisiteSummary:
-        return cls(**view.__dict__)
+        return cls(**asdict(view))
 
 
 class ProfileRequirementTemplateSummary(BaseModel):
@@ -160,4 +161,4 @@ class ProfileRequirementTemplateSummary(BaseModel):
 
     @classmethod
     def of(cls, view: ProfileRequirementTemplateView) -> ProfileRequirementTemplateSummary:
-        return cls(**view.__dict__)
+        return cls(**asdict(view))
