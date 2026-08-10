@@ -31,6 +31,7 @@ from app.modules.catalog.models import (
 from app.modules.catalog.profiles import require_profile
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
+from app.modules.markets import service as markets_service
 from app.modules.outbox import service as outbox
 
 BRAND_CREATE_ENDPOINT = "POST /api/v1/brands"
@@ -875,9 +876,12 @@ def create_sku_hs_code(
         # 됐다. 다른 엔드포인트와 같은 직렬화 경로를 쓰기 위한 값이라 여기서 되돌린다.
         verified_on = date.fromisoformat(str(payload["last_verified_on"]))
         _guard_verified_on(verified_on)
+        # 시장 선등록 가드(S2-1 판정 조건 6) — FK는 안전망, 안내는 여기서 나간다.
+        country_code = str(payload["country_code"]).strip().upper()
+        markets_service.require_active_market_code(session, country_code)
         row = SkuHsCode(
             sku_id=sku.id,
-            country_code=str(payload["country_code"]).strip().upper(),
+            country_code=country_code,
             hs_version=str(payload["hs_version"]).strip().upper(),
             hs_code=_normalized_hs_code(str(payload["hs_code"])),
             tariff_note=payload.get("tariff_note"),

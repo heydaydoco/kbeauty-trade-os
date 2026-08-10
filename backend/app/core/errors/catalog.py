@@ -120,6 +120,11 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "검토 등록 후 다른 사용자가 대상 행을 먼저 수정하거나 삭제했습니다. 목록을 다시 내려받아 변경분을 새로 올려 주세요.",
     ),
+    ErrorCode.MARKETS_MARKET_NOT_REGISTERED: ErrorSpec(
+        422,
+        # 조건 6(S2-1 판정) — 조치가 "시장 선등록"임을 문구가 직접 안내한다.
+        "등록되지 않은 시장(국가 코드)입니다. 시장 관리 화면에서 해당 시장을 먼저 등록한 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

@@ -17,7 +17,13 @@ from httpx2 import Response
 
 from app.main import app
 from app.modules.identity.models import RoleCode
-from tests.support.factories import DEFAULT_PASSWORD, create_product, create_sku, create_user
+from tests.support.factories import (
+    DEFAULT_PASSWORD,
+    create_market,
+    create_product,
+    create_sku,
+    create_user,
+)
 
 pytestmark = pytest.mark.group_c
 
@@ -29,7 +35,18 @@ Create = Callable[..., Response]
 
 
 @pytest.fixture
-def trader() -> Iterator[TestClient]:
+def markets() -> None:
+    """이 파일이 참조하는 시장 선등록 (S2-1 FK 승격 — 판정 조건 6).
+
+    시장이 없으면 라벨·규칙·HS 등록이 422로 안내된다 — 그 거동 자체는
+    test_markets.py가 검증하고, 여기서는 종전 시나리오를 그대로 살린다.
+    """
+    for code in ("US", "CA"):
+        create_market(code)
+
+
+@pytest.fixture
+def trader(markets: None) -> Iterator[TestClient]:
     create_user("trade@example.com", roles=(RoleCode.TRADE,))
     with TestClient(app) as client:
         response = client.post(

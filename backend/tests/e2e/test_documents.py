@@ -28,6 +28,7 @@ from app.modules.identity.models import RoleCode
 from tests.support.factories import (
     DEFAULT_PASSWORD,
     create_item_profile,
+    create_market,
     create_sku,
     create_user,
 )
@@ -391,6 +392,7 @@ def test_a_label_file_rides_on_the_label_listing(
     trader: TestClient, upload: Upload, sku_id: int
 ) -> None:
     """라벨에 올린 파일이 SKU 상세 라벨 목록의 documents로 나온다 (구 file_url 자리)"""
+    create_market("US")  # S2-1 FK 승격 — 시장 선등록
     label = trader.post(
         f"{SKUS}/{sku_id}/labels",
         json={"country_code": "US", "label_version": 1, "language": "en"},

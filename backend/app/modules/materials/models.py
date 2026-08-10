@@ -176,8 +176,11 @@ class Label(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, 
     sku_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("skus.id", ondelete="RESTRICT"), nullable=False
     )
-    #: 시장. markets 테이블은 S2-1이라 아직 국가코드 문자열이다(ADR-0023).
-    country_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    #: 시장 코드 — markets.code를 **값으로** 참조한다(S2-1 승격 — ADR-0023 종착,
+    #: 판정 조건 3: 유일키 [sku,국가,언어,판번]·CSV 칸 불변, FK만 얹는다).
+    country_code: Mapped[str] = mapped_column(
+        String(2), ForeignKey("markets.code", ondelete="RESTRICT"), nullable=False
+    )
     #: 라벨 판번(1부터). ★ `version`이 아니다 — 그건 낙관적 잠금이다(위 독스트링).
     label_version: Mapped[int] = mapped_column(Integer, nullable=False)
     #: 표기 언어(ko·en·zh-CN…). 국가와 다르다 — 한 시장에 다국어 라벨이 있다.

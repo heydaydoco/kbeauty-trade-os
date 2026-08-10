@@ -23,6 +23,7 @@ from app.modules.catalog.models import Product
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.ingredients.models import Ingredient, IngredientRule, ProductIngredient
+from app.modules.markets import service as markets_service
 from app.modules.outbox import service as outbox
 
 INGREDIENT_CREATE_ENDPOINT = "POST /api/v1/ingredients"
@@ -333,9 +334,13 @@ def create_ingredient_rule(
         verified_on = date.fromisoformat(str(payload["last_verified_on"]))
         _guard_verified_on(verified_on)
 
+        # 시장 선등록 가드(S2-1 판정 조건 6) — FK는 안전망, 안내는 여기서 나간다.
+        country_code = str(payload["country_code"]).strip().upper()
+        markets_service.require_active_market_code(session, country_code)
+
         row = IngredientRule(
             ingredient_id=ingredient.id,
-            country_code=str(payload["country_code"]).strip().upper(),
+            country_code=country_code,
             rule_type=rule_type,
             max_concentration_pct=limit,
             source_url=str(payload["source_url"]).strip(),

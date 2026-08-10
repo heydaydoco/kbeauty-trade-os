@@ -18,6 +18,7 @@ from tests.support.factories import (
     DEFAULT_PASSWORD,
     create_ingredient,
     create_ingredient_rule,
+    create_market,
     create_material,
     create_product,
     create_sku,
@@ -49,6 +50,7 @@ def viewer() -> Iterator[TestClient]:
 
 def test_labels_csv_exports_all_skus_with_bom_and_crlf(trader: TestClient) -> None:
     """라벨 CSV — BOM·CRLF·한글, 파일 열은 없다(documents의 것)"""
+    create_market("US")  # S2-1 FK 승격 — 시장 선등록
     sku_id = create_sku("SKU-L1", name_ko="수분 세럼 30ml")
     created = trader.post(
         f"/api/v1/skus/{sku_id}/labels",

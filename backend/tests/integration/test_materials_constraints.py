@@ -15,7 +15,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.db.uow import unit_of_work
 from app.modules.materials.models import Label, Material, ProductBom
-from tests.support.factories import create_material, create_product, create_sku
+from tests.support.factories import (
+    create_market,
+    create_material,
+    create_product,
+    create_sku,
+)
 
 pytestmark = pytest.mark.group_k
 
@@ -52,6 +57,8 @@ def _insert_label(**overrides: Any) -> None:
         "approval_status": "DRAFT",
     }
     columns.update(overrides)
+    # 시장 선등록(S2-1 FK 승격) — 형식 CHECK 검증('us')은 라벨 쪽에서 그대로 발동한다.
+    create_market(str(columns["country_code"]))
     with unit_of_work() as uow:
         uow.session.add(Label(**columns))
         uow.session.flush()
@@ -172,6 +179,7 @@ def test_business_version_is_independent_of_the_locking_version() -> None:
     (sku·시장·판번)까지 오염된다. 여기서 그 분리를 실측한다.
     """
     sku_id = create_sku("SKU-VER")
+    create_market("US")
     with unit_of_work() as uow:
         row = Label(sku_id=sku_id, country_code="US", label_version=3, language="en")
         uow.session.add(row)

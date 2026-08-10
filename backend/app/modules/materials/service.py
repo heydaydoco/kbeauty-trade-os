@@ -27,6 +27,7 @@ from app.modules.catalog.models import Product, Sku
 from app.modules.catalog.pricing import may_see_cost
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
+from app.modules.markets import service as markets_service
 from app.modules.materials.models import Label, Material, ProductBom
 from app.modules.outbox import service as outbox
 
@@ -658,9 +659,12 @@ def create_label(
         sku = require_sku(session, sku_id)
         sku_code = sku.sku_code
         cut_in = payload.get("cut_in_date")
+        # 시장 선등록 가드(S2-1 판정 조건 6) — FK는 안전망, 안내는 여기서 나간다.
+        country_code = str(payload["country_code"]).strip().upper()
+        markets_service.require_active_market_code(session, country_code)
         row = Label(
             sku_id=sku.id,
-            country_code=str(payload["country_code"]).strip().upper(),
+            country_code=country_code,
             label_version=int(payload["label_version"]),
             language=str(payload["language"]).strip(),
             approval_status=payload.get("approval_status") or "DRAFT",

@@ -232,8 +232,11 @@ class SkuHsCode(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMix
     sku_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("skus.id", ondelete="RESTRICT"), nullable=False
     )
-    #: ISO 3166-1 alpha-2. markets 테이블은 S2-1이라 아직 코드 문자열이다.
-    country_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    #: 시장 코드 — markets.code를 **값으로** 참조한다(S2-1 승격 — ADR-0023 종착,
+    #: 판정 조건 3: 컬럼·유일키·CSV 불변, FK만 얹는다).
+    country_code: Mapped[str] = mapped_column(
+        String(2), ForeignKey("markets.code", ondelete="RESTRICT"), nullable=False
+    )
     #: "HS2022" 형식. 값 목록을 못박지 않고 형식만 본다 — WCO 개정(HS2027)이
     #: 오면 마이그레이션 없이 받되, 오타는 막는다.
     hs_version: Mapped[str] = mapped_column(String(10), nullable=False)

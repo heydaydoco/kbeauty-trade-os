@@ -76,6 +76,11 @@ class ErrorCode(StrEnum):
     #: 전체를 거부한다(사람이 검토한 diff와 다른 결과를 만들지 않는다).
     IMPORTS_CONFIRM_VERSION_CONFLICT = "IMPORTS.CONFIRM.VERSION_CONFLICT"
 
+    # 시장 (S2-1 / §5.1 / 판정 조건 6)
+    #: 라벨·성분 규칙·HS 세번이 참조하는 시장이 등록돼 있지 않다 — FK가
+    #: 마지막 안전망이고, 사용자 안내(선등록)는 이 코드로 나간다.
+    MARKETS_MARKET_NOT_REGISTERED = "MARKETS.MARKET.NOT_REGISTERED"
+
     # 동시성·멱등 (§17.2 / §17.4)
     CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"
