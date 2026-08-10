@@ -24,4 +24,5 @@
 - DESIGN.md §19의 Phase 순서로 진행. 현재 Phase와 다음 할 일을 세션 시작 시 확인.
 - 체크포인트 커밋을 작게 자주. 커밋 메시지는 "무엇을 왜"가 드러나게.
 - push마다 CI(전체 테스트+마이그레이션 드라이런)가 돌며, 실패 상태로 병합하지 않는다.
-- **웹의 Merge 버튼 사용 금지. 병합은 항상 `bash scripts/merge-pr.sh <PR번호>`로만** — 이 스크립트가 CI green을 확인한 뒤에만 병합한다(GitHub Pro 미결제로 기계 차단 불가, 폴백 규율 — ADR-0011).
+- **웹의 Merge 버튼 사용 금지. 병합은 항상 `scripts/merge-pr.sh <PR번호>`로만** — 이 스크립트가 CI green을 확인한 뒤에만 병합한다(GitHub Pro 미결제로 기계 차단 불가, 폴백 규율 — ADR-0011).
+- **영준 안내용 병합 명령은 항상 PowerShell 전체 경로(`& "C:\Program Files\Git\bin\bash.exe" scripts/merge-pr.sh <번호>`)로 표기 — `bash` 단독 표기 금지**(이 PC의 PowerShell에서 `bash`는 WSL을 물어 오류가 난다. 2026-08-08 웹 세션 판정 수칙).
