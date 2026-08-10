@@ -83,6 +83,13 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "import_staging_rows",
         # S2-1 — 시장 (§5.1). 마스터다 — MIG 계보 백필 행의 정식화 편집(UPDATE).
         "markets",
+        # S2-1 — 요건 템플릿 (§5.1·§4.8). 전부 편집 마스터다 — 규제 변경을 관리
+        # 화면이 흡수한다(ADR-03). 확정 행의 편집 차단은 서비스+DB CHECK 몫이고
+        # (ADR-0033), 불변이 필요한 "그때 요건"의 동결은 S2-2 인스턴스 스냅샷이다.
+        "requirement_templates",
+        "template_checklist",
+        "template_prerequisites",  # 선행 해제 = soft delete(UPDATE)
+        "item_profile_requirement_templates",  # 세트 해제 = soft delete(UPDATE)
     }
 )
 
