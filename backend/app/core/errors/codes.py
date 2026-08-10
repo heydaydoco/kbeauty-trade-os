@@ -81,6 +81,21 @@ class ErrorCode(StrEnum):
     #: 마지막 안전망이고, 사용자 안내(선등록)는 이 코드로 나간다.
     MARKETS_MARKET_NOT_REGISTERED = "MARKETS.MARKET.NOT_REGISTERED"
 
+    # 요건 템플릿 (S2-1 / §5.1·§5.5 / ADR-0033·0034 / GC-C8)
+    #: 근거 2필드(근거링크·최종확인일) 없이 확정을 시도했다 — §5.5 확정 차단.
+    #: DB CHECK(confirmed_requires_evidence)가 마지막 층이고 안내는 이 코드다.
+    REQUIREMENTS_TEMPLATE_EVIDENCE_REQUIRED = "REQUIREMENTS.TEMPLATE.EVIDENCE_REQUIRED"
+    #: 확정 상태 템플릿의 내용 편집 시도 — 편집은 초안 전환(명시 액션) 후에만
+    #: 가능하고, 수정분은 재확정을 거친다(판정 조건 11 — 게이트 우회 차단).
+    REQUIREMENTS_TEMPLATE_CONFIRMED_LOCKED = "REQUIREMENTS.TEMPLATE.CONFIRMED_LOCKED"
+    #: 이미 확정된 템플릿의 재확정 시도(다른 멱등 키) — 같은 키는 최초 결과 재생.
+    REQUIREMENTS_TEMPLATE_ALREADY_CONFIRMED = "REQUIREMENTS.TEMPLATE.ALREADY_CONFIRMED"
+    #: 확정 상태가 아닌 템플릿의 초안 전환 시도 — 전환할 확정이 없다.
+    REQUIREMENTS_TEMPLATE_NOT_CONFIRMED = "REQUIREMENTS.TEMPLATE.NOT_CONFIRMED"
+    #: 선행요건이 순환한다 — 자기참조(깊이 1)는 DB CHECK, 깊이 2+는 이 검증이
+    #: 막는다(조건 1). 순환 그래프는 태스크 순서(S2-2)를 성립 불가로 만든다.
+    REQUIREMENTS_PREREQUISITE_CYCLE = "REQUIREMENTS.PREREQUISITE.CYCLE"
+
     # 동시성·멱등 (§17.2 / §17.4)
     CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"
