@@ -393,6 +393,23 @@ def test_an_amount_without_a_currency_is_rejected_with_guidance(
     actor: AuthenticatedUser,
 ) -> None:
     with pytest.raises(AppError) as exc:
-        _template(actor, key="cost-half", estimated_cost_amount=500_000)
+        _template(actor, key="cost-half", estimated_cost="500000")
     assert exc.value.code == ErrorCode.VALIDATION_INVALID_FIELD
     assert "estimated_cost" in exc.value.detail
+
+
+def test_a_human_amount_is_stored_in_minor_units(actor: AuthenticatedUser) -> None:
+    """사람 표기(12.34 USD)가 정수 최소단위(1234)로 저장된다 — 환산은 서버 몫"""
+    body = _template(actor, key="cost-usd", estimated_cost="1234.56", estimated_cost_currency="usd")
+    assert body["estimated_cost_amount"] == 123_456
+    assert body["estimated_cost_currency"] == "USD"
+
+
+def test_too_many_decimal_places_are_rejected_with_the_allowed_scale(
+    actor: AuthenticatedUser,
+) -> None:
+    """KRW(0자리)에 소수점을 쓰면 자릿수 안내와 함께 거부된다 (credit_limit 선례)"""
+    with pytest.raises(AppError) as exc:
+        _template(actor, key="cost-krw", estimated_cost="1500000.5", estimated_cost_currency="KRW")
+    assert exc.value.code == ErrorCode.VALIDATION_INVALID_FIELD
+    assert "소수점" in exc.value.detail["estimated_cost"]

@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import ColumnElement, func, select
@@ -36,6 +37,7 @@ from sqlalchemy.orm import Session
 from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError, VersionConflictError
+from app.core.money import UnknownCurrencyError, minor_units
 from app.core.time import utcnow
 from app.modules.catalog.profiles import require_profile
 from app.modules.documents.models import DocumentType
@@ -211,26 +213,60 @@ def _normalized_type(raw: Any) -> str:
 
 
 def _normalized_cost(payload: dict[str, Any]) -> tuple[int | None, str | None]:
-    """금액·통화 쌍 검증 (ADR-0003 ④ — DB CHECK가 마지막 층, 안내는 여기서)."""
-    amount = payload.get("estimated_cost_amount")
+    """사람 표기(12.34)를 정수 최소단위로 (ADR-0003 ④ — parse_credit_limit 선례 꼴).
+
+    자릿수 출처는 서버 통화 목록 하나다(money.minor_units) — 프런트는 표기
+    그대로 보내고 환산은 여기서 한다. 쌍 검증·자릿수 초과 안내 포함, DB의
+    쌍 CHECK는 마지막 층이다.
+    """
+    raw = payload.get("estimated_cost")
     currency = payload.get("estimated_cost_currency")
-    if (amount is None) != (currency is None):
+    if raw is None and currency is None:
+        return None, None
+    if raw is None or currency is None:
         raise AppError(
             ErrorCode.VALIDATION_INVALID_FIELD,
             detail={
-                "estimated_cost": "예상 비용은 금액과 통화를 함께 입력하거나 함께 비워야 합니다."
+                "estimated_cost": "예상 비용은 금액과 통화를 함께 입력하거나 함께 비워 주세요."
             },
         )
-    if currency is None or amount is None:
-        return None, None
-    normalized = str(currency).strip().upper()
-    if not _CURRENCY_PATTERN.fullmatch(normalized):
+    code = str(currency).strip().upper()
+    if not _CURRENCY_PATTERN.fullmatch(code):
         raise AppError(
             ErrorCode.VALIDATION_INVALID_FIELD,
             detail={"estimated_cost_currency": "통화는 영문 3자 코드입니다(예: USD, KRW)."},
             log_context={"estimated_cost_currency": currency},
         )
-    return int(amount), normalized
+    try:
+        exponent = minor_units(code)
+    except UnknownCurrencyError as exc:  # 통화 목록은 money.py가 유일 출처
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={"estimated_cost_currency": f"등록되지 않은 통화입니다: {code}"},
+            log_context={"estimated_cost_currency": code},
+        ) from exc
+    try:
+        amount = Decimal(str(raw))
+    except InvalidOperation as exc:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={"estimated_cost": "예상 비용은 숫자여야 합니다."},
+        ) from exc
+    if amount < 0:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={"estimated_cost": "예상 비용은 0 이상이어야 합니다."},
+        )
+    scaled = amount.scaleb(exponent)
+    if scaled != scaled.to_integral_value():
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                "estimated_cost": f"{code}는 소수점 {exponent}자리까지 쓸 수 있습니다. "
+                "자릿수를 확인해 주세요."
+            },
+        )
+    return int(scaled), code
 
 
 def _clean_url(raw: Any) -> str | None:

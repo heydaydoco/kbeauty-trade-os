@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import date
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -32,8 +33,9 @@ class RequirementTemplateCreateRequest(BaseModel):
     validity_months: int | None = Field(default=None, ge=1)
     renewal_cycle_months: int | None = Field(default=None, ge=1)
     renewal_lead_days: int | None = Field(default=None, ge=1)
-    #: 금액·통화는 한 쌍(둘 다 또는 둘 다 없음 — 서비스가 검증, DB CHECK가 강제).
-    estimated_cost_amount: int | None = Field(default=None, ge=0)
+    #: 사람 표기 그대로(예: 1500000, 12.34) — 최소단위 환산은 서버가 한다
+    #: (credit_limit 선례. 금액·통화는 한 쌍 — 서비스 검증+DB CHECK 이중).
+    estimated_cost: Decimal | None = Field(default=None, ge=0, max_digits=15)
     estimated_cost_currency: str | None = Field(default=None, min_length=3, max_length=3)
     source_url: str | None = Field(default=None, max_length=500)
     last_verified_on: date | None = None
@@ -55,7 +57,7 @@ class RequirementTemplateUpdateRequest(BaseModel):
     validity_months: int | None = Field(default=None, ge=1)
     renewal_cycle_months: int | None = Field(default=None, ge=1)
     renewal_lead_days: int | None = Field(default=None, ge=1)
-    estimated_cost_amount: int | None = Field(default=None, ge=0)
+    estimated_cost: Decimal | None = Field(default=None, ge=0, max_digits=15)
     estimated_cost_currency: str | None = Field(default=None, min_length=3, max_length=3)
     source_url: str | None = Field(default=None, max_length=500)
     last_verified_on: date | None = None
