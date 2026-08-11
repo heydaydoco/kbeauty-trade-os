@@ -185,49 +185,55 @@ def test_period_order_check() -> None:
 def test_task_done_pair_check() -> None:
     """체크 여부와 체크 시각은 한 쌍 — 어긋난 행은 거부"""
     certification_id = _insert_certification()
-    with pytest.raises(IntegrityError, match="ck_certification_tasks_done_pair"):
-        with unit_of_work() as uow:
-            uow.session.add(
-                CertificationTask(
-                    certification_id=certification_id,
-                    seq=1,
-                    item_name="CFS 준비",
-                    is_required=True,
-                    done=True,  # done_at 없이 완료 — 모순
-                )
+    with (
+        pytest.raises(IntegrityError, match="ck_certification_tasks_done_pair"),
+        unit_of_work() as uow,
+    ):
+        uow.session.add(
+            CertificationTask(
+                certification_id=certification_id,
+                seq=1,
+                item_name="CFS 준비",
+                is_required=True,
+                done=True,  # done_at 없이 완료 — 모순
             )
-            uow.session.flush()
+        )
+        uow.session.flush()
 
 
 def test_log_reason_required_for_expired() -> None:
     """만료 이력에 사유가 없으면 거부 (조건 B — 자동 기록이 채워야 한다)"""
     certification_id = _insert_certification()
-    with pytest.raises(IntegrityError, match="ck_certification_status_log_reason_required"):
-        with unit_of_work() as uow:
-            uow.session.add(
-                CertificationStatusLog(
-                    certification_id=certification_id,
-                    from_status="EXPIRING",
-                    to_status="EXPIRED",
-                    reason=None,
-                )
+    with (
+        pytest.raises(IntegrityError, match="ck_certification_status_log_reason_required"),
+        unit_of_work() as uow,
+    ):
+        uow.session.add(
+            CertificationStatusLog(
+                certification_id=certification_id,
+                from_status="EXPIRING",
+                to_status="EXPIRED",
+                reason=None,
             )
-            uow.session.flush()
+        )
+        uow.session.flush()
 
 
 def test_log_rejects_self_transition() -> None:
     """제자리 전이 이력은 거부 — machine.py에 자기 쌍이 없다는 사실의 DB 층"""
     certification_id = _insert_certification()
-    with pytest.raises(IntegrityError, match="ck_certification_status_log_no_self_transition"):
-        with unit_of_work() as uow:
-            uow.session.add(
-                CertificationStatusLog(
-                    certification_id=certification_id,
-                    from_status="APPROVED",
-                    to_status="APPROVED",
-                )
+    with (
+        pytest.raises(IntegrityError, match="ck_certification_status_log_no_self_transition"),
+        unit_of_work() as uow,
+    ):
+        uow.session.add(
+            CertificationStatusLog(
+                certification_id=certification_id,
+                from_status="APPROVED",
+                to_status="APPROVED",
             )
-            uow.session.flush()
+        )
+        uow.session.flush()
 
 
 # ── 활성 한정 유니크 거동 (판정 안건 ①) ─────────────────────────────────────
@@ -287,14 +293,16 @@ def test_task_seq_unique_within_certification() -> None:
             )
         )
         uow.session.flush()
-    with pytest.raises(IntegrityError, match="uq_certification_tasks_certification_id_seq"):
-        with unit_of_work() as uow:
-            uow.session.add(
-                CertificationTask(
-                    certification_id=certification_id, seq=1, item_name="GMP", is_required=False
-                )
+    with (
+        pytest.raises(IntegrityError, match="uq_certification_tasks_certification_id_seq"),
+        unit_of_work() as uow,
+    ):
+        uow.session.add(
+            CertificationTask(
+                certification_id=certification_id, seq=1, item_name="GMP", is_required=False
             )
-            uow.session.flush()
+        )
+        uow.session.flush()
 
 
 def test_soft_deleted_task_frees_seq() -> None:
