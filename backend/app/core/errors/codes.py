@@ -92,6 +92,9 @@ class ErrorCode(StrEnum):
     REQUIREMENTS_TEMPLATE_ALREADY_CONFIRMED = "REQUIREMENTS.TEMPLATE.ALREADY_CONFIRMED"
     #: 확정 상태가 아닌 템플릿의 초안 전환 시도 — 전환할 확정이 없다.
     REQUIREMENTS_TEMPLATE_NOT_CONFIRMED = "REQUIREMENTS.TEMPLATE.NOT_CONFIRMED"
+    #: 초안이 아닌 템플릿의 확정 시도 — 확정은 DRAFT에서만 한다(#16 보완 판정).
+    #: 폐기(RETIRED) 재활성은 초안 전환(근거 최신성 재검토) 경유가 유일 경로다.
+    REQUIREMENTS_TEMPLATE_NOT_DRAFT = "REQUIREMENTS.TEMPLATE.NOT_DRAFT"
     #: 선행요건이 순환한다 — 자기참조(깊이 1)는 DB CHECK, 깊이 2+는 이 검증이
     #: 막는다(조건 1). 순환 그래프는 태스크 순서(S2-2)를 성립 불가로 만든다.
     REQUIREMENTS_PREREQUISITE_CYCLE = "REQUIREMENTS.PREREQUISITE.CYCLE"

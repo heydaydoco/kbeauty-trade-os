@@ -375,7 +375,8 @@ def confirm_template(
 ) -> tuple[int, dict[str, Any]]:
     """확정 — 사람 1클릭 + idempotency key (§15 L2 / §12.2 보강 ⑤ 선례).
 
-    근거 2필드가 없으면 422(§5.5 / GC-C8 — 차단 사유를 필드별로 안내). 행 잠금
+    근거 2필드가 없으면 422(§5.5 / GC-C8 — 차단 사유를 필드별로 안내). 확정은
+    DRAFT에서만 — RETIRED는 409(재활성=초안 전환 경유, #16 보완 판정). 행 잠금
     (FOR UPDATE)으로 동시 확정을 직렬화한다 — 뒤늦은 쪽은 409를 받는다.
     """
     with unit_of_work() as uow:
@@ -395,6 +396,14 @@ def confirm_template(
             raise AppError(
                 ErrorCode.REQUIREMENTS_TEMPLATE_ALREADY_CONFIRMED,
                 log_context={"template_id": template_id},
+            )
+        if row.status != "DRAFT":
+            # #16 보완 판정 — 확정은 DRAFT에서만. RETIRED 재활성은 초안 전환
+            # (근거 최신성 재검토) 경유가 유일 경로다. 멱등 재생 판정 뒤에 있어
+            # 같은 키의 재수신(과거 확정의 재생)은 이 가드에 닿지 않는다.
+            raise AppError(
+                ErrorCode.REQUIREMENTS_TEMPLATE_NOT_DRAFT,
+                log_context={"template_id": template_id, "status": row.status},
             )
         _require_version(row, payload["version"])
 

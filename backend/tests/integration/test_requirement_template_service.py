@@ -219,6 +219,24 @@ def test_reverting_a_draft_is_rejected(actor: AuthenticatedUser) -> None:
     assert exc.value.code == ErrorCode.REQUIREMENTS_TEMPLATE_NOT_CONFIRMED
 
 
+def test_confirming_a_retired_template_is_rejected(actor: AuthenticatedUser) -> None:
+    """근거가 완비돼도 RETIRED 확정은 409다 — 재활성은 초안 전환(재검토) 경유뿐 (#16 보완 판정)"""
+    body = _template(actor, key="retired", **_EVIDENCE)
+    retired = service.update_template(
+        actor=actor, template_id=body["id"], payload=_update_payload(body, status="RETIRED")
+    )
+    assert retired.status == "RETIRED"
+    with pytest.raises(AppError) as exc:
+        service.confirm_template(
+            actor=actor,
+            idempotency_key="retired-confirm",
+            template_id=body["id"],
+            payload={"version": retired.version},
+        )
+    assert exc.value.code == ErrorCode.REQUIREMENTS_TEMPLATE_NOT_DRAFT
+    assert service.get_template(body["id"]).status == "RETIRED", "거부가 상태를 바꾸면 안 된다"
+
+
 def test_confirming_a_confirmed_template_with_a_new_key_is_rejected(
     actor: AuthenticatedUser,
 ) -> None:

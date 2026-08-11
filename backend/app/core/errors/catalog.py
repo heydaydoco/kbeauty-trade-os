@@ -143,6 +143,11 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "확정 상태의 템플릿이 아니라 초안으로 전환할 수 없습니다. 화면을 새로 고쳐 현재 상태를 확인해 주세요.",
     ),
+    ErrorCode.REQUIREMENTS_TEMPLATE_NOT_DRAFT: ErrorSpec(
+        409,
+        # #16 보완 판정 — 허용 경로(초안 복귀→근거 재검토→확정)를 직접 안내한다.
+        "폐기된 템플릿은 바로 확정할 수 없습니다. 편집에서 초안으로 되돌려 근거를 재검토한 뒤 다시 확정해 주세요.",
+    ),
     ErrorCode.REQUIREMENTS_PREREQUISITE_CYCLE: ErrorSpec(
         422,
         "선행요건이 서로를 순환 참조하게 됩니다. 선행 관계의 방향을 확인해 주세요.",

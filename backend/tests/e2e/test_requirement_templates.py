@@ -270,6 +270,46 @@ def test_the_edit_status_field_cannot_confirm(cert: TestClient, create: Create) 
     assert cert.get(f"{TEMPLATES}/{body['id']}").json()["status"] == "DRAFT"
 
 
+def test_a_retired_template_cannot_be_confirmed_directly(cert: TestClient, create: Create) -> None:
+    """근거가 남아 있는 RETIRED도 확정은 409다 — 허용 경로는 초안 복귀 후 확정뿐 (#16 보완 판정)"""
+    body = create(key="retire", **_EVIDENCE).json()
+    edit = {
+        "version": body["version"],
+        "name": body["name"],
+        "applies_to": body["applies_to"],
+        "requirement_type": body["requirement_type"],
+        "source_url": _EVIDENCE["source_url"],
+        "last_verified_on": _EVIDENCE["last_verified_on"],
+        "status": "RETIRED",
+    }
+    retired = cert.patch(f"{TEMPLATES}/{body['id']}", json=edit)
+    assert retired.status_code == 200
+    assert retired.json()["status"] == "RETIRED"
+
+    blocked = cert.post(
+        f"{TEMPLATES}/{body['id']}/confirm",
+        json={"version": retired.json()["version"]},
+        headers={"Idempotency-Key": "retire-confirm"},
+    )
+    assert blocked.status_code == 409
+    assert _error_code(blocked) == "REQUIREMENTS.TEMPLATE.NOT_DRAFT"
+    assert cert.get(f"{TEMPLATES}/{body['id']}").json()["status"] == "RETIRED"
+
+    # 허용 경로 자기검사(과차단 방지) — 초안 복귀 후에는 확정이 성립한다.
+    reactivated = cert.patch(
+        f"{TEMPLATES}/{body['id']}",
+        json={**edit, "version": retired.json()["version"], "status": "DRAFT"},
+    )
+    assert reactivated.status_code == 200
+    confirmed = cert.post(
+        f"{TEMPLATES}/{body['id']}/confirm",
+        json={"version": reactivated.json()["version"]},
+        headers={"Idempotency-Key": "retire-reconfirm"},
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "CONFIRMED"
+
+
 # ── 확정 멱등 (§17.4 — J) ──────────────────────────────────────────────────
 
 
