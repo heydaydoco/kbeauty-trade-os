@@ -146,3 +146,29 @@ def test_status_assignment_scan_is_not_idle() -> None:
     assert _STATUS_ASSIGNMENT.search(service_source) is not None
     assert _STATUS_ASSIGNMENT.search("row.status = 'APPROVED'") is not None
     assert _STATUS_ASSIGNMENT.search("row.status == 'APPROVED'") is None
+
+
+# ── 쓰기 스키마의 status 구조적 부재 (층2 — #16 "PATCH의 status 불가" 전면화) ─
+
+
+def test_status_is_structurally_absent_from_write_schemas() -> None:
+    """생성·편집 요청에 status 필드가 없고, 밖에서 실어 보내면 422다(extra=forbid)"""
+
+    from app.modules.certifications import schemas
+
+    for model in (
+        schemas.CertificationCreateRequest,
+        schemas.CertificationUpdateRequest,
+        schemas.CertificationTransitionRequest,
+    ):
+        assert "status" not in model.model_fields, model.__name__
+        assert model.model_config.get("extra") == "forbid", model.__name__
+
+
+def test_transition_target_literal_matches_the_machine() -> None:
+    """스키마의 전이 도달값 열거가 machine의 상태 11값과 같다 (이중 정의 대사)"""
+    from typing import get_args
+
+    from app.modules.certifications import schemas
+
+    assert set(get_args(schemas.Status)) == set(CERTIFICATION_STATUSES)
