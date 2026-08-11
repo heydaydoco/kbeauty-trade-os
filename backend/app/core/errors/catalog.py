@@ -152,6 +152,32 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "선행요건이 서로를 순환 참조하게 됩니다. 선행 관계의 방향을 확인해 주세요.",
     ),
+    ErrorCode.CERTIFICATIONS_TEMPLATE_NOT_CONFIRMED: ErrorSpec(
+        422,
+        # 3층 확정 게이트의 소비자(안건 ①) — 조치(템플릿 확정)를 직접 안내한다.
+        "확정된 템플릿에서만 인증을 등록할 수 있습니다. 요건 템플릿을 먼저 확정해 주세요.",
+    ),
+    ErrorCode.CERTIFICATIONS_TARGET_APPLIES_TO_MISMATCH: ErrorSpec(
+        422,
+        "대상 유형이 템플릿의 적용단위와 다릅니다. 템플릿의 적용단위를 확인해 주세요.",
+    ),
+    ErrorCode.CERTIFICATIONS_TARGET_NOT_FOUND: ErrorSpec(
+        422,
+        "인증 대상을 찾을 수 없습니다. 대상이 등록돼 있는지 확인해 주세요.",
+    ),
+    ErrorCode.CERTIFICATIONS_TRANSITION_NOT_ALLOWED: ErrorSpec(
+        409,
+        # §5.2 전이 외 변경 거부 — detail에 현재 상태·시도 상태가 실린다.
+        "현재 상태에서 허용되지 않는 전이입니다. 화면을 새로 고쳐 현재 상태를 확인해 주세요.",
+    ),
+    ErrorCode.CERTIFICATIONS_TRANSITION_REASON_REQUIRED: ErrorSpec(
+        422,
+        "이 전이에는 사유가 필요합니다. 사유를 입력해 주세요.",
+    ),
+    ErrorCode.CERTIFICATIONS_EXPIRES_ON_STATE_LOCKED: ErrorSpec(
+        409,
+        "만료일 정정은 승인·만료임박·만료 상태에서만 할 수 있습니다. 승인 전 만료일은 승인 기록에 함께 입력해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.
