@@ -56,6 +56,23 @@ const APPROVAL_STATUS: Record<string, string> = {
   RETIRED: "폐기",
 };
 
+// 요건 템플릿 적용단위 (§5.1 — WBS S2-1 DoD 5종 문면 그대로).
+const APPLIES_TO: Record<string, string> = {
+  PRODUCT: "처방",
+  SKU: "SKU",
+  FACILITY: "시설",
+  COMPANY: "기업",
+  INGREDIENT: "성분",
+};
+
+// 요건 템플릿 상태 (§5.5 — ADR-0033). "확정"은 요건 정의의 등록 완료 표시이지
+// 어떤 대상의 적합 판정이 아니다 — 판정 워딩을 여기 추가하지 않는다(ADR-0022).
+const TEMPLATE_STATUS: Record<string, string> = {
+  DRAFT: "초안",
+  CONFIRMED: "확정",
+  RETIRED: "폐기",
+};
+
 // 거래처 유형 (§4.6 열거 10종 — ADR-0026).
 const PARTNER_TYPE: Record<string, string> = {
   SUPPLIER: "공급사",
@@ -102,6 +119,8 @@ export const classificationLabel = (code: string): string => translate(CLASSIFIC
 export const materialTypeLabel = (code: string): string => translate(MATERIAL_TYPE, code);
 export const originStatusLabel = (code: string): string => translate(ORIGIN_STATUS, code);
 export const approvalStatusLabel = (code: string): string => translate(APPROVAL_STATUS, code);
+export const appliesToLabel = (code: string): string => translate(APPLIES_TO, code);
+export const templateStatusLabel = (code: string): string => translate(TEMPLATE_STATUS, code);
 export const partnerTypeLabel = (code: string): string => translate(PARTNER_TYPE, code);
 export const documentOwnerTypeLabel = (code: string): string =>
   translate(DOCUMENT_OWNER_TYPE, code);

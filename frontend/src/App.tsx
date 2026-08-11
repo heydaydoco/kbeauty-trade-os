@@ -11,6 +11,7 @@ import { IngredientsPage } from "./routes/ingredients";
 import { ItemProfilesPage } from "./routes/item-profiles";
 import { LoginPage } from "./routes/login";
 import { MarketsPage } from "./routes/markets";
+import { RequirementTemplatesPage } from "./routes/requirement-templates";
 import { MaterialsPage } from "./routes/materials";
 import { NotFoundPage } from "./routes/not-found";
 import { PartnersPage } from "./routes/partners";
@@ -78,6 +79,7 @@ export function AppRoutes() {
         <Route path="/ingredients/:ingredientId" element={<IngredientDetailPage />} />
         <Route path="/materials" element={<MaterialsPage />} />
         <Route path="/markets" element={<MarketsPage />} />
+        <Route path="/requirement-templates" element={<RequirementTemplatesPage />} />
         <Route path="/partners" element={<PartnersPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/imports" element={<ImportsPage />} />

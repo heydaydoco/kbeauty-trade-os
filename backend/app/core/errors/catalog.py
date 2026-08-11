@@ -125,6 +125,33 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         # 조건 6(S2-1 판정) — 조치가 "시장 선등록"임을 문구가 직접 안내한다.
         "등록되지 않은 시장(국가 코드)입니다. 시장 관리 화면에서 해당 시장을 먼저 등록한 뒤 다시 시도해 주세요.",
     ),
+    ErrorCode.REQUIREMENTS_TEMPLATE_EVIDENCE_REQUIRED: ErrorSpec(
+        422,
+        # §5.5 확정 차단(GC-C8) — 차단 사유와 조치(근거 입력)를 직접 안내한다.
+        "근거링크와 최종확인일이 없는 템플릿은 확정할 수 없습니다. 두 항목을 입력한 뒤 다시 확정해 주세요.",
+    ),
+    ErrorCode.REQUIREMENTS_TEMPLATE_CONFIRMED_LOCKED: ErrorSpec(
+        409,
+        # 판정 조건 11 — 조치(초안 전환→수정→재확정)를 직접 안내한다.
+        "확정된 템플릿은 편집할 수 없습니다. '초안 전환'으로 되돌린 뒤 수정하고 다시 확정해 주세요.",
+    ),
+    ErrorCode.REQUIREMENTS_TEMPLATE_ALREADY_CONFIRMED: ErrorSpec(
+        409,
+        "이미 확정된 템플릿입니다. 화면을 새로 고쳐 현재 상태를 확인해 주세요.",
+    ),
+    ErrorCode.REQUIREMENTS_TEMPLATE_NOT_CONFIRMED: ErrorSpec(
+        422,
+        "확정 상태의 템플릿이 아니라 초안으로 전환할 수 없습니다. 화면을 새로 고쳐 현재 상태를 확인해 주세요.",
+    ),
+    ErrorCode.REQUIREMENTS_TEMPLATE_NOT_DRAFT: ErrorSpec(
+        409,
+        # #16 보완 판정 — 허용 경로(초안 복귀→근거 재검토→확정)를 직접 안내한다.
+        "폐기된 템플릿은 바로 확정할 수 없습니다. 편집에서 초안으로 되돌려 근거를 재검토한 뒤 다시 확정해 주세요.",
+    ),
+    ErrorCode.REQUIREMENTS_PREREQUISITE_CYCLE: ErrorSpec(
+        422,
+        "선행요건이 서로를 순환 참조하게 됩니다. 선행 관계의 방향을 확인해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

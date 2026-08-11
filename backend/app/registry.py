@@ -21,6 +21,7 @@ from app.modules.numbering import models as numbering_models
 from app.modules.outbox import models as outbox_models
 from app.modules.partners import models as partners_models
 from app.modules.platform import models as platform_models
+from app.modules.requirements import models as requirements_models
 from app.modules.worklist import models as worklist_models
 
 __all__ = [
@@ -38,5 +39,6 @@ __all__ = [
     "outbox_models",
     "partners_models",
     "platform_models",
+    "requirements_models",
     "worklist_models",
 ]
