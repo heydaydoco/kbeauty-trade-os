@@ -348,6 +348,52 @@ def _converge(session: Session, row: Certification, *, base_date: date | None = 
     return target
 
 
+def sweep_date_transitions(*, base_date: date | None = None) -> dict[str, int]:
+    """날짜 스윕 — 달력 파생 3태 전 행을 정답 상태로 수렴시키는 일괄 처리 함수.
+
+    WBS S2-2 DoD "만료임박 날짜 조건 자동 부여 배치"의 충족 형태다(판정 ⑦ —
+    배치=일괄 처리 함수의 실재+C 그룹 직접 호출 검증. scheduled_jobs 등록은
+    S2-3 실행기 몫이라 여기 없다 — 부채 #12 0행 유지, 실행 수단은 CLI
+    `certification-sweep` 수동 호출뿐).
+
+    건별 독립 트랜잭션(§17.6 — 한 건의 실패가 스윕 전체를 막지 않는다)·
+    행 잠금 후 상태 재확인(§17.2 확인→기록 — 사람 전이와의 경합 직렬화:
+    잠그는 사이 갱신중·종결로 옮겨 간 행은 _converge가 건너뛴다)·
+    멱등(재실행 변화 0 — §20 J). 무기한(expires_on NULL)은 후보 밖이다.
+    """
+    effective = base_date or today_kst()
+    with unit_of_work() as uow:
+        candidate_ids = list(
+            uow.session.execute(
+                select(Certification.id)
+                .where(
+                    Certification.status.in_(DATE_DERIVED_STATUSES),
+                    Certification.deleted_at.is_(None),
+                    Certification.expires_on.is_not(None),
+                )
+                .order_by(Certification.id)
+            ).scalars()
+        )
+    counts: dict[str, int] = {"scanned": len(candidate_ids), "converged": 0}
+    for certification_id in candidate_ids:
+        with unit_of_work() as uow:
+            session = uow.session
+            row = session.execute(
+                select(Certification)
+                .where(Certification.id == certification_id, Certification.deleted_at.is_(None))
+                .with_for_update()
+            ).scalar_one_or_none()
+            if row is None:  # 후보 수집 후 삭제된 행 — 건너뛴다
+                continue
+            before = row.status
+            target = _converge(session, row, base_date=effective)
+            if target is not None:
+                counts["converged"] += 1
+                key = f"{before}->{target}"
+                counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def transition_certification(
     *,
     actor: AuthenticatedUser,

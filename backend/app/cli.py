@@ -16,12 +16,14 @@ from __future__ import annotations
 import argparse
 import getpass
 import sys
+from datetime import date
 
 from sqlalchemy import select
 
 from app.core.db.uow import unit_of_work
 from app.modules.audit import service as audit
 from app.modules.audit.models import AuditAction
+from app.modules.certifications.service import sweep_date_transitions
 from app.modules.identity.models import Role, RoleCode, User, UserRole
 from app.modules.identity.passwords import hash_password
 from app.modules.identity.service import normalize_email
@@ -103,10 +105,30 @@ def main(argv: list[str] | None = None) -> int:
         help="생략하면 화면에 입력받는다(셸 히스토리에 비밀번호를 남기지 않으려면 생략할 것)",
     )
 
+    # 인증 만료임박·만료 날짜 스윕 (§5.2 자동 부여 / WBS S2-2 DoD "배치" — 판정 ⑦).
+    # scheduled_jobs 등록은 S2-3 실행기 몫이라 실행 수단은 이 수동 호출뿐이다.
+    sweep = commands.add_parser(
+        "certification-sweep",
+        help="인증 만료임박·만료 날짜 수렴 스윕을 1회 실행한다 (스케줄 등록은 S2-3)",
+    )
+    sweep.add_argument(
+        "--base-date",
+        default=None,
+        help="기준일(YYYY-MM-DD). 생략하면 KST 오늘 — 업무 날짜는 KST다(§22 렌즈 6)",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "create-admin":
         user_id = create_admin(args.email, _read_password(args.password), args.display_name)
         print(f"관리자 계정 준비 완료: {normalize_email(args.email)} (id={user_id})")
+        return 0
+    if args.command == "certification-sweep":
+        base = date.fromisoformat(args.base_date) if args.base_date else None
+        counts = sweep_date_transitions(base_date=base)
+        print(f"스윕 완료: 대상 {counts['scanned']}건 중 수렴 {counts['converged']}건")
+        for key in sorted(counts):
+            if "->" in key:
+                print(f"  {key}: {counts[key]}건")
         return 0
     return 1  # pragma: no cover — argparse가 먼저 막는다
 
