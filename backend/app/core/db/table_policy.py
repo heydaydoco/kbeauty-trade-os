@@ -20,6 +20,10 @@ from typing import Any
 IMMUTABLE_TABLES: frozenset[str] = frozenset(
     {
         "audit_log",  # S0-2
+        # S2-2 — 인증 상태 변경 이력 (§5.2 "이력 자동" / 판정 안건 ④).
+        # §17.5 명시 3종 밖의 확장이다 — DESIGN §17.5 확장 명문+ADR-0040 세트.
+        # 정정은 원본 수정이 아니라 새 전이 기록이다.
+        "certification_status_log",
     }
 )
 
@@ -90,6 +94,11 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "template_checklist",
         "template_prerequisites",  # 선행 해제 = soft delete(UPDATE)
         "item_profile_requirement_templates",  # 세트 해제 = soft delete(UPDATE)
+        # S2-2 — 인증 인스턴스 (§5.1·§5.2). 상태 전이·실적 기록·담당 변경이
+        # 전부 UPDATE다. 불변이 필요한 것은 이력(certification_status_log —
+        # IMMUTABLE 등재)이지 본체가 아니다.
+        "certifications",
+        "certification_tasks",  # 체크·서류 링크·soft delete(UPDATE)
     }
 )
 

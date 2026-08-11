@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy.orm import InstrumentedAttribute
 
+from app.modules.certifications.models import Certification
 from app.modules.worklist.models import Alert, AlertRule, Task
 
 #: 담당자를 가리키는 컬럼 이름들. 감사 컬럼(created_by_id·updated_by_id)과
@@ -44,4 +45,6 @@ ASSIGNMENT_TARGETS: tuple[AssignmentTarget, ...] = (
     AssignmentTarget("tasks", Task, Task.assignee_id),
     AssignmentTarget("alert_rules", AlertRule, AlertRule.recipient_user_id),
     AssignmentTarget("alerts", Alert, Alert.recipient_user_id),
+    # S2-2 — §2 "담당 건(전표·인증·태스크·알림)"의 인증 명시분.
+    AssignmentTarget("certifications", Certification, Certification.assignee_id),
 )
