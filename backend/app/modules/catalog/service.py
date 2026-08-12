@@ -29,6 +29,7 @@ from app.modules.catalog.models import (
     SkuHsCode,
 )
 from app.modules.catalog.profiles import require_profile
+from app.modules.certifications import service as certifications_service
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.markets import service as markets_service
@@ -408,6 +409,17 @@ def create_product(
             payload={"product_id": product.id, "product_code": product.product_code},
         )
 
+        # §4.8 자동 적용 — 품목군 요건 세트의 CONFIRMED·PRODUCT 단위 템플릿
+        # 전건에 미착수 인증 인스턴스+태스크를 같은 트랜잭션으로 만든다(안건 ⑥).
+        if profile is not None:
+            certifications_service.apply_item_profile_requirements(
+                session,
+                item_profile_id=profile.id,
+                target_type="PRODUCT",
+                target_id=product.id,
+                actor=actor,
+            )
+
         body = _serialize_product(
             _product_view(product, brand, profile.name_ko if profile is not None else None)
         )
@@ -689,6 +701,18 @@ def create_sku(
             aggregate_id=sku.id,
             payload={"sku_id": sku.id, "sku_code": sku.sku_code},
         )
+
+        # §4.8 자동 적용 — SKU 단위(applies_to=SKU) 템플릿 전건, 같은 트랜잭션.
+        # SET 제외 규칙은 발명하지 않는다 — 수동 생성 경로(_require_target)와
+        # 같은 기준(SKU면 대상)이고, 세트의 판정 롤업(§4.2)은 매트릭스 몫이다.
+        if profile is not None:
+            certifications_service.apply_item_profile_requirements(
+                session,
+                item_profile_id=profile.id,
+                target_type="SKU",
+                target_id=sku.id,
+                actor=actor,
+            )
 
         brand = _live_brand(session, product.brand_id) if product is not None else None
         view = _sku_view(
