@@ -55,7 +55,7 @@ pgAdmin이 필요하면 `docker compose --profile tools up -d pgadmin` → http:
 
 ## 부채 (렌즈 미통과·보류 — 조용한 누락 금지)
 1. **병합 차단(DoD② 일부) — 미충족 확정**. GitHub Pro 미결제(ADR-0011). 폴백: pre-push 훅 + `merge-pr.sh` + 웹 Merge 버튼 금지. **재검토 트리거: 협업자 추가 또는 팀 배포**.
-2. **프런트 eslint — 재이월(2026-08-12 S2-2 PR-2 재확인 — 프런트 세션 의무 이행, 4회째 동일)**. `typescript-eslint@latest` peer가 여전히 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`(npm view 실측). **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** 다음 프런트 세션에서 재확인. tsc strict(typecheck)가 현 게이트.
+2. **프런트 eslint — 재이월(2026-08-12 S2-3 PR-1 재확인 — 프런트 세션 의무 이행, 5회째 동일)**. `typescript-eslint@8.67.0`(latest) peer가 여전히 `typescript >=4.8.4 <6.1.0`인데 이 리포는 TS `7.0.2`(npm view 실측 2026-08-12). **재검토 트리거: typescript-eslint peer가 TS 7을 받아들일 때.** 다음 프런트 세션에서 재확인. tsc strict(typecheck)가 현 게이트.
 3. ~~pgAdmin~~ — **종결**.
 4. ~~담당자 라우팅 미배정~~ — **종결**(ADR-0012 / WBS v1.2).
 5. ~~compose-smoke CI 잡~~ — **종결(S1.5 PR-2 — 판정 ⑦ 2026-08-06, PR-2 내 별도 커밋)**. `docker compose up` 실기동 회귀 잡 신설, 범위 최소 4항: 스택 기동 · **readyz 200 게이트**(healthz는 DB 없이도 200이라 부족 — DB 연결+마이그레이션 최신 포함) · 비인증 401 · PDF 업로드→다운로드 **바이트 왕복 1건**(브랜드→제품→SKU 3단 생성·멱등 키). **CI 추가 시간 실측**: 도입 전 run 3분50초 → 도입 후 3분48초 — compose-smoke 잡 1분25초가 backend 크리티컬 패스(3분31초)에 병렬 흡수돼 **벽시계 증가 0**, 소모 러너 분만 run당 약 +1.5분(분 단위 올림 +2분).
