@@ -73,6 +73,22 @@ const TEMPLATE_STATUS: Record<string, string> = {
   RETIRED: "폐기",
 };
 
+// 인증 인스턴스 상태 11값 (§5.2 — S2-2). 상태는 사실 서술이다 — "승인(유효)"는
+// 기관 결정의 기록이지 시스템 판정이 아니다(4금 ①). 판정 워딩을 추가하지 않는다.
+const CERTIFICATION_STATUS: Record<string, string> = {
+  NOT_STARTED: "미착수",
+  PREPARING: "서류준비",
+  SUBMITTED: "신청제출",
+  IN_REVIEW: "심사중",
+  SUPPLEMENTING: "보완요청",
+  APPROVED: "승인(유효)",
+  EXPIRING: "만료임박",
+  RENEWING: "갱신중",
+  REJECTED: "반려",
+  EXPIRED: "만료",
+  SUSPENDED: "중단",
+};
+
 // 거래처 유형 (§4.6 열거 10종 — ADR-0026).
 const PARTNER_TYPE: Record<string, string> = {
   SUPPLIER: "공급사",
@@ -121,6 +137,8 @@ export const originStatusLabel = (code: string): string => translate(ORIGIN_STAT
 export const approvalStatusLabel = (code: string): string => translate(APPROVAL_STATUS, code);
 export const appliesToLabel = (code: string): string => translate(APPLIES_TO, code);
 export const templateStatusLabel = (code: string): string => translate(TEMPLATE_STATUS, code);
+export const certificationStatusLabel = (code: string): string =>
+  translate(CERTIFICATION_STATUS, code);
 export const partnerTypeLabel = (code: string): string => translate(PARTNER_TYPE, code);
 export const documentOwnerTypeLabel = (code: string): string =>
   translate(DOCUMENT_OWNER_TYPE, code);

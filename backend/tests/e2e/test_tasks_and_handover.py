@@ -218,7 +218,8 @@ def test_handover_reports_every_target_table(client: TestClient) -> None:
 
     body = client.post(f"{USERS}/{leaver_id}/handover", json={"to_user_id": successor_id}).json()
 
-    assert set(body["moved"]) == {"tasks", "alert_rules", "alerts"}
+    # S2-2 — certifications.assignee_id 등재로 대상 4종(§2 "인증" 명시분·ADR-0037 계보).
+    assert set(body["moved"]) == {"tasks", "alert_rules", "alerts", "certifications"}
     assert body["total"] == 0
 
 

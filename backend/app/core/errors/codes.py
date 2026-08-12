@@ -99,6 +99,22 @@ class ErrorCode(StrEnum):
     #: 막는다(조건 1). 순환 그래프는 태스크 순서(S2-2)를 성립 불가로 만든다.
     REQUIREMENTS_PREREQUISITE_CYCLE = "REQUIREMENTS.PREREQUISITE.CYCLE"
 
+    # 인증 인스턴스 (S2-2 / §5.1·§5.2 / s2-2-plan.md §0-1)
+    #: 확정(CONFIRMED) 아닌 템플릿으로 인스턴스 생성 시도 — 3층 확정 게이트의
+    #: 소비자다(안건 ①). RETIRED 템플릿도 신규 생성 불가(기존 인스턴스는 유지).
+    CERTIFICATIONS_TEMPLATE_NOT_CONFIRMED = "CERTIFICATIONS.TEMPLATE.NOT_CONFIRMED"
+    #: 대상 유형이 템플릿 적용단위와 다르다 — 폴리모픽 대상의 정합 강제(안건 ②).
+    CERTIFICATIONS_TARGET_APPLIES_TO_MISMATCH = "CERTIFICATIONS.TARGET.APPLIES_TO_MISMATCH"
+    #: 대상 실체(제품·SKU·성분·파트너)가 없다 — 폴리모픽이라 FK 대신 서비스 검증.
+    CERTIFICATIONS_TARGET_NOT_FOUND = "CERTIFICATIONS.TARGET.NOT_FOUND"
+    #: 전이 표 밖 상태 전이 시도 — §5.2 "전이 외 변경 거부"(허용 27방향뿐).
+    CERTIFICATIONS_TRANSITION_NOT_ALLOWED = "CERTIFICATIONS.TRANSITION.NOT_ALLOWED"
+    #: 반려·중단 전이에 사유가 없다 — §5.2 "사유 필수"(DB CHECK가 마지막 층).
+    CERTIFICATIONS_TRANSITION_REASON_REQUIRED = "CERTIFICATIONS.TRANSITION.REASON_REQUIRED"
+    #: 만료일 정정은 달력 파생 3태(승인·만료임박·만료)에서만 — 그 밖 상태의
+    #: 만료일은 승인·갱신 전이의 부속 데이터로만 기록된다(조건 A 수렴과 세트).
+    CERTIFICATIONS_EXPIRES_ON_STATE_LOCKED = "CERTIFICATIONS.EXPIRES_ON.STATE_LOCKED"
+
     # 동시성·멱등 (§17.2 / §17.4)
     CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"
