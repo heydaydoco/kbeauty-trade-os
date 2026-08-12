@@ -87,6 +87,11 @@ class CertificationUpdateRequest(BaseModel):
 
 
 class TaskAddRequest(BaseModel):
+    #: 모르는 필드는 조용한 무시가 아니라 422다 (S2-3 판정 요청 18 — 인증 본체
+    #: 쓰기 스키마 3종과의 비대칭 해소. 태스크에는 status 밀반입 축이 없어
+    #: 실해는 없었으나 "조용한 무시 금지" 규율은 쓰기 스키마 전체의 계약이다).
+    model_config = ConfigDict(extra="forbid")
+
     seq: int = Field(ge=1)
     item_name: str = Field(min_length=1, max_length=200)
     is_required: bool
@@ -99,7 +104,13 @@ class TaskUpdateRequest(BaseModel):
     document_id는 3값 의미론이다: 필드 생략=미변경 / null=연결 해제 /
     양수=해당 문서로 연결(실재 검증은 서비스 — 폴리모픽 §5.6 공용 참조라
     소유자 제한이 없다).
+
+    extra=forbid — TaskAddRequest와 같은 사유(S2-3 판정 요청 18). 3값 의미론이
+    "생략=미변경"을 쓰므로, 오타 난 필드명이 조용히 무시되면 사용자는 바뀌지
+    않은 것을 바뀌었다고 믿는다.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     version: int = Field(ge=1)
     done: bool | None = None

@@ -165,6 +165,33 @@ def test_status_is_structurally_absent_from_write_schemas() -> None:
         assert model.model_config.get("extra") == "forbid", model.__name__
 
 
+def test_every_write_schema_forbids_unknown_fields() -> None:
+    """쓰기 스키마 전건이 extra=forbid다 — 이름이 `…Request`면 예외 없다.
+
+    S2-3 판정 요청 18: 태스크 쓰기 스키마 2종만 forbid 없이 서 있던 비대칭을
+    닫는다. 열거가 아니라 **모듈 스캔**이라, 앞으로 추가되는 쓰기 스키마도
+    forbid 없이는 이 테스트를 통과하지 못한다(조용한 무시 금지의 기계화).
+    """
+    from pydantic import BaseModel
+
+    from app.modules.certifications import schemas
+
+    write_models = sorted(
+        name
+        for name, obj in vars(schemas).items()
+        if isinstance(obj, type) and issubclass(obj, BaseModel) and name.endswith("Request")
+    )
+    #: 공회전 방지 — 스캔이 실제로 쓰기 스키마를 집어야 한다.
+    assert len(write_models) >= 5, write_models
+
+    offenders = [
+        name
+        for name in write_models
+        if getattr(schemas, name).model_config.get("extra") != "forbid"
+    ]
+    assert offenders == [], f"extra=forbid 없는 쓰기 스키마: {offenders}"
+
+
 def test_transition_target_literal_matches_the_machine() -> None:
     """스키마의 전이 도달값 열거가 machine의 상태 11값과 같다 (이중 정의 대사)"""
     from typing import get_args
