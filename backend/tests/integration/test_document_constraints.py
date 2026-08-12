@@ -17,7 +17,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.db.uow import unit_of_work
 from app.core.time import utcnow
-from app.modules.documents.models import Document, DocumentType, ItemProfileDocumentType
+from app.modules.documents.models import (
+    DOCUMENT_OWNER_TYPES,
+    Document,
+    DocumentType,
+    ItemProfileDocumentType,
+)
 
 pytestmark = pytest.mark.group_k
 
@@ -129,10 +134,36 @@ def test_a_link_row_without_a_url_is_rejected_by_the_database() -> None:
 
 
 def test_an_unknown_owner_type_is_rejected_by_the_database() -> None:
-    """소유 열거는 소비분 2종(SKU·LABEL)뿐이다 (ADR-0028 — 확장은 후속 마이그레이션)"""
+    """소유 열거는 소비분 3종(SKU·LABEL·CERTIFICATION)뿐이다 (ADR-0028 확장 규율)"""
     with pytest.raises(IntegrityError) as exc:
         _insert_document(owner_type="SHIPMENT")
     assert "owner_type_valid" in str(exc.value)
+
+
+def test_a_certification_owner_type_is_accepted_by_the_database() -> None:
+    """확장분 CERTIFICATION 소유가 DB를 통과한다 (S2-2 PR-2 — 판정 안건 ⑤)"""
+    assert _insert_document(owner_type="CERTIFICATION") > 0
+
+
+def test_owner_type_check_definition_matches_the_model_enumeration() -> None:
+    """owner_type CHECK **정의문**에 모델 열거 전건이 실재한다 (마이그레이션 e7a1d4c8b2f6)
+
+    기존 테이블 CHECK 변경은 autogenerate가 감지하지 못해(함정 ①) 수기
+    재정의였다 — 이름만 있고 구 정의가 남는 실패 모양을 정의문 실측으로
+    잡는다(ck_import_staging_registry_code_valid 정의문 테스트와 같은 양식).
+    """
+    with unit_of_work() as uow:
+        definition = uow.session.execute(
+            text(
+                """
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conrelid = 'public.documents'::regclass
+                  AND conname = 'ck_documents_owner_type_valid'
+                """
+            )
+        ).scalar_one()
+    for code in DOCUMENT_OWNER_TYPES:
+        assert f"'{code}'" in definition, definition
 
 
 def test_an_unknown_storage_kind_is_rejected_by_the_database() -> None:

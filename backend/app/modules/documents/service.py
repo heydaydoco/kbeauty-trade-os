@@ -45,6 +45,7 @@ from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.time import today_kst, utcnow
 from app.modules.catalog.models import Sku
 from app.modules.catalog.profiles import require_profile
+from app.modules.certifications.models import Certification
 from app.modules.documents.models import (
     DOCUMENT_OWNER_TYPES,
     Document,
@@ -256,6 +257,21 @@ def _require_owner(
             )
         label, sku_code = row
         return _label_display(sku_code, label.country_code, label.label_version, label.language)
+    if owner_type == "CERTIFICATION":
+        cert = session.execute(
+            select(Certification).where(
+                Certification.id == owner_id, Certification.deleted_at.is_(None)
+            )
+        ).scalar_one_or_none()
+        if cert is None:
+            raise AppError(
+                ErrorCode.VALIDATION_INVALID_FIELD,
+                detail={
+                    "owner_id": "존재하지 않는 인증 인스턴스입니다. 인증 목록에서 다시 선택해 주세요."
+                },
+                log_context={"owner_type": owner_type, "owner_id": owner_id},
+            )
+        return _certification_display(cert.id, cert.template_name)
     raise AppError(
         ErrorCode.VALIDATION_INVALID_FIELD,
         detail={
@@ -268,6 +284,11 @@ def _require_owner(
 
 def _label_display(sku_code: str, country_code: str, label_version: int, language: str) -> str:
     return f"{sku_code} · {country_code} v{label_version}({language})"
+
+
+def _certification_display(certification_id: int, template_name: str) -> str:
+    """인스턴스 식별 표시 — 스냅샷 요건명만으로는 대상 간 중복이라 #id를 병기한다."""
+    return f"#{certification_id} · {template_name}"
 
 
 def _owner_displays(session: Session, keys: set[tuple[str, int]]) -> dict[tuple[str, int], str]:
@@ -291,6 +312,16 @@ def _owner_displays(session: Session, keys: set[tuple[str, int]]) -> dict[tuple[
             .where(Label.id.in_(label_ids))
         ):
             displays[("LABEL", label_id)] = _label_display(sku_code, country, version, language)
+    certification_ids = [owner_id for owner_type, owner_id in keys if owner_type == "CERTIFICATION"]
+    if certification_ids:
+        for certification_id, template_name in session.execute(
+            select(Certification.id, Certification.template_name).where(
+                Certification.id.in_(certification_ids)
+            )
+        ):
+            displays[("CERTIFICATION", certification_id)] = _certification_display(
+                certification_id, template_name
+            )
     return displays
 
 

@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +21,13 @@ from fastapi.testclient import TestClient
 from httpx2 import Response
 
 from app.core.config import settings
+from app.core.db.uow import unit_of_work
 from app.core.time import today_kst
 from app.main import app
+from app.modules.certifications.models import Certification
 from app.modules.documents import service as documents_service
 from app.modules.identity.models import RoleCode
+from app.modules.requirements.models import RequirementTemplate
 from tests.support.factories import (
     DEFAULT_PASSWORD,
     create_item_profile,
@@ -432,6 +435,61 @@ def test_an_unknown_document_type_is_rejected(link: Link) -> None:
     refused = link(document_type="MYSTERY")
     assert refused.status_code == 422, refused.text
     assert "등록되지 않은 문서 종류" in refused.json()["error"]["detail"]["document_type"]
+
+
+# ── CERTIFICATION 소유 (S2-2 PR-2 — 판정 안건 ⑤) ──────────────────────────
+
+
+@pytest.fixture
+def certification_id(sku_id: int) -> int:
+    """인증 인스턴스 직접 준비 — 생성 경로의 계약은 인증 e2e가 따로 고정한다."""
+    with unit_of_work() as uow:
+        template = RequirementTemplate(
+            market_id=create_market("US"),
+            name="US 제품 등록",
+            applies_to="SKU",
+            requirement_type="REGISTRATION",
+            source_url="https://example.test/rule",
+            last_verified_on=date(2026, 8, 1),
+            status="CONFIRMED",
+        )
+        uow.session.add(template)
+        uow.session.flush()
+        row = Certification(
+            template_id=template.id,
+            target_type="SKU",
+            target_id=sku_id,
+            template_name=template.name,
+            requirement_type=template.requirement_type,
+        )
+        uow.session.add(row)
+        uow.session.flush()
+        return row.id
+
+
+def test_a_certification_owned_document_registers_and_lists(
+    trader: TestClient, link: Link, certification_id: int
+) -> None:
+    """인증 소유 문서가 등록되고 목록이 식별 표시(#id · 요건명)를 낸다 (안건 ⑤)"""
+    created = link(
+        owner_type="CERTIFICATION",
+        owner_id=certification_id,
+        document_type="CERTIFICATE",
+        url="https://example.com/registration.pdf",
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["owner_display"] == f"#{certification_id} · US 제품 등록"
+
+    listed = trader.get(
+        DOCUMENTS, params={"owner_type": "CERTIFICATION", "owner_id": certification_id}
+    )
+    assert listed.json()["total"] == 1
+
+
+def test_an_unknown_certification_owner_is_rejected(link: Link) -> None:
+    refused = link(owner_type="CERTIFICATION", owner_id=999_999, document_type="CERTIFICATE")
+    assert refused.status_code == 422, refused.text
+    assert "존재하지 않는 인증 인스턴스" in refused.json()["error"]["detail"]["owner_id"]
 
 
 # ── 목록 필터·CSV ──────────────────────────────────────────────────────────
