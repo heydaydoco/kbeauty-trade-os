@@ -46,15 +46,54 @@ def test_registry_codes_are_stable_identifiers() -> None:
         assert re.fullmatch(r"[a-z][a-z0-9-]{2,59}", spec.code), spec.code
 
 
-def test_no_migration_seeds_scheduled_jobs() -> None:
-    """마이그레이션 시드 항구 금지(함정 ⑩) — 등록 경로는 앱(CLI)뿐이다"""
-    offenders = [
-        path.name
-        for path in sorted(_MIGRATIONS_DIR.glob("*.py"))
-        if "scheduled_jobs" in path.read_text(encoding="utf-8")
-        and "op.bulk_insert" in path.read_text(encoding="utf-8")
-    ]
-    assert offenders == [], f"마이그레이션이 배치를 시드합니다: {offenders}"
+#: 이 리포의 시드 관용구는 `op.execute("INSERT INTO …")`다(roles·document_types
+#: 선례). `op.bulk_insert`만 찾으면 실제 시드를 하나도 못 잡는다.
+_SEEDS = re.compile(r"INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
+
+#: 앱 경로로만 채워야 하는 테이블 — users FK(ActorMixin)를 달아 시드하면
+#: 테스트 정리의 TRUNCATE CASCADE가 PRESERVED_TABLES를 무력화한다(함정 ⑩).
+_NEVER_SEEDED = ("scheduled_jobs", "notification_channels", "webhook_subscriptions")
+
+
+def test_no_migration_seeds_the_app_owned_tables() -> None:
+    """마이그레이션 시드 항구 금지(함정 ⑩) — 등록 경로는 앱(CLI·API)뿐이다"""
+    offenders: list[str] = []
+    for path in sorted(_MIGRATIONS_DIR.glob("*.py")):
+        seeded = {match.lower() for match in _SEEDS.findall(path.read_text(encoding="utf-8"))}
+        for table in _NEVER_SEEDED:
+            if table in seeded:
+                offenders.append(f"{path.name}:{table}")
+    assert offenders == [], f"마이그레이션이 앱 소유 테이블을 시드합니다: {offenders}"
+
+
+def test_the_seed_scan_recognises_this_repos_idiom() -> None:
+    """공회전 방지 — 스캔이 리포의 실제 시드 관용구를 알아본다.
+
+    `op.bulk_insert`만 찾던 종전 스캔은 이 리포에서 단 한 건도 잡지 못했다
+    (roles·document_types·partners 시드가 전부 op.execute + INSERT INTO다).
+    """
+    assert _SEEDS.findall("op.execute(\"INSERT INTO roles (code) VALUES ('X')\")") == ["roles"]
+    seeded_somewhere = any(
+        _SEEDS.search(path.read_text(encoding="utf-8")) for path in _MIGRATIONS_DIR.glob("*.py")
+    )
+    assert seeded_somewhere, "시드하는 마이그레이션이 하나도 안 잡혔습니다 — 스캔이 헛돕니다"
+
+
+def test_no_app_code_writes_notification_channel_rows() -> None:
+    """채널·구독의 '0행 유지'(판정 요청 5)를 지키는 진짜 장치.
+
+    행수를 세는 통합 테스트는 TRUNCATE 하네스 때문에 늘 0이라 아무것도 보증하지
+    못한다 — 보증은 **쓰기 경로의 부재**다. S6-3에서 공급 경로를 열 때 이
+    테스트가 먼저 빨개지고, 그 순간이 판정 지점이다.
+    """
+    offenders: list[str] = []
+    for path in sorted(_APP_DIR.rglob("*.py")):
+        if "__pycache__" in path.parts or path.name == "models.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        if re.search(r"(?<!class )\b(NotificationChannel|WebhookSubscription)\s*\(", source):
+            offenders.append(str(path.relative_to(_APP_DIR)))
+    assert offenders == [], f"채널·구독 쓰기 경로가 생겼습니다: {offenders}"
 
 
 def test_scheduled_jobs_rows_are_written_only_by_the_platform_module() -> None:

@@ -83,10 +83,33 @@ def _recipients_of(subject_key: str = "test:tasks:1:D-30") -> set[int]:
 # ── ① 이원화 (요청 7) ────────────────────────────────────────────────────────
 
 
-def test_a_rule_with_an_explicit_user_wins() -> None:
+def test_a_rule_with_an_explicit_user_decides_when_there_is_no_assignee() -> None:
     target = create_user("named@example.com", roles=(RoleCode.CERT,))
     assert len(_notify(rule=_rule(recipient_user_id=target))) == 1
     assert _recipients_of() == {target}
+
+
+def test_the_assignee_outranks_an_explicit_rule_recipient() -> None:
+    """담당자가 규칙보다 앞선다 (판정 요청 7 (i) — 담당자 → 규칙 → 폴백).
+
+    ★ 순서가 뒤집히면 규칙에 수신자를 한 명 적어 두는 순간 **전 건의 담당자
+      라우팅이 그 한 사람으로 덮인다** — DoD "담당자 지정 건은 담당자에게만"의
+      정반대다. 이 조합(규칙 수신자 + 담당자 동시 실재)이 그 역전을 잡는다.
+    """
+    rule_target = create_user("rule-target@example.com", roles=(RoleCode.CERT,))
+    assignee = create_user("real-owner@example.com", roles=(RoleCode.CERT,))
+
+    created = _notify(rule=_rule(recipient_user_id=rule_target), assignee_id=assignee)
+    assert len(created) == 1
+    assert _recipients_of() == {assignee}
+
+
+def test_the_assignee_outranks_a_role_rule() -> None:
+    create_user("role-holder@example.com", roles=(RoleCode.CERT,))
+    assignee = create_user("role-owner@example.com", roles=(RoleCode.TRADE,))
+
+    _notify(rule=_rule(recipient_role=RoleCode.CERT.value), assignee_id=assignee)
+    assert _recipients_of() == {assignee}
 
 
 def test_a_role_rule_fans_out_to_every_holder() -> None:
@@ -151,6 +174,34 @@ def test_inactive_users_never_receive() -> None:
     retired = create_user("retired@example.com", roles=(RoleCode.CERT,), is_active=False)
     assert _notify(rule=_rule(recipient_user_id=retired)) == []
     assert _notify(assignee_id=retired, routing=Routing.EVENT) == []
+
+
+def test_a_rule_pointing_at_a_retired_user_still_falls_back(admins: tuple[int, int]) -> None:
+    """규칙이 퇴사자를 가리켜도 기일 알림은 사라지지 않는다 (fail-visible).
+
+    ★ '아무도 못 짚었다'와 '규칙이 지목했는데 그 사람이 없다'는 결과가 같아야
+      한다. 후자에서 멈추면 규칙 하나가 기일 축 전체를 조용히 침묵시킨다 —
+      이 축의 존재 이유(조용한 도과 방지)와 정반대다.
+    """
+    retired = create_user("gone@example.com", roles=(RoleCode.CERT,), is_active=False)
+    created = _notify(rule=_rule(recipient_user_id=retired), routing=Routing.DEADLINE)
+    assert len(created) == 2
+    assert _recipients_of() == set(admins)
+
+
+def test_a_role_rule_with_no_holders_still_falls_back(admins: tuple[int, int]) -> None:
+    """보유자 0명인 역할을 가리키는 규칙도 마찬가지다"""
+    created = _notify(rule=_rule(recipient_role=RoleCode.LOGISTICS.value), routing=Routing.DEADLINE)
+    assert len(created) == 2
+    assert _recipients_of() == set(admins)
+
+
+def test_an_empty_rule_stays_silent_for_events_without_an_assignee(
+    admins: tuple[int, int],
+) -> None:
+    """일반 이벤트는 폴백이 없다 — 규칙이 아무도 못 짚으면 미발송이다"""
+    assert _notify(rule=_rule(), routing=Routing.EVENT) == []
+    assert _recipients_of() == set()
 
 
 # ── ③ dedup 규약 (요청 6) ────────────────────────────────────────────────────

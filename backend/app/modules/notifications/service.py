@@ -19,14 +19,23 @@
   없으면 넣는다"는 두 스캔 사이에서 뚫린다 — ON CONFLICT DO NOTHING으로
   경합을 DB에 맡기고, 생략된 건수를 그대로 돌려준다.
 
-★ **수신자 결정은 이원화다**(판정 요청 7). 공통 순서는 규칙의 명시 수신자 →
-  담당자이고, 둘 다 없을 때만 갈린다:
+★ **수신자 결정은 이원화다**(판정 요청 7). 순서는 **담당자 → 규칙**이고, 둘 다
+  아무도 짚지 못했을 때만 갈린다:
       DEADLINE(기일 계열) → **ADMIN 역할 전원 폴백**(fail-visible).
           기일 알림이 안 가는 것은 곧 도과이고, 도과의 대가는 인증 실효다.
           조용한 미발송보다 "규칙이 없어 관리자에게 갔다"가 낫다.
       EVENT(디스패처 일반 이벤트) → **미발송**. 이쪽은 규칙이 곧 구독 의사이고,
           폭을 넓히면 ADR-07이 금지한 전사 폭포에 가까워진다.
-  **담당자가 있으면 ADMIN 폴백은 발동하지 않는다**(배타 라우팅 — 조건 E).
+  **담당자가 있으면 규칙 수신자도 ADMIN 폴백도 발동하지 않는다**(배타 라우팅 —
+  조건 E). 담당자가 규칙보다 앞서는 이유: 규칙은 사건 종류당 하나인데 담당은
+  건마다 다르다. 규칙을 앞세우면 규칙에 수신자를 한 명 적어 두는 순간 **전 건의
+  담당자 라우팅이 그 한 사람으로 덮인다** — DoD "담당자 지정 건은 담당자에게만"의
+  정반대다.
+
+★ **아무도 못 짚은 경우와 '규칙이 지목했지만 그 사람이 없는' 경우는 같다.**
+  규칙이 비활성 계정을 가리키거나 보유자 0명인 역할을 가리키면 결과 집합이
+  비는데, 거기서 멈추면 기일 알림이 조용히 사라진다(fail-visible 위반). 그래서
+  **빈 결과는 폴백으로 관통**시킨다.
 """
 
 from __future__ import annotations
@@ -37,10 +46,17 @@ from typing import Any
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
-from app.core.errors.exceptions import ForbiddenError, NotFoundError, VersionConflictError
+from app.core.errors.codes import ErrorCode
+from app.core.errors.exceptions import (
+    AppError,
+    ForbiddenError,
+    NotFoundError,
+    VersionConflictError,
+)
 from app.core.time import utcnow
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.models import Role, RoleCode, User, UserRole
@@ -148,18 +164,21 @@ def resolve_recipients(
         # 운영 알림은 관리자가 정본 수신자다 — 규칙·담당자를 보지 않는다.
         return Recipients(_users_with_role(session, RoleCode.ADMIN), fallback=False)
 
-    if rule is not None and rule.recipient_user_id is not None:
-        if _is_active_user(session, rule.recipient_user_id):
-            return Recipients((rule.recipient_user_id,), fallback=False)
-        return Recipients((), fallback=False)
-
-    if rule is not None and rule.recipient_role is not None:
-        return Recipients(_users_with_role(session, RoleCode(rule.recipient_role)), fallback=False)
-
+    # ① 담당자 우선 (판정 요청 7 (i)) — 여기서 끝나면 규칙도 폴백도 안 본다.
     if assignee_id is not None and _is_active_user(session, assignee_id):
-        # 담당자가 있으면 여기서 끝난다 — ADMIN 폴백은 발동하지 않는다(조건 E).
         return Recipients((assignee_id,), fallback=False)
 
+    # ② 담당자가 없을 때만 규칙이 수신자를 정한다.
+    if rule is not None:
+        if rule.recipient_user_id is not None:
+            if _is_active_user(session, rule.recipient_user_id):
+                return Recipients((rule.recipient_user_id,), fallback=False)
+        elif rule.recipient_role is not None:
+            holders = _users_with_role(session, RoleCode(rule.recipient_role))
+            if holders:
+                return Recipients(holders, fallback=False)
+
+    # ③ 아무도 못 짚었다 — 규칙이 없든, 규칙이 지목한 사람이 없든 결과는 같다.
     if routing is Routing.DEADLINE:
         return Recipients(_users_with_role(session, RoleCode.ADMIN), fallback=True)
     return Recipients((), fallback=False)
@@ -351,6 +370,31 @@ def _rule_body(view: AlertRuleView) -> dict[str, Any]:
     }
 
 
+def _flush_rule(session: Session, row: AlertRule, *, code: str) -> None:
+    """규칙 저장 — DB 제약 위반을 사용자 안내로 바꾼다(markets 선례).
+
+    ★ 잡지 않으면 관리자가 흔히 하는 두 실수(코드 중복·없는 사용자 id 지정)가
+      500으로 나간다. 규칙 편집은 관리 화면의 일상 조작이라, 입력 실수가 서버
+      장애로 표시되면 사용자는 고칠 방법을 알 수 없다.
+    ★ 실패 경로에서 쓸 값은 flush 전에 평범한 변수로 받아 둔다(함정 ②).
+    """
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        message = str(exc.orig) if exc.orig is not None else ""
+        if "recipient_user_id" in message:
+            detail = {
+                "recipient_user_id": "존재하지 않는 사용자입니다. 사용자 목록에서 확인해 주세요."
+            }
+        else:
+            detail = {"code": f"이미 등록된 규칙 코드입니다({code}). 목록에서 확인해 주세요."}
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail=detail,
+            log_context={"alert_rule_code": code},
+        ) from exc
+
+
 def create_rule(
     *, actor: AuthenticatedUser, idempotency_key: str, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:
@@ -376,7 +420,7 @@ def create_rule(
             created_by_id=actor.id,
         )
         session.add(row)
-        session.flush()
+        _flush_rule(session, row, code=str(payload["code"]))
 
         body = _rule_body(_rule_view(row))
         assert claim.record is not None
@@ -428,7 +472,7 @@ def update_rule(
             if field in changes:
                 setattr(row, field, changes[field])
         row.updated_by_id = actor.id
-        session.flush()
+        _flush_rule(session, row, code=row.code)
         return _rule_view(row)
 
 

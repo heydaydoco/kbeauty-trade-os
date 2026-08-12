@@ -30,12 +30,14 @@ S0-2부터 events는 쌓이기만 했다 — 적는 주체는 있고 보내는 �
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import datetime, timedelta
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
+from app.core.logging.redaction import scrub_text
 from app.core.time import utcnow
 from app.modules.notifications import service as notifications
 from app.modules.outbox.models import Event
@@ -101,6 +103,10 @@ def _process_one(event_id: int, *, now: datetime) -> tuple[str, int]:
                     Event.id == event_id,
                     Event.published_at.is_(None),
                     Event.attempts < MAX_ATTEMPTS,
+                    # 후보를 고른 뒤 잠그기까지 사이에 다른 디스패처가 이 건을
+                    # 실패시켜 백오프를 걸었을 수 있다 — 잠근 뒤 그 술어까지
+                    # 다시 본다(§17.2 "확인→기록" 재확인).
+                    or_(Event.next_retry_at.is_(None), Event.next_retry_at <= now),
                 )
                 .with_for_update(skip_locked=True)
             ).scalar_one_or_none()
@@ -116,7 +122,10 @@ def _process_one(event_id: int, *, now: datetime) -> tuple[str, int]:
     except Exception as error:
         # 한 건의 실패가 나머지를 막지 않는다(§17.6) — 넓게 잡는 것이 여기서는
         # 의도다. 좁히면 예상 못 한 예외 하나가 배치 전체를 멈춘다.
-        _record_failure(event_id, error=error, now=now)
+        # 실패 기록마저 실패해도 배치는 계속된다 — 여기서 터뜨리면 "한 건의
+        # 실패가 나머지를 막지 않는다"가 기록 경로에서만 깨진다.
+        with suppress(Exception):
+            _record_failure(event_id, error=error, now=now)
         return "failed", 0
 
 
@@ -165,7 +174,9 @@ def _record_failure(event_id: int, *, error: Exception, now: datetime) -> None:
         if event is None:
             return
         event.attempts += 1
-        event.last_error = f"{type(error).__name__}: {error}"[:2000]
+        # DB 예외 문자열에는 PG가 만든 행 값이 실릴 수 있다(함정 ④) — last_error는
+        # 관리 화면으로 되돌아가는 필드이므로 마스킹 프로세서를 통과시킨다.
+        event.last_error = scrub_text(f"{type(error).__name__}: {error}")[:2000]
         event.next_retry_at = now + backoff_for(event.attempts)
         if event.attempts >= MAX_ATTEMPTS:
             # 상한 도달 = 대기열 이탈. 조용히 두면 아무도 모른다(§17.6).

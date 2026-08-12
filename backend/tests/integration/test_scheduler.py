@@ -16,14 +16,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import func, select
 
-from app.core.db.session import SessionFactory
 from app.core.db.uow import unit_of_work
-from app.core.time import KST
+from app.core.time import KST, utcnow
 from app.modules.identity.models import RoleCode
 from app.modules.platform import scheduler
 from app.modules.platform.models import ScheduledJob
 from app.modules.platform.scheduler import Schedule, ScheduleError, is_due, parse_schedule
 from app.modules.worklist.models import Alert
+from tests.support.concurrency import run_concurrently
 from tests.support.factories import create_user
 
 pytestmark = pytest.mark.group_j
@@ -148,6 +148,85 @@ def test_an_unmapped_code_is_refused_and_recorded() -> None:
     assert row.last_error is not None and "등록되지 않은" in row.last_error
 
 
+def test_a_defective_job_is_not_retried_every_tick() -> None:
+    """이미 그 사유로 FAILED가 찍힌 결함 행은 다시 집지 않는다.
+
+    ★ 매 틱 다시 집으면 20초마다 실패를 덮어쓰고 관리자 알림이 무한히 쌓인다 —
+      알림이 많으면 안 읽히고, 안 읽히는 알림은 없는 알림이다.
+    """
+    create_user("spam-admin@example.com", roles=(RoleCode.ADMIN,))
+    with unit_of_work() as uow:
+        uow.session.add(ScheduledJob(code="rogue-job", name_ko="정체 불명", schedule="interval@1"))
+
+    assert scheduler.run_due_jobs()["failed"] == 1
+    assert scheduler.run_due_jobs()["checked"] == 0  # 두 번째 틱은 집지 않는다
+
+    with unit_of_work() as uow:
+        alerts: int = uow.session.execute(select(func.count()).select_from(Alert)).scalar_one()
+    assert alerts == 1
+
+
+def test_a_broken_schedule_is_refused_instead_of_running_every_tick() -> None:
+    """폐쇄 2형 밖 schedule은 **실행 거부**다 — 매 틱 실행이 아니다.
+
+    ★ is_due를 건너뛰고 실행해 버리면 오타 난 주기가 하루 1회 대신 20초마다
+      도는 정반대 결과가 된다(fail-open). 하루 1회여야 할 인증 날짜 스윕이
+      매 틱 도는 것을 화면은 "정상"으로 표시한다.
+    """
+    create_user("broken-admin@example.com", roles=(RoleCode.ADMIN,))
+    scheduler.register_jobs()
+    with unit_of_work() as uow:
+        row = uow.session.execute(
+            select(ScheduledJob).where(ScheduledJob.code == "certification-sweep")
+        ).scalar_one()
+        row.schedule = "daily@6:00"  # 폐쇄 2형 밖(시각이 2자리가 아니다)
+
+    counts = scheduler.run_due_jobs()
+    assert counts["failed"] == 1
+
+    broken = next(job for job in _jobs() if job.code == "certification-sweep")
+    assert broken.last_status == "FAILED"
+    assert broken.last_error is not None and "알 수 없는 스케줄 형식" in broken.last_error
+    assert broken.last_run_at is None  # 실행하지 않았다
+
+
+def test_failure_alerts_are_deduped_per_day() -> None:
+    """지속 실패 잡의 관리자 알림은 하루 1건이다 (분 단위면 하루 1,440건)"""
+    admin = create_user("daily-admin@example.com", roles=(RoleCode.ADMIN,))
+    scheduler.register_jobs()
+
+    def _boom() -> dict[str, int]:
+        raise RuntimeError("계속 실패")
+
+    broken = scheduler.JobSpec(
+        code="outbox-dispatch", name_ko="디스패치", schedule="interval@1", run=_boom
+    )
+    with unit_of_work() as uow:
+        # 결함 행이 아니라 '정상 등록 + 실행 실패'라 매 틱 다시 집힌다.
+        uow.session.execute(
+            select(ScheduledJob).where(ScheduledJob.code == "outbox-dispatch")
+        ).scalar_one()
+
+    import pytest as _pytest
+
+    monkeypatch = _pytest.MonkeyPatch()
+    try:
+        monkeypatch.setitem(scheduler.JOBS_BY_CODE, "outbox-dispatch", broken)
+        base = utcnow()
+        for minute in range(3):
+            scheduler.run_due_jobs(now=base + timedelta(minutes=minute * 2))
+    finally:
+        monkeypatch.undo()
+
+    with unit_of_work() as uow:
+        total: int = uow.session.execute(
+            select(func.count())
+            .select_from(Alert)
+            .where(Alert.recipient_user_id == admin, Alert.entity_type == "scheduled_jobs")
+        ).scalar_one()
+    assert total == 1
+
+
 # ── ④ 실행·실패·크래시 정리 ─────────────────────────────────────────────────
 
 
@@ -227,13 +306,21 @@ def test_a_crashed_run_is_recovered_on_startup() -> None:
 # ── ⑤ 중복 기동 방지 ────────────────────────────────────────────────────────
 
 
-def test_only_one_scheduler_can_hold_the_lock() -> None:
-    """두 번째 실행기는 잠금을 못 잡는다 — scale up 해도 하나만 돈다"""
-    first = SessionFactory()
-    second = SessionFactory()
-    try:
-        assert scheduler.try_acquire_lock(first) is True
-        assert scheduler.try_acquire_lock(second) is False
-    finally:
-        first.close()
-        second.close()
+def test_two_schedulers_run_a_due_job_only_once() -> None:
+    """두 실행기가 동시에 돌아도 같은 잡은 한 번만 실행된다.
+
+    ★ 프로세스 단위 세션 잠금을 쓰지 않는 이유는 실측이다 — 앱 계정에
+      `idle_in_transaction_session_timeout='60s'`가 걸려 있어 잠금만 잡고 노는
+      세션은 60초 뒤 PG가 끊고, 잠금은 그때 조용히 풀린다. 잡별 **트랜잭션**
+      잠금은 클레임 트랜잭션과 수명이 같아 그 창이 없다.
+    ★ 순차 실행은 이 경합을 만들지 못한다(GC-F1 규율) — 실제 동시 실행이다.
+    """
+    scheduler.register_jobs()
+    outcomes = run_concurrently(lambda _i: scheduler.run_due_jobs(), workers=2)
+    assert all(outcome.ok for outcome in outcomes), [o.error for o in outcomes]
+
+    ran = sum(outcome.value["ran"] for outcome in outcomes)
+    skipped = sum(outcome.value["skipped"] for outcome in outcomes)
+    assert ran == 2  # 등록 잡 2종이 각각 정확히 한 번
+    assert skipped >= 0
+    assert {row.last_status for row in _jobs()} == {"OK"}

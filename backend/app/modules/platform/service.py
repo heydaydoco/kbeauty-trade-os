@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 
 from app.core.db.uow import unit_of_work
-from app.core.errors.exceptions import NotFoundError, VersionConflictError
+from app.core.errors.exceptions import NotFoundError
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.platform.models import ScheduledJob
 from app.modules.platform.scheduler import JOBS_BY_CODE
@@ -65,9 +65,17 @@ def list_jobs(*, offset: int, limit: int) -> tuple[list[ScheduledJobView], int]:
         return [_view(row) for row in rows], total
 
 
-def set_enabled(
-    *, actor: AuthenticatedUser, job_id: int, version: int, is_enabled: bool
-) -> ScheduledJobView:
+def set_enabled(*, actor: AuthenticatedUser, job_id: int, is_enabled: bool) -> ScheduledJobView:
+    """배치를 켜거나 끈다.
+
+    ★ **낙관 잠금(version)을 요구하지 않는다.** 실행기가 잡을 돌 때마다
+      last_run_at·last_status를 쓰므로 이 행의 version은 1분 주기 잡 기준
+      분당 2씩 오른다 — 관리자가 목록을 읽고 1분 뒤 토글하면 항상 409가 되어
+      판정 요청 14가 승인한 "끄기"가 실 운영에서 성공하지 못한다(자기 적대
+      검증 확정 발견). §17.2의 version 대상은 "사람이 편집하는 전표·마스터"이고,
+      여기서 충돌하는 두 필드(사람의 on/off · 시스템의 실행 결과)는 서로 다른
+      축이라 겹쳐 쓸 일이 없다. 켜기·끄기는 그 자체로 멱등이다.
+    """
     with unit_of_work() as uow:
         session = uow.session
         row = session.execute(
@@ -75,10 +83,6 @@ def set_enabled(
         ).scalar_one_or_none()
         if row is None:
             raise NotFoundError(log_context={"scheduled_job_id": job_id})
-        if row.version != version:
-            raise VersionConflictError(
-                log_context={"scheduled_job_id": job_id, "expected": version, "actual": row.version}
-            )
         row.is_enabled = is_enabled
         row.updated_by_id = actor.id
         session.flush()

@@ -26,10 +26,5 @@ def list_scheduled_jobs(params: Annotated[PageParams, Depends()]) -> Page[Schedu
 def toggle_scheduled_job(
     job_id: int, payload: ScheduledJobToggleRequest, current: AdminUser
 ) -> ScheduledJobSummary:
-    view = service.set_enabled(
-        actor=current,
-        job_id=job_id,
-        version=payload.version,
-        is_enabled=payload.is_enabled,
-    )
+    view = service.set_enabled(actor=current, job_id=job_id, is_enabled=payload.is_enabled)
     return ScheduledJobSummary(**asdict(view))

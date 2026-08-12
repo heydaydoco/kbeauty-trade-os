@@ -61,9 +61,7 @@ def test_an_admin_can_disable_a_job(admin: TestClient) -> None:
     scheduler.register_jobs()
     job = admin.get(JOBS).json()["items"][0]
 
-    toggled = admin.patch(
-        f"{JOBS}/{job['id']}", json={"version": job["version"], "is_enabled": False}
-    )
+    toggled = admin.patch(f"{JOBS}/{job['id']}", json={"is_enabled": False})
     assert toggled.status_code == 200, toggled.text
     assert toggled.json()["is_enabled"] is False
 
@@ -71,18 +69,24 @@ def test_an_admin_can_disable_a_job(admin: TestClient) -> None:
 def test_a_non_admin_cannot_toggle(admin: TestClient, cert: TestClient) -> None:
     scheduler.register_jobs()
     job = admin.get(JOBS).json()["items"][0]
-    denied = cert.patch(
-        f"{JOBS}/{job['id']}", json={"version": job["version"], "is_enabled": False}
-    )
+    denied = cert.patch(f"{JOBS}/{job['id']}", json={"is_enabled": False})
     assert denied.status_code == 403, denied.text
 
 
-def test_a_stale_version_is_refused(admin: TestClient) -> None:
+def test_toggling_stays_usable_while_the_job_keeps_running(admin: TestClient) -> None:
+    """실행기가 잡을 돌려 version이 올라도 토글은 계속 성공한다.
+
+    ★ 낙관 잠금을 걸면 이 행은 시스템이 매 실행마다 갱신하므로(1분 주기 잡은
+      분당 version +2) 관리자가 목록을 읽고 1분 뒤 끄면 항상 409가 된다 —
+      판정 요청 14가 승인한 '끄기'가 실 운영에서 성공하지 못한다.
+    """
     scheduler.register_jobs()
     job = admin.get(JOBS).json()["items"][0]
-    admin.patch(f"{JOBS}/{job['id']}", json={"version": job["version"], "is_enabled": False})
-    stale = admin.patch(f"{JOBS}/{job['id']}", json={"version": job["version"], "is_enabled": True})
-    assert stale.status_code == 409, stale.text
+    scheduler.run_due_jobs()  # 시스템이 같은 행을 갱신한다(version 증가)
+
+    toggled = admin.patch(f"{JOBS}/{job['id']}", json={"is_enabled": False})
+    assert toggled.status_code == 200, toggled.text
+    assert toggled.json()["is_enabled"] is False
 
 
 def test_the_schedule_string_cannot_be_edited_from_the_screen(admin: TestClient) -> None:
@@ -91,6 +95,6 @@ def test_the_schedule_string_cannot_be_edited_from_the_screen(admin: TestClient)
     job = admin.get(JOBS).json()["items"][0]
     refused = admin.patch(
         f"{JOBS}/{job['id']}",
-        json={"version": job["version"], "is_enabled": True, "schedule": "interval@99"},
+        json={"is_enabled": True, "schedule": "interval@99"},
     )
     assert refused.status_code == 422, refused.text

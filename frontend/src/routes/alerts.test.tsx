@@ -60,7 +60,14 @@ const JOB = {
   version: 1,
 };
 
-function stubApi(me: unknown, options: { onAck?: () => void; unread?: number } = {}) {
+interface StubOptions {
+  onAck?: () => void;
+  unread?: number;
+  onRuleCreate?: (body: unknown) => void;
+  onJobToggle?: (body: unknown) => void;
+}
+
+function stubApi(me: unknown, options: StubOptions = {}) {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: string, init?: RequestInit) => {
@@ -73,6 +80,14 @@ function stubApi(me: unknown, options: { onAck?: () => void; unread?: number } =
         return Promise.resolve(
           jsonResponse({ ...UNREAD_ALERT, acknowledged_at: "2026-08-12T02:00:00Z" }),
         );
+      }
+      if (input.includes("/v1/alert-rules") && init?.method === "POST") {
+        options.onRuleCreate?.(JSON.parse(String(init.body)));
+        return Promise.resolve(jsonResponse(RULE_TO_ASSIGNEE, 201));
+      }
+      if (input.includes("/v1/scheduled-jobs/") && init?.method === "PATCH") {
+        options.onJobToggle?.(JSON.parse(String(init.body)));
+        return Promise.resolve(jsonResponse({ ...JOB, is_enabled: false }));
       }
       if (input.includes("/v1/alerts")) {
         return Promise.resolve(jsonResponse(page([UNREAD_ALERT, ACKED_ALERT])));
@@ -137,6 +152,43 @@ describe("알림센터", () => {
     expect(screen.getByRole("heading", { name: "배치 레지스트리" })).toBeInTheDocument();
     expect(await screen.findByText("interval@1")).toBeInTheDocument();
     expect(screen.getByText("정상")).toBeInTheDocument();
+  });
+
+  it("관리자가 규칙을 등록한다 — 수신 역할 공란은 본문에서 생략된다", async () => {
+    const onRuleCreate = vi.fn();
+    stubApi(ADMIN, { onRuleCreate });
+    renderWithProviders(<AppRoutes />, { route: "/alerts" });
+
+    await screen.findByRole("heading", { name: "알림 규칙" });
+    fireEvent.change(screen.getByRole("textbox", { name: "규칙 코드" }), {
+      target: { value: "CERT-D30" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "이름" }), {
+      target: { value: "인증 만료 D-30" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "사건 코드" }), {
+      target: { value: "certifications.certification.expiring" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "규칙 등록" }));
+
+    await waitFor(() => expect(onRuleCreate).toHaveBeenCalledTimes(1));
+    // 공란 = "담당자에게" — 빈 문자열을 보내면 서버 열거에 걸린다.
+    expect(onRuleCreate.mock.lastCall?.[0]).not.toHaveProperty("recipient_role");
+  });
+
+  it("배치 켜기·끄기 버튼이 version 없이 토글을 부른다 (판정 요청 14)", async () => {
+    const onJobToggle = vi.fn();
+    stubApi(ADMIN, { onJobToggle });
+    renderWithProviders(<AppRoutes />, { route: "/alerts" });
+
+    await screen.findByRole("heading", { name: "배치 레지스트리" });
+    fireEvent.click(await screen.findByRole("button", { name: "끄기" }));
+
+    await waitFor(() => expect(onJobToggle).toHaveBeenCalledTimes(1));
+    const body = onJobToggle.mock.lastCall?.[0];
+    expect(body).toEqual({ is_enabled: false });
+    // 실행기가 같은 행을 계속 갱신하므로 낙관 잠금을 실으면 늘 409가 된다.
+    expect(body).not.toHaveProperty("version");
   });
 
   it("셸의 알림 링크에 미확인 수가 붙는다", async () => {

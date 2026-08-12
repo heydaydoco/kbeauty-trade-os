@@ -145,14 +145,23 @@ def test_pending_index_definition_covers_retry_ordering() -> None:
 # ── ④ 0행 유지 (판정 요청 5) ─────────────────────────────────────────────────
 
 
-def test_notification_tables_ship_empty() -> None:
-    """채널·구독은 0행으로 선다 — 마이그레이션 시드 금지(함정 ⑩)의 실측.
+def test_notification_tables_accept_rows_but_ship_none() -> None:
+    """두 테이블은 **쓸 수는 있으나 아무도 쓰지 않는** 상태로 선다.
 
-    이 테스트가 빨개지는 경우는 둘뿐이다: 마이그레이션이 시드를 넣었거나,
-    S6-3 전에 행 공급 경로가 생겼거나. 둘 다 판정 대상이다.
+    ★ 여기서 행수를 세는 것만으로는 아무것도 보증하지 못한다 — 테스트 격리가
+      매 케이스 후 TRUNCATE라 이 테이블은 무슨 짓을 해도 0행이다(자기 적대 검증
+      확정 발견: 공회전). 그래서 이 케이스는 **구조**만 확인하고(제약이 살아
+      있어 삽입 자체는 가능하다), "0행으로 선다"의 진짜 보증은 두 곳에 있다:
+        ① 마이그레이션이 시드하지 않는다 — tests/architecture/test_scheduler_registry.py
+        ② 앱에 쓰기 경로가 없다 — tests/architecture/test_notification_core.py
     """
+    channel_id = _insert_channel(code="PROBE")
+    _insert_subscription(channel_id, event_type="probe.event.happened")
     with unit_of_work() as uow:
-        channels = uow.session.execute(select(func.count()).select_from(NotificationChannel))
-        subscriptions = uow.session.execute(select(func.count()).select_from(WebhookSubscription))
-        assert channels.scalar_one() == 0
-        assert subscriptions.scalar_one() == 0
+        channels: int = uow.session.execute(
+            select(func.count()).select_from(NotificationChannel)
+        ).scalar_one()
+        subscriptions: int = uow.session.execute(
+            select(func.count()).select_from(WebhookSubscription)
+        ).scalar_one()
+    assert (channels, subscriptions) == (1, 1)
