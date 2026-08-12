@@ -300,6 +300,13 @@ def _run_one(job_id: int, *, now: datetime) -> str:
         defect = _defect_of(row)
         code, name_ko = row.code, row.name_ko
         if defect is None:
+            # ★ 잠근 뒤 **다시 판정한다**(§17.2 "확인→기록"). 잠금 수명은 이
+            #   트랜잭션이라 커밋과 함께 풀리고, 잡 본체는 그 밖에서 돈다 —
+            #   재판정이 없으면 후보 목록을 먼저 뜬 다른 실행기가 방금 실행된
+            #   잡을 한 번 더 집는다(실측: 동시 실행 테스트가 잡아냈다).
+            #   last_run_at을 여기서 찍으므로 뒤이은 재판정은 자연히 False다.
+            if not is_due(parse_schedule(row.schedule), last_run_at=row.last_run_at, now=now):
+                return "skipped"
             row.last_run_at = now
             row.last_status = "RUNNING"
             row.last_error = None

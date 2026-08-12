@@ -320,7 +320,22 @@ def test_two_schedulers_run_a_due_job_only_once() -> None:
     assert all(outcome.ok for outcome in outcomes), [o.error for o in outcomes]
 
     ran = sum(outcome.value["ran"] for outcome in outcomes)
-    skipped = sum(outcome.value["skipped"] for outcome in outcomes)
     assert ran == 2  # 등록 잡 2종이 각각 정확히 한 번
-    assert skipped >= 0
     assert {row.last_status for row in _jobs()} == {"OK"}
+
+
+def test_a_second_pass_does_not_rerun_what_just_ran() -> None:
+    """방금 실행된 잡은 곧바로 다시 집히지 않는다 — 잠금 해제 후의 창을 막는다.
+
+    ★ 잡별 트랜잭션 잠금은 **클레임 트랜잭션과 함께 풀린다**. 잡 본체는 그
+      밖에서 돌므로, 후보 목록을 먼저 떠 둔 다른 실행기가 그 사이에 같은 잡을
+      한 번 더 집을 수 있다. 잠근 뒤 is_due를 다시 보는 재판정(§17.2)이 그
+      창을 닫는다 — 이 케이스가 그 재판정의 회귀다.
+    """
+    scheduler.register_jobs()
+    assert scheduler.run_due_jobs()["ran"] == 2
+
+    # 후보를 먼저 뜬 실행기를 흉내 낸다 — 목록은 살아 있지만 이미 실행됐다.
+    stale_ids = [row.id for row in _jobs()]
+    outcomes = [scheduler._run_one(job_id, now=utcnow()) for job_id in stale_ids]
+    assert outcomes == ["skipped", "skipped"]
