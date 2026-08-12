@@ -112,3 +112,93 @@ describe("인증 목록", () => {
     expect(screen.getByText("만료일 임박(자동 — 리드타임 도달)")).toBeInTheDocument();
   });
 });
+
+// ── 태스크 서류 링크 (S2-2 PR-2 — §5.1 "서류 링크") ─────────────────────────
+
+const TASK = {
+  id: 31,
+  certification_id: 1,
+  seq: 1,
+  item_name: "CFS 준비",
+  document_type_id: null,
+  is_required: true,
+  done: false,
+  done_at: null,
+  document_id: null as number | null,
+  note: null,
+  version: 1,
+};
+
+const DOC = {
+  id: 42,
+  owner_type: "SKU",
+  owner_id: 5,
+  owner_display: "SKU-001",
+  document_type: "CFS",
+  document_type_name: "판매증명서",
+  storage_kind: "FILE",
+  original_filename: "CFS.pdf",
+  content_type: "application/pdf",
+  size_bytes: 100,
+  sha256: "a".repeat(64),
+  url: null,
+  issued_on: null,
+  valid_until: null,
+  retention_until: null,
+  note: null,
+};
+
+function stubTaskApi(task: typeof TASK, onTaskPatch?: (body: unknown) => void) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: string, init?: RequestInit) => {
+      if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(CERT_USER));
+      if (input.includes("/tasks/") && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        onTaskPatch?.(body);
+        return Promise.resolve(
+          jsonResponse({ ...task, document_id: body.document_id ?? task.document_id, version: 2 }),
+        );
+      }
+      if (input.includes("/tasks")) return Promise.resolve(jsonResponse(page([task])));
+      if (input.includes("/v1/documents")) return Promise.resolve(jsonResponse(page([DOC])));
+      if (input.includes("/status-log")) return Promise.resolve(jsonResponse(page([])));
+      if (input.includes("/prerequisites")) return Promise.resolve(jsonResponse(page([])));
+      if (input.includes("/v1/certifications")) return Promise.resolve(jsonResponse(page([ROW])));
+      return Promise.resolve(jsonResponse(page([])));
+    }),
+  );
+}
+
+describe("태스크 서류 링크", () => {
+  beforeEach(() => {
+    vi.stubGlobal("crypto", { randomUUID: () => "test-key" });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("서류 셀렉트 선택이 PATCH에 document_id·version을 싣는다 (3값 의미론의 연결 방향)", async () => {
+    const bodies: unknown[] = [];
+    stubTaskApi(TASK, (body) => bodies.push(body));
+    renderWithProviders(<AppRoutes />, { route: "/certifications" });
+
+    fireEvent.click(await screen.findByRole("button", { name: "상세" }));
+    const select = await screen.findByLabelText("CFS 준비 서류 연결");
+    fireEvent.change(select, { target: { value: "42" } });
+
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({ version: 1, document_id: 42 });
+  });
+
+  it("연결된 파일 서류가 다운로드 앵커로 표시된다 (문서 목록 밖이면 #id 폴백 — 함정 ⑦ 가드)", async () => {
+    stubTaskApi({ ...TASK, document_id: 42 });
+    renderWithProviders(<AppRoutes />, { route: "/certifications" });
+
+    fireEvent.click(await screen.findByRole("button", { name: "상세" }));
+    const anchor = await screen.findByRole("link", { name: "CFS.pdf" });
+    expect(anchor).toHaveAttribute("href", "/api/v1/documents/42/download");
+  });
+});

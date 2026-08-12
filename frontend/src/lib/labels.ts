@@ -103,10 +103,11 @@ const PARTNER_TYPE: Record<string, string> = {
   CERT_AGENCY: "인증대행",
 };
 
-// 문서 소유자 유형 (§4.7 — ADR-0028, 소비분 2종 한정).
+// 문서 소유자 유형 (§4.7 — ADR-0028, 소비분 한정. S2-2 PR-2에서 인증 확장).
 const DOCUMENT_OWNER_TYPE: Record<string, string> = {
   SKU: "SKU",
   LABEL: "라벨",
+  CERTIFICATION: "인증",
 };
 
 // 문서 저장 형태 (§4.7 — FILE/LINK 2형).

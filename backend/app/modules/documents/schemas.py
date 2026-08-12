@@ -39,7 +39,7 @@ class DocumentTypeSummary(BaseModel):
 class LinkDocumentCreateRequest(BaseModel):
     """LINK형 문서 등록 — 외부 URL의 기록이다(실물 업로드는 /documents/files)."""
 
-    owner_type: str = Field(min_length=2, max_length=10)
+    owner_type: str = Field(min_length=2, max_length=13)
     owner_id: int = Field(gt=0)
     #: document_types.code — 열린 데이터라 값 검증은 서비스가 FK 실재로 한다.
     document_type: str = Field(min_length=1, max_length=40)

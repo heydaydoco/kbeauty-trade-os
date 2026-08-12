@@ -40,6 +40,7 @@ from app.modules.certifications.machine import (
     DATE_DERIVED_STATUSES,
     HUMAN_TRANSITIONS,
     REASON_REQUIRED_TO,
+    TERMINAL_STATUSES,
     TRANSITION_OPTIONAL_FIELDS,
     TRANSITION_REQUIRED_FIELDS,
 )
@@ -48,6 +49,7 @@ from app.modules.certifications.models import (
     CertificationStatusLog,
     CertificationTask,
 )
+from app.modules.documents.models import Document
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.models import User
 from app.modules.identity.service import AuthenticatedUser
@@ -55,7 +57,11 @@ from app.modules.ingredients.models import Ingredient
 from app.modules.markets.models import Market
 from app.modules.outbox import service as outbox
 from app.modules.partners.models import Partner
-from app.modules.requirements.models import RequirementTemplate, TemplateChecklistItem
+from app.modules.requirements.models import (
+    ItemProfileRequirementTemplate,
+    RequirementTemplate,
+    TemplateChecklistItem,
+)
 
 CERTIFICATION_CREATE_ENDPOINT = "POST /api/v1/certifications"
 CERTIFICATION_TRANSITION_ENDPOINT = "POST /api/v1/certifications/transitions"
@@ -494,6 +500,149 @@ def transition_certification(
 # ── 생성 (CONFIRMED 게이트 + 스냅샷 + 태스크 참조 복사) ─────────────────────
 
 
+def _instantiate_template(
+    session: Session,
+    *,
+    template: RequirementTemplate,
+    target_type: str,
+    target_id: int | None,
+    actor_user_id: int,
+    assignee_id: int | None = None,
+    note: str | None = None,
+    automatic: bool = False,
+) -> Certification:
+    """스냅샷 행 + 체크리스트→태스크 참조 복사 + 아웃박스 발행 — 생성의 공유 코어.
+
+    API 생성과 §4.8 자동 적용(S2-2 PR-2)이 공유한다. 게이트(CONFIRMED·
+    applies_to 일치·대상 실재)와 활성 유니크 충돌의 처리(API=422 변환 /
+    자동 적용=사전 존재 확인으로 생략)는 호출자 몫 — flush의 IntegrityError를
+    그대로 올린다. 상태는 server_default NOT_STARTED뿐(상태 대입 없음 — 층2).
+    """
+    row = Certification(
+        template_id=template.id,
+        target_type=target_type,
+        target_id=target_id,
+        # 스냅샷 7필드 — "그때 요건"의 동결 (estimated_cost는 명시 예외).
+        template_name=template.name,
+        requirement_type=template.requirement_type,
+        validity_months=template.validity_months,
+        renewal_cycle_months=template.renewal_cycle_months,
+        renewal_lead_days=template.renewal_lead_days,
+        source_url=template.source_url,
+        last_verified_on=template.last_verified_on,
+        assignee_id=assignee_id,
+        note=note,
+        created_by_id=actor_user_id,
+    )
+    session.add(row)
+    session.flush()
+
+    # 체크리스트 → 태스크 참조 복사 (ADR-05 — [M2] 보강 S2-1 PR-2 ④ 지시분).
+    items = (
+        session.execute(
+            select(TemplateChecklistItem)
+            .where(
+                TemplateChecklistItem.template_id == template.id,
+                TemplateChecklistItem.deleted_at.is_(None),
+            )
+            .order_by(TemplateChecklistItem.seq)
+        )
+        .scalars()
+        .all()
+    )
+    for item in items:
+        session.add(
+            CertificationTask(
+                certification_id=row.id,
+                seq=item.seq,
+                item_name=item.item_name,
+                document_type_id=item.document_type_id,
+                is_required=item.is_required,
+                created_by_id=actor_user_id,
+            )
+        )
+
+    outbox.publish(
+        session,
+        event_type="certifications.certification.created",
+        aggregate_type="certifications",
+        aggregate_id=row.id,
+        payload={
+            "certification_id": row.id,
+            "template_id": template.id,
+            "target_type": target_type,
+            "target_id": target_id,
+            "task_count": len(items),
+            # 전이 이벤트의 automatic 표식(판정 ⑩)과 대칭 — §4.8 자동 생성분 구분.
+            "automatic": automatic,
+        },
+    )
+    return row
+
+
+def apply_item_profile_requirements(
+    session: Session,
+    *,
+    item_profile_id: int,
+    target_type: str,
+    target_id: int,
+    actor: AuthenticatedUser,
+) -> list[int]:
+    """§4.8 "신규 등록 시 자동 적용" — 등록 트랜잭션에 합류해 호출된다 (안건 ⑥).
+
+    품목군 요건 세트 중 **CONFIRMED이면서 적용단위가 등록 대상과 일치**하는
+    템플릿 전건에 미착수 인스턴스+태스크를 만든다(제품→PRODUCT, SKU→SKU).
+    멱등 = 활성 한정 유니크 술어의 **사전 존재 확인**(기존재 시 생성 생략) —
+    예외 경로(IntegrityError→422)로 잡으면 합류한 등록 트랜잭션이 오염된다.
+    소급 3계열(품목군 사후 지정·세트 추가 소급·FACILITY/COMPANY/INGREDIENT)은
+    비포함 — 수동 등록 경로가 흡수(관찰 원장 등재분). 생성 인스턴스의
+    행위자는 등록 조작자다(자동 표식은 아웃박스 payload의 automatic).
+    """
+    templates = (
+        session.execute(
+            select(RequirementTemplate)
+            .join(
+                ItemProfileRequirementTemplate,
+                ItemProfileRequirementTemplate.requirement_template_id == RequirementTemplate.id,
+            )
+            .where(
+                ItemProfileRequirementTemplate.item_profile_id == item_profile_id,
+                ItemProfileRequirementTemplate.deleted_at.is_(None),
+                RequirementTemplate.deleted_at.is_(None),
+                RequirementTemplate.status == "CONFIRMED",
+                RequirementTemplate.applies_to == target_type,
+            )
+            .order_by(RequirementTemplate.id)
+        )
+        .scalars()
+        .all()
+    )
+    created: list[int] = []
+    for template in templates:
+        # 활성 한정 유니크 술어와 같은 조건(deleted_at IS NULL + 종결 2태 제외).
+        existing = session.execute(
+            select(Certification.id).where(
+                Certification.template_id == template.id,
+                Certification.target_type == target_type,
+                Certification.target_id == target_id,
+                Certification.deleted_at.is_(None),
+                Certification.status.notin_(sorted(TERMINAL_STATUSES)),
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            continue
+        row = _instantiate_template(
+            session,
+            template=template,
+            target_type=target_type,
+            target_id=target_id,
+            actor_user_id=actor.id,
+            automatic=True,
+        )
+        created.append(row.id)
+    return created
+
+
 def create_certification(
     *, actor: AuthenticatedUser, idempotency_key: str, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:
@@ -552,26 +701,18 @@ def create_certification(
                     detail={"assignee_id": "담당자 계정을 찾을 수 없습니다."},
                 )
 
-        row = Certification(
-            template_id=template.id,
-            target_type=target_type,
-            target_id=target_id,
-            # 스냅샷 7필드 — "그때 요건"의 동결 (estimated_cost는 명시 예외).
-            template_name=template.name,
-            requirement_type=template.requirement_type,
-            validity_months=template.validity_months,
-            renewal_cycle_months=template.renewal_cycle_months,
-            renewal_lead_days=template.renewal_lead_days,
-            source_url=template.source_url,
-            last_verified_on=template.last_verified_on,
-            assignee_id=int(assignee_id) if assignee_id is not None else None,
-            note=payload.get("note"),
-            created_by_id=actor.id,
-        )
-        session.add(row)
         try:
-            session.flush()
+            row = _instantiate_template(
+                session,
+                template=template,
+                target_type=target_type,
+                target_id=target_id,
+                actor_user_id=actor.id,
+                assignee_id=int(assignee_id) if assignee_id is not None else None,
+                note=payload.get("note"),
+            )
         except IntegrityError as exc:
+            # 함정 ② — 실패 경로의 값은 flush 전에 빼 둔 평범한 변수만 읽는다.
             raise AppError(
                 ErrorCode.VALIDATION_INVALID_FIELD,
                 detail={
@@ -579,45 +720,6 @@ def create_certification(
                 },
                 log_context={"template_id": template_id, "target_id": target_id},
             ) from exc
-
-        # 체크리스트 → 태스크 참조 복사 (ADR-05 — [M2] 보강 S2-1 PR-2 ④ 지시분).
-        items = (
-            session.execute(
-                select(TemplateChecklistItem)
-                .where(
-                    TemplateChecklistItem.template_id == template.id,
-                    TemplateChecklistItem.deleted_at.is_(None),
-                )
-                .order_by(TemplateChecklistItem.seq)
-            )
-            .scalars()
-            .all()
-        )
-        for item in items:
-            session.add(
-                CertificationTask(
-                    certification_id=row.id,
-                    seq=item.seq,
-                    item_name=item.item_name,
-                    document_type_id=item.document_type_id,
-                    is_required=item.is_required,
-                    created_by_id=actor.id,
-                )
-            )
-
-        outbox.publish(
-            session,
-            event_type="certifications.certification.created",
-            aggregate_type="certifications",
-            aggregate_id=row.id,
-            payload={
-                "certification_id": row.id,
-                "template_id": template.id,
-                "target_type": target_type,
-                "target_id": target_id,
-                "task_count": len(items),
-            },
-        )
         session.flush()
 
         body = _serialize(_certification_view(session, row, _market_code(session, row.template_id)))
@@ -823,11 +925,34 @@ def add_task(
         return 201, body
 
 
+def _resolve_task_document(session: Session, value: Any) -> int | None:
+    """서류 링크 값 해석 — null=해제, 양수=활성 문서 실재 검증(§5.1 "서류 링크").
+
+    소유자 제한을 걸지 않는다 — §5.6의 공용 참조(CFS·CoA는 SKU 소유 문서를
+    여러 태스크가 참조)가 정본 용법이라, 태스크의 document_type과의 일치도
+    강제하지 않는다(종류 안내는 화면 필터 몫 — 문면에 없는 차단은 발명이다).
+    """
+    if value is None:
+        return None
+    document_id = int(value)
+    document = session.execute(
+        select(Document).where(Document.id == document_id, Document.deleted_at.is_(None))
+    ).scalar_one_or_none()
+    if document is None:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={"document_id": "존재하지 않는 문서입니다. 문서보관소에서 다시 선택해 주세요."},
+            log_context={"document_id": document_id},
+        )
+    return document.id
+
+
 def update_task(
     *, actor: AuthenticatedUser, certification_id: int, task_id: int, payload: dict[str, Any]
 ) -> TaskView:
-    """체크 토글·항목명·메모 편집 — done↔done_at 쌍은 서비스가 함께 움직인다
-    (DB CHECK done_pair가 마지막 층). 서류 링크 연결 화면·검증은 PR-2다."""
+    """체크 토글·항목명·메모 편집·서류 링크 — done↔done_at 쌍은 서비스가 함께
+    움직인다(DB CHECK done_pair가 마지막 층). document_id는 3값 의미론
+    (생략=미변경 / null=해제 / 양수=연결 — 스키마 독스트링)."""
     with unit_of_work() as uow:
         session = uow.session
         require_certification(session, certification_id)
@@ -857,6 +982,8 @@ def update_task(
             row.item_name = str(payload["item_name"]).strip()
         if "seq" in payload:
             row.seq = int(payload["seq"])
+        if "document_id" in payload:
+            row.document_id = _resolve_task_document(session, payload["document_id"])
         if "note" in payload:
             row.note = payload["note"]
         row.updated_by_id = actor.id

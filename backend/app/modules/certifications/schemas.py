@@ -94,12 +94,18 @@ class TaskAddRequest(BaseModel):
 
 
 class TaskUpdateRequest(BaseModel):
-    """체크 토글·항목 편집 — exclude_unset 의미론. 서류 링크 연결은 PR-2."""
+    """체크 토글·항목 편집·서류 링크 — exclude_unset 의미론.
+
+    document_id는 3값 의미론이다: 필드 생략=미변경 / null=연결 해제 /
+    양수=해당 문서로 연결(실재 검증은 서비스 — 폴리모픽 §5.6 공용 참조라
+    소유자 제한이 없다).
+    """
 
     version: int = Field(ge=1)
     done: bool | None = None
     seq: int | None = Field(default=None, ge=1)
     item_name: str | None = Field(default=None, min_length=1, max_length=200)
+    document_id: int | None = Field(default=None, ge=1)
     note: str | None = None
 
 

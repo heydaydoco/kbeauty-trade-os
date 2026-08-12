@@ -57,9 +57,11 @@ from app.core.db.mixins import (
     VersionMixin,
 )
 
-#: 문서의 소유자 유형 — 이번 세션이 소비하는 2종뿐이다(위 독스트링).
+#: 문서의 소유자 유형 — 소비분 한정 확장 규율(ADR-0028)이다.
 #: SKU — MSDS 등 SKU 단위 문서(ADR-0020 승격). LABEL — 라벨 아트웍 파일.
-DOCUMENT_OWNER_TYPES = ("SKU", "LABEL")
+#: CERTIFICATION — 인증 인스턴스 서류(S2-2 PR-2 — 판정 안건 ⑤. 확장은 이
+#: 1종까지이고, GMP류 공용 서류의 소유 공백은 관찰 원장 등재분이다).
+DOCUMENT_OWNER_TYPES = ("SKU", "LABEL", "CERTIFICATION")
 
 #: 문서의 저장 형태. FILE — 서버 저장 실물. LINK — 외부 URL(승격 이관분 포함).
 DOCUMENT_STORAGE_KINDS = ("FILE", "LINK")
@@ -97,7 +99,8 @@ class Document(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixi
     __tablename__ = "documents"
 
     #: 폴리모픽 소유 — FK가 불가능해 CHECK+서비스 검증이다(위 독스트링).
-    owner_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    #: 길이 13 = 최장 값 'CERTIFICATION'(S2-2 PR-2 확장 시 10→13 확폭).
+    owner_type: Mapped[str] = mapped_column(String(13), nullable=False)
     owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     document_type_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("document_types.id", ondelete="RESTRICT"), nullable=False

@@ -20,6 +20,7 @@ import { appliesToLabel, certificationStatusLabel, orEmpty } from "../lib/labels
 import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
+import type { DocumentRow } from "./documents";
 import type { RequirementTemplate } from "./requirement-templates";
 
 export interface Certification {
@@ -319,11 +320,49 @@ function TransitionPanel({
   );
 }
 
-/** 태스크 패널 — 체크 토글·추가·제거 (ADR-11 "태스크는 자유", 서류 링크는 다음 단계). */
+/** 연결된 서류 셀 — 문서가 목록 밖(200 상한·삭제)이어도 던지지 않는다(함정 ⑦ 가드). */
+function TaskDocumentCell({
+  documentId,
+  document,
+}: {
+  documentId: number | null;
+  document: DocumentRow | undefined;
+}) {
+  if (documentId === null) return <>{orEmpty(null)}</>;
+  if (document === undefined) return <>{`#${documentId}`}</>;
+  if (document.storage_kind === "FILE") {
+    return (
+      <a href={`/api/v1/documents/${document.id}/download`} className="underline">
+        {orEmpty(document.original_filename)}
+      </a>
+    );
+  }
+  if (document.url) {
+    return (
+      <a href={document.url} className="underline" rel="noreferrer noopener">
+        링크 열기
+      </a>
+    );
+  }
+  return <>{orEmpty(null)}</>;
+}
+
+function taskDocumentOptionLabel(doc: DocumentRow): string {
+  return `#${doc.id} ${doc.document_type_name} · ${doc.original_filename ?? doc.url ?? ""}`;
+}
+
+/** 태스크 패널 — 체크 토글·추가·제거·서류 링크 (ADR-11 "태스크는 자유" / §5.1). */
 function TasksPanel({ row, canEdit }: { row: Certification; canEdit: boolean }) {
   const client = useQueryClient();
   const listKey = ["certifications", row.id, "tasks"] as const;
   const tasks = usePagedQuery<CertificationTask>(listKey, `/v1/certifications/${row.id}/tasks`);
+  // 연결 후보·표시용 문서 목록 — 드롭다운 선례대로 ?size=200 우회(§5.6 공용
+  // 참조라 소유자 필터를 걸지 않는다). 200 상한 한계는 관찰 원장 계열.
+  const documents = usePagedQuery<DocumentRow>(
+    ["documents", "task-link-options"],
+    "/v1/documents?size=200",
+  );
+  const documentById = new Map((documents.data?.items ?? []).map((doc) => [doc.id, doc]));
   const [form, setForm] = useState({ seq: "", item_name: "", required: true });
 
   const toggle = useMutation({
@@ -331,6 +370,15 @@ function TasksPanel({ row, canEdit }: { row: Certification; canEdit: boolean }) 
       apiFetch<CertificationTask>(`/v1/certifications/${row.id}/tasks/${task.id}`, {
         method: "PATCH",
         body: { version: task.version, done: !task.done },
+      }),
+    onSuccess: () => void client.invalidateQueries({ queryKey: listKey }),
+  });
+
+  const linkDocument = useMutation({
+    mutationFn: ({ task, documentId }: { task: CertificationTask; documentId: number | null }) =>
+      apiFetch<CertificationTask>(`/v1/certifications/${row.id}/tasks/${task.id}`, {
+        method: "PATCH",
+        body: { version: task.version, document_id: documentId },
       }),
     onSuccess: () => void client.invalidateQueries({ queryKey: listKey }),
   });
@@ -352,7 +400,11 @@ function TasksPanel({ row, canEdit }: { row: Certification; canEdit: boolean }) 
     onSuccess: () => void client.invalidateQueries({ queryKey: listKey }),
   });
 
-  const message = fieldMessage(toggle.error) ?? fieldMessage(add.error) ?? fieldMessage(remove.error);
+  const message =
+    fieldMessage(toggle.error) ??
+    fieldMessage(linkDocument.error) ??
+    fieldMessage(add.error) ??
+    fieldMessage(remove.error);
 
   return (
     <div className="mt-4 rounded-lg border border-gray-200 p-4">
@@ -373,6 +425,7 @@ function TasksPanel({ row, canEdit }: { row: Certification; canEdit: boolean }) 
               <th className="cell-nowrap px-3 py-2 num">순번</th>
               <th className="px-3 py-2">항목</th>
               <th className="cell-nowrap px-3 py-2">필수</th>
+              <th className="px-3 py-2">서류</th>
               <th className="cell-nowrap px-3 py-2">완료</th>
               {canEdit && <th className="px-3 py-2" />}
             </tr>
@@ -383,6 +436,40 @@ function TasksPanel({ row, canEdit }: { row: Certification; canEdit: boolean }) 
                 <td className="cell-nowrap px-3 py-2 num">{task.seq}</td>
                 <td className="px-3 py-2">{task.item_name}</td>
                 <td className="cell-nowrap px-3 py-2">{task.is_required ? "필수" : "선택"}</td>
+                <td className="px-3 py-2">
+                  {canEdit && (
+                    <select
+                      aria-label={`${task.item_name} 서류 연결`}
+                      value={task.document_id ?? ""}
+                      disabled={linkDocument.isPending}
+                      onChange={(event) =>
+                        linkDocument.mutate({
+                          task,
+                          documentId:
+                            event.target.value === "" ? null : Number(event.target.value),
+                        })
+                      }
+                      className="mr-2 max-w-56 rounded border border-gray-300 px-2 py-1 text-xs"
+                    >
+                      <option value="">(연결 없음)</option>
+                      {documents.data?.items.map((doc) => (
+                        <option key={doc.id} value={doc.id}>
+                          {taskDocumentOptionLabel(doc)}
+                        </option>
+                      ))}
+                      {/* 현재 연결 문서가 목록 밖이어도 값이 사라지지 않게 유지한다. */}
+                      {task.document_id !== null && !documentById.has(task.document_id) && (
+                        <option value={task.document_id}>{`#${task.document_id}`}</option>
+                      )}
+                    </select>
+                  )}
+                  <TaskDocumentCell
+                    documentId={task.document_id}
+                    document={
+                      task.document_id === null ? undefined : documentById.get(task.document_id)
+                    }
+                  />
+                </td>
                 <td className="cell-nowrap px-3 py-2">
                   {canEdit ? (
                     <input
