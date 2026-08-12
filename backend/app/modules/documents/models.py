@@ -124,8 +124,8 @@ class Document(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixi
 
     #: 발급일(업무 날짜). 보존기한 산정의 기준이다(§4.7).
     issued_on: Mapped[date | None] = mapped_column(Date, nullable=True)
-    #: 유효기간 만료일. 값이 있는 문서가 기일 엔진(S2-3) 스캔 대상이다 —
-    #: 스캔 배치는 이번 범위가 아니다(scheduled_jobs 0행 유지).
+    #: 유효기간 만료일. 값이 있는 문서가 기일 엔진 스캔 대상이다(§4.7) —
+    #: 스캔 잡(deadline-scan) 자체는 S2-3 PR-2다. PR-1은 실행기와 알림 통로까지.
     valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
     #: 보존기한. 이 날짜까지 soft delete가 거부된다(파기 잠금 — 서비스 강제).
     retention_until: Mapped[date | None] = mapped_column(Date, nullable=True)

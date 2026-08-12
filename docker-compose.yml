@@ -160,6 +160,36 @@ services:
       retries: 12
       start_period: 20s
 
+  # ── 배치 실행기 (§15 스케줄 레지스트리 / S2-3 — 부채 #12) ─────────────────
+  # ★ api와 **같은 이미지·같은 계정**으로 뜬다. 실행기가 도는 곳이 앱 안이라야
+  #   잡이 앱의 트랜잭션·권한 규율(§17.1·§17.5)을 그대로 따른다.
+  # ★ 중복 기동은 PG advisory lock이 막는다 — 두 번째 프로세스는 잠금을 못 잡고
+  #   조용히 종료한다(scale up 해도 하나만 돈다).
+  worker:
+    build:
+      context: ./backend
+      target: dev
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: dev
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY 누락 — .env를 확인할 것}
+      TZ: UTC
+      DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_dev
+      MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_dev
+      FILE_STORAGE_ROOT: /data/files
+    volumes:
+      - ./backend:/app
+      - files_data:/data/files
+    command: ["python", "-m", "app.cli", "run-scheduler"]
+    restart: unless-stopped
+
   # ── 프런트엔드 (Vite dev server) ──────────────────────────────────────────
   web:
     build:

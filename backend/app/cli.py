@@ -27,6 +27,7 @@ from app.modules.certifications.service import sweep_date_transitions
 from app.modules.identity.models import Role, RoleCode, User, UserRole
 from app.modules.identity.passwords import hash_password
 from app.modules.identity.service import normalize_email
+from app.modules.platform import scheduler
 
 MIN_PASSWORD_LENGTH = 12
 
@@ -106,7 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # 인증 만료임박·만료 날짜 스윕 (§5.2 자동 부여 / WBS S2-2 DoD "배치" — 판정 ⑦).
-    # scheduled_jobs 등록은 S2-3 실행기 몫이라 실행 수단은 이 수동 호출뿐이다.
+    # S2-3부터는 실행기가 같은 함수를 스케줄로도 돌린다 — 이 명령은 기준일을
+    # 지정해 손으로 한 번 돌리는 통로로 남는다(과거 날짜 재수렴·관통 실측).
     sweep = commands.add_parser(
         "certification-sweep",
         help="인증 만료임박·만료 날짜 수렴 스윕을 1회 실행한다 (스케줄 등록은 S2-3)",
@@ -116,6 +118,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="기준일(YYYY-MM-DD). 생략하면 KST 오늘 — 업무 날짜는 KST다(§22 렌즈 6)",
     )
+
+    # 배치 레지스트리 등록 (§15 / 부채 #12 — 판정 요청 15의 앱 경로 등록).
+    # 마이그레이션 시드는 항구 금지다(함정 ⑩ — scheduled_jobs가 users FK를 단다).
+    commands.add_parser(
+        "register-jobs",
+        help="레지스트리의 배치를 scheduled_jobs에 등록한다(멱등 — 있는 건 건드리지 않음)",
+    )
+
+    # 실행기 진입점 — compose의 worker 서비스가 이 명령으로 뜬다.
+    commands.add_parser("run-scheduler", help="배치 실행기를 기동한다(무한 루프)")
 
     args = parser.parse_args(argv)
     if args.command == "create-admin":
@@ -130,6 +142,15 @@ def main(argv: list[str] | None = None) -> int:
             if "->" in key:
                 print(f"  {key}: {counts[key]}건")
         return 0
+    if args.command == "register-jobs":
+        created = scheduler.register_jobs()
+        if created:
+            print(f"등록 완료 {len(created)}건: {', '.join(created)}")
+        else:
+            print("새로 등록할 배치가 없습니다(전건 등록 상태).")
+        return 0
+    if args.command == "run-scheduler":
+        return scheduler.run_forever()
     return 1  # pragma: no cover — argparse가 먼저 막는다
 
 
