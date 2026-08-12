@@ -302,3 +302,25 @@ def test_task_link_edit_is_denied_to_non_editors(cert: TestClient, viewer: TestC
         json={"version": task["version"], "document_id": document_id},
     )
     assert denied.status_code == 403, denied.text
+
+
+def test_task_add_rejects_unknown_fields(cert: TestClient) -> None:
+    """태스크 생성의 모르는 필드는 조용한 무시가 아니라 422 (판정 요청 18)"""
+    body = _register(cert, key="taskforbid-add")
+    refused = cert.post(
+        f"{CERTIFICATIONS}/{body['id']}/tasks",
+        json={"seq": 1, "item_name": "CFS 준비", "is_required": True, "done": True},
+        headers={"Idempotency-Key": "taskforbid-add-task"},
+    )
+    assert refused.status_code == 422, refused.text
+
+
+def test_task_update_rejects_unknown_fields(cert: TestClient) -> None:
+    """태스크 편집의 오타 필드가 조용히 무시되지 않는다 — 생략=미변경과의 혼동 차단"""
+    body = _register(cert, key="taskforbid-edit")
+    task = _add_task(cert, body["id"], key="taskforbid-edit-task")
+    refused = cert.patch(
+        f"{CERTIFICATIONS}/{body['id']}/tasks/{task['id']}",
+        json={"version": task["version"], "documnet_id": 1},
+    )
+    assert refused.status_code == 422, refused.text

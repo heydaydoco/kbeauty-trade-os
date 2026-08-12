@@ -42,11 +42,22 @@ class Event(PkMixin, TimestampMixin, Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    #: 다음 재시도 시각 (S2-3 판정 요청 12 — 지수 백오프의 저장형).
+    #: NULL이면 "지금 바로 대상"이다. 실패한 건에만 값이 찍히므로, 대기열
+    #: 조회가 실패 건을 매번 다시 집어 드는 스핀을 막는다. 산식 계산
+    #: (updated_at+attempts)으로 두지 않은 이유는 그 식이 인덱스를 못 타서
+    #: 대기열 조회가 실패 건 수에 비례해 느려지기 때문이다.
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     __table_args__ = (
         # 대기열 조회는 "아직 안 보낸 것"만 훑는다 — 부분 인덱스로 발송 완료분을
         # 인덱스에서 빼면 시간이 지나도 대기열 조회 비용이 늘지 않는다.
+        # ★ 선두 컬럼이 next_retry_at인 이유: 디스패처의 클레임 질의가
+        #   "재시도 시각이 지났거나 없는 것"을 시각 순으로 집기 때문이다.
+        #   NULLS FIRST가 PG 오름차순의 기본이 아니므로 질의에서 명시한다.
         Index(
             "ix_events_pending",
+            "next_retry_at",
             "id",
             postgresql_where=text("published_at IS NULL"),
         ),

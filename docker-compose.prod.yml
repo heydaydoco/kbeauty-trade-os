@@ -112,6 +112,30 @@ services:
     # 포트 미게시 — nginx(web)를 통해서만 접근한다.
     restart: unless-stopped
 
+  # 배치 실행기 (§15 / S2-3). api와 같은 이미지·같은 앱 계정으로 돈다.
+  # 중복 기동은 PG advisory lock이 막으므로 replica를 늘려도 하나만 실행된다.
+  worker:
+    build:
+      context: ./backend
+      target: prod
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: prod
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SECRET_KEY: ${SECRET_KEY:?}
+      TZ: UTC
+      DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_dev
+      MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_dev
+      FILE_STORAGE_ROOT: /data/files
+    volumes:
+      - files_data:/data/files
+    command: ["python", "-m", "app.cli", "run-scheduler"]
+    restart: unless-stopped
+
   web:
     build:
       context: ./frontend

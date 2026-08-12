@@ -2,6 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { queryClient } from "./lib/queryClient";
 import { useSession } from "./lib/session";
+import { AlertsPage } from "./routes/alerts";
 import { BrandsPage } from "./routes/brands";
 import { DocumentsPage } from "./routes/documents";
 import { HealthPage } from "./routes/health";
@@ -82,6 +83,7 @@ export function AppRoutes() {
         <Route path="/markets" element={<MarketsPage />} />
         <Route path="/requirement-templates" element={<RequirementTemplatesPage />} />
         <Route path="/certifications" element={<CertificationsPage />} />
+        <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/partners" element={<PartnersPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/imports" element={<ImportsPage />} />

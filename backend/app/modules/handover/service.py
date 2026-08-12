@@ -22,6 +22,7 @@ from app.modules.audit.models import AuditAction
 from app.modules.handover.targets import ASSIGNMENT_TARGETS
 from app.modules.identity.models import User
 from app.modules.outbox import service as outbox
+from app.modules.worklist.models import Alert
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +67,8 @@ def reassign_all(*, from_user_id: int, to_user_id: int, actor_user_id: int) -> H
             )
             moved[target.label] = len(moved_ids)
 
+        _rewrite_alert_dedup_keys(session, from_user_id=from_user_id, to_user_id=to_user_id)
+
         audit.record(
             session,
             action=AuditAction.ASSIGNMENTS_HANDED_OVER,
@@ -82,6 +85,42 @@ def reassign_all(*, from_user_id: int, to_user_id: int, actor_user_id: int) -> H
             payload={"from_user_id": from_user_id, "to_user_id": to_user_id, "moved": moved},
         )
         return HandoverResult(from_user_id=from_user_id, to_user_id=to_user_id, moved=moved)
+
+
+def _rewrite_alert_dedup_keys(session: Session, *, from_user_id: int, to_user_id: int) -> None:
+    """이관된 알림의 dedup_key 꼬리(수신자 id)를 새 담당자로 바꾼다.
+
+    ★ dedup_key는 `{사건}:{수신자id}`다(ADR-0045 — 수신자 포함 규약). 수신자
+      컬럼만 옮기고 키를 그대로 두면 키 안의 id와 실제 수신자가 어긋나, 다음
+      스캔이 **새 담당자에게 같은 건을 한 번 더** 보낸다(§20 H "확인 알림
+      재발송 0"이 이관 직후에만 깨진다 — 자기 적대 검증 확정 발견).
+    ★ 이미 새 담당자가 같은 키를 갖고 있으면(양쪽 모두 받은 건) 바꿀 수 없다 —
+      부분 유니크에 걸린다. 그 행은 키를 그대로 두고 넘어간다: 수신자는 이미
+      새 담당자이고, 중복 행 하나가 남는 것이 이관 실패보다 낫다.
+    """
+    old_suffix = f":{from_user_id}"
+    new_suffix = f":{to_user_id}"
+    rows = session.execute(
+        select(Alert).where(
+            Alert.recipient_user_id == to_user_id,
+            Alert.deleted_at.is_(None),
+            Alert.dedup_key.like(f"%{old_suffix}"),
+        )
+    ).scalars()
+    taken = set(
+        session.execute(
+            select(Alert.dedup_key).where(
+                Alert.recipient_user_id == to_user_id, Alert.deleted_at.is_(None)
+            )
+        ).scalars()
+    )
+    for row in rows:
+        candidate = row.dedup_key[: -len(old_suffix)] + new_suffix
+        if candidate in taken:
+            continue
+        taken.add(candidate)
+        row.dedup_key = candidate
+    session.flush()
 
 
 def _require_user(session: Session, user_id: int, *, allow_inactive: bool) -> User:
