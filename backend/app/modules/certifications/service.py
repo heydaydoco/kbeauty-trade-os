@@ -48,6 +48,7 @@ from app.modules.certifications.models import (
     CertificationStatusLog,
     CertificationTask,
 )
+from app.modules.documents.models import Document
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.models import User
 from app.modules.identity.service import AuthenticatedUser
@@ -823,11 +824,34 @@ def add_task(
         return 201, body
 
 
+def _resolve_task_document(session: Session, value: Any) -> int | None:
+    """서류 링크 값 해석 — null=해제, 양수=활성 문서 실재 검증(§5.1 "서류 링크").
+
+    소유자 제한을 걸지 않는다 — §5.6의 공용 참조(CFS·CoA는 SKU 소유 문서를
+    여러 태스크가 참조)가 정본 용법이라, 태스크의 document_type과의 일치도
+    강제하지 않는다(종류 안내는 화면 필터 몫 — 문면에 없는 차단은 발명이다).
+    """
+    if value is None:
+        return None
+    document_id = int(value)
+    document = session.execute(
+        select(Document).where(Document.id == document_id, Document.deleted_at.is_(None))
+    ).scalar_one_or_none()
+    if document is None:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={"document_id": "존재하지 않는 문서입니다. 문서보관소에서 다시 선택해 주세요."},
+            log_context={"document_id": document_id},
+        )
+    return document.id
+
+
 def update_task(
     *, actor: AuthenticatedUser, certification_id: int, task_id: int, payload: dict[str, Any]
 ) -> TaskView:
-    """체크 토글·항목명·메모 편집 — done↔done_at 쌍은 서비스가 함께 움직인다
-    (DB CHECK done_pair가 마지막 층). 서류 링크 연결 화면·검증은 PR-2다."""
+    """체크 토글·항목명·메모 편집·서류 링크 — done↔done_at 쌍은 서비스가 함께
+    움직인다(DB CHECK done_pair가 마지막 층). document_id는 3값 의미론
+    (생략=미변경 / null=해제 / 양수=연결 — 스키마 독스트링)."""
     with unit_of_work() as uow:
         session = uow.session
         require_certification(session, certification_id)
@@ -857,6 +881,8 @@ def update_task(
             row.item_name = str(payload["item_name"]).strip()
         if "seq" in payload:
             row.seq = int(payload["seq"])
+        if "document_id" in payload:
+            row.document_id = _resolve_task_document(session, payload["document_id"])
         if "note" in payload:
             row.note = payload["note"]
         row.updated_by_id = actor.id

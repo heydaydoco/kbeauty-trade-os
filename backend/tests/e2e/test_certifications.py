@@ -14,9 +14,11 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.core.db.uow import unit_of_work
 from app.main import app
+from app.modules.documents.models import Document, DocumentType
 from app.modules.identity.models import RoleCode
 from app.modules.requirements.models import RequirementTemplate
 from tests.support.factories import DEFAULT_PASSWORD, create_market, create_sku, create_user
@@ -206,3 +208,97 @@ def test_every_role_can_read(cert: TestClient, trader: TestClient, viewer: TestC
         assert detail.status_code == 200
         tasks = client.get(f"{CERTIFICATIONS}/{body['id']}/tasks")
         assert tasks.status_code == 200
+
+
+# ── 태스크 서류 링크 (S2-2 PR-2 — §5.1 "서류 링크"·§5.6 공용 참조) ──────────
+
+
+def _insert_link_document(*, owner_type: str = "SKU", owner_id: int = 1) -> int:
+    """공용 참조 대상 문서 준비 — 등록 경로의 계약은 test_documents가 고정한다."""
+    with unit_of_work() as uow:
+        type_id = uow.session.execute(
+            select(DocumentType.id).where(
+                DocumentType.code == "CFS", DocumentType.deleted_at.is_(None)
+            )
+        ).scalar_one()
+        row = Document(
+            owner_type=owner_type,
+            owner_id=owner_id,
+            document_type_id=type_id,
+            storage_kind="LINK",
+            url="https://example.com/cfs.pdf",
+        )
+        uow.session.add(row)
+        uow.session.flush()
+        return row.id
+
+
+def _add_task(client: TestClient, certification_id: int, *, key: str) -> dict[str, Any]:
+    response = client.post(
+        f"{CERTIFICATIONS}/{certification_id}/tasks",
+        json={"seq": 1, "item_name": "CFS 준비", "is_required": True},
+        headers={"Idempotency-Key": key},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_task_links_and_unlinks_a_document(cert: TestClient) -> None:
+    """서류 연결(양수)→해제(null) 왕복 — 3값 의미론의 두 변경 방향 실측"""
+    body = _register(cert, key="doclink")
+    task = _add_task(cert, body["id"], key="doclink-task")
+    document_id = _insert_link_document(owner_id=body["target_id"])
+
+    linked = cert.patch(
+        f"{CERTIFICATIONS}/{body['id']}/tasks/{task['id']}",
+        json={"version": task["version"], "document_id": document_id},
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["document_id"] == document_id
+
+    unlinked = cert.patch(
+        f"{CERTIFICATIONS}/{body['id']}/tasks/{task['id']}",
+        json={"version": linked.json()["version"], "document_id": None},
+    )
+    assert unlinked.status_code == 200, unlinked.text
+    assert unlinked.json()["document_id"] is None
+
+
+def test_task_link_omission_keeps_the_document(cert: TestClient) -> None:
+    """document_id 생략=미변경 — 체크 토글이 연결을 지우지 않는다(3값 의미론)"""
+    body = _register(cert, key="dockeep")
+    task = _add_task(cert, body["id"], key="dockeep-task")
+    document_id = _insert_link_document(owner_id=body["target_id"])
+    linked = cert.patch(
+        f"{CERTIFICATIONS}/{body['id']}/tasks/{task['id']}",
+        json={"version": task["version"], "document_id": document_id},
+    )
+    toggled = cert.patch(
+        f"{CERTIFICATIONS}/{body['id']}/tasks/{task['id']}",
+        json={"version": linked.json()["version"], "done": True},
+    )
+    assert toggled.status_code == 200, toggled.text
+    assert toggled.json()["done"] is True
+    assert toggled.json()["document_id"] == document_id
+
+
+def test_task_link_to_a_missing_document_is_rejected(cert: TestClient) -> None:
+    body = _register(cert, key="docmiss")
+    task = _add_task(cert, body["id"], key="docmiss-task")
+    refused = cert.patch(
+        f"{CERTIFICATIONS}/{body['id']}/tasks/{task['id']}",
+        json={"version": task["version"], "document_id": 999_999},
+    )
+    assert refused.status_code == 422, refused.text
+    assert "존재하지 않는 문서" in refused.json()["error"]["detail"]["document_id"]
+
+
+def test_task_link_edit_is_denied_to_non_editors(cert: TestClient, viewer: TestClient) -> None:
+    body = _register(cert, key="docperm")
+    task = _add_task(cert, body["id"], key="docperm-task")
+    document_id = _insert_link_document(owner_id=body["target_id"])
+    denied = viewer.patch(
+        f"{CERTIFICATIONS}/{body['id']}/tasks/{task['id']}",
+        json={"version": task["version"], "document_id": document_id},
+    )
+    assert denied.status_code == 403, denied.text
