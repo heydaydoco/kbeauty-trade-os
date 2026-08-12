@@ -99,6 +99,11 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # IMMUTABLE 등재)이지 본체가 아니다.
         "certifications",
         "certification_tasks",  # 체크·서류 링크·soft delete(UPDATE)
+        # S2-3 — 알림 채널·구독 (ADR-07·§16). 설정 마스터라 관리 화면이 고친다.
+        # 이번 세션에는 0행이고 쓰기 경로도 없지만(판정 요청 5), 분류는 테이블이
+        # 서는 시점의 의무다 — "행이 없으니 나중에"가 곧 조용한 누락이다.
+        "notification_channels",
+        "webhook_subscriptions",
     }
 )
 
