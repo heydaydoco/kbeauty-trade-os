@@ -14,6 +14,7 @@ from app.modules.imports import router as imports_router
 from app.modules.ingredients import router as ingredients_router
 from app.modules.markets import router as markets_router
 from app.modules.materials import router as materials_router
+from app.modules.notifications import router as notifications_router
 from app.modules.partners import router as partners_router
 from app.modules.requirements import router as requirements_router
 from app.modules.worklist import router as worklist_router
@@ -24,6 +25,8 @@ api_router.include_router(identity_router.router)
 api_router.include_router(identity_router.users_router)
 api_router.include_router(handover_router.router)
 api_router.include_router(worklist_router.router)
+api_router.include_router(notifications_router.router)
+api_router.include_router(notifications_router.rules_router)
 api_router.include_router(catalog_router.brands_router)
 api_router.include_router(catalog_router.item_profiles_router)
 api_router.include_router(catalog_router.products_router)
