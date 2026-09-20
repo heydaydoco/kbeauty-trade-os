@@ -55,6 +55,10 @@ class ErrorCode(StrEnum):
     DOCUMENTS_SET_SKU_MSDS_FORBIDDEN = "DOCUMENTS.MSDS.SET_SKU_FORBIDDEN"
     #: LINK형 문서의 다운로드 시도 — 내려받을 실물이 없다.
     DOCUMENTS_DOWNLOAD_NOT_A_FILE = "DOCUMENTS.DOWNLOAD.NOT_A_FILE"
+    #: 인증 태스크가 서류 링크로 참조 중인 문서의 삭제 시도 — 선해제 후 삭제
+    #: (S2-3 판정 요청 19 (나)). 기일 스캔이 활성 문서만 돌므로, 링크된 채 삭제되면
+    #: 그 문서의 만료 알림이 조용히 사라진다.
+    DOCUMENTS_LINKED_TO_TASK = "DOCUMENTS.DOCUMENT.LINKED_TO_TASK"
 
     # 엑셀 임포트 (S1-3 / §12.2 / ADR-09·0027)
     #: 업로드 크기 상한 초과 — 수치는 imports.service.MAX_UPLOAD_BYTES가 유일
