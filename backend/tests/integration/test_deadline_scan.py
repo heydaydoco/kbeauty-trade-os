@@ -373,6 +373,26 @@ def test_escalation_is_judged_before_this_scans_own_alerts(
     assert counts["threshold"] == 3 and counts["escalated"] == 0
 
 
+def test_old_cycle_alerts_do_not_escalate_the_new_deadline(
+    actor: AuthenticatedUser, admins: Any
+) -> None:
+    """지난 주기(옛 만료일)의 미확인 알림은 새 만료일의 D-3 판정 근거가 아니다
+
+    관통 실측 발견: 만료일 정정 직후 옛 주기의 미확인 D-30이 새 주기 에스컬레이션을
+    즉시 발동시켰다. 판정은 현재 만료일 스탬프의 알림만 센다.
+    """
+    certification_id = _certification(actor, key="esc-cycle", assignee_id=actor.id)
+    deadlines.scan_deadlines(base_date=EXPIRES - timedelta(days=10))  # 옛 주기 D-30 미확인
+    with unit_of_work() as uow:
+        row = uow.session.get(Certification, certification_id)
+        assert row is not None
+        row.expires_on = date(2027, 9, 30)  # 갱신 — 새 주기
+    counts = deadlines.scan_deadlines(base_date=date(2027, 9, 28))  # 새 주기 D-2
+    assert counts["escalated"] == 0 and counts["threshold"] == 3
+    # 새 주기의 D-30이 미확인으로 남은 다음 날에는 발동한다
+    assert deadlines.scan_deadlines(base_date=date(2027, 9, 29))["escalated"] == 2
+
+
 def test_escalation_does_not_fire_before_d3(actor: AuthenticatedUser, admins: Any) -> None:
     _certification(actor, key="esc-early", assignee_id=actor.id)
     deadlines.scan_deadlines(base_date=EXPIRES - timedelta(days=10))

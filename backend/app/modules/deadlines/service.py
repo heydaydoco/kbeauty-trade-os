@@ -212,13 +212,20 @@ def _subject_key(kind: str, subject: Subject, threshold: str) -> str:
 
 
 def _has_unacknowledged_deadline_alert(session: Session, subject: Subject) -> bool:
-    """이 건의 기일 알림 중 미확인이 하나라도 남아 있는가 (에스컬레이션 판정)."""
+    """이 건의 **현재 만료일** 기일 알림 중 미확인이 남아 있는가 (에스컬레이션 판정).
+
+    ★ 만료일이 다른(지난 주기·정정 전) 알림은 세지 않는다 — 갱신으로 만료일이
+      바뀐 뒤에도 옛 주기의 미확인 알림이 남아 있을 수 있는데, 그것은 이미 지난
+      기일의 이야기라 새 기일의 D-3 판정 근거가 아니다(관통 실측에서 정정 직후
+      옛 주기 미확인분이 새 주기 에스컬레이션을 즉시 발동시킨 것을 잡았다).
+    """
     prefix = _subject_key(KIND_DEADLINE, subject, "")
+    stamp = subject.expires_on.isoformat()
     return bool(
         session.execute(
             select(
                 exists().where(
-                    Alert.dedup_key.like(f"{prefix}%"),
+                    Alert.dedup_key.like(f"{prefix}%@{stamp}:%"),
                     Alert.acknowledged_at.is_(None),
                     Alert.deleted_at.is_(None),
                 )
