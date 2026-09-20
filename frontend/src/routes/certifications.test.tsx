@@ -35,6 +35,8 @@ const ROW = {
   assignee_id: null,
   note: null,
   version: 3,
+  is_overdue: false,
+  overdue_days: null,
 };
 
 const AUTO_LOG = {
@@ -87,6 +89,36 @@ describe("인증 목록", () => {
     expect(screen.getAllByText("미착수").length).toBeGreaterThanOrEqual(2);
     // 무역 역할에는 등록 폼이 없다(판정 ⑫ — 편집=인증+관리자).
     expect(screen.queryByText("새 인증 등록")).not.toBeInTheDocument();
+  });
+
+  it("갱신중 도과는 상태 라벨 옆 배지로 표시된다 — 상태는 갱신중 그대로 (S2-3 안건 ⑦)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.includes("/v1/certifications"))
+          return Promise.resolve(
+            jsonResponse(
+              page([
+                { ...ROW, status: "RENEWING", expires_on: "2026-08-01", is_overdue: true, overdue_days: 19 },
+              ]),
+            ),
+          );
+        return Promise.resolve(jsonResponse(page([])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/certifications" });
+
+    expect(await screen.findByText("도과 19일")).toBeInTheDocument();
+    expect(screen.getAllByText("갱신중").length).toBeGreaterThanOrEqual(2); // 필터 옵션 + 셀
+  });
+
+  it("도과가 아니면 배지가 없다 (계산값 false)", async () => {
+    stubApi(TRADER);
+    renderWithProviders(<AppRoutes />, { route: "/certifications" });
+
+    expect(await screen.findByText("MoCRA 제품 리스팅")).toBeInTheDocument();
+    expect(screen.queryByText(/도과 \d+일/)).not.toBeInTheDocument();
   });
 
   it("인증 역할은 전이 폼을 보고, 전이 요청에 version이 실린다 (§17.2)", async () => {

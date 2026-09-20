@@ -48,6 +48,7 @@ from app.core.db.uow import unit_of_work
 from app.core.logging.redaction import scrub_text
 from app.core.time import KST, utcnow
 from app.modules.certifications import service as certifications
+from app.modules.deadlines import service as deadlines
 from app.modules.notifications import dispatcher
 from app.modules.notifications import service as notifications
 from app.modules.platform.models import ScheduledJob
@@ -128,6 +129,14 @@ def _run_outbox_dispatch() -> dict[str, int]:
     return dispatcher.dispatch_pending()
 
 
+def _run_deadline_scan() -> dict[str, int]:
+    return deadlines.scan_deadlines()
+
+
+def _run_daily_briefing() -> dict[str, int]:
+    return deadlines.send_daily_briefing()
+
+
 @dataclass(frozen=True, slots=True)
 class JobSpec:
     code: str
@@ -150,6 +159,21 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         name_ko="아웃박스 알림 디스패치",
         schedule="interval@1",
         run=_run_outbox_dispatch,
+    ),
+    JobSpec(
+        code="deadline-scan",
+        name_ko="인증·문서 기일 스캔(만료 문턱·도과·에스컬레이션)",
+        # 스윕(06:00)이 그날의 상태를 맞춘 뒤에 돈다 — 순서는 시각 차로만 보장한다
+        # (실행기에 잡 간 의존 개념은 없다). 스캔 자체는 상태가 아니라 날짜를 본다.
+        schedule="daily@06:30",
+        run=_run_deadline_scan,
+    ),
+    JobSpec(
+        code="daily-briefing",
+        name_ko="데일리 브리핑(담당자별 1통)",
+        # 업무 시작 시각 고정(관찰 등재 — 설정화 트리거: 사용자 요구).
+        schedule="daily@09:00",
+        run=_run_daily_briefing,
     ),
 )
 

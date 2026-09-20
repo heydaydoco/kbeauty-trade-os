@@ -143,6 +143,11 @@ class CertificationSummary(BaseModel):
     assignee_id: int | None
     note: str | None
     version: int
+    #: 도과 계산값(안건 ⑦) — 갱신중 도과 표시의 근거. 저장 컬럼이 아니다.
+    #: 기본값을 두는 이유: 멱등 재생 본문(JSONB)은 생성 시점에 얼린 것이라
+    #: 이 필드가 생기기 전 요청의 재생에는 없다 — 재생이 500이 되면 안 된다.
+    is_overdue: bool = False
+    overdue_days: int | None = None
 
     @classmethod
     def of(cls, view: CertificationView) -> CertificationSummary:
