@@ -98,6 +98,11 @@ def threshold_label(threshold: int) -> str:
     return f"D-{threshold}"
 
 
+def _d_label(remaining: int) -> str:
+    """사람 표기 — 남았으면 D-N, 지났으면 D+N(음수 이중 하이픈 'D--19' 방지 — 관통 실측)."""
+    return f"D-{remaining}" if remaining >= 0 else f"D+{-remaining}"
+
+
 def _normalize_thresholds(raw: Any) -> tuple[int, ...]:
     """규칙 config의 thresholds — 양의 정수 목록만 받고, 아니면 기본값.
 
@@ -250,8 +255,8 @@ def _scan_subject(
                 subject_key=_subject_key(KIND_ESCALATION, subject, f"D-{ESCALATION_DAYS}@{stamp}"),
                 title=f"미확인 기일 에스컬레이션 — {subject.title}",
                 body=(
-                    f"만료일 {stamp}(D-{remaining})까지 {ESCALATION_DAYS}일 이내인데 담당자가 "
-                    "기일 알림을 확인하지 않았습니다. 담당자와 진행 상황을 확인해 주세요."
+                    f"만료일 {stamp}({_d_label(remaining)})까지 {ESCALATION_DAYS}일 이내인데 "
+                    "담당자가 기일 알림을 확인하지 않았습니다. 담당자와 진행 상황을 확인해 주세요."
                 ),
                 severity="CRITICAL",
                 routing=Routing.ADMIN,
@@ -290,8 +295,10 @@ def _scan_subject(
                 title=f"만료 {threshold_label(threshold)} — {subject.title}",
                 body=(
                     f"만료일 {stamp}까지 {remaining}일 남았습니다"
-                    f"({threshold_label(threshold)} 문턱). 갱신 준비를 확인해 주세요."
-                ),
+                    if remaining >= 0
+                    else f"만료일 {stamp}이 이미 {-remaining}일 지났습니다"
+                )
+                + f"({threshold_label(threshold)} 문턱). 갱신 준비를 확인해 주세요.",
                 severity="CRITICAL" if threshold <= CRITICAL_THRESHOLD_DAYS else "WARN",
                 event_type=policy.event_type,
                 rule=policy.rule,
