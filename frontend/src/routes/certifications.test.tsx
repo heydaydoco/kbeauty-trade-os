@@ -113,12 +113,40 @@ describe("인증 목록", () => {
     expect(screen.getAllByText("갱신중").length).toBeGreaterThanOrEqual(2); // 필터 옵션 + 셀
   });
 
-  it("도과가 아니면 배지가 없다 (계산값 false)", async () => {
-    stubApi(TRADER);
+  it("도과가 아니면 배지가 없다 — 게이트 축은 is_overdue 하나다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.includes("/v1/certifications"))
+          return Promise.resolve(
+            jsonResponse(page([{ ...ROW, is_overdue: false, overdue_days: 3 }])),
+          );
+        return Promise.resolve(jsonResponse(page([])));
+      }),
+    );
     renderWithProviders(<AppRoutes />, { route: "/certifications" });
 
     expect(await screen.findByText("MoCRA 제품 리스팅")).toBeInTheDocument();
     expect(screen.queryByText(/도과 \d+일/)).not.toBeInTheDocument();
+  });
+
+  it("상세 패널에도 같은 배지가 붙는다 (목록+상세 = 2곳)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.includes("/v1/certifications"))
+          return Promise.resolve(
+            jsonResponse(page([{ ...ROW, status: "RENEWING", is_overdue: true, overdue_days: 19 }])),
+          );
+        return Promise.resolve(jsonResponse(page([])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/certifications" });
+
+    fireEvent.click(await screen.findByRole("button", { name: "상세" }));
+    await waitFor(() => expect(screen.getAllByText("도과 19일")).toHaveLength(2));
   });
 
   it("인증 역할은 전이 폼을 보고, 전이 요청에 version이 실린다 (§17.2)", async () => {

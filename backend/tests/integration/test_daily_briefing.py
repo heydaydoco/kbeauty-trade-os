@@ -21,6 +21,7 @@ from app.modules.identity.models import RoleCode, User
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.requirements.models import RequirementTemplate
 from app.modules.worklist.models import Alert
+from tests.support.concurrency import run_concurrently
 from tests.support.factories import create_market, create_sku, create_user
 
 pytestmark = pytest.mark.group_h
@@ -98,7 +99,7 @@ def test_each_assignee_gets_one_briefing(actor: AuthenticatedUser) -> None:
 
     counts = deadlines.send_daily_briefing(base_date=TODAY)
 
-    assert counts == {"recipients": 2, "sent": 2}
+    assert counts == {"recipients": 2, "sent": 2, "failed": 0}
     rows = _alerts()
     assert {row.recipient_user_id for row in rows} == {actor.id, other}
     assert {row.dedup_key for row in rows} == {
@@ -132,9 +133,9 @@ def test_briefing_body_summarises_the_assignees_load(actor: AuthenticatedUser) -
     assert "· 담당 인증(진행 중): 3건" in briefing.body
     assert "· 만료임박: 1건" in briefing.body
     assert "· 만료·도과: 1건" in briefing.body
-    assert "· 미확인 알림: " in briefing.body
-    unread = int(briefing.body.split("· 미확인 알림: ")[1].split("건")[0])
-    assert unread >= 1
+    # 미확인 = s2(D-12: 문턱 3) + s3(도과 1 — 도과 건에 문턱 소급 없음) = 4. 브리핑
+    # 자신은 포함되지 않는다(브리핑 키 제외) — 스캔↔브리핑 연동을 정수로 고정한다.
+    assert "· 미확인 알림: 4건" in briefing.body
 
 
 def test_inactive_assignees_get_no_briefing_and_no_fallback(actor: AuthenticatedUser) -> None:
@@ -146,5 +147,47 @@ def test_inactive_assignees_get_no_briefing_and_no_fallback(actor: Authenticated
         assert user is not None
         user.is_active = False
     counts = deadlines.send_daily_briefing(base_date=TODAY)
-    assert counts == {"recipients": 0, "sent": 0}
+    assert counts == {"recipients": 0, "sent": 0, "failed": 0}
     assert _alerts() == []
+
+
+@pytest.mark.group_j
+@pytest.mark.concurrency
+def test_two_briefing_runs_at_once_send_one(actor: AuthenticatedUser) -> None:
+    """더블 실행(동시) → 1통 (§20 J — 멱등은 DB 유니크뿐이라 실제 경합으로 본다)"""
+    _certification(actor, key="b-race", assignee_id=actor.id)
+    outcomes = run_concurrently(
+        lambda _i: deadlines.send_daily_briefing(base_date=TODAY), workers=2
+    )
+    assert all(outcome.ok for outcome in outcomes), [o.error for o in outcomes]
+    assert sum(o.value["sent"] for o in outcomes) == 1
+    assert len(_alerts()) == 1
+
+
+def test_one_failing_recipient_does_not_stop_the_briefing(
+    actor: AuthenticatedUser, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """수신자 한 명의 실패가 나머지를 막지 않는다(§17.6) — 실패는 집계된다"""
+    other = create_user("briefing-other2@example.com", roles=(RoleCode.TRADE,))
+    _certification(actor, key="f1", assignee_id=actor.id)
+    _certification(actor, key="f2", assignee_id=other)
+    original = deadlines._briefing_lines
+
+    def boom(session: Any, user_id: int, base_date: date) -> Any:
+        if user_id == actor.id:
+            raise RuntimeError("의도한 실패")
+        return original(session, user_id, base_date)
+
+    monkeypatch.setattr(deadlines, "_briefing_lines", boom)
+    counts = deadlines.send_daily_briefing(base_date=TODAY)
+    assert counts == {"recipients": 1, "sent": 1, "failed": 1}
+    assert {row.recipient_user_id for row in _alerts()} == {other}
+
+
+def test_past_briefings_are_not_counted_as_unread(actor: AuthenticatedUser) -> None:
+    """어제 브리핑(미확인)은 오늘 브리핑의 "미확인 알림"에 안 센다 — 달력이 아니라 신호"""
+    _certification(actor, key="b-unread", assignee_id=actor.id)
+    deadlines.send_daily_briefing(base_date=date(2026, 8, 19))
+    deadlines.send_daily_briefing(base_date=TODAY)
+    today = next(row for row in _alerts() if row.dedup_key.startswith("briefing:2026-08-20"))
+    assert "· 미확인 알림: 0건" in today.body

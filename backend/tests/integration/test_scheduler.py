@@ -271,6 +271,29 @@ def test_a_failing_job_alerts_an_admin(monkeypatch: pytest.MonkeyPatch) -> None:
         assert [alert.severity for alert in alerts] == ["CRITICAL"]
 
 
+def test_a_partially_failed_scan_marks_the_job_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """건별 격리 배치의 실패 건 ≥1 → 잡 FAILED + 관리자 알림(조용한 도과 방지)"""
+    admin = create_user("jobs-admin-scan@example.com", roles=(RoleCode.ADMIN,))
+    scheduler.register_jobs()
+    monkeypatch.setattr(
+        scheduler.deadlines, "scan_deadlines", lambda: {"certifications": 3, "failed": 1}
+    )
+    counts = scheduler.run_due_jobs()
+    assert counts["failed"] >= 1
+    job = next(row for row in _jobs() if row.code == "deadline-scan")
+    assert job.last_status == "FAILED" and "1건 실패" in (job.last_error or "")
+    with unit_of_work() as uow:
+        total: int = uow.session.execute(
+            select(func.count())
+            .select_from(Alert)
+            .where(
+                Alert.recipient_user_id == admin,
+                Alert.dedup_key.like("jobs.failed:deadline-scan:%"),
+            )
+        ).scalar_one()
+    assert total == 1
+
+
 def test_a_disabled_job_does_not_run() -> None:
     scheduler.register_jobs()
     with unit_of_work() as uow:

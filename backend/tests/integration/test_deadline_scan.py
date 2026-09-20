@@ -22,11 +22,13 @@ from app.modules.certifications.models import Certification
 from app.modules.deadlines import service as deadlines
 from app.modules.deadlines.service import CERTIFICATION_EVENT, DOCUMENT_EVENT
 from app.modules.documents.models import Document, DocumentType
+from app.modules.handover import service as handover
 from app.modules.identity.models import RoleCode
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.outbox.models import Event
 from app.modules.requirements.models import RequirementTemplate
 from app.modules.worklist.models import Alert, AlertRule
+from tests.support.concurrency import run_concurrently
 from tests.support.factories import create_market, create_sku, create_user
 
 pytestmark = pytest.mark.group_c
@@ -225,8 +227,8 @@ def test_overdue_sends_one_overdue_alert_per_expiry(actor: AuthenticatedUser, ad
     """도과 — 만료일이 지난 건은 도과 알림 1건(재스캔 0)"""
     certification_id = _certification(actor, key="overdue", status="EXPIRED", assignee_id=actor.id)
     counts = deadlines.scan_deadlines(base_date=EXPIRES + timedelta(days=5))
-    assert counts["overdue"] == 1
-    assert f"deadline:certifications:{certification_id}:overdue@2026-09-30:{actor.id}" in _keys()
+    assert counts["overdue"] == 1 and counts["threshold"] == 0  # 도과 건에 문턱 소급 없음(§0-3 ⑨)
+    assert _keys() == {f"deadline:certifications:{certification_id}:overdue@2026-09-30:{actor.id}"}
     assert deadlines.scan_deadlines(base_date=EXPIRES + timedelta(days=6))["overdue"] == 0
 
 
@@ -328,6 +330,33 @@ def test_unassigned_certification_falls_back_to_admins(
     assert {row.recipient_user_id for row in _alerts("deadline:")} == set(admins)
 
 
+def test_certification_rule_role_fans_out_when_unassigned(
+    actor: AuthenticatedUser, admins: tuple[int, int]
+) -> None:
+    """담당자 없음 + 규칙 recipient_role → 역할 보유자 전원(각 1건), 관리자 폴백 0"""
+    traders = (
+        create_user("trade-a@example.com", roles=(RoleCode.TRADE,)),
+        create_user("trade-b@example.com", roles=(RoleCode.TRADE,)),
+    )
+    _rule(CERTIFICATION_EVENT, recipient_role="TRADE")
+    _certification(actor, key="role-rule", assignee_id=None)
+    counts = deadlines.scan_deadlines(base_date=BASE)
+    assert counts["threshold"] == 4  # 문턱 2 × TRADE 2
+    assert {row.recipient_user_id for row in _alerts("deadline:")} == set(traders)
+    assert all("규칙이 없어" not in (row.body or "") for row in _alerts("deadline:"))
+
+
+def test_the_lowest_id_rule_is_the_policy_when_two_match(
+    actor: AuthenticatedUser, admins: Any
+) -> None:
+    """같은 사건 규칙이 둘이면 id가 작은 것이 정본 — 문턱도 그 규칙의 것"""
+    _rule(CERTIFICATION_EVENT, code="R-FIRST", config={"thresholds": [120]})
+    _rule(CERTIFICATION_EVENT, code="R-SECOND", config={"thresholds": [45]})
+    certification_id = _certification(actor, key="two-rules", assignee_id=actor.id)
+    deadlines.scan_deadlines(base_date=BASE)  # D-88 — 120만 지났다(45는 무시)
+    assert _keys() == {f"deadline:certifications:{certification_id}:D-120@2026-09-30:{actor.id}"}
+
+
 def test_thresholds_come_from_the_certification_rule(actor: AuthenticatedUser, admins: Any) -> None:
     """문턱은 데이터다(ADR-11) — 인증 규칙 config가 기본 D-180/90/30을 덮는다"""
     _rule(CERTIFICATION_EVENT, config={"thresholds": [120, 45]})
@@ -362,6 +391,30 @@ def test_acknowledged_alerts_do_not_escalate(actor: AuthenticatedUser, admins: A
     _ack_all(actor.id)
     counts = deadlines.scan_deadlines(base_date=EXPIRES - timedelta(days=3))
     assert counts["escalated"] == 0 and _keys("esc:") == set()
+
+
+def test_partial_acknowledgement_still_escalates(actor: AuthenticatedUser, admins: Any) -> None:
+    """문턱 셋 중 하나만 확인했으면 미확인이 남은 것 — 에스컬레이션 발동"""
+    _certification(actor, key="esc-partial", assignee_id=actor.id)
+    deadlines.scan_deadlines(base_date=EXPIRES - timedelta(days=10))
+    with unit_of_work() as uow:
+        row = uow.session.execute(
+            select(Alert).where(Alert.dedup_key.like("%:D-30@%"))
+        ).scalar_one()
+        row.acknowledged_at = utcnow()
+    assert deadlines.scan_deadlines(base_date=EXPIRES - timedelta(days=3))["escalated"] == 2
+
+
+def test_documents_escalate_too(admins: tuple[int, int]) -> None:
+    """문서도 같은 판정 — 폴백 수신자(관리자)가 안 읽으면 관리자 에스컬레이션(각 1건)"""
+    document_id = _document(valid_until=EXPIRES)
+    deadlines.scan_deadlines(base_date=EXPIRES - timedelta(days=10))
+    counts = deadlines.scan_deadlines(base_date=EXPIRES - timedelta(days=3))
+    assert counts["escalated"] == 2
+    assert _keys("esc:") == {
+        f"esc:documents:{document_id}:D-3@2026-09-30:{admins[0]}",
+        f"esc:documents:{document_id}:D-3@2026-09-30:{admins[1]}",
+    }
 
 
 def test_escalation_is_judged_before_this_scans_own_alerts(
@@ -402,14 +455,59 @@ def test_escalation_does_not_fire_before_d3(actor: AuthenticatedUser, admins: An
 # ── 건별 트랜잭션·기준일 기본값 ────────────────────────────────────────────────
 
 
-def test_default_base_date_is_kst_today(actor: AuthenticatedUser, admins: Any) -> None:
-    """기준일 생략 = KST 오늘(§22 렌즈 6)"""
-    certification_id = _certification(
-        actor, key="today", expires_on=today_kst() + timedelta(days=10), assignee_id=actor.id
-    )
+def test_default_base_date_is_kst_today(
+    actor: AuthenticatedUser, admins: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """기준일 생략 = KST 오늘(§22 렌즈 6) — today_kst()가 기준일의 유일 출처"""
+    certification_id = _certification(actor, key="today", assignee_id=actor.id)
+    monkeypatch.setattr(deadlines, "today_kst", lambda: BASE)
     counts = deadlines.scan_deadlines()
-    assert counts["threshold"] == 3
-    assert any(f":{certification_id}:D-30@" in key for key in _keys())
+    assert counts["threshold"] == 2  # D-88 — D-180·D-90
+    assert f"deadline:certifications:{certification_id}:D-90@2026-09-30:{actor.id}" in _keys()
+    assert today_kst() != BASE  # 실제 오늘과 다름을 확인 — 패치가 실효했다는 증거
+
+
+@pytest.mark.group_j
+@pytest.mark.concurrency
+def test_two_scans_at_once_send_once(actor: AuthenticatedUser, admins: Any) -> None:
+    """두 스캔이 동시에 돌아도 알림은 1벌 — 멱등 장치는 DB 유니크뿐이라 실제 경합으로 본다"""
+    _certification(actor, key="race", assignee_id=actor.id)
+    outcomes = run_concurrently(lambda _i: deadlines.scan_deadlines(base_date=BASE), workers=2)
+    assert all(outcome.ok for outcome in outcomes), [o.error for o in outcomes]
+    assert sum(o.value["threshold"] for o in outcomes) == 2
+    assert sum(o.value["failed"] for o in outcomes) == 0
+    assert len(_alerts("deadline:")) == 2
+
+
+@pytest.mark.group_h
+def test_handover_moves_deadline_alerts_without_resending(
+    actor: AuthenticatedUser, admins: Any
+) -> None:
+    """담당 일괄 이관 → 기존 알림의 키 꼬리가 새 담당자로, 재스캔 재발송 0 (§20 H·ADR-0015)"""
+    successor = create_user("deadline-successor@example.com", roles=(RoleCode.CERT,))
+    certification_id = _certification(actor, key="handover", assignee_id=actor.id)
+    deadlines.scan_deadlines(base_date=BASE)
+    handover.reassign_all(from_user_id=actor.id, to_user_id=successor, actor_user_id=admins[0])
+
+    assert deadlines.scan_deadlines(base_date=BASE)["threshold"] == 0
+    rows = _alerts("deadline:")
+    assert {row.recipient_user_id for row in rows} == {successor}
+    assert {row.dedup_key for row in rows} == {
+        f"deadline:certifications:{certification_id}:D-180@2026-09-30:{successor}",
+        f"deadline:certifications:{certification_id}:D-90@2026-09-30:{successor}",
+    }
+    # 이관 뒤의 새 문턱은 새 담당자에게만
+    later = deadlines.scan_deadlines(base_date=EXPIRES - timedelta(days=30))
+    assert later["threshold"] == 1
+    assert {row.recipient_user_id for row in _alerts("deadline:")} == {successor}
+
+
+def test_nobody_to_notify_is_a_silent_gap(actor: AuthenticatedUser) -> None:
+    """담당자·규칙·활성 관리자 전부 없으면 0건 — 폴백의 끝은 관리자다(관찰 등재 근거)"""
+    _certification(actor, key="nobody", assignee_id=None)
+    counts = deadlines.scan_deadlines(base_date=BASE)
+    assert counts["certifications"] == 1 and counts["threshold"] == 0
+    assert _alerts() == []
 
 
 def test_one_failing_subject_does_not_stop_the_scan(
@@ -429,3 +527,45 @@ def test_one_failing_subject_does_not_stop_the_scan(
     counts = deadlines.scan_deadlines(base_date=BASE)
     assert counts["failed"] == 1 and counts["threshold"] == 2
     assert all(f":{good_id}:" in key for key in _keys())
+
+
+def test_a_rollback_does_not_leak_into_the_counts(
+    actor: AuthenticatedUser, admins: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """건의 뒤쪽 INSERT가 실패하면 앞서 센 알림도 롤백된다 — 집계는 커밋 뒤에만 합산"""
+    _certification(actor, key="rollback", assignee_id=actor.id)
+    original = deadlines.notifications.notify
+    calls = {"n": 0}
+
+    def flaky(session: Any, **kwargs: Any) -> list[int]:
+        calls["n"] += 1
+        if calls["n"] == 2:  # D-180은 성공, D-90에서 실패
+            raise RuntimeError("의도한 실패")
+        return original(session, **kwargs)
+
+    monkeypatch.setattr(deadlines.notifications, "notify", flaky)
+    counts = deadlines.scan_deadlines(base_date=BASE)
+    assert counts["failed"] == 1 and counts["threshold"] == 0
+    assert _alerts() == []
+
+
+def test_a_soft_deleted_certification_is_not_scanned(actor: AuthenticatedUser, admins: Any) -> None:
+    certification_id = _certification(actor, key="softdel", assignee_id=actor.id)
+    with unit_of_work() as uow:
+        row = uow.session.get(Certification, certification_id)
+        assert row is not None
+        row.deleted_at = utcnow()
+    counts = deadlines.scan_deadlines(base_date=BASE)
+    assert counts["certifications"] == 0 and _alerts() == []
+
+
+def test_an_over_long_template_name_still_notifies(actor: AuthenticatedUser, admins: Any) -> None:
+    """템플릿명 200자 — 제목이 컬럼 길이를 넘어도 잘려서 나간다(영구 미발송 방지)"""
+    certification_id = _certification(actor, key="long", assignee_id=actor.id)
+    with unit_of_work() as uow:
+        row = uow.session.get(Certification, certification_id)
+        assert row is not None
+        row.template_name = "가" * 200
+    counts = deadlines.scan_deadlines(base_date=BASE)
+    assert counts["failed"] == 0 and counts["threshold"] == 2
+    assert all(len(row.title) <= 200 and row.title.endswith("…") for row in _alerts())

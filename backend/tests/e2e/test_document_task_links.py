@@ -21,6 +21,7 @@ from app.modules.certifications.models import CertificationTask
 from app.modules.deadlines import service as deadlines
 from app.modules.identity.models import RoleCode
 from app.modules.requirements.models import RequirementTemplate
+from app.modules.worklist.models import Alert
 from tests.support.factories import DEFAULT_PASSWORD, create_market, create_sku, create_user
 
 pytestmark = pytest.mark.group_b
@@ -153,5 +154,9 @@ def test_linked_document_stays_in_the_deadline_scan(
     cert: TestClient, linked: dict[str, Any]
 ) -> None:
     """링크된 활성 문서는 스캔 대상 — 삭제 차단이 곧 유효기간 알림의 보존이다"""
+    admin_id = create_user("doclink-admin@example.com", roles=(RoleCode.ADMIN,))
     counts = deadlines.scan_deadlines(base_date=date(2026, 7, 4))  # D-180 지남
-    assert counts["documents"] == 1
+    assert counts["documents"] == 1 and counts["threshold"] == 1
+    with unit_of_work() as uow:
+        keys = set(uow.session.execute(select(Alert.dedup_key)).scalars())
+    assert keys == {f"deadline:documents:{linked['document_id']}:D-180@2026-12-31:{admin_id}"}

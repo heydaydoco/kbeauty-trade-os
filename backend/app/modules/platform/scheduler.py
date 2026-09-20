@@ -129,12 +129,24 @@ def _run_outbox_dispatch() -> dict[str, int]:
     return dispatcher.dispatch_pending()
 
 
+def _fail_if_any_failed(counts: dict[str, int], *, what: str) -> dict[str, int]:
+    """건별 격리 배치는 끝까지 돌지만, 실패 건이 있으면 잡을 FAILED로 올린다.
+
+    안 그러면 특정 건이 매일 실패해도 잡은 OK — §15 "실패 시 관리자 알림"이
+    미발화하고 그 건의 기일 알림은 조용히 0건이다(자기 적대 검증 확정). 성공한
+    건은 이미 커밋돼 있어 재실행이 덮어쓰지 않는다(멱등).
+    """
+    if counts.get("failed", 0):
+        raise RuntimeError(f"{what} {counts['failed']}건 실패 — 로그(entity_id)를 확인해 주세요.")
+    return counts
+
+
 def _run_deadline_scan() -> dict[str, int]:
-    return deadlines.scan_deadlines()
+    return _fail_if_any_failed(deadlines.scan_deadlines(), what="기일 스캔")
 
 
 def _run_daily_briefing() -> dict[str, int]:
-    return deadlines.send_daily_briefing()
+    return _fail_if_any_failed(deadlines.send_daily_briefing(), what="데일리 브리핑")
 
 
 @dataclass(frozen=True, slots=True)

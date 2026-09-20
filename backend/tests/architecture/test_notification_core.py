@@ -30,6 +30,8 @@ _APP_DIR = _MODULE_DIR.parent.parent
 #: 모델 선언까지 위반으로 잡으면 스캔이 정의 파일에서 늘 빨개진다.
 #: `AlertRule(`은 애초에 걸리지 않는다(`Alert` 다음이 여는 괄호여야 한다).
 _ALERT_CONSTRUCTION = re.compile(r"(?<!class )\bAlert\s*\(")
+#: 코어 밖의 우회 삽입 — SQL 표현식 INSERT(`insert(Alert)`·`Alert.__table__`).
+_ALERT_SQL_INSERT = re.compile(r"\binsert\(\s*Alert\b|\bAlert\.__table__")
 
 
 def _python_sources(root: Path) -> list[Path]:
@@ -43,9 +45,20 @@ def test_alerts_are_created_only_by_the_notification_core() -> None:
         if path == _MODULE_DIR / "service.py":
             continue
         source = path.read_text(encoding="utf-8")
-        if _ALERT_CONSTRUCTION.search(source) or "pg_insert(Alert)" in source:
+        if (
+            _ALERT_CONSTRUCTION.search(source)
+            or "pg_insert(Alert)" in source
+            or _ALERT_SQL_INSERT.search(source)
+        ):
             offenders.append(str(path.relative_to(_APP_DIR)))
     assert offenders == [], f"알림 생성이 코어 밖에 있습니다: {offenders}"
+
+
+def test_the_deadline_scan_does_not_go_through_the_outbox() -> None:
+    """스캔=코어 직접 호출·아웃박스 비경유 (판정 요청 3 (가)) — outbox import 부재로 고정"""
+    source = (_APP_DIR / "modules" / "deadlines" / "service.py").read_text(encoding="utf-8")
+    assert "outbox" not in source
+    assert "notifications.notify(" in source
 
 
 def test_the_core_scan_is_not_idle() -> None:
@@ -55,6 +68,8 @@ def test_the_core_scan_is_not_idle() -> None:
     assert _ALERT_CONSTRUCTION.search("Alert(recipient_user_id=1)") is not None
     assert _ALERT_CONSTRUCTION.search("AlertRule(code='x')") is None
     assert _ALERT_CONSTRUCTION.search("class Alert(PkMixin, Base):") is None
+    assert _ALERT_SQL_INSERT.search("session.execute(insert(Alert).values(...))") is not None
+    assert _ALERT_SQL_INSERT.search("Alert.__table__.insert()") is not None
 
 
 def test_the_dispatcher_makes_no_external_calls() -> None:

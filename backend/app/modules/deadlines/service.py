@@ -88,14 +88,23 @@ def days_left(expires_on: date, base_date: date) -> int:
 def passed_thresholds(remaining: int, thresholds: tuple[int, ...]) -> tuple[int, ...]:
     """이미 지난 문턱 전부 (GC-C1 — D-88이면 (180, 90), D-30은 아직).
 
-    도과(remaining < 0)면 문턱 전부가 지난 것이다 — 도과 알림과 별개로 문턱
-    알림도 성립한다(어제까지 스캔이 한 번도 안 돌았다면 지금이라도 나간다).
+    순수 함수라 도과(remaining < 0)에도 전부를 돌려준다 — 도과 건에 문턱을 소급
+    발송하지 않는 판단은 호출처(_scan_subject ②)의 몫이다.
     """
     return tuple(sorted((t for t in thresholds if remaining <= t), reverse=True))
 
 
 def threshold_label(threshold: int) -> str:
     return f"D-{threshold}"
+
+
+#: alerts.title 컬럼 길이 — 템플릿명(200자)에 접두가 붙으면 넘칠 수 있다. 넘치면
+#: INSERT가 매일 실패해 그 건만 영구 미발송이 된다(자기 적대 검증 확정) — 자른다.
+ALERT_TITLE_MAX = 200
+
+
+def _title(text: str) -> str:
+    return text if len(text) <= ALERT_TITLE_MAX else text[: ALERT_TITLE_MAX - 1] + "…"
 
 
 def _d_label(remaining: int) -> str:
@@ -240,23 +249,30 @@ def _has_unacknowledged_deadline_alert(session: Session, subject: Subject) -> bo
 
 
 def _scan_subject(
-    session: Session, subject: Subject, *, policy: Policy, base_date: date, counts: dict[str, int]
-) -> None:
-    """한 건의 기일 판정 — 에스컬레이션 → 도과 → 문턱 순서(독스트링 ★ D-3 참고)."""
+    session: Session, subject: Subject, *, policy: Policy, base_date: date
+) -> dict[str, int]:
+    """한 건의 기일 판정 — 에스컬레이션 → 도과 또는 문턱(독스트링 ★ D-3 참고).
+
+    돌아오는 집계는 **이 건의 트랜잭션이 커밋된 뒤에만** 전체 집계에 합산된다 —
+    같은 건의 뒤 INSERT가 실패해 롤백되면 앞서 만든 알림도 없던 일이 되므로,
+    전체 집계를 트랜잭션 안에서 올리면 "새로 만들어진 알림 수"가 거짓이 된다.
+    """
     remaining = days_left(subject.expires_on, base_date)
     stamp = subject.expires_on.isoformat()
+    made = {"threshold": 0, "overdue": 0, "escalated": 0}
 
     # ① 에스컬레이션 — D-3 이내(도과 포함)이고 미확인 기일 알림이 남아 있을 때.
     #    이번 스캔이 만들 알림보다 먼저 판정한다(받을 틈이 없던 알림은 미확인이 아니다).
     if remaining <= ESCALATION_DAYS and _has_unacknowledged_deadline_alert(session, subject):
-        counts["escalated"] += len(
+        who = "담당자가" if subject.assignee_id is not None else "수신자(규칙·관리자)가"
+        made["escalated"] += len(
             notifications.notify(
                 session,
                 subject_key=_subject_key(KIND_ESCALATION, subject, f"D-{ESCALATION_DAYS}@{stamp}"),
-                title=f"미확인 기일 에스컬레이션 — {subject.title}",
+                title=_title(f"미확인 기일 에스컬레이션 — {subject.title}"),
                 body=(
                     f"만료일 {stamp}({_d_label(remaining)})까지 {ESCALATION_DAYS}일 이내인데 "
-                    "담당자가 기일 알림을 확인하지 않았습니다. 담당자와 진행 상황을 확인해 주세요."
+                    f"{who} 기일 알림을 확인하지 않았습니다. 진행 상황을 확인해 주세요."
                 ),
                 severity="CRITICAL",
                 routing=Routing.ADMIN,
@@ -265,49 +281,51 @@ def _scan_subject(
             )
         )
 
+    routed: dict[str, Any] = {
+        "event_type": policy.event_type,
+        "rule": policy.rule,
+        "assignee_id": subject.assignee_id,
+        "routing": Routing.DEADLINE,
+        "entity_type": subject.entity_type,
+        "entity_id": subject.entity_id,
+    }
+
     # ② 도과 — 만료일이 지났다(갱신중이면 "갱신중 도과" — 상태는 건드리지 않는다).
+    #    도과 건에 지난 문턱(D-180/90/30)을 소급 발송하지 않는다 — 이미 지난 기일의
+    #    "임박" 알림은 정보가 아니라 소음이고, 반입 첫 스캔에서 건당 4건씩 터진다
+    #    (자기 적대 검증 확정 — 계획서 §0-3 ⑨). 도과 알림 1건이 그 상태의 전부다.
     if remaining < 0:
-        counts["overdue"] += len(
+        made["overdue"] += len(
             notifications.notify(
                 session,
                 subject_key=_subject_key(KIND_DEADLINE, subject, f"overdue@{stamp}"),
-                title=f"기일 도과 — {subject.title}",
+                title=_title(f"기일 도과 — {subject.title}"),
                 body=f"만료일 {stamp}이 {-remaining}일 지났습니다. 갱신 진행 상황을 확인해 주세요.",
                 severity="CRITICAL",
-                event_type=policy.event_type,
-                rule=policy.rule,
-                assignee_id=subject.assignee_id,
-                routing=Routing.DEADLINE,
-                entity_type=subject.entity_type,
-                entity_id=subject.entity_id,
+                **routed,
             )
         )
+        return made
 
     # ③ 문턱 — 지난 문턱 전부(지각 발송 포함). 이미 있는 키는 코어가 생략한다.
     #    D-30 이하는 긴급, 그 위는 주의 — 등급은 표시 힌트이지 라우팅 축이 아니다.
     for threshold in passed_thresholds(remaining, policy.thresholds):
-        counts["threshold"] += len(
+        made["threshold"] += len(
             notifications.notify(
                 session,
                 subject_key=_subject_key(
                     KIND_DEADLINE, subject, f"{threshold_label(threshold)}@{stamp}"
                 ),
-                title=f"만료 {threshold_label(threshold)} — {subject.title}",
+                title=_title(f"만료 {threshold_label(threshold)} — {subject.title}"),
                 body=(
                     f"만료일 {stamp}까지 {remaining}일 남았습니다"
-                    if remaining >= 0
-                    else f"만료일 {stamp}이 이미 {-remaining}일 지났습니다"
-                )
-                + f"({threshold_label(threshold)} 문턱). 갱신 준비를 확인해 주세요.",
+                    f"({threshold_label(threshold)} 문턱). 갱신 준비를 확인해 주세요."
+                ),
                 severity="CRITICAL" if threshold <= CRITICAL_THRESHOLD_DAYS else "WARN",
-                event_type=policy.event_type,
-                rule=policy.rule,
-                assignee_id=subject.assignee_id,
-                routing=Routing.DEADLINE,
-                entity_type=subject.entity_type,
-                entity_id=subject.entity_id,
+                **routed,
             )
         )
+    return made
 
 
 def scan_deadlines(*, base_date: date | None = None) -> dict[str, int]:
@@ -343,7 +361,7 @@ def scan_deadlines(*, base_date: date | None = None) -> dict[str, int]:
 
 
 def _scan_one(
-    work: Callable[[Session, int, date, dict[str, int]], str],
+    work: Callable[[Session, int, date], dict[str, int]],
     entity_id: int,
     *,
     base_date: date,
@@ -353,10 +371,11 @@ def _scan_one(
 
     넓게 잡는 것이 의도다 — 좁히면 예상 못 한 예외 하나가 그날 스캔 전체를 멈추고,
     멈춘 스캔은 조용한 도과다. 예외 문자열은 마스킹을 거친다(함정 ④ 계보).
+    집계는 **커밋이 끝난 뒤** 합산한다 — 롤백된 건의 알림은 없던 일이다.
     """
     try:
         with unit_of_work() as uow:
-            work(uow.session, entity_id, base_date, counts)
+            made = work(uow.session, entity_id, base_date)
     except Exception as error:
         counts["failed"] += 1
         logger.error(
@@ -365,12 +384,13 @@ def _scan_one(
             entity_id=entity_id,
             error=scrub_text(f"{type(error).__name__}: {error}")[:500],
         )
+        return
+    for key, value in made.items():
+        counts[key] += value
 
 
-def _scan_certification(
-    session: Session, certification_id: int, base_date: date, counts: dict[str, int]
-) -> str:
-    """돌아오는 값은 로그·집계용 표식일 뿐이다 — 판단은 counts가 담는다."""
+def _scan_certification(session: Session, certification_id: int, base_date: date) -> dict[str, int]:
+    """이 건이 만든 알림 집계 — 커밋 뒤 전체 집계에 합산된다(_scan_one)."""
     row = session.execute(
         select(Certification).where(
             Certification.id == certification_id,
@@ -380,21 +400,17 @@ def _scan_certification(
         )
     ).scalar_one_or_none()
     if row is None:  # 후보 수집 뒤 삭제·종결·무기한 정정된 행 — 건너뛴다
-        return "skipped"
-    counts["certifications"] += 1
-    _scan_subject(
+        return {}
+    made = _scan_subject(
         session,
         _certification_subject(row),
         policy=_policy(session, CERTIFICATION_EVENT),
         base_date=base_date,
-        counts=counts,
     )
-    return "scanned"
+    return {"certifications": 1, **made}
 
 
-def _scan_document(
-    session: Session, document_id: int, base_date: date, counts: dict[str, int]
-) -> str:
+def _scan_document(session: Session, document_id: int, base_date: date) -> dict[str, int]:
     row = session.execute(
         select(Document).where(
             Document.id == document_id,
@@ -403,16 +419,14 @@ def _scan_document(
         )
     ).scalar_one_or_none()
     if row is None:
-        return "skipped"
-    counts["documents"] += 1
-    _scan_subject(
+        return {}
+    made = _scan_subject(
         session,
         _document_subject(session, row),
         policy=_policy(session, DOCUMENT_EVENT),
         base_date=base_date,
-        counts=counts,
     )
-    return "scanned"
+    return {"documents": 1, **made}
 
 
 # ── 데일리 브리핑 (판정 요청 9 — 담당 건 보유 사용자만 각자 1통) ─────────────
@@ -438,6 +452,8 @@ def _briefing_lines(session: Session, user_id: int, base_date: date) -> list[Bri
         ).scalar_one()
         return value
 
+    # 지난 브리핑(안내 등급, 확인할 이유가 없는 통지)은 세지 않는다 — 세면 매일 +1
+    # 누적되어 "미확인 N건"이 업무 신호가 아니라 달력이 된다.
     unread: int = session.execute(
         select(func.count())
         .select_from(Alert)
@@ -445,6 +461,7 @@ def _briefing_lines(session: Session, user_id: int, base_date: date) -> list[Bri
             Alert.recipient_user_id == user_id,
             Alert.acknowledged_at.is_(None),
             Alert.deleted_at.is_(None),
+            Alert.dedup_key.not_like(f"{KIND_BRIEFING}:%"),
         )
     ).scalar_one()
     return [
@@ -484,32 +501,53 @@ def send_daily_briefing(*, base_date: date | None = None) -> dict[str, int]:
       코어가 수신자를 **뒤에** 붙이는 구조와 순서가 어긋나므로, 코어를 넓히지 않고
       표기를 코어 구조에 맞춘다 — 담당 이관의 키 재작성(`_rewrite_alert_dedup_keys`)이
       "꼬리=수신자" 전제로 돌기 때문에 수신자를 앞에 두면 그 경로도 깨진다.
-    ★ 수신자 결정은 `assignee_id=수신자`로 DEADLINE 경로를 태운다 — 활성 사용자만
-      골라 넘기므로 폴백은 발동하지 않는다(발동하면 브리핑이 관리자에게 가는 오류 —
-      테스트가 고정).
+    ★ 수신자 결정은 `assignee_id=수신자`로 DEADLINE 경로를 태운다 — 같은 트랜잭션에서
+      활성 여부를 다시 확인하고 넘기므로 폴백은 발동하지 않는다(발동하면 브리핑이
+      관리자에게 가서 관리자 본인 슬롯을 점유하는 오류 — 테스트가 고정).
+    ★ 사용자별 독립 트랜잭션 + 실패 격리(§17.6 — 스캔과 같은 규율).
     """
     effective = base_date or today_kst()
-    counts = {"recipients": 0, "sent": 0}
+    counts = {"recipients": 0, "sent": 0, "failed": 0}
     with unit_of_work() as uow:
         recipient_ids = _briefing_recipient_ids(uow.session)
 
     for user_id in recipient_ids:
-        with unit_of_work() as uow:
-            session = uow.session
-            counts["recipients"] += 1
-            lines = _briefing_lines(session, user_id, effective)
-            body = "\n".join(f"· {line.label}: {line.count}건" for line in lines)
-            created = notifications.notify(
-                session,
-                subject_key=f"{KIND_BRIEFING}:{effective.isoformat()}",
-                title=f"데일리 브리핑 — {effective.isoformat()}",
-                body=body,
-                severity="INFO",
-                event_type=BRIEFING_EVENT,
-                assignee_id=user_id,
-                routing=Routing.DEADLINE,
-                entity_type="certifications",
-                entity_id=None,
+        try:
+            with unit_of_work() as uow:
+                sent = _brief_one(uow.session, user_id, effective)
+        except Exception as error:
+            counts["failed"] += 1
+            logger.error(
+                "daily_briefing_recipient_failed",
+                user_id=user_id,
+                error=scrub_text(f"{type(error).__name__}: {error}")[:500],
             )
-            counts["sent"] += len(created)
+            continue
+        counts["recipients"] += 1
+        counts["sent"] += sent
     return counts
+
+
+def _brief_one(session: Session, user_id: int, base_date: date) -> int:
+    active = session.execute(
+        select(User.id).where(
+            User.id == user_id, User.deleted_at.is_(None), User.is_active.is_(True)
+        )
+    ).scalar_one_or_none()
+    if active is None:  # 목록을 뜬 뒤 비활성화됐다 — 폴백으로 흘리지 않는다
+        return 0
+    lines = _briefing_lines(session, user_id, base_date)
+    body = "\n".join(f"· {line.label}: {line.count}건" for line in lines)
+    created = notifications.notify(
+        session,
+        subject_key=f"{KIND_BRIEFING}:{base_date.isoformat()}",
+        title=f"데일리 브리핑 — {base_date.isoformat()}",
+        body=body,
+        severity="INFO",
+        event_type=BRIEFING_EVENT,
+        assignee_id=user_id,
+        routing=Routing.DEADLINE,
+        entity_type="certifications",
+        entity_id=None,
+    )
+    return len(created)
