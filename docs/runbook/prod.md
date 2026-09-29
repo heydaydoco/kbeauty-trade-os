@@ -35,3 +35,13 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod config -q
 
 현재는 600 권한 env 파일. 향후 Docker secrets / 외부 시크릿 매니저로 갈 때는
 compose의 `environment:`를 `*_FILE` 규약으로 바꾼다(이 문서 갱신 + ADR).
+
+## 백업·복원·장애 수칙 (S2-4 PR-3)
+
+- 백업은 compose `backup` 서비스가 한다(운영 기본 포함 — `.env.prod`의 `KBOS_BACKUP_PASSPHRASE` 필수, 16자 이상). 절차·판독·복원은 [backup-restore.md](backup-restore.md).
+- **`backups` 볼륨을 호스트 밖으로 복제**하는 것은 운영자 몫이다(같은 디스크의 백업은 디스크 장애에 무력).
+- 패스프레이즈는 `.env.prod`와 **별도 장소**에 보관한다 — 잃으면 백업을 풀 수 없다.
+- 시스템이 멈추면 [incident-sop.md](incident-sop.md)(수기 기록 → 소급 입력 → 검산 1회). 인쇄용 양식은 [forms/manual-record-form.md](forms/manual-record-form.md).
+- 배치는 **worker 기동 시 자동 등록**된다(멱등 — 이미 있는 잡·관리자가 끈 상태는 건드리지 않는다). 수동 등록이 필요하면 `python -m app.cli register-jobs`.
+- 문서 실물 물리 정리는 **기본 OFF**(`KBOS_FILE_PURGE_ENABLED=false`)다. 켜기 전에 `python -m app.cli purge-files`(dry-run)로 후보를 확인한다 — 되돌릴 수 없다.
+

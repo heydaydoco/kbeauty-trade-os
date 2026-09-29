@@ -31,13 +31,14 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import (
     CHAR,
     BigInteger,
     CheckConstraint,
     Date,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -133,6 +134,10 @@ class Document(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixi
     #: 보존기한. 이 날짜까지 soft delete가 거부된다(파기 잠금 — 서비스 강제).
     retention_until: Mapped[date | None] = mapped_column(Date, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 물리 정리(실물 삭제) 시각 — 소프트 삭제된 FILE 문서의 실물을 유예기간·보존기한 경과 뒤 지웠다는 기록이다
+    #: (S2-4 PR-3 / S2-3 판정 요청 17 / ADR-0050). 되돌릴 수 없는 동작이라 기본 OFF이며 audit에도 남는다.
+    #: 행은 지우지 않는다(이력·해시 보존) — 실물 검증(복원 리허설·용량 감시)은 이 값이 있는 행을 "실물 없음이 정상"으로 본다.
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         value_in("owner_type", DOCUMENT_OWNER_TYPES),
@@ -155,6 +160,11 @@ class Document(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixi
         # 기간 순서 (§17.5). NULL은 통과한다 — 값이 있으면 지켜야 한다는 뜻.
         CheckConstraint("valid_until >= issued_on", name="validity_after_issue"),
         CheckConstraint("retention_until >= issued_on", name="retention_after_issue"),
+        # 물리 정리는 소프트 삭제된 FILE 문서에만 — 살아 있는 문서의 실물을 지웠다는 기록이 남을 수 없다.
+        CheckConstraint(
+            "purged_at IS NULL OR (deleted_at IS NOT NULL AND storage_kind = 'FILE')",
+            name="purged_requires_deleted_file",
+        ),
         unique_active("documents", "owner_type", "owner_id", "sha256"),
     )
 

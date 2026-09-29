@@ -118,11 +118,13 @@ def test_registering_is_idempotent() -> None:
     """CLI 등록은 멱등 — 두 번 불러도 행이 늘지 않는다"""
     first = scheduler.register_jobs()
     assert sorted(first) == [
+        "backup-freshness",
         "certification-sweep",
         "daily-briefing",
         "deadline-scan",
         "outbox-dispatch",
         "stagnation-scan",
+        "storage-monitor",
     ]
     assert scheduler.register_jobs() == []
     assert len(_jobs()) == len(scheduler.JOB_REGISTRY)
