@@ -127,7 +127,8 @@ def _acyclic(templates: tuple[CatalogTemplate, ...], market: str) -> None:
 def parse_catalog(raw: dict[str, Any]) -> Catalog:
     _require(isinstance(raw.get("version"), str) and bool(raw["version"]), "version이 없다")
     notice = raw.get("notice")
-    _require(isinstance(notice, list) and len(notice) > 0, "notice(고지문)가 없다")
+    if not isinstance(notice, list) or not notice:
+        raise CatalogError("notice(고지문)가 없다")
     markets: list[CatalogMarket] = []
     seen_codes: set[str] = set()
     seen_keys: set[str] = set()
