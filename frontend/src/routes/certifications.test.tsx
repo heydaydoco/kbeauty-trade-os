@@ -33,6 +33,7 @@ const ROW = {
   valid_from: null,
   expires_on: null,
   assignee_id: null,
+  assignee_name: null,
   note: null,
   version: 3,
   is_overdue: false,
@@ -170,6 +171,67 @@ describe("인증 목록", () => {
     fireEvent.click(await screen.findByRole("button", { name: "상세" }));
     expect(await screen.findByText("시스템(자동)")).toBeInTheDocument();
     expect(screen.getByText("만료일 임박(자동 — 리드타임 도달)")).toBeInTheDocument();
+  });
+});
+
+// ── 딥링크 (S2-3 PR-3 — 보드·매트릭스가 넘긴 ?id= 를 상세로 연다) ─────────────
+
+describe("딥링크 (?id=) — 보드가 넘긴 인증을 상세로 연다", () => {
+  beforeEach(() => {
+    vi.stubGlobal("crypto", { randomUUID: () => "test-key" });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("목록 1쪽에 없는 인증도 단건 조회로 상세 패널이 열리고 담당자 이름이 보인다", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        seen.push(input);
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.endsWith("/v1/certifications/77"))
+          return Promise.resolve(
+            jsonResponse({
+              ...ROW,
+              id: 77,
+              template_name: "딥링크 요건",
+              status: "IN_REVIEW",
+              assignee_id: 5,
+              assignee_name: "박인증",
+            }),
+          );
+        if (input.includes("/status-log")) return Promise.resolve(jsonResponse(page([])));
+        if (input.includes("/tasks")) return Promise.resolve(jsonResponse(page([])));
+        if (input.includes("/prerequisites")) return Promise.resolve(jsonResponse(page([])));
+        if (input.includes("/v1/certifications")) return Promise.resolve(jsonResponse(page([ROW])));
+        return Promise.resolve(jsonResponse(page([])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/certifications?id=77" });
+
+    expect(await screen.findByText(/딥링크 요건/, { selector: "h2, h3" })).toBeInTheDocument();
+    expect(screen.getByText(/담당자 박인증/)).toBeInTheDocument();
+    expect(seen.some((path) => path.endsWith("/v1/certifications/77"))).toBe(true);
+  });
+
+  it("id가 숫자가 아니면 단건 조회를 하지 않는다", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        seen.push(input);
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        return Promise.resolve(jsonResponse(page([ROW])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/certifications?id=abc" });
+
+    await screen.findByText("MoCRA 제품 리스팅");
+    expect(seen.some((path) => /\/v1\/certifications\/[^?]/.test(path))).toBe(false);
   });
 });
 

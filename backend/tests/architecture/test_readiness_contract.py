@@ -107,6 +107,16 @@ def test_the_readiness_module_does_not_reach_the_outbox_or_alerts() -> None:
             assert module not in source, f"{path.name}이 {module}을 참조합니다"
 
 
+def test_the_calendar_board_is_read_only() -> None:
+    """기일 캘린더 조회(board.py)도 쓰기·발행이 없다 — 조회일 뿐이다(S2-3 PR-3 안건 ⑥)"""
+    from app.modules.deadlines import board
+
+    source = Path(board.__file__).read_text("utf-8")
+    assert _write_calls(source) == []
+    for module in _FORBIDDEN_IMPORTS:
+        assert module not in source
+
+
 def test_the_write_scan_is_not_idle() -> None:
     """공회전 방지 — 스캔이 실제 쓰기 코드를 알아본다"""
     assert _write_calls("session.add(row)\nsession.flush()\noutbox.publish(x)") == [

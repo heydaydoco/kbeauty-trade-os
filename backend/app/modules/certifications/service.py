@@ -110,6 +110,8 @@ class CertificationView:
     valid_from: date | None
     expires_on: date | None
     assignee_id: int | None
+    #: 담당자 표시명 — 보드 카드가 이름을 보인다. 읽기 전용 표시 필드(집계·판정 아님).
+    assignee_name: str | None
     note: str | None
     version: int
     #: 도과 계산값(안건 ⑦ — 저장하지 않는다). 만료일이 KST 오늘보다 앞이면 참.
@@ -147,15 +149,67 @@ class StatusLogView:
     cert_number_snapshot: str | None
 
 
-def _target_label(session: Session, target_type: str, target_id: int | None) -> str:
+#: 세션 단위 표시명 캐시 키 — 한 쪽분을 미리 채워 두는 자리(N+1 방지). 캐시는 **문자열**이다.
+#: ★ 엔터티를 읽어 두고 `session.get`이 식별 맵에서 답하길 기대하면 안 된다 — SQLAlchemy의
+#:   식별 맵은 약한 참조라, 결과 목록을 버리는 순간 객체가 사라져 `session.get`이 다시
+#:   질의한다(실측: 캘린더 30건에서 질의 65회). 문자열 캐시는 그 영향을 받지 않는다.
+_TARGET_LABELS = "certifications.target_labels"
+_ASSIGNEE_NAMES = "certifications.assignee_names"
+
+
+def target_label(session: Session, target_type: str, target_id: int | None) -> str:
     """대상의 사람용 표기 — COMPANY는 자사 단일이라 고정 문구다."""
     if target_type == "COMPANY":
         return "자사(기업 단위)"
+    cached = session.info.get(_TARGET_LABELS, {}).get((target_type, target_id))
+    if cached is not None:
+        return str(cached)
     model = _TARGET_MODELS[target_type]
     row = session.get(model, target_id)
     if row is None:  # soft delete 이후에도 라벨은 남긴다 — 표기 실패는 아니다
         return f"{target_type}#{target_id}"
     return str(getattr(row, "name_ko", None) or f"{target_type}#{target_id}")
+
+
+def preload_targets(session: Session, targets: set[tuple[str, int | None]]) -> None:
+    """한 쪽분 대상(제품·SKU·성분·파트너) 표시명을 유형별 질의 한 번씩으로 채운다(N+1 방지).
+
+    삭제된 대상도 채운다 — 표기는 조회일 뿐이고 soft delete 뒤에도 라벨은 남는다.
+    """
+    by_type: dict[str, set[int]] = {}
+    for target_type, target_id in targets:
+        if target_type in _TARGET_MODELS and target_id is not None:
+            by_type.setdefault(target_type, set()).add(target_id)
+    cache: dict[tuple[str, int | None], str] = session.info.setdefault(_TARGET_LABELS, {})
+    for target_type, ids in by_type.items():
+        model = _TARGET_MODELS[target_type]
+        for row_id, name in session.execute(
+            select(model.id, model.name_ko).where(model.id.in_(ids))
+        ):
+            cache[(target_type, row_id)] = str(name or f"{target_type}#{row_id}")
+
+
+def assignee_name(session: Session, assignee_id: int | None) -> str | None:
+    """담당자 표시명. 퇴사·삭제 계정도 이름은 남긴다(이관 전 이력 표시) — 판정 아닌 표기다."""
+    if assignee_id is None:
+        return None
+    cached = session.info.get(_ASSIGNEE_NAMES, {}).get(assignee_id)
+    if cached is not None:
+        return str(cached)
+    user = session.get(User, assignee_id)
+    return user.display_name if user is not None else None
+
+
+def preload_assignees(session: Session, assignee_ids: set[int | None]) -> None:
+    """한 쪽분 담당자 표시명을 질의 한 번으로 채운다(N+1 방지)."""
+    ids = {value for value in assignee_ids if value is not None}
+    if not ids:
+        return
+    cache: dict[int, str] = session.info.setdefault(_ASSIGNEE_NAMES, {})
+    for user_id, display_name in session.execute(
+        select(User.id, User.display_name).where(User.id.in_(ids))
+    ):
+        cache[user_id] = str(display_name)
 
 
 def _certification_view(
@@ -170,7 +224,7 @@ def _certification_view(
         requirement_type=row.requirement_type,
         target_type=row.target_type,
         target_id=row.target_id,
-        target_label=_target_label(session, row.target_type, row.target_id),
+        target_label=target_label(session, row.target_type, row.target_id),
         status=row.status,
         validity_months=row.validity_months,
         renewal_cycle_months=row.renewal_cycle_months,
@@ -183,6 +237,7 @@ def _certification_view(
         valid_from=row.valid_from,
         expires_on=row.expires_on,
         assignee_id=row.assignee_id,
+        assignee_name=assignee_name(session, row.assignee_id),
         note=row.note,
         version=row.version,
         is_overdue=overdue_days is not None,
@@ -806,6 +861,8 @@ def list_certifications(
             .offset(offset)
             .limit(limit)
         ).all()
+        preload_assignees(session, {row.assignee_id for row, _ in rows})
+        preload_targets(session, {(row.target_type, row.target_id) for row, _ in rows})
         return [_certification_view(session, row, code) for row, code in rows], total
 
 

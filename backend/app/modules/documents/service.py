@@ -291,7 +291,7 @@ def _certification_display(certification_id: int, template_name: str) -> str:
     return f"#{certification_id} · {template_name}"
 
 
-def _owner_displays(session: Session, keys: set[tuple[str, int]]) -> dict[tuple[str, int], str]:
+def owner_displays(session: Session, keys: set[tuple[str, int]]) -> dict[tuple[str, int], str]:
     """페이지 분량의 소유자 표시를 한 번에 가져온다 — 행마다 조회하면 N+1이다(§18.4).
 
     소유자가 soft delete된 뒤에도 문서는 남으므로 삭제 필터를 걸지 않는다 —
@@ -657,7 +657,7 @@ def list_documents(
             .offset(offset)
             .limit(limit)
         ).all()
-        displays = _owner_displays(session, {(row.owner_type, row.owner_id) for row, _ in rows})
+        displays = owner_displays(session, {(row.owner_type, row.owner_id) for row, _ in rows})
         return [
             _document_view(row, doc_type, displays.get((row.owner_type, row.owner_id)))
             for row, doc_type in rows
@@ -677,7 +677,7 @@ def all_documents_for_export() -> list[DocumentView]:
             .where(Document.deleted_at.is_(None))
             .order_by(Document.id.desc())
         ).all()
-        displays = _owner_displays(session, {(row.owner_type, row.owner_id) for row, _ in rows})
+        displays = owner_displays(session, {(row.owner_type, row.owner_id) for row, _ in rows})
         return [
             _document_view(row, doc_type, displays.get((row.owner_type, row.owner_id)))
             for row, doc_type in rows
@@ -699,7 +699,7 @@ def get_document(document_id: int) -> DocumentView:
     with unit_of_work() as uow:
         session = uow.session
         row, doc_type = _require_document(session, document_id)
-        displays = _owner_displays(session, {(row.owner_type, row.owner_id)})
+        displays = owner_displays(session, {(row.owner_type, row.owner_id)})
         return _document_view(row, doc_type, displays.get((row.owner_type, row.owner_id)))
 
 

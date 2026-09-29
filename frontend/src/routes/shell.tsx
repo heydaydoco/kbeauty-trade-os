@@ -14,6 +14,7 @@ const NAV = [
   { to: "/markets", label: "시장" },
   { to: "/requirement-templates", label: "요건 템플릿" },
   { to: "/certifications", label: "인증" },
+  { to: "/certification-board", label: "인증 보드" },
   { to: "/partners", label: "거래처" },
   { to: "/documents", label: "문서보관소" },
   { to: "/imports", label: "엑셀 임포트" },

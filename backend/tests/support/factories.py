@@ -345,6 +345,7 @@ def create_certification_instance(
     status: str,
     expires_on: object | None = None,
     lead_days: int | None = 90,
+    assignee_id: int | None = None,
 ) -> int:
     """인증 인스턴스 행을 직접 만든다 — 상태·만료일을 자유롭게 심는 **픽스처 한정** 경로.
 
@@ -366,6 +367,40 @@ def create_certification_instance(
             requirement_type="REGISTRATION",
             renewal_lead_days=lead_days,
             expires_on=expires_on if isinstance(expires_on, date) else None,
+            assignee_id=assignee_id,
+        )
+        uow.session.add(row)
+        uow.session.flush()
+        return row.id
+
+
+def create_link_document(
+    owner_id: int,
+    *,
+    valid_until: object | None,
+    owner_type: str = "SKU",
+    document_type: str = "CFS",
+    tag: str = "doc",
+) -> int:
+    """LINK형 문서 행을 직접 만든다(유효기간 지정) — 등록 경로의 계약은 documents 테스트의 몫."""
+    from datetime import date
+
+    from app.modules.documents.models import Document, DocumentType
+
+    with unit_of_work() as uow:
+        type_id = uow.session.execute(
+            select(DocumentType.id).where(
+                DocumentType.code == document_type, DocumentType.deleted_at.is_(None)
+            )
+        ).scalar_one()
+        row = Document(
+            owner_type=owner_type,
+            owner_id=owner_id,
+            document_type_id=type_id,
+            storage_kind="LINK",
+            url=f"https://example.com/{tag}-{owner_id}.pdf",
+            issued_on=date(2025, 1, 1),
+            valid_until=valid_until if isinstance(valid_until, date) else None,
         )
         uow.session.add(row)
         uow.session.flush()

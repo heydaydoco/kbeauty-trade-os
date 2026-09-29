@@ -10,8 +10,9 @@
 // ★ 날짜·상태 표시는 셀에서 전제를 확인하고 그린다(함정 ⑦ — 던질 수 있는
 //   표시 함수를 가드 없이 부르면 화면 백지).
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiDelete, apiFetch } from "../lib/api";
@@ -44,6 +45,8 @@ export interface Certification {
   valid_from: string | null;
   expires_on: string | null;
   assignee_id: number | null;
+  /** 담당자 표시명(읽기 전용) — 보드 카드가 이름을 보인다. */
+  assignee_name: string | null;
   note: string | null;
   version: number;
   /** 도과 계산값(S2-3 PR-2 안건 ⑦) — 서버가 KST 오늘 기준으로 계산한다. 갱신중(RENEWING)은
@@ -688,6 +691,20 @@ export function CertificationsPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [selected, setSelected] = useState<Certification | null>(null);
 
+  // 딥링크 — 보드·매트릭스가 `?id=`로 넘긴 인증을 상세 패널로 연다. 목록은 쪽 단위라 그 인증이
+  // 1쪽에 없을 수 있으므로 단건을 따로 조회한다(목록에서 찾으면 2쪽 이후의 인증이 안 열린다).
+  const [searchParams] = useSearchParams();
+  const focusParam = Number(searchParams.get("id"));
+  const focusId = Number.isInteger(focusParam) && focusParam > 0 ? focusParam : null;
+  const focused = useQuery({
+    queryKey: [...CERTIFICATIONS_QUERY_KEY, "focus", focusId],
+    queryFn: () => apiFetch<Certification>(`/v1/certifications/${focusId}`),
+    enabled: focusId !== null,
+  });
+  useEffect(() => {
+    if (focused.data !== undefined) setSelected(focused.data);
+  }, [focused.data]);
+
   const listPath =
     statusFilter === "" ? "/v1/certifications" : `/v1/certifications?status=${statusFilter}`;
   const list = usePagedList<Certification>(
@@ -898,6 +915,7 @@ export function CertificationsPage() {
             <OverdueBadge row={selected} />
             {selected.expires_on !== null && ` · 만료일 ${selected.expires_on}`}
             {selected.cert_number !== null && ` · 인증번호 ${selected.cert_number}`}
+            {selected.assignee_name !== null && ` · 담당자 ${selected.assignee_name}`}
           </p>
           {canEdit && (
             <TransitionPanel
