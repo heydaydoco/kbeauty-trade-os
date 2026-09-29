@@ -89,6 +89,7 @@ def create_sku(
     *,
     name_ko: str = "테스트 SKU",
     product_id: int | None = None,
+    status: str = "ACTIVE",
 ) -> int:
     """단품 SKU를 만들고 id를 돌려준다 (§4.1 — 단품은 처방 없이 존재할 수 없다)."""
     if product_id is None:
@@ -99,6 +100,7 @@ def create_sku(
             name_ko=name_ko,
             kind="SINGLE",
             product_id=product_id,
+            status=status,
         )
         uow.session.add(sku)
         uow.session.flush()
@@ -310,10 +312,11 @@ def create_sku_with_axes(
     product_profile_id: int | None = None,
     manufacturer_id: int | None = None,
     name_ko: str = "테스트 SKU",
+    status: str = "ACTIVE",
 ) -> tuple[int, int]:
     """(sku_id, product_id) — 품목군은 SKU·제품에 **따로** 붙는다(자동 적용 축 검증의 전제)."""
     product_id = create_product(f"P-{sku_code}"[:40])
-    sku_id = create_sku(sku_code, name_ko=name_ko, product_id=product_id)
+    sku_id = create_sku(sku_code, name_ko=name_ko, product_id=product_id, status=status)
     with unit_of_work() as uow:
         sku = uow.session.get(Sku, sku_id)
         product = uow.session.get(Product, product_id)
@@ -324,12 +327,24 @@ def create_sku_with_axes(
     return sku_id, product_id
 
 
-def create_set_sku(sku_code: str, components: list[int], *, profile_id: int | None = None) -> int:
+def create_set_sku(
+    sku_code: str,
+    components: list[int],
+    *,
+    profile_id: int | None = None,
+    manufacturer_id: int | None = None,
+) -> int:
     """세트 SKU(구성품 수량 1)를 만들고 id를 돌려준다 (§4.2 — SET은 처방을 갖지 않는다)."""
     from app.modules.catalog.models import SetComponent
 
     with unit_of_work() as uow:
-        sku = Sku(sku_code=sku_code, name_ko="테스트 세트", kind="SET", item_profile_id=profile_id)
+        sku = Sku(
+            sku_code=sku_code,
+            name_ko="테스트 세트",
+            kind="SET",
+            item_profile_id=profile_id,
+            manufacturer_partner_id=manufacturer_id,
+        )
         uow.session.add(sku)
         uow.session.flush()
         for component in components:
@@ -346,6 +361,7 @@ def create_certification_instance(
     expires_on: object | None = None,
     lead_days: int | None = 90,
     assignee_id: int | None = None,
+    valid_from: object | None = None,
 ) -> int:
     """인증 인스턴스 행을 직접 만든다 — 상태·만료일을 자유롭게 심는 **픽스처 한정** 경로.
 
@@ -357,6 +373,10 @@ def create_certification_instance(
 
     from app.modules.certifications.models import Certification
 
+    for label, value in (("expires_on", expires_on), ("valid_from", valid_from)):
+        # 문자열 등을 조용히 무기한(NULL)으로 바꾸지 않는다 — 준비 실수가 기능 결함처럼 보인다.
+        if value is not None and not isinstance(value, date):
+            raise TypeError(f"{label}은 date여야 합니다: {value!r}")
     with unit_of_work() as uow:
         row = Certification(
             template_id=template_id,
@@ -367,6 +387,7 @@ def create_certification_instance(
             requirement_type="REGISTRATION",
             renewal_lead_days=lead_days,
             expires_on=expires_on if isinstance(expires_on, date) else None,
+            valid_from=valid_from if isinstance(valid_from, date) else None,
             assignee_id=assignee_id,
         )
         uow.session.add(row)
@@ -387,6 +408,8 @@ def create_link_document(
 
     from app.modules.documents.models import Document, DocumentType
 
+    if valid_until is not None and not isinstance(valid_until, date):
+        raise TypeError(f"valid_until은 date여야 합니다: {valid_until!r}")
     with unit_of_work() as uow:
         type_id = uow.session.execute(
             select(DocumentType.id).where(

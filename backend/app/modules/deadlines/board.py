@@ -6,7 +6,7 @@
 캘린더에 없다"가 생긴다.
 
 ★ **읽기 전용이다.** 저장하는 것도 발행하는 것도 없다(캘린더는 계산이 아니라 조회다).
-★ 기간을 **최대 93일**로 묶는다 — 이 조회는 두 테이블을 기간으로 훑어 합친 뒤 쪽을
+★ 기간을 **최대 93일**(시작일·종료일을 포함해 세는 일수)로 묶는다 — 이 조회는 두 테이블을 기간으로 훑어 합친 뒤 쪽을
   자르므로, 기간이 무한하면 "전체를 읽고 잘라 주는" 조회가 된다(§18.4 무제한 조회 금지의
   정신). 화면은 월 단위로 부른다.
 """
@@ -37,7 +37,8 @@ from app.modules.documents.service import owner_displays
 from app.modules.markets.models import Market
 from app.modules.requirements.models import RequirementTemplate
 
-#: 조회 기간 상한(일) — 한 화면(월)에 한 달 + 앞뒤 여유가 들어가는 크기.
+#: 조회 기간 상한(일) — **시작일·종료일을 포함해 센다**(종료−시작 ≤ 92). 한 화면(월)에 한 달 + 앞뒤
+#: 여유가 들어가는 크기.
 MAX_SPAN_DAYS = 93
 
 KIND_CERTIFICATION = "CERTIFICATION"
@@ -67,11 +68,12 @@ def validate_window(start: date, end: date) -> None:
             detail={"to": "종료일이 시작일보다 앞섭니다. 기간을 다시 지정해 주세요."},
             log_context={"from": start.isoformat(), "to": end.isoformat()},
         )
-    if (end - start).days > MAX_SPAN_DAYS:
+    if (end - start).days + 1 > MAX_SPAN_DAYS:
         raise AppError(
             ErrorCode.VALIDATION_INVALID_FIELD,
             detail={
-                "to": f"조회 기간은 최대 {MAX_SPAN_DAYS}일입니다. 기간을 나누어 조회해 주세요."
+                "to": f"조회 기간은 시작일·종료일을 포함해 최대 {MAX_SPAN_DAYS}일입니다. "
+                "기간을 나누어 조회해 주세요."
             },
             log_context={"from": start.isoformat(), "to": end.isoformat()},
         )

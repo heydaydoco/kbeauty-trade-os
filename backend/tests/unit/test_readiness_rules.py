@@ -14,6 +14,7 @@ import pytest
 from app.modules.certifications.calendar import derived_date_status, effective_status, overdue_days
 from app.modules.certifications.machine import CERTIFICATION_STATUSES
 from app.modules.readiness.rules import (
+    DRAFT_NOTE,
     GRAY,
     GREEN,
     RED,
@@ -108,6 +109,15 @@ def test_summary_counts_add_up() -> None:
     assert (summary.color, summary.required) == (RED, 4)
     assert (summary.approved, summary.in_progress, summary.unmet) == (1, 2, 1)
     assert summary.approved + summary.in_progress + summary.unmet == summary.required
+
+
+def test_the_three_counts_are_told_apart() -> None:
+    """승인·진행·미충족이 서로 다른 값(1·2·3)이라야 필드 배선이 뒤바뀌어도 잡힌다"""
+    summary = summarize(
+        [_result(GREEN), _result(YELLOW), _result(YELLOW), _result(RED), _result(RED), _result(RED)]
+    )
+    assert (summary.approved, summary.in_progress, summary.unmet) == (1, 2, 3)
+    assert summary.required == 6 and summary.color == RED
 
 
 def test_an_empty_cell_is_gray_with_zero_counts() -> None:
@@ -283,6 +293,76 @@ def test_overdue_days_definition(
     status: str, expires_on: date | None, expected: int | None
 ) -> None:
     assert overdue_days(status, expires_on, TODAY) == expected
+
+
+# ── 유효 시작일 전 승인 — 아직 효력이 없다 (🟢 과신 방지) ─────────────────────
+
+
+@pytest.mark.parametrize(
+    ("valid_from", "expected_color", "has_note"),
+    [
+        (date(2027, 1, 1), YELLOW, True),  # 먼 미래 시작
+        (date(2026, 9, 30), YELLOW, True),  # 내일부터 — 오늘은 아직
+        (TODAY, GREEN, False),  # 오늘부터 유효
+        (date(2026, 9, 1), GREEN, False),
+        (None, GREEN, False),
+    ],
+)
+def test_an_approval_that_has_not_started_yet_is_not_green(
+    valid_from: date | None, expected_color: str, has_note: bool
+) -> None:
+    result = evaluate_requirement(
+        _requirement(),
+        InstanceFacts(1, "APPROVED", FAR, 90, valid_from),
+        base_date=TODAY,
+    )
+    assert result.color == expected_color
+    assert result.status == "APPROVED"  # 실효 상태는 그대로 — 색만 달라진다
+    assert (result.note is not None) == has_note
+    if has_note:
+        assert "유효 시작일" in (result.note or "") and valid_from is not None
+        assert valid_from.isoformat() in (result.note or "")
+
+
+@pytest.mark.parametrize("stored", ["IN_REVIEW", "EXPIRING", "EXPIRED"])
+def test_the_start_date_rule_only_touches_approved(stored: str) -> None:
+    """진행·임박·만료는 이미 🟢이 아니다 — 유효 시작일 안내를 덧붙이지 않는다"""
+    expires_on = date(2026, 1, 1) if stored == "EXPIRED" else date(2026, 10, 15)
+    result = evaluate_requirement(
+        _requirement(),
+        InstanceFacts(1, stored, expires_on, 90, date(2027, 1, 1)),
+        base_date=TODAY,
+    )
+    assert "유효 시작일" not in (result.note or "")
+
+
+# ── 초안으로 되돌린 템플릿 — 편집 창에 요건이 사라지지 않는다 ─────────────────
+
+
+def test_a_reverted_template_keeps_counting_with_a_note() -> None:
+    requirement = Requirement(1, "MoCRA 제품 리스팅", "SKU", "SKU", 10, draft=True)
+    result = evaluate_requirement(
+        requirement, InstanceFacts(1, "APPROVED", FAR, 90), base_date=TODAY
+    )
+    assert (result.color, result.status) == (GREEN, "APPROVED")
+    assert result.note == DRAFT_NOTE
+
+
+def test_notes_are_combined_when_several_apply() -> None:
+    requirement = Requirement(1, "MoCRA 제품 리스팅", "SKU", "SKU", 10, draft=True)
+    result = evaluate_requirement(
+        requirement, InstanceFacts(1, "RENEWING", date(2026, 9, 1), 90), base_date=TODAY
+    )
+    assert result.color == RED
+    assert "갱신중이지만 만료일이 지났습니다." in (result.note or "")
+    assert DRAFT_NOTE in (result.note or "")
+
+
+def test_a_confirmed_requirement_has_no_draft_note() -> None:
+    result = evaluate_requirement(
+        _requirement(), InstanceFacts(1, "APPROVED", FAR, 90), base_date=TODAY
+    )
+    assert result.note is None
 
 
 # ── 헬퍼 ─────────────────────────────────────────────────────────────────────

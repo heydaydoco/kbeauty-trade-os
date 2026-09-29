@@ -839,12 +839,22 @@ def list_certifications(
     status: str | None,
     offset: int,
     limit: int,
+    market_code: str | None = None,
 ) -> tuple[list[CertificationView], int]:
     with unit_of_work() as uow:
         session = uow.session
         conditions: list[ColumnElement[bool]] = [Certification.deleted_at.is_(None)]
         if template_id is not None:
             conditions.append(Certification.template_id == template_id)
+        if market_code is not None:
+            # 인증 보드의 시장 필터 — 인스턴스의 시장은 템플릿의 시장이다.
+            conditions.append(
+                Certification.template_id.in_(
+                    select(RequirementTemplate.id)
+                    .join(Market, RequirementTemplate.market_id == Market.id)
+                    .where(Market.code == market_code)
+                )
+            )
         if target_type is not None:
             conditions.append(Certification.target_type == target_type)
         if status is not None:

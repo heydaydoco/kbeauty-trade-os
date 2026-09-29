@@ -25,9 +25,19 @@ DB에서 모아 온다. 한 화면(SKU 50행 × 시장 N열)을 그리는 데 �
   필요하고 S2-3 범위 밖이다). 모집합 밖 축은 범례가 공개한다(조건 A — `SCOPE_NOTE`).
   세트 SKU는 자기 요건(SKU·COMPANY 축)에 **구성품 롤업**을 더한다(§4.2).
 
-  요건으로 세는 템플릿은 **확정(CONFIRMED)** 뿐이다 — 초안은 검증되지 않은 정의이고
-  폐기(RETIRED)는 더 이상 요구되지 않는 요건이다. 인스턴스는 **활성**(삭제 아님·
-  종결 2태 아님) 하나만 본다 — 반려·중단만 남은 대상은 "활성 인스턴스 부재"(🔴)다.
+  요건으로 세는 템플릿은 **확정(CONFIRMED)** 이다 — 폐기(RETIRED)는 더 이상 요구되지
+  않는 요건이고, 확정된 적 없는 초안은 검증되지 않은 정의다. 단 **편집하려고 초안으로
+  되돌린 템플릿**(DRAFT)은 이미 걸려 있는 활성 인스턴스가 있는 대상에게 계속 센다 —
+  편집 창(며칠일 수 있다)에 요건이 조용히 사라져 셀이 🟢이 되는 것을 막는다(안내 문구를
+  단다). 인스턴스는 **활성**(삭제 아님·종결 2태 아님) 하나만 본다 — 반려·중단만 남은
+  대상은 "활성 인스턴스 부재"(🔴)다.
+
+■ 세트의 제품·시설 요건은 구성품에게 물린다 (§4.2)
+  세트 SKU는 제품(product_id 없음)도 제조사(보통 없음)도 없으므로, **세트 자신의 품목군**에
+  걸린 PRODUCT·FACILITY 템플릿은 각 구성품의 제품·제조사를 대상으로 평가한다(같은
+  (템플릿, 대상)은 롤업이 1건으로 합친다). 세트가 제조사를 직접 지정했다면 시설 요건은
+  그 제조사 몫으로도 센다. 이렇게 하지 않으면 세트 품목군에만 걸린 제품·시설 요건이 어느
+  셀에도 집계되지 않는다(조용한 누락 = 🟢 과신).
 """
 
 from __future__ import annotations
@@ -60,6 +70,9 @@ from app.modules.requirements.models import ItemProfileRequirementTemplate, Requ
 
 #: 모집합에 드는 적용단위 — INGREDIENT는 제외(모듈 독스트링).
 _COUNTED_APPLIES_TO = AXES
+
+#: 요건이 될 수 있는 템플릿 상태 — DRAFT는 활성 인스턴스가 있는 대상에게만 센다(모듈 독스트링).
+_COUNTED_TEMPLATE_STATUSES = ("CONFIRMED", "DRAFT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +122,8 @@ class _TemplateRef:
     market_id: int
     applies_to: str
     name: str
+    #: CONFIRMED 또는 DRAFT(편집 중으로 되돌려진 확정 템플릿) — 모듈 독스트링.
+    status: str
 
 
 @dataclass(slots=True)
@@ -220,6 +235,7 @@ def _load_facts(session: Session, page_skus: Sequence[Sku]) -> _Facts:
                 RequirementTemplate.market_id,
                 RequirementTemplate.applies_to,
                 RequirementTemplate.name,
+                RequirementTemplate.status,
             )
             .join(
                 RequirementTemplate,
@@ -229,7 +245,7 @@ def _load_facts(session: Session, page_skus: Sequence[Sku]) -> _Facts:
                 ItemProfileRequirementTemplate.item_profile_id.in_(profile_ids),
                 ItemProfileRequirementTemplate.deleted_at.is_(None),
                 RequirementTemplate.deleted_at.is_(None),
-                RequirementTemplate.status == "CONFIRMED",
+                RequirementTemplate.status.in_(_COUNTED_TEMPLATE_STATUSES),
                 RequirementTemplate.applies_to.in_(_COUNTED_APPLIES_TO),
             )
             .order_by(RequirementTemplate.id)
@@ -240,6 +256,7 @@ def _load_facts(session: Session, page_skus: Sequence[Sku]) -> _Facts:
                     market_id=row.market_id,
                     applies_to=row.applies_to,
                     name=row.name,
+                    status=row.status,
                 )
             )
 
@@ -293,6 +310,7 @@ def _load_instances(
             Certification.status,
             Certification.expires_on,
             Certification.renewal_lead_days,
+            Certification.valid_from,
         )
         .where(
             Certification.template_id.in_(template_ids),
@@ -307,6 +325,7 @@ def _load_instances(
             status=row.status,
             expires_on=row.expires_on,
             renewal_lead_days=row.renewal_lead_days,
+            valid_from=row.valid_from,
         )
     return found
 
@@ -326,7 +345,12 @@ def required_items(sku: Sku, facts: _Facts) -> list[tuple[int, Requirement]]:
     for ref in facts.templates.get(own_profile, []) if own_profile is not None else []:
         if ref.applies_to == "SKU":
             items.append(
-                (ref.market_id, Requirement(ref.template_id, ref.name, "SKU", "SKU", sku.id))
+                (
+                    ref.market_id,
+                    Requirement(
+                        ref.template_id, ref.name, "SKU", "SKU", sku.id, draft=_is_draft(ref)
+                    ),
+                )
             )
     if sku.product_id is not None and product_profile is not None:
         for ref in facts.templates.get(product_profile, []):
@@ -335,7 +359,12 @@ def required_items(sku: Sku, facts: _Facts) -> list[tuple[int, Requirement]]:
                     (
                         ref.market_id,
                         Requirement(
-                            ref.template_id, ref.name, "PRODUCT", "PRODUCT", sku.product_id
+                            ref.template_id,
+                            ref.name,
+                            "PRODUCT",
+                            "PRODUCT",
+                            sku.product_id,
+                            draft=_is_draft(ref),
                         ),
                     )
                 )
@@ -353,11 +382,21 @@ def required_items(sku: Sku, facts: _Facts) -> list[tuple[int, Requirement]]:
                 items.append(
                     (
                         ref.market_id,
-                        Requirement(ref.template_id, ref.name, "COMPANY", "COMPANY", None),
+                        Requirement(
+                            ref.template_id,
+                            ref.name,
+                            "COMPANY",
+                            "COMPANY",
+                            None,
+                            draft=_is_draft(ref),
+                        ),
                     )
                 )
-            elif ref.applies_to == "FACILITY" and not is_set:
-                # 세트는 제조사가 없다 — 시설 요건은 구성품 롤업이 진다.
+            elif ref.applies_to == "FACILITY" and (
+                not is_set or sku.manufacturer_partner_id is not None
+            ):
+                # 세트는 보통 제조사가 없다 — 그 경우 시설 요건은 구성품에게 물린다
+                # (`_delegated_to_components`). 세트가 제조사를 직접 지정했다면 그 몫도 센다.
                 seen.add(ref.template_id)
                 manufacturer = sku.manufacturer_partner_id
                 items.append(
@@ -370,30 +409,95 @@ def required_items(sku: Sku, facts: _Facts) -> list[tuple[int, Requirement]]:
                             "FACILITY",
                             manufacturer,
                             target_missing=manufacturer is None,
+                            draft=_is_draft(ref),
                         ),
                     )
                 )
     return items
 
 
+def _is_draft(ref: _TemplateRef) -> bool:
+    return ref.status == "DRAFT"
+
+
+def _evaluate_requirement(
+    requirement: Requirement, facts: _Facts, base_date: date
+) -> RequirementResult | None:
+    """요건 1건의 결과. 초안 전환된 요건인데 이 대상에게 걸린 활성 인스턴스가 없으면 None(세지 않음)."""
+    instance = (
+        None
+        if requirement.target_missing
+        else facts.instances.get(
+            (requirement.template_id, requirement.target_type, requirement.target_id)
+        )
+    )
+    if requirement.draft and instance is None:
+        return None
+    return evaluate_requirement(requirement, instance, base_date=base_date)
+
+
+def _sorted_by_axis(per_market: dict[int, list[RequirementResult]]) -> None:
+    axis_order = {axis: index for index, axis in enumerate(AXES)}
+    for results in per_market.values():
+        results.sort(key=lambda item: (axis_order[item.axis], item.template_id))
+
+
 def _evaluate(sku: Sku, facts: _Facts, base_date: date) -> dict[int, list[RequirementResult]]:
     """SKU 한 행의 요건 결과 — 시장 id별. 자기 요건만(세트 롤업은 호출자)."""
     per_market: dict[int, list[RequirementResult]] = defaultdict(list)
     for market_id, requirement in required_items(sku, facts):
-        instance = (
-            None
-            if requirement.target_missing
-            else facts.instances.get(
-                (requirement.template_id, requirement.target_type, requirement.target_id)
-            )
-        )
-        per_market[market_id].append(
-            evaluate_requirement(requirement, instance, base_date=base_date)
-        )
-    axis_order = {axis: index for index, axis in enumerate(AXES)}
-    for results in per_market.values():
-        results.sort(key=lambda item: (axis_order[item.axis], item.template_id))
+        result = _evaluate_requirement(requirement, facts, base_date)
+        if result is not None:
+            per_market[market_id].append(result)
+    _sorted_by_axis(per_market)
     return per_market
+
+
+def _delegated_to_components(
+    sku: Sku, component_ids: Sequence[int], facts: _Facts, base_date: date
+) -> dict[int, dict[int, list[RequirementResult]]]:
+    """세트 자신의 품목군에 걸린 PRODUCT·FACILITY 요건 → 각 구성품의 제품·제조사가 대상.
+
+    {구성품 id: {시장 id: 결과}}. 구성품 자신의 품목군에서 나온 같은 (템플릿, 대상) 요건과는
+    롤업(`merge_component_results`)이 1건으로 합친다.
+    """
+    delegated: dict[int, dict[int, list[RequirementResult]]] = {}
+    own_profile = sku.item_profile_id
+    if own_profile is None:
+        return delegated
+    for ref in facts.templates.get(own_profile, []):
+        if ref.applies_to not in ("PRODUCT", "FACILITY"):
+            continue
+        for component_id in component_ids:
+            component = facts.skus[component_id]
+            if ref.applies_to == "PRODUCT":
+                if component.product_id is None:
+                    continue
+                requirement = Requirement(
+                    ref.template_id,
+                    ref.name,
+                    "PRODUCT",
+                    "PRODUCT",
+                    component.product_id,
+                    draft=_is_draft(ref),
+                )
+            else:
+                manufacturer = component.manufacturer_partner_id
+                requirement = Requirement(
+                    ref.template_id,
+                    ref.name,
+                    "FACILITY",
+                    "FACILITY",
+                    manufacturer,
+                    target_missing=manufacturer is None,
+                    draft=_is_draft(ref),
+                )
+            result = _evaluate_requirement(requirement, facts, base_date)
+            if result is not None:
+                delegated.setdefault(component_id, {}).setdefault(ref.market_id, []).append(result)
+    for per_market in delegated.values():
+        _sorted_by_axis(per_market)
+    return delegated
 
 
 def _build_row(
@@ -413,6 +517,7 @@ def _build_row(
     component_refs = [
         ComponentRef(sku_id=cid, sku_code=facts.skus[cid].sku_code) for cid in component_ids
     ]
+    delegated = _delegated_to_components(sku, component_ids, facts, base_date)
 
     cells: list[MatrixCellView] = []
     for market in markets:
@@ -421,7 +526,14 @@ def _build_row(
             results = merge_component_results(
                 results,
                 [
-                    (cid, facts.skus[cid].sku_code, evaluated(facts.skus[cid]).get(market.id, []))
+                    (
+                        cid,
+                        facts.skus[cid].sku_code,
+                        [
+                            *evaluated(facts.skus[cid]).get(market.id, []),
+                            *delegated.get(cid, {}).get(market.id, []),
+                        ],
+                    )
                     for cid in component_ids
                 ],
             )

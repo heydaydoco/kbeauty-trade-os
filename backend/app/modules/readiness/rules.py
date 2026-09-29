@@ -8,6 +8,7 @@ DESIGN §5.3: 행 SKU × 열 시장, 셀 = 필수 요건 집계 신호등 4색(�
 ■ 색 매핑 (S2-3 판정 요청 1 — 표 하나가 정본)
     🟢 승인(실효)                          — 임박 아님·도과 아님·무기한 포함
     🟡 만료임박 / 서류준비·신청제출·심사중·보완요청 / 갱신중(미도과)
+       / 승인이지만 **유효 시작일 전**(아직 효력이 없다 — 🟢 과신 방지)
     🔴 활성 인스턴스 부재 · 미착수 · 만료 · 갱신중 도과 · 반려·중단(종결 — 활성 아님)
     ⚪ 필수 요건 0건(대상외)
   **미착수 = 🔴** — 착수 사실이 0이면 실질 미충족이다(🟡로 두면 "진행 중"이라는
@@ -68,6 +69,10 @@ SCOPE_NOTE = (
 )
 
 
+#: 초안으로 되돌려진 템플릿의 요건에 붙이는 안내.
+DRAFT_NOTE = "요건 정의가 편집 중(초안)입니다 — 재확정 전까지 기존 인증 기준으로 집계합니다."
+
+
 def requirement_color(status: str | None, *, renewing_overdue: bool = False) -> str:
     """요건 1건의 색. status=None은 활성 인스턴스 부재(🔴 — fail-closed)."""
     if status is None:
@@ -97,6 +102,8 @@ class InstanceFacts:
     status: str
     expires_on: date | None
     renewal_lead_days: int | None
+    #: 승인 후 효력 시작일 — 미래이면 아직 유효하지 않다(승인이어도 🟢이 아니다).
+    valid_from: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +118,9 @@ class Requirement:
     target_id: int | None
     #: 제조사 미지정 SKU의 FACILITY 요건 — 대상이 없어 충족을 확인할 수 없다(🔴).
     target_missing: bool = False
+    #: 템플릿이 초안으로 되돌려진 상태(편집 중). 이미 걸려 있는 활성 인스턴스가 있는 대상에게만
+    #: 계속 요건으로 센다 — 편집 창에 요건이 조용히 사라져 🟢이 되는 것을 막는다.
+    draft: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +149,9 @@ def evaluate_requirement(
 ) -> RequirementResult:
     """요건 1건 + 그 대상의 활성 인스턴스 → 색·실효 상태·사유."""
 
-    def result(status: str | None, color: str, note: str | None) -> RequirementResult:
+    def result(status: str | None, color: str, notes: list[str]) -> RequirementResult:
+        if requirement.draft:
+            notes = [*notes, DRAFT_NOTE]
         return RequirementResult(
             template_id=requirement.template_id,
             template_name=requirement.template_name,
@@ -149,22 +161,33 @@ def evaluate_requirement(
             status=status,
             color=color,
             certification_id=instance.certification_id if instance is not None else None,
-            note=note,
+            note=" ".join(notes) if notes else None,
             target_missing=requirement.target_missing,
         )
 
     if requirement.target_missing:
-        return result(None, RED, "제조사가 지정되지 않아 시설 요건을 확인할 수 없습니다.")
+        return result(None, RED, ["제조사가 지정되지 않아 시설 요건을 확인할 수 없습니다."])
     if instance is None:
-        return result(None, RED, "활성 인증 인스턴스가 없습니다(미등록·반려·중단).")
+        return result(None, RED, ["활성 인증 인스턴스가 없습니다(미등록·반려·중단)."])
 
     effective = effective_status(
         instance.status, instance.expires_on, instance.renewal_lead_days, base_date
     )
     overdue = overdue_days(instance.status, instance.expires_on, base_date) is not None
     renewing_overdue = instance.status == "RENEWING" and overdue
-    note = "갱신중이지만 만료일이 지났습니다." if renewing_overdue else None
-    return result(effective, requirement_color(effective, renewing_overdue=renewing_overdue), note)
+    notes: list[str] = []
+    if renewing_overdue:
+        notes.append("갱신중이지만 만료일이 지났습니다.")
+    color = requirement_color(effective, renewing_overdue=renewing_overdue)
+    if (
+        effective == "APPROVED"
+        and instance.valid_from is not None
+        and instance.valid_from > base_date
+    ):
+        # 승인은 났지만 효력이 아직 시작되지 않았다 — "판매가능"이라 부를 수 없다.
+        color = YELLOW
+        notes.append(f"승인됐지만 유효 시작일({instance.valid_from.isoformat()}) 전입니다.")
+    return result(effective, color, notes)
 
 
 @dataclass(frozen=True, slots=True)

@@ -20,6 +20,7 @@ from app.core.time import utcnow
 from app.modules.certifications import service as certifications
 from app.modules.certifications.models import Certification
 from app.modules.deadlines import board
+from app.modules.deadlines import service as scan
 from app.modules.documents.models import Document
 from app.modules.identity.models import RoleCode
 from tests.support.factories import (
@@ -49,6 +50,13 @@ def _cert(
     return create_certification_instance(
         template, "SKU", sku, status=status, expires_on=on, assignee_id=assignee_id
     )
+
+
+def _soft_delete(model: type, row_id: int) -> None:
+    with unit_of_work() as uow:
+        row = uow.session.get(model, row_id)
+        assert row is not None
+        row.deleted_at = utcnow()  # type: ignore[attr-defined]
 
 
 @pytest.fixture
@@ -196,12 +204,56 @@ def test_bad_windows_are_refused_with_guidance(start: date, end: date, field: st
     assert "기간" in raised.value.detail[field]
 
 
-def test_the_window_limit_is_inclusive_at_93_days() -> None:
+def test_the_window_limit_counts_both_end_days() -> None:
+    """최대 93일 = 시작일·종료일을 포함해 93일(종료−시작 92) — 94일째는 거절"""
     from datetime import timedelta
 
-    _items(start=START, end=START + timedelta(days=board.MAX_SPAN_DAYS))  # 통과
+    _items(start=START, end=START + timedelta(days=board.MAX_SPAN_DAYS - 1))  # 93일 — 통과
+    with pytest.raises(AppError) as raised:
+        _items(start=START, end=START + timedelta(days=board.MAX_SPAN_DAYS))  # 94일
+    assert "포함해 최대 93일" in raised.value.detail["to"]
+
+
+def test_a_one_day_window_is_allowed_but_a_reversed_one_is_not(setup: tuple[int, int]) -> None:
+    from datetime import timedelta
+
+    template, sku = setup
+    day = date(2026, 9, 10)
+    on_day = _cert(template, sku, on=day)
+    items, total = _items(start=day, end=day)  # from == to 는 하루짜리 창이다
+    assert (total, [item.id for item in items]) == (1, [on_day])
     with pytest.raises(AppError):
-        _items(start=START, end=START + timedelta(days=board.MAX_SPAN_DAYS + 1))
+        _items(start=day + timedelta(days=1), end=day)
+
+
+def test_the_calendar_candidates_are_exactly_the_scan_candidates(setup: tuple[int, int]) -> None:
+    """ "알림은 왔는데 캘린더에 없다"의 구조적 방지 — 후보 정의를 스캔 함수와 직접 대조한다.
+
+    스캔 쪽 제외 조건이 바뀌면(예: 새 종결 상태) 손으로 쓴 기대 목록은 그대로 초록이지만,
+    이 대조는 바로 빨개진다.
+    """
+    template, sku = setup
+    others = [create_sku_with_axes(f"EQ-{index}")[0] for index in range(8)]
+    _cert(template, sku, on=date(2026, 9, 10), status="APPROVED")
+    _cert(template, others[0], on=date(2026, 9, 11), status="RENEWING")  # 갱신중 도과도 후보
+    _cert(template, others[1], on=date(2026, 9, 12), status="EXPIRED")
+    _cert(template, others[2], on=date(2026, 9, 13), status="REJECTED")  # 제외
+    _cert(template, others[3], on=date(2026, 9, 14), status="SUSPENDED")  # 제외
+    _cert(template, others[4], on=None)  # 무기한 — 기일 없음
+    deleted = _cert(template, others[5], on=date(2026, 9, 15))
+    _soft_delete(Certification, deleted)
+    create_link_document(sku, valid_until=date(2026, 9, 16), tag="eq-keep")
+    create_link_document(sku, valid_until=None, tag="eq-none")
+    gone = create_link_document(sku, valid_until=date(2026, 9, 17), tag="eq-gone")
+    _soft_delete(Document, gone)
+
+    with unit_of_work() as uow:
+        scan_certifications = set(scan._certification_candidate_ids(uow.session))
+        scan_documents = set(scan._document_candidate_ids(uow.session))
+    items, _ = _items()
+    assert scan_certifications and scan_documents  # 공허 통과 방지
+    assert {item.id for item in items if item.kind == "CERTIFICATION"} == scan_certifications
+    assert {item.id for item in items if item.kind == "DOCUMENT"} == scan_documents
 
 
 def _statements(work: Callable[[], object]) -> int:
@@ -244,5 +296,6 @@ def test_query_count_is_flat_for_the_calendar_and_the_certification_list() -> No
             template_id=None, target_type=None, status=None, offset=0, limit=50
         )
     )
+    assert calendar_few > 0 and list_few > 0  # 리스너가 실제로 붙어 있다(0 == 0 공허 통과 방지)
     assert calendar_few == calendar_many, f"캘린더 3건 {calendar_few}회 vs 30건 {calendar_many}회"
     assert list_few == list_many, f"인증 목록 3건 {list_few}회 vs 30건 {list_many}회"

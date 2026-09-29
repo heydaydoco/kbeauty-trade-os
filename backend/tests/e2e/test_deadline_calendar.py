@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -71,11 +71,13 @@ def _seed() -> tuple[int, int]:
     return cert, doc
 
 
+@pytest.mark.group_k
 def test_calendar_requires_a_session() -> None:
     with TestClient(app) as anonymous:
         assert anonymous.get(CALENDAR, params=_window()).status_code == 401
 
 
+@pytest.mark.group_k
 @pytest.mark.parametrize(
     "role", [RoleCode.ADMIN, RoleCode.TRADE, RoleCode.LOGISTICS, RoleCode.CERT, RoleCode.VIEWER]
 )
@@ -104,6 +106,7 @@ def test_calendar_items_carry_what_the_board_shows(viewer: TestClient) -> None:
     assert certification["is_overdue"] is False and document["id"] == doc
 
 
+@pytest.mark.group_k
 def test_bad_windows_get_a_korean_422(viewer: TestClient) -> None:
     today = today_kst()
     backwards = viewer.get(
@@ -114,12 +117,13 @@ def test_bad_windows_get_a_korean_422(viewer: TestClient) -> None:
 
     too_long = viewer.get(CALENDAR, params=_window(days=200))
     assert too_long.status_code == 422
-    assert "최대 93일" in too_long.json()["error"]["detail"]["to"]
+    assert "포함해 최대 93일" in too_long.json()["error"]["detail"]["to"]
 
     assert viewer.get(CALENDAR).status_code == 422  # 기간 필수
     assert viewer.get(CALENDAR, params={"from": "내일", "to": "모레"}).status_code == 422
 
 
+@pytest.mark.group_k
 def test_calendar_page_contract(viewer: TestClient) -> None:
     """기본 50·상한 200 — 목록 계약(§18.4)"""
     sku, _ = create_sku_with_axes("CAL-PAGE")
@@ -152,3 +156,40 @@ def test_certification_list_shows_the_assignee_name(viewer: TestClient) -> None:
     assert row["assignee_name"] == "김인증" and row["assignee_id"] is not None
     detail = viewer.get(f"{CERTIFICATIONS}/{cert}").json()
     assert detail["assignee_name"] == "김인증"
+
+
+def test_overdue_is_judged_on_the_kst_date(
+    viewer: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UTC로는 2031-03-31 16:30, KST로는 2031-04-01 — 3/31 기일은 KST 기준으로 이미 지났다
+
+    실제 오늘과 먼 날짜를 골라 UTC 날짜·시스템 날짜로 바꾼 변이가 어느 날 돌려도 실패한다.
+    """
+    sku, _ = create_sku_with_axes("CAL-KST")
+    create_link_document(sku, valid_until=date(2031, 3, 31), tag="kst")
+    monkeypatch.setattr("app.core.time.utcnow", lambda: datetime(2031, 3, 31, 16, 30, tzinfo=UTC))
+    body = viewer.get(CALENDAR, params={"from": "2031-03-25", "to": "2031-04-05"}).json()
+    assert [(item["date"], item["is_overdue"]) for item in body["items"]] == [("2031-03-31", True)]
+
+
+def test_certification_list_can_be_narrowed_by_market(viewer: TestClient) -> None:
+    """인증 보드 시장 필터 — 인스턴스의 시장은 템플릿의 시장이다(총계도 필터를 따른다)"""
+    profile = create_item_profile("PRF-MKT-FILTER")
+    us = create_requirement_template("US", "US 리스팅", profile_id=profile)
+    ca = create_requirement_template("CA", "CA 통보", profile_id=profile)
+    sku, _ = create_sku_with_axes("MKT-F", profile_id=profile)
+    us_cert = create_certification_instance(us, "SKU", sku, status="PREPARING")
+    ca_cert = create_certification_instance(ca, "SKU", sku, status="PREPARING")
+
+    everything = viewer.get(CERTIFICATIONS).json()
+    assert {row["id"] for row in everything["items"]} == {us_cert, ca_cert}
+    only_ca = viewer.get(CERTIFICATIONS, params={"market_code": "CA", "size": 1}).json()
+    assert (only_ca["total"], [row["id"] for row in only_ca["items"]]) == (1, [ca_cert])
+    assert only_ca["items"][0]["market_code"] == "CA"
+    assert viewer.get(CERTIFICATIONS, params={"market_code": "JP"}).json()["total"] == 0
+
+
+@pytest.mark.group_k
+@pytest.mark.parametrize("bad", ["us", "USA", "U", "1A", ""])
+def test_a_malformed_market_code_is_422(viewer: TestClient, bad: str) -> None:
+    assert viewer.get(CERTIFICATIONS, params={"market_code": bad}).status_code == 422

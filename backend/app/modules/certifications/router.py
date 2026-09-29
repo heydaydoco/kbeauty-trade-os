@@ -60,6 +60,9 @@ def list_certifications(
     template_id: Annotated[int | None, Query(ge=1)] = None,
     target_type: Annotated[TargetType | None, Query()] = None,
     certification_status: Annotated[str | None, Query(alias="status")] = None,
+    market_code: Annotated[
+        str | None, Query(pattern=r"^[A-Z]{2}$", description="시장 코드(대문자 2자)로 좁힘")
+    ] = None,
 ) -> Page[CertificationSummary]:
     views, total = service.list_certifications(
         template_id=template_id,
@@ -67,6 +70,7 @@ def list_certifications(
         status=certification_status,
         offset=params.offset,
         limit=params.limit,
+        market_code=market_code,
     )
     return Page.of([CertificationSummary.of(view) for view in views], total, params)
 

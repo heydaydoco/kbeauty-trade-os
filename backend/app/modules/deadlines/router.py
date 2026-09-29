@@ -1,6 +1,6 @@
 """기일 캘린더 엔드포인트 (§14 ④ 인증 보드 — 캘린더 / S2-3 PR-3 안건 ⑥).
 
-읽기 전용·전 역할 열람(원가·마진 필드 없음 — 마스킹 비대상). 기간은 최대 93일이다
+읽기 전용·전 역할 열람(원가·마진 필드 없음 — 마스킹 비대상). 기간은 최대 93일(시작일·종료일 포함)이다
 (`board.MAX_SPAN_DAYS` — 이유는 그 파일). 목록 응답은 Page 봉투다(§18.4).
 """
 
@@ -45,7 +45,9 @@ class CalendarItemSummary(BaseModel):
         )
 
 
-@router.get("/calendar", summary="기일 캘린더 (인증 만료일·문서 유효기간, 최대 93일)")
+@router.get(
+    "/calendar", summary="기일 캘린더 (인증 만료일·문서 유효기간, 시작·종료 포함 최대 93일)"
+)
 def list_calendar_items(
     current: CurrentUser,
     params: Annotated[PageParams, Depends()],
