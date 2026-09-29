@@ -2,7 +2,8 @@
 //
 // ★ 상태는 전이 버튼으로만 바뀐다 — 전이 표 밖은 서버가 409로 거부한다(§5.2).
 //   여기의 HUMAN_TRANSITIONS는 UX용 사본이고 정본은 서버 machine.py다(사본이
-//   낡아도 서버가 막는다). 칸반+캘린더 보드는 S2-3 몫(판정 ⑪ — WBS v1.4).
+//   낡아도 서버가 막는다). 칸반+캘린더 보드는 /certification-board(S2-3 PR-3)이고, 보드·
+//   매트릭스가 `?id=` 딥링크로 이 화면의 상세 패널을 연다.
 // ★ 편집(등록·전이·태스크)은 인증+관리자다(판정 ⑫) — 화면 게이트는 표시일 뿐
 //   실제 차단은 서버(§18.1).
 // ★ 드롭다운(템플릿·대상)은 전부 ?size=200 우회다 — 대상(SKU 수백 규모)의
@@ -11,7 +12,7 @@
 //   표시 함수를 가드 없이 부르면 화면 백지).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
@@ -701,9 +702,19 @@ export function CertificationsPage() {
     queryFn: () => apiFetch<Certification>(`/v1/certifications/${focusId}`),
     enabled: focusId !== null,
   });
+  // 링크 하나당 한 번만 연다 — 사용자가 패널을 닫거나 다른 행을 고른 뒤 창 복귀 갱신 등으로
+  // 대상 데이터가 바뀌어 다시 도착해도 열린 상태를 되돌리지 않는다.
+  const appliedFocus = useRef<number | null>(null);
   useEffect(() => {
-    if (focused.data !== undefined) setSelected(focused.data);
-  }, [focused.data]);
+    if (focusId === null) {
+      appliedFocus.current = null;
+      return;
+    }
+    if (focused.data !== undefined && appliedFocus.current !== focusId) {
+      appliedFocus.current = focusId;
+      setSelected(focused.data);
+    }
+  }, [focused.data, focusId]);
 
   const listPath =
     statusFilter === "" ? "/v1/certifications" : `/v1/certifications?status=${statusFilter}`;
@@ -915,9 +926,19 @@ export function CertificationsPage() {
 
       {selected && (
         <div className="mt-6 rounded-lg border border-gray-300 p-4">
-          <h2 className="font-semibold">
-            [{selected.market_code}] {selected.template_name} — {selected.target_label}
-          </h2>
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="font-semibold">
+              [{selected.market_code}] {selected.template_name} — {selected.target_label}
+            </h2>
+            {/* 딥링크로 연 인증은 목록 쪽에 없을 수 있어 행의 "상세 닫기"로는 닫을 수 없다. */}
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              className="ml-auto text-sm text-gray-500 underline"
+            >
+              닫기
+            </button>
+          </div>
           <p className="mt-1 text-sm text-gray-600">
             상태 {certificationStatusLabel(selected.status)}
             <OverdueBadge row={selected} />

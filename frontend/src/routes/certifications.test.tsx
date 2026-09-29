@@ -255,6 +255,37 @@ describe("딥링크 (?id=) — 보드가 넘긴 인증을 상세로 연다", () 
     expect(await screen.findByRole("alert")).toHaveTextContent("불러오지 못했습니다");
   });
 
+  it("사용자가 닫은 상세 패널은 대상 데이터가 갱신돼 다시 도착해도 되살아나지 않는다", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.endsWith("/v1/certifications/77")) {
+          calls += 1; // 두 번째 조회는 다른 사용자가 고친 뒤의 데이터(version 증가)
+          return Promise.resolve(
+            jsonResponse({ ...ROW, id: 77, template_name: "딥링크 요건", version: 3 + calls }),
+          );
+        }
+        if (input.includes("/status-log")) return Promise.resolve(jsonResponse(page([])));
+        if (input.includes("/tasks")) return Promise.resolve(jsonResponse(page([])));
+        if (input.includes("/prerequisites")) return Promise.resolve(jsonResponse(page([])));
+        return Promise.resolve(jsonResponse(page([ROW])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/certifications?id=77" });
+
+    expect(await screen.findByText(/딥링크 요건/, { selector: "h2" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "닫기" })); // 목록 쪽에 없는 인증이라 패널 자체의 닫기
+    await waitFor(() => expect(screen.queryByText(/딥링크 요건/, { selector: "h2" })).toBeNull());
+
+    // 창 복귀 — react-query가 오래된 조회를 다시 가져온다
+    window.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText(/딥링크 요건/, { selector: "h2" })).toBeNull();
+  });
+
   it("id가 숫자가 아니면 단건 조회를 하지 않는다", async () => {
     const seen: string[] = [];
     vi.stubGlobal(
