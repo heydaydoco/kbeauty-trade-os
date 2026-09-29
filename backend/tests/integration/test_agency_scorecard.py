@@ -384,3 +384,21 @@ def test_the_query_count_does_not_grow_with_the_number_of_agencies() -> None:
     many = count_statements(lambda: scorecard.scorecard(offset=0, limit=50))
     assert single > 0
     assert many == single
+
+
+def test_only_the_first_preparation_entry_starts_the_clock() -> None:
+    """서류준비 진입이 이력에 여러 번 있어도 가장 이른 진입이 기점이다(마지막이 아니다)"""
+    agency_id = _agency()
+    certification_id = _case(agency_id)
+    _log(certification_id, "PREPARING", _at(9, 1))
+    _log(certification_id, "PREPARING", _at(9, 8))
+    _log(certification_id, "APPROVED", _at(9, 11))
+    assert _one(agency_id).lead_days_avg == 10.0
+
+
+def test_an_agency_whose_only_contract_has_ended_has_no_current_contract() -> None:
+    """종료된 계약만 있으면 현행 계약이 없다 — 다른 현행 계약에 가려지지 않는 경우를 단독으로 고정"""
+    today = today_kst()
+    agency_id = _agency()
+    _contract(agency_id, "ENDED", start=today - timedelta(days=90), end=today - timedelta(days=1))
+    assert _one(agency_id).current_contract is None

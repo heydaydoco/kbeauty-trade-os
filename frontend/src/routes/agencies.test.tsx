@@ -239,6 +239,56 @@ describe("대행 계약 화면", () => {
     expect(within(old).getAllByText("—").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("통화표가 늦게 오면 수수료 자리에 '…'를 보이고 화면이 죽지 않는다 — 도착하면 서식이 붙는다", async () => {
+    let releaseCurrencies: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseCurrencies = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.includes("/v1/system/currencies")) {
+          return gate.then(() => jsonResponse(CURRENCIES));
+        }
+        if (input.includes("/v1/agencies/scorecard")) {
+          return Promise.resolve(jsonResponse({ ...page([SCORE]), note: "정의" }));
+        }
+        if (input.includes("/v1/agency-contracts")) {
+          return Promise.resolve(jsonResponse(page([CONTRACT])));
+        }
+        return Promise.resolve(jsonResponse(page([])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/agencies" });
+
+    const row = await contractRow("CT-2026-01");
+    expect(within(row).getByText("…")).toBeInTheDocument(); // 통화표 전 — 서식을 만들지 않는다
+    releaseCurrencies();
+    await waitFor(() => expect(within(row).getByText("1,234.56 USD")).toBeInTheDocument());
+  });
+
+  it("통화표에 없는 코드는 화면을 죽이지 않고 원값을 그대로 보인다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.includes("/v1/system/currencies")) return Promise.resolve(jsonResponse(CURRENCIES));
+        if (input.includes("/v1/agencies/scorecard")) {
+          return Promise.resolve(jsonResponse({ ...page([]), note: "정의" }));
+        }
+        if (input.includes("/v1/agency-contracts")) {
+          return Promise.resolve(jsonResponse(page([{ ...CONTRACT, fee_amount: 777, fee_currency: "XYZ" }])));
+        }
+        return Promise.resolve(jsonResponse(page([])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/agencies" });
+
+    const row = await contractRow("CT-2026-01");
+    await waitFor(() => expect(within(row).getByText("777 XYZ")).toBeInTheDocument());
+  });
+
   it("무역 역할에는 등록 폼·수정 버튼이 없다 (편집=인증+관리자)", async () => {
     stubApi(TRADER);
     renderWithProviders(<AppRoutes />, { route: "/agencies" });
@@ -320,6 +370,9 @@ describe("대행 계약 화면", () => {
 
     confirm.mockReturnValueOnce(false);
     fireEvent.click(within(form).getByRole("button", { name: "삭제" }));
+    // 요청은 비동기로 나간다 — 확인 창이 뜬 뒤 한 박자 기다려야 "안 나갔다"가 빈 검증이 되지 않는다.
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
 
     confirm.mockReturnValueOnce(true);

@@ -109,7 +109,14 @@ interface Recorded {
   body: unknown;
 }
 
-function stubApi(me: unknown, row: unknown, calls: Recorded[] = [], logs: unknown[] = [LOG_OPEN, LOG_DONE]) {
+function stubApi(
+  me: unknown,
+  row: unknown,
+  calls: Recorded[] = [],
+  logs: unknown[] = [LOG_OPEN, LOG_DONE],
+  /** 저장(PATCH) 응답에 덧씌울 값 — 서버가 정정한 필드를 재현한다. */
+  patched: Record<string, unknown> = {},
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: string, init?: RequestInit) => {
@@ -155,7 +162,7 @@ function stubApi(me: unknown, row: unknown, calls: Recorded[] = [], logs: unknow
       }
       if (input.includes("/v1/partners")) return Promise.resolve(jsonResponse(page([AGENCY, SUPPLIER])));
       if (/\/v1\/certifications\/1$/.test(input) && method === "PATCH") {
-        return Promise.resolve(jsonResponse({ ...(row as object), version: 4 }));
+        return Promise.resolve(jsonResponse({ ...(row as object), ...patched, version: 4 }));
       }
       if (/\/v1\/certifications\/1$/.test(input)) return Promise.resolve(jsonResponse(row));
       if (input.includes("/status-log")) return Promise.resolve(jsonResponse(page([])));
@@ -269,6 +276,17 @@ describe("인증 상세 — 대행 협업 표시·편집", () => {
     });
   });
 
+  it("직접 처리로 바꾸면 대행사 선택칸도 비워진다 — 잠긴 칸에 옛 대행사가 남아 보이지 않는다", async () => {
+    stubApi(CERT_USER, AGENCY_ROW);
+    await openDetail();
+
+    const form = await screen.findByRole("form", { name: "인증 정보 편집" });
+    await waitFor(() => expect(within(form).getByLabelText("대행사")).toHaveValue("1"));
+    fireEvent.change(within(form).getByLabelText("처리방식"), { target: { value: "DIRECT" } });
+    expect(within(form).getByLabelText("대행사")).toBeDisabled();
+    expect(within(form).getByLabelText("대행사")).toHaveValue("");
+  });
+
   it("직접 처리일 때 '대행사' 주체는 고를 수 없다", async () => {
     stubApi(CERT_USER, BASE_ROW);
     await openDetail();
@@ -317,6 +335,28 @@ describe("인증 상세 — 대행 협업 표시·편집", () => {
       action_owner: "AUTHORITY",
       action_owner_changed_on: "2026-09-21",
     });
+  });
+
+  it("저장하면 폼이 서버가 돌려준 새 값(version 4)으로 다시 시작한다 — 서버가 정정한 필드가 옛 입력으로 남지 않는다", async () => {
+    const calls: Recorded[] = [];
+    stubApi(CERT_USER, BASE_ROW, calls, [], { cert_number: "A-1", note: "서버가 정정한 메모" });
+    await openDetail();
+
+    const form = await screen.findByRole("form", { name: "인증 정보 편집" });
+    fireEvent.change(within(form).getByLabelText("인증번호"), { target: { value: "A-1" } });
+    fireEvent.click(within(form).getByRole("button", { name: "저장" }));
+
+    await waitFor(() =>
+      expect(within(screen.getByRole("form", { name: "인증 정보 편집" })).getByLabelText("메모")).toHaveValue(
+        "서버가 정정한 메모",
+      ),
+    );
+    // 다음 저장은 새 version(4)으로 낙관 잠금을 건다.
+    const next = screen.getByRole("form", { name: "인증 정보 편집" });
+    fireEvent.change(within(next).getByLabelText("인증번호"), { target: { value: "A-2" } });
+    fireEvent.click(within(next).getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(patchCalls(calls)).toHaveLength(2));
+    expect(patchCalls(calls)[1]?.body).toEqual({ version: 4, cert_number: "A-2" });
   });
 
   it("서버가 거절하면 필드 문구를 그대로 보인다", async () => {
@@ -471,6 +511,9 @@ describe("인증 상세 — 통신 기록", () => {
     const buttons = await screen.findAllByRole("button", { name: "삭제" });
     confirm.mockReturnValueOnce(false);
     fireEvent.click(buttons[0] as HTMLElement);
+    // 요청은 비동기로 나간다 — 확인 창이 뜬 뒤 한 박자 기다려야 "안 나갔다"가 빈 검증이 되지 않는다.
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(calls.some((c) => c.method === "DELETE")).toBe(false);
 
     confirm.mockReturnValueOnce(true);

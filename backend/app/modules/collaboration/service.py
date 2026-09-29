@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, NoReturn
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.exc import IntegrityError
@@ -229,15 +229,30 @@ def _check_contract_period(start_on: date, end_on: date | None) -> None:
         raise _invalid("end_on", "계약 종료일은 시작일보다 빠를 수 없습니다.")
 
 
-def _contract_conflict(payload: dict[str, Any], exc: IntegrityError) -> AppError:
+_CONTRACT_UNIQUE = "uq_agency_contracts_partner_id_contract_no_active"
+
+
+def _translate_contract_integrity(payload: dict[str, Any], exc: IntegrityError) -> NoReturn:
+    """유일 위반만 "이미 등록된 번호" 안내로 바꾼다 — 다른 무결성 오류(경쟁 중 FK 등)를 중복 번호로
+    오진하면 사용자가 엉뚱한 곳을 고친다. 그 외는 원 예외를 그대로 올려 로그에서 보이게 한다."""
     # 함정 ② — 실패 경로에서는 ORM 속성을 읽지 않고 요청 값만 쓴다.
-    return AppError(
+    if _CONTRACT_UNIQUE not in str(exc.orig):
+        raise exc
+    raise AppError(
         ErrorCode.VALIDATION_INVALID_FIELD,
         detail={
             "contract_no": "같은 대행사에 이미 등록된 계약 번호입니다. 다른 번호를 입력해 주세요."
         },
         log_context={"contract_no": payload.get("contract_no")},
-    )
+    ) from exc
+
+
+def _clean_contract_no(raw: Any) -> str:
+    """계약 번호 — 공백뿐이면 422(DB CHECK가 막아도 "중복"으로 오진되지 않게 서비스가 먼저 안내)."""
+    value = str(raw).strip()
+    if not value:
+        raise _invalid("contract_no", "계약 번호를 입력해 주세요.")
+    return value
 
 
 def create_contract(
@@ -265,7 +280,7 @@ def create_contract(
 
         row = AgencyContract(
             partner_id=partner.id,
-            contract_no=str(payload["contract_no"]).strip(),
+            contract_no=_clean_contract_no(payload["contract_no"]),
             scope_note=payload.get("scope_note"),
             start_on=start_on,
             end_on=end_on,
@@ -278,7 +293,7 @@ def create_contract(
         try:
             session.flush()
         except IntegrityError as exc:
-            raise _contract_conflict(payload, exc) from exc
+            _translate_contract_integrity(payload, exc)
 
         body = _serialize_contract(_contract_view(row, partner_name, today_kst()))
         assert claim.record is not None
@@ -296,7 +311,7 @@ def update_contract(
         _require_version(row, payload["version"], key="contract_id")
 
         if "contract_no" in payload:
-            row.contract_no = str(payload["contract_no"]).strip()
+            row.contract_no = _clean_contract_no(payload["contract_no"])
         if "scope_note" in payload:
             row.scope_note = payload["scope_note"]
         if "note" in payload:
@@ -318,7 +333,7 @@ def update_contract(
         try:
             session.flush()
         except IntegrityError as exc:
-            raise _contract_conflict(payload, exc) from exc
+            _translate_contract_integrity(payload, exc)
         return _contract_view(row, str(partner_name), today_kst())
 
 

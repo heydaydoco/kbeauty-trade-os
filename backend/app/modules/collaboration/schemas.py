@@ -40,14 +40,14 @@ class ContractCreateRequest(BaseModel):
     #: 대행사 — 거래처 유형 CERT_AGENCY(서비스 검증).
     partner_id: int = Field(ge=1)
     contract_no: str = Field(min_length=1, max_length=60)
-    scope_note: str | None = None
+    scope_note: str | None = Field(default=None, max_length=2000)
     start_on: date
     #: 비우면 기간 미정(상시 계약).
     end_on: date | None = None
     #: 수수료 — 사람이 쓰는 표기. 통화와 한 쌍(둘 다 비우면 미기재).
     fee: Decimal | None = Field(default=None, ge=0, max_digits=15)
     fee_currency: str | None = Field(default=None, min_length=3, max_length=3)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class ContractUpdateRequest(BaseModel):
@@ -57,12 +57,12 @@ class ContractUpdateRequest(BaseModel):
 
     version: int = Field(ge=1)
     contract_no: str | None = Field(default=None, min_length=1, max_length=60)
-    scope_note: str | None = None
+    scope_note: str | None = Field(default=None, max_length=2000)
     start_on: date | None = None
     end_on: date | None = None
     fee: Decimal | None = Field(default=None, ge=0, max_digits=15)
     fee_currency: str | None = Field(default=None, min_length=3, max_length=3)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def _non_nullable(self) -> ContractUpdateRequest:

@@ -259,6 +259,41 @@ def test_the_current_flag_follows_the_contract_period_boundaries(cert: TestClien
     assert flag("open-ended", -30, None) is True
 
 
+def test_a_blank_contract_number_is_a_field_error_not_a_duplicate_message(
+    cert: TestClient,
+) -> None:
+    """공백뿐인 계약 번호는 "번호를 입력" 안내 — DB CHECK 위반이 "이미 등록된 번호"로 오진되지 않는다"""
+    partner_id = _agency()
+    created = _contract(cert, partner_id, contract_no="REAL")
+    blank = cert.post(
+        CONTRACTS,
+        json={"partner_id": partner_id, "contract_no": "   ", "start_on": "2026-01-01"},
+        headers=_key(),
+    )
+    assert blank.status_code == 422
+    assert "입력" in _errors(blank)["contract_no"] and "이미" not in _errors(blank)["contract_no"]
+    patched = cert.patch(f"{CONTRACTS}/{created['id']}", json={"version": 1, "contract_no": "  "})
+    assert patched.status_code == 422 and "입력" in _errors(patched)["contract_no"]
+
+
+def test_free_text_fields_have_a_length_ceiling(cert: TestClient) -> None:
+    """범위·메모는 2000자까지 — 무제한 텍스트로 응답·로그가 부풀지 않게 한다"""
+    partner_id = _agency()
+    too_long = "가" * 2001
+    for field in ("scope_note", "note"):
+        response = cert.post(
+            CONTRACTS,
+            json={
+                "partner_id": partner_id,
+                "contract_no": f"LONG-{field}",
+                "start_on": "2026-01-01",
+                field: too_long,
+            },
+            headers=_key(),
+        )
+        assert response.status_code == 422, field
+
+
 def test_patching_a_contract_needs_the_current_version(cert: TestClient) -> None:
     """낙관 잠금 — 오래된 version은 409, 성공하면 version이 오른다"""
     created = _contract(cert, _agency())
@@ -333,6 +368,29 @@ def test_the_contract_list_is_a_paged_envelope_and_filters_by_agency_and_currenc
     assert only_first["total"] == 2
     current = cert.get(CONTRACTS, params={"current_only": "true"}).json()
     assert {item["contract_no"] for item in current["items"]} == {"A-new", "B-1"}
+
+
+def test_current_only_is_inclusive_of_the_end_date_and_excludes_future_starts(
+    cert: TestClient,
+) -> None:
+    """current_only — 종료일 당일은 포함, 내일 시작 계약은 제외(경계) — is_current와 같은 정의"""
+    today = today_kst()
+    partner_id = _agency()
+    _contract(
+        cert,
+        partner_id,
+        contract_no="ENDS-TODAY",
+        start_on=(today - timedelta(days=5)).isoformat(),
+        end_on=today.isoformat(),
+    )
+    _contract(
+        cert,
+        partner_id,
+        contract_no="STARTS-TOMORROW",
+        start_on=(today + timedelta(days=1)).isoformat(),
+    )
+    current = cert.get(CONTRACTS, params={"current_only": "true"}).json()
+    assert {item["contract_no"] for item in current["items"]} == {"ENDS-TODAY"}
 
 
 def test_the_contract_list_rejects_oversized_pages(cert: TestClient) -> None:
@@ -629,6 +687,24 @@ def test_the_comm_log_list_filters_orders_and_counts_attachments(cert: TestClien
     assert items[1]["attachment_count"] == 2 and items[0]["attachment_count"] == 0
     open_only = cert.get(COMM_LOGS, params={"open_only": "true"}).json()
     assert [item["id"] for item in open_only["items"]] == [newer["id"]]
+
+
+def test_soft_deleted_attachments_are_not_counted(cert: TestClient) -> None:
+    """첨부 건수는 활성 문서만 센다 — 삭제된 첨부가 남으면 건수와 목록이 어긋난다"""
+    from app.core.db.uow import unit_of_work
+    from app.core.time import utcnow
+    from app.modules.documents.models import Document
+
+    log = _log(cert, _certification())
+    create_link_document(log["id"], valid_until=None, owner_type="COMM_LOG", document_type="CFS")
+    gone = create_link_document(
+        log["id"], valid_until=None, owner_type="COMM_LOG", document_type="GMP", tag="gone"
+    )
+    with unit_of_work() as uow:
+        row = uow.session.get(Document, gone)
+        assert row is not None
+        row.deleted_at = utcnow()
+    assert cert.get(COMM_LOG_URL(log)).json()["attachment_count"] == 1
 
 
 def test_deleting_a_comm_log_hides_it(cert: TestClient) -> None:
