@@ -28,7 +28,7 @@ import {
 import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
-import { CertificationEditPanel, CommLogsPanel } from "./certification-collaboration";
+import { CertificationEditPanel, CommLogsPanel, PackagePanel } from "./certification-collaboration";
 import type { DocumentRow } from "./documents";
 import type { RequirementTemplate } from "./requirement-templates";
 
@@ -997,6 +997,7 @@ export function CertificationsPage() {
           <PrerequisiteHint row={selected} />
           <TasksPanel row={selected} canEdit={canEdit} />
           <CommLogsPanel row={selected} canEdit={canEdit} />
+          <PackagePanel row={selected} />
           <HistoryPanel row={selected} />
         </div>
       )}

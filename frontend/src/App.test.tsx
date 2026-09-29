@@ -83,6 +83,13 @@ describe("라우팅", () => {
     expect(screen.getByRole("heading", { name: "대행 계약" })).toBeInTheDocument();
   });
 
+  it("/market-wizard는 신규 시장 개설 화면을 연다 (S2-4 PR-2)", async () => {
+    stubLoggedIn();
+    renderWithProviders(<AppRoutes />, { route: "/market-wizard" });
+
+    expect(await screen.findByRole("heading", { name: "신규 시장 개설" })).toBeInTheDocument();
+  });
+
   it("/materials는 자재 화면을 연다 (S1-2 PR-2)", async () => {
     stubLoggedIn();
     renderWithProviders(<AppRoutes />, { route: "/materials" });

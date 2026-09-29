@@ -12,6 +12,7 @@ const NAV = [
   { to: "/ingredients", label: "성분" },
   { to: "/materials", label: "자재" },
   { to: "/markets", label: "시장" },
+  { to: "/market-wizard", label: "신규 시장 개설" },
   { to: "/requirement-templates", label: "요건 템플릿" },
   { to: "/certifications", label: "인증" },
   { to: "/certification-board", label: "인증 보드" },
