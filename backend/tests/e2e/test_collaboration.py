@@ -922,3 +922,44 @@ def test_the_list_carries_agency_names_without_per_row_queries(cert: TestClient)
         template_id=None, target_type=None, status=None, offset=0, limit=50
     )[0]
     assert {row.agency_partner_name for row in rows} == {"테스트 대행사"}
+
+
+# ═══ 스코어카드 ══════════════════════════════════════════════════════════════
+
+SCORECARD = "/api/v1/agencies/scorecard"
+
+
+def test_the_scorecard_is_readable_by_every_role_and_carries_the_definition_note(
+    viewer: TestClient, trader: TestClient, cert: TestClient
+) -> None:
+    """전 역할 열람(원가·마진 아님) — 페이지 봉투 + 서버가 준 지표 정의 문구(note)"""
+    agency = _agency()
+    _contract(cert, agency, fee="1000", fee_currency="USD")
+    for client in (viewer, trader, cert):
+        response = client.get(SCORECARD)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert (body["total"], body["page"], body["size"]) == (1, 1, 50)
+        assert "현재 지정된 대행사 기준" in body["note"]
+        (item,) = body["items"]
+        assert item["partner_id"] == agency and item["case_count"] == 0
+        assert item["supplement_rate"] is None and item["lead_days_avg"] is None
+        assert item["current_contract"]["fee_amount"] == 100000
+        assert item["current_contract"]["fee_currency"] == "USD"
+
+
+def test_the_scorecard_reflects_an_agency_assignment_immediately(cert: TestClient) -> None:
+    """저장하지 않는 계산값 — 대행 지정 직후 담당 건수가 바로 오른다(배치 대기 없음)"""
+    agency = _agency()
+    certification_id = _certification()
+    assert cert.get(SCORECARD).json()["items"][0]["case_count"] == 0
+    response = _patch_cert(
+        cert, certification_id, 1, handling_mode="AGENCY", agency_partner_id=agency
+    )
+    assert response.status_code == 200
+    assert cert.get(SCORECARD).json()["items"][0]["case_count"] == 1
+
+
+def test_the_scorecard_rejects_oversized_pages(viewer: TestClient) -> None:
+    """size 상한(200) 초과는 422 — 무페이지네이션 금지(§18.4)"""
+    assert viewer.get(SCORECARD, params={"size": 201}).status_code == 422

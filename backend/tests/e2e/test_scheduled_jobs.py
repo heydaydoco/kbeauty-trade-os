@@ -46,9 +46,15 @@ def test_the_registry_is_visible_to_admins(admin: TestClient) -> None:
     listed = admin.get(JOBS)
     assert listed.status_code == 200, listed.text
     body = listed.json()
-    assert body["total"] == 4
+    assert body["total"] == len(scheduler.JOB_REGISTRY)
     codes = {item["code"] for item in body["items"]}
-    assert codes == {"certification-sweep", "outbox-dispatch", "deadline-scan", "daily-briefing"}
+    assert codes == {
+        "certification-sweep",
+        "outbox-dispatch",
+        "deadline-scan",
+        "daily-briefing",
+        "stagnation-scan",
+    }
     # 등록만 되고 안 도는 잡을 화면이 구분해 보여 준다.
     assert all(item["is_mapped"] for item in body["items"])
 

@@ -122,9 +122,10 @@ def test_registering_is_idempotent() -> None:
         "daily-briefing",
         "deadline-scan",
         "outbox-dispatch",
+        "stagnation-scan",
     ]
     assert scheduler.register_jobs() == []
-    assert len(_jobs()) == 4
+    assert len(_jobs()) == len(scheduler.JOB_REGISTRY)
 
 
 def test_every_registered_code_has_a_mapping() -> None:
@@ -238,7 +239,7 @@ def test_failure_alerts_are_deduped_per_day() -> None:
 def test_a_due_job_runs_and_records_ok() -> None:
     scheduler.register_jobs()
     counts = scheduler.run_due_jobs()
-    assert counts["ran"] == 4
+    assert counts["ran"] == len(scheduler.JOB_REGISTRY)
     assert {row.last_status for row in _jobs()} == {"OK"}
     assert all(row.last_run_at is not None for row in _jobs())
 
@@ -348,7 +349,7 @@ def test_two_schedulers_run_a_due_job_only_once() -> None:
     assert all(outcome.ok for outcome in outcomes), [o.error for o in outcomes]
 
     ran = sum(outcome.value["ran"] for outcome in outcomes)
-    assert ran == 4  # 등록 잡 4종이 각각 정확히 한 번
+    assert ran == len(scheduler.JOB_REGISTRY)  # 등록 잡 전건이 각각 정확히 한 번
     assert {row.last_status for row in _jobs()} == {"OK"}
 
 
@@ -361,9 +362,9 @@ def test_a_second_pass_does_not_rerun_what_just_ran() -> None:
       창을 닫는다 — 이 케이스가 그 재판정의 회귀다.
     """
     scheduler.register_jobs()
-    assert scheduler.run_due_jobs()["ran"] == 4
+    assert scheduler.run_due_jobs()["ran"] == len(scheduler.JOB_REGISTRY)
 
     # 후보를 먼저 뜬 실행기를 흉내 낸다 — 목록은 살아 있지만 이미 실행됐다.
     stale_ids = [row.id for row in _jobs()]
     outcomes = [scheduler._run_one(job_id, now=utcnow()) for job_id in stale_ids]
-    assert outcomes == ["skipped"] * 4
+    assert outcomes == ["skipped"] * len(scheduler.JOB_REGISTRY)

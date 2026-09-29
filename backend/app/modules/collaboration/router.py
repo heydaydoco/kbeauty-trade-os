@@ -13,14 +13,16 @@ from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.core.pagination import Page, PageParams
-from app.modules.collaboration import service
+from app.modules.collaboration import scorecard, service
 from app.modules.collaboration.schemas import (
+    AgencyScore,
     CommLogCreateRequest,
     CommLogSummary,
     CommLogUpdateRequest,
     ContractCreateRequest,
     ContractSummary,
     ContractUpdateRequest,
+    ScorecardPage,
     SubjectType,
 )
 from app.modules.identity.models import RoleCode
@@ -28,8 +30,24 @@ from app.modules.identity.models import RoleCode
 #: 대행 협업 편집은 인증 역할이 한다(관리자는 항상 통과).
 CAN_EDIT = (RoleCode.CERT,)
 
+agencies_router = APIRouter(prefix="/agencies", tags=["agencies"])
 contracts_router = APIRouter(prefix="/agency-contracts", tags=["agency-contracts"])
 comm_logs_router = APIRouter(prefix="/comm-logs", tags=["comm-logs"])
+
+
+# ── 스코어카드 (계산값 — 저장 0) ─────────────────────────────────────────────
+
+
+@agencies_router.get("/scorecard", summary="대행사 스코어카드 (소요일·보완율·현행 계약 — 계산값)")
+def get_scorecard(current: CurrentUser, params: Annotated[PageParams, Depends()]) -> ScorecardPage:
+    views, total = scorecard.scorecard(offset=params.offset, limit=params.limit)
+    return ScorecardPage(
+        items=[AgencyScore.of(view) for view in views],
+        total=total,
+        page=params.page,
+        size=params.size,
+        note=scorecard.SCORECARD_NOTE,
+    )
 
 
 # ── 대행 계약 ──────────────────────────────────────────────────────────────

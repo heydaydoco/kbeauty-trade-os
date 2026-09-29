@@ -18,6 +18,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.core.pagination import Page
+from app.modules.collaboration.scorecard import AgencyScoreView, CurrentContractView
 from app.modules.collaboration.service import CommLogView, ContractView
 
 SubjectType = Literal["CERTIFICATION"]
@@ -150,3 +152,54 @@ class CommLogSummary(BaseModel):
     @classmethod
     def of(cls, view: CommLogView) -> CommLogSummary:
         return cls(**asdict(view))
+
+
+# ── 스코어카드 ─────────────────────────────────────────────────────────────
+
+
+class CurrentContractSummary(BaseModel):
+    id: int
+    contract_no: str
+    start_on: date
+    end_on: date | None
+    #: 정수 최소단위 — 합산·환산하지 않고 계약에 적힌 그대로 보인다.
+    fee_amount: int | None
+    fee_currency: str | None
+    scope_note: str | None
+
+    @classmethod
+    def of(cls, view: CurrentContractView) -> CurrentContractSummary:
+        return cls(**asdict(view))
+
+
+class AgencyScore(BaseModel):
+    partner_id: int
+    partner_code: str
+    partner_name: str
+    #: 삭제되지 않은 인증 전건(종결 포함) — 현재 대행사 귀속.
+    case_count: int
+    submitted_count: int
+    approved_count: int
+    supplemented_count: int
+    #: 보완요청을 거친 건 ÷ 신청제출 도달 건(0~1) — 분모 0이면 null(0%로 위장 금지).
+    supplement_rate: float | None
+    #: 소요일 표본 수(승인에 도달한 건).
+    lead_sample_count: int
+    lead_days_avg: float | None
+    lead_days_median: float | None
+    current_contract: CurrentContractSummary | None
+
+    @classmethod
+    def of(cls, view: AgencyScoreView) -> AgencyScore:
+        data = asdict(view)
+        contract = view.current_contract
+        data["current_contract"] = (
+            CurrentContractSummary.of(contract) if contract is not None else None
+        )
+        return cls(**data)
+
+
+class ScorecardPage(Page[AgencyScore]):
+    """페이지 봉투 + 지표 정의 문구(서버가 정본 — 화면은 그대로 보인다)."""
+
+    note: str
