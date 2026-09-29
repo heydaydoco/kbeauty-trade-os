@@ -448,6 +448,11 @@ def run_forever(*, tick_seconds: int = TICK_SECONDS) -> int:  # pragma: no cover
       프로세스를 조기 종료시키던 종전 방식은 `restart: unless-stopped`와 만나
       무한 재기동이 되기도 했다 — 지금은 두 번째 프로세스도 정상 대기 상태다.
     """
+    # 레지스트리의 새 잡을 자동 등록한다(멱등 — 이미 있는 행·사람이 끈 상태는 건드리지 않는다). 수동 register-jobs를
+    # 잊어 신규 잡(백업 신선도 감시 등)이 조용히 안 도는 사고를 막는다(S2-4 PR-3 — ADR-0050).
+    registered = register_jobs()
+    if registered:
+        print(f"배치 자동 등록 {len(registered)}건: {', '.join(registered)}")
     recovered = recover_stale_running()
     if recovered:
         print(f"비정상 종료 정리: {', '.join(recovered)}")
