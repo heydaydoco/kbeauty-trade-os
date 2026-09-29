@@ -414,3 +414,36 @@ def test_a_market_with_drafts_only_is_in_progress_and_a_deleted_market_counts_as
         row.deleted_at = utcnow()
     body = cert.get(f"{WIZARD}/SG").json()
     assert body["market_id"] is None and _step(body, "market")["status"] == "TODO"
+
+
+def test_templates_step_stays_in_progress_while_any_draft_remains_and_ignores_other_markets(
+    cert: TestClient,
+) -> None:
+    """확정 1건+초안 잔존은 진행 중(완료 아님) — 다른 시장의 템플릿은 세지 않는다"""
+    _apply(cert, "EU", "US")
+    row = _templates("EU")[0]
+    patched = cert.patch(
+        f"/api/v1/requirement-templates/{row.id}",
+        json=_edit_body(row, last_verified_on=date(2026, 9, 30).isoformat()),
+    )
+    assert (
+        cert.post(
+            f"/api/v1/requirement-templates/{row.id}/confirm",
+            json={"version": patched.json()["version"]},
+            headers=_key(),
+        ).status_code
+        == 200
+    )
+    eu = _step(cert.get(f"{WIZARD}/EU").json(), "templates")
+    assert eu["status"] == "IN_PROGRESS"
+    assert eu["counts"] == {
+        "draft": _catalog_count("EU") - 1,
+        "confirmed": 1,
+        "total": _catalog_count("EU"),
+    }
+    us = _step(cert.get(f"{WIZARD}/US").json(), "templates")
+    assert us["counts"] == {
+        "draft": _catalog_count("US"),
+        "confirmed": 0,
+        "total": _catalog_count("US"),
+    }
