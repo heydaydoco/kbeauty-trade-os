@@ -117,9 +117,14 @@ def _jobs() -> list[ScheduledJob]:
 def test_registering_is_idempotent() -> None:
     """CLI 등록은 멱등 — 두 번 불러도 행이 늘지 않는다"""
     first = scheduler.register_jobs()
-    assert sorted(first) == ["certification-sweep", "outbox-dispatch"]
+    assert sorted(first) == [
+        "certification-sweep",
+        "daily-briefing",
+        "deadline-scan",
+        "outbox-dispatch",
+    ]
     assert scheduler.register_jobs() == []
-    assert len(_jobs()) == 2
+    assert len(_jobs()) == 4
 
 
 def test_every_registered_code_has_a_mapping() -> None:
@@ -233,7 +238,7 @@ def test_failure_alerts_are_deduped_per_day() -> None:
 def test_a_due_job_runs_and_records_ok() -> None:
     scheduler.register_jobs()
     counts = scheduler.run_due_jobs()
-    assert counts["ran"] == 2
+    assert counts["ran"] == 4
     assert {row.last_status for row in _jobs()} == {"OK"}
     assert all(row.last_run_at is not None for row in _jobs())
 
@@ -264,6 +269,29 @@ def test_a_failing_job_alerts_an_admin(monkeypatch: pytest.MonkeyPatch) -> None:
             )
         ).scalars()
         assert [alert.severity for alert in alerts] == ["CRITICAL"]
+
+
+def test_a_partially_failed_scan_marks_the_job_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """건별 격리 배치의 실패 건 ≥1 → 잡 FAILED + 관리자 알림(조용한 도과 방지)"""
+    admin = create_user("jobs-admin-scan@example.com", roles=(RoleCode.ADMIN,))
+    scheduler.register_jobs()
+    monkeypatch.setattr(
+        scheduler.deadlines, "scan_deadlines", lambda: {"certifications": 3, "failed": 1}
+    )
+    counts = scheduler.run_due_jobs()
+    assert counts["failed"] >= 1
+    job = next(row for row in _jobs() if row.code == "deadline-scan")
+    assert job.last_status == "FAILED" and "1건 실패" in (job.last_error or "")
+    with unit_of_work() as uow:
+        total: int = uow.session.execute(
+            select(func.count())
+            .select_from(Alert)
+            .where(
+                Alert.recipient_user_id == admin,
+                Alert.dedup_key.like("jobs.failed:deadline-scan:%"),
+            )
+        ).scalar_one()
+    assert total == 1
 
 
 def test_a_disabled_job_does_not_run() -> None:
@@ -320,7 +348,7 @@ def test_two_schedulers_run_a_due_job_only_once() -> None:
     assert all(outcome.ok for outcome in outcomes), [o.error for o in outcomes]
 
     ran = sum(outcome.value["ran"] for outcome in outcomes)
-    assert ran == 2  # 등록 잡 2종이 각각 정확히 한 번
+    assert ran == 4  # 등록 잡 4종이 각각 정확히 한 번
     assert {row.last_status for row in _jobs()} == {"OK"}
 
 
@@ -333,9 +361,9 @@ def test_a_second_pass_does_not_rerun_what_just_ran() -> None:
       창을 닫는다 — 이 케이스가 그 재판정의 회귀다.
     """
     scheduler.register_jobs()
-    assert scheduler.run_due_jobs()["ran"] == 2
+    assert scheduler.run_due_jobs()["ran"] == 4
 
     # 후보를 먼저 뜬 실행기를 흉내 낸다 — 목록은 살아 있지만 이미 실행됐다.
     stale_ids = [row.id for row in _jobs()]
     outcomes = [scheduler._run_one(job_id, now=utcnow()) for job_id in stale_ids]
-    assert outcomes == ["skipped", "skipped"]
+    assert outcomes == ["skipped"] * 4

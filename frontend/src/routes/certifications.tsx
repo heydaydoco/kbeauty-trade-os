@@ -46,6 +46,23 @@ export interface Certification {
   assignee_id: number | null;
   note: string | null;
   version: number;
+  /** 도과 계산값(S2-3 PR-2 안건 ⑦) — 서버가 KST 오늘 기준으로 계산한다. 갱신중(RENEWING)은
+   *  스윕 비대상이라 상태가 그대로 남는데, 만료일이 지났다는 사실은 이 값이 말한다. */
+  is_overdue: boolean;
+  overdue_days: number | null;
+}
+
+/** 도과 배지 — 상태 라벨 옆에 붙는 계산값 표시(저장값 아님). */
+function OverdueBadge({ row }: { row: Certification }) {
+  if (!row.is_overdue) return null;
+  return (
+    <span
+      className="cell-nowrap ml-1 rounded bg-red-100 px-1.5 py-0.5 text-xs font-semibold text-red-800"
+      title="만료일이 지났습니다(계산값). 갱신중이면 갱신 절차를 서둘러 주세요."
+    >
+      도과 {row.overdue_days ?? 0}일
+    </span>
+  );
 }
 
 interface CertificationTask {
@@ -851,6 +868,7 @@ export function CertificationsPage() {
                   <td className="px-4 py-2">{row.target_label}</td>
                   <td className="cell-nowrap px-4 py-2">
                     {certificationStatusLabel(row.status)}
+                    <OverdueBadge row={row} />
                   </td>
                   <td className="cell-nowrap px-4 py-2">{orEmpty(row.expires_on)}</td>
                   <td className="cell-nowrap px-4 py-2">{orEmpty(row.cert_number)}</td>
@@ -877,6 +895,7 @@ export function CertificationsPage() {
           </h2>
           <p className="mt-1 text-sm text-gray-600">
             상태 {certificationStatusLabel(selected.status)}
+            <OverdueBadge row={selected} />
             {selected.expires_on !== null && ` · 만료일 ${selected.expires_on}`}
             {selected.cert_number !== null && ` · 인증번호 ${selected.cert_number}`}
           </p>

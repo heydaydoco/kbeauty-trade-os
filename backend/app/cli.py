@@ -24,6 +24,7 @@ from app.core.db.uow import unit_of_work
 from app.modules.audit import service as audit
 from app.modules.audit.models import AuditAction
 from app.modules.certifications.service import sweep_date_transitions
+from app.modules.deadlines import service as deadlines
 from app.modules.identity.models import Role, RoleCode, User, UserRole
 from app.modules.identity.passwords import hash_password
 from app.modules.identity.service import normalize_email
@@ -119,6 +120,25 @@ def main(argv: list[str] | None = None) -> int:
         help="기준일(YYYY-MM-DD). 생략하면 KST 오늘 — 업무 날짜는 KST다(§22 렌즈 6)",
     )
 
+    # 기일 스캔·브리핑 수동 실행 (S2-3 PR-2 — 스윕과 같은 "스케줄 + CLI 겸용" 계보).
+    # 기준일을 지정해 과거·미래 날짜로 관통 실측하는 통로다(안건 ② (e)).
+    scan = commands.add_parser(
+        "deadline-scan",
+        help="인증 만료일·문서 유효기간 기일 스캔을 1회 실행한다(알림 생성 — 멱등)",
+    )
+    scan.add_argument(
+        "--base-date",
+        default=None,
+        help=(
+            "기준일(YYYY-MM-DD). 생략하면 KST 오늘. ★ 운영 DB에서 미래 날짜를 주지 말 것 — "
+            "dedup 키가 만료일 기준이라 미래 기준일로 만든 알림이 실시간 알림의 자리를 선점한다"
+        ),
+    )
+    briefing = commands.add_parser(
+        "daily-briefing", help="담당 건 보유 사용자에게 데일리 브리핑을 1회 보낸다(하루 1통 dedup)"
+    )
+    briefing.add_argument("--base-date", default=None, help="기준일(YYYY-MM-DD). 생략하면 KST 오늘")
+
     # 배치 레지스트리 등록 (§15 / 부채 #12 — 판정 요청 15의 앱 경로 등록).
     # 마이그레이션 시드는 항구 금지다(함정 ⑩ — scheduled_jobs가 users FK를 단다).
     commands.add_parser(
@@ -142,6 +162,23 @@ def main(argv: list[str] | None = None) -> int:
             if "->" in key:
                 print(f"  {key}: {counts[key]}건")
         return 0
+    if args.command == "deadline-scan":
+        base = date.fromisoformat(args.base_date) if args.base_date else None
+        counts = deadlines.scan_deadlines(base_date=base)
+        print(
+            f"스캔 완료: 인증 {counts['certifications']}건·문서 {counts['documents']}건 — "
+            f"신규 알림 문턱 {counts['threshold']}·도과 {counts['overdue']}·"
+            f"에스컬레이션 {counts['escalated']}·실패 {counts['failed']}건"
+        )
+        return 1 if counts["failed"] else 0
+    if args.command == "daily-briefing":
+        base = date.fromisoformat(args.base_date) if args.base_date else None
+        counts = deadlines.send_daily_briefing(base_date=base)
+        print(
+            f"브리핑 완료: 수신자 {counts['recipients']}명 중 신규 발송 {counts['sent']}통"
+            f"·실패 {counts['failed']}건"
+        )
+        return 1 if counts["failed"] else 0
     if args.command == "register-jobs":
         created = scheduler.register_jobs()
         if created:

@@ -48,6 +48,7 @@ from app.core.db.uow import unit_of_work
 from app.core.logging.redaction import scrub_text
 from app.core.time import KST, utcnow
 from app.modules.certifications import service as certifications
+from app.modules.deadlines import service as deadlines
 from app.modules.notifications import dispatcher
 from app.modules.notifications import service as notifications
 from app.modules.platform.models import ScheduledJob
@@ -128,6 +129,26 @@ def _run_outbox_dispatch() -> dict[str, int]:
     return dispatcher.dispatch_pending()
 
 
+def _fail_if_any_failed(counts: dict[str, int], *, what: str) -> dict[str, int]:
+    """건별 격리 배치는 끝까지 돌지만, 실패 건이 있으면 잡을 FAILED로 올린다.
+
+    안 그러면 특정 건이 매일 실패해도 잡은 OK — §15 "실패 시 관리자 알림"이
+    미발화하고 그 건의 기일 알림은 조용히 0건이다(자기 적대 검증 확정). 성공한
+    건은 이미 커밋돼 있어 재실행이 덮어쓰지 않는다(멱등).
+    """
+    if counts.get("failed", 0):
+        raise RuntimeError(f"{what} {counts['failed']}건 실패 — 로그(entity_id)를 확인해 주세요.")
+    return counts
+
+
+def _run_deadline_scan() -> dict[str, int]:
+    return _fail_if_any_failed(deadlines.scan_deadlines(), what="기일 스캔")
+
+
+def _run_daily_briefing() -> dict[str, int]:
+    return _fail_if_any_failed(deadlines.send_daily_briefing(), what="데일리 브리핑")
+
+
 @dataclass(frozen=True, slots=True)
 class JobSpec:
     code: str
@@ -150,6 +171,21 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         name_ko="아웃박스 알림 디스패치",
         schedule="interval@1",
         run=_run_outbox_dispatch,
+    ),
+    JobSpec(
+        code="deadline-scan",
+        name_ko="인증·문서 기일 스캔(만료 문턱·도과·에스컬레이션)",
+        # 스윕(06:00)이 그날의 상태를 맞춘 뒤에 돈다 — 순서는 시각 차로만 보장한다
+        # (실행기에 잡 간 의존 개념은 없다). 스캔 자체는 상태가 아니라 날짜를 본다.
+        schedule="daily@06:30",
+        run=_run_deadline_scan,
+    ),
+    JobSpec(
+        code="daily-briefing",
+        name_ko="데일리 브리핑(담당자별 1통)",
+        # 업무 시작 시각 고정(관찰 등재 — 설정화 트리거: 사용자 요구).
+        schedule="daily@09:00",
+        run=_run_daily_briefing,
     ),
 )
 

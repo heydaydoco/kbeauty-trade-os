@@ -111,6 +111,11 @@ class CertificationView:
     assignee_id: int | None
     note: str | None
     version: int
+    #: 도과 계산값(안건 ⑦ — 저장하지 않는다). 만료일이 KST 오늘보다 앞이면 참.
+    #: 갱신중(RENEWING)의 도과가 이 값의 존재 이유다 — 상태는 RENEWING 그대로이고
+    #: (스윕 비대상) 표시·매트릭스·알림만 이 계산값을 본다. EXPIRED에서도 참이다.
+    is_overdue: bool
+    overdue_days: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +160,7 @@ def _target_label(session: Session, target_type: str, target_id: int | None) -> 
 def _certification_view(
     session: Session, row: Certification, market_code: str
 ) -> CertificationView:
+    overdue_days = overdue_days_of(row)
     return CertificationView(
         id=row.id,
         template_id=row.template_id,
@@ -178,7 +184,20 @@ def _certification_view(
         assignee_id=row.assignee_id,
         note=row.note,
         version=row.version,
+        is_overdue=overdue_days is not None,
+        overdue_days=overdue_days,
     )
+
+
+def overdue_days_of(row: Certification, *, base_date: date | None = None) -> int | None:
+    """만료일 도과 일수 — 도과가 아니면(무기한·미도래·종결) None (안건 ⑦ 계산값).
+
+    종결 2태(반려·중단)는 만료일이 남아 있어도 도과가 아니다 — 이미 닫힌 건이다.
+    """
+    if row.expires_on is None or row.status in TERMINAL_STATUSES:
+        return None
+    elapsed = ((base_date or today_kst()) - row.expires_on).days
+    return elapsed if elapsed > 0 else None
 
 
 def _market_code(session: Session, template_id: int) -> str:

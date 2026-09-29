@@ -45,7 +45,7 @@ from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.time import today_kst, utcnow
 from app.modules.catalog.models import Sku
 from app.modules.catalog.profiles import require_profile
-from app.modules.certifications.models import Certification
+from app.modules.certifications.models import Certification, CertificationTask
 from app.modules.documents.models import (
     DOCUMENT_OWNER_TYPES,
     Document,
@@ -703,9 +703,31 @@ def get_document(document_id: int) -> DocumentView:
         return _document_view(row, doc_type, displays.get((row.owner_type, row.owner_id)))
 
 
-def delete_document(*, actor: AuthenticatedUser, document_id: int) -> None:
-    """soft delete — 보존기한 내면 거부한다(파기 잠금, §4.7).
+def _active_task_links(session: Session, document_id: int) -> list[int]:
+    """이 문서를 서류로 연결 중인 활성 인증 태스크 id (소유 인증도 활성인 것만)."""
+    return list(
+        session.execute(
+            select(CertificationTask.id)
+            .join(Certification, Certification.id == CertificationTask.certification_id)
+            .where(
+                CertificationTask.document_id == document_id,
+                CertificationTask.deleted_at.is_(None),
+                Certification.deleted_at.is_(None),
+            )
+            .order_by(CertificationTask.id)
+        ).scalars()
+    )
 
+
+def delete_document(*, actor: AuthenticatedUser, document_id: int) -> None:
+    """soft delete — 보존기한 내면 거부하고(파기 잠금, §4.7), 인증 태스크가 서류로
+    연결 중이어도 거부한다(S2-3 판정 요청 19 (나) — 선해제 후 삭제).
+
+    ★ 링크 가드의 이유: 기일 스캔은 **활성 문서만** 돈다. 태스크가 증빙으로 붙여
+      둔 문서가 링크된 채 사라지면 그 문서의 유효기간 알림이 조용히 소거되고,
+      태스크 쪽에는 흔적도 이벤트도 없다(무역 역할이 문서 삭제로 인증 증빙 상태를
+      간접 변경하는 교차 지점). FK RESTRICT는 물리 삭제용이라 soft delete에는
+      발화하지 않는다 — 이 가드가 그 자리다.
     강제 삭제 액션은 없다(웹 세션 승인 문면). 저장 실물은 지우지 않는다 —
     soft delete는 복원 가능해야 하고(§17.4), 실물 정리는 보존·백업 정책(S2-4)의
     일이다.
@@ -720,6 +742,13 @@ def delete_document(*, actor: AuthenticatedUser, document_id: int) -> None:
                     "document_id": document_id,
                     "retention_until": row.retention_until.isoformat(),
                 },
+            )
+        linked = _active_task_links(session, document_id)
+        if linked:
+            raise AppError(
+                ErrorCode.DOCUMENTS_LINKED_TO_TASK,
+                detail={"task_ids": linked},
+                log_context={"document_id": document_id, "task_ids": linked},
             )
         row.deleted_at = utcnow()
         row.updated_by_id = actor.id

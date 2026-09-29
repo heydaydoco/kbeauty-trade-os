@@ -118,10 +118,13 @@ def test_registered_jobs_stay_clear_of_the_four_bans() -> None:
     """등록 잡 전건이 §15 L3 금지 4영역 밖이다.
 
     지금 도는 것은 ⓐ 달력 파생 상태 수렴(기판정 승인 — ADR-0038·0039)과
-    ⓑ 내부 알림 생성뿐이다. 지출 확정·법적 판정·대외 발송·장부 확정을 하는
-    잡이 들어오면 이 목록이 먼저 바뀌므로, 그때 판정을 거치게 된다.
+    ⓑ 내부 알림 생성(디스패치·기일 스캔·브리핑 — 읽기+alerts INSERT)뿐이다.
+    지출 확정·법적 판정·대외 발송·장부 확정을 하는 잡이 들어오면 이 목록이
+    먼저 바뀌므로, 그때 판정을 거치게 된다.
     """
     assert {spec.code for spec in scheduler.JOB_REGISTRY} == {
         "certification-sweep",
         "outbox-dispatch",
+        "deadline-scan",
+        "daily-briefing",
     }

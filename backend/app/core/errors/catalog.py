@@ -88,6 +88,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "링크형 문서에는 내려받을 파일이 없습니다. 문서의 링크 주소로 이동해 확인해 주세요.",
     ),
+    ErrorCode.DOCUMENTS_LINKED_TO_TASK: ErrorSpec(
+        409,
+        "인증 체크리스트가 서류로 연결 중인 문서는 삭제할 수 없습니다. 해당 인증의 태스크에서 서류 연결을 먼저 해제한 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.IMPORTS_FILE_TOO_LARGE: ErrorSpec(
         413,
         "파일이 너무 큽니다(최대 20MB). 파일을 나누어 다시 업로드해 주세요.",
