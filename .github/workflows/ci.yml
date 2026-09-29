@@ -101,6 +101,8 @@ jobs:
       TEST_DATABASE_URL: postgresql+psycopg://kbos_app:ci_app_pw@localhost:5432/kbos_test
       TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_test
       MIGRATION_CHECK_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_migr
+      # 백업·복원 리허설 스크립트 테스트(pg_dump·openssl 필요)가 skip으로 조용히 사라지지 않게 한다 — 없으면 실패.
+      KBOS_REQUIRE_SCRIPT_TESTS: "1"
     steps:
       - uses: actions/checkout@v5
 
@@ -115,6 +117,14 @@ jobs:
                  -v app_pw="$KBOS_APP_PASSWORD" \
                  -f "$f"
           done
+
+      - name: PostgreSQL 클라이언트(pg_dump·pg_restore) 확인 — 백업·복원 리허설 스크립트 테스트용
+        run: |
+          if ! command -v pg_dump >/dev/null || ! pg_dump --version | grep -qE ' 16\.'; then
+            sudo apt-get update -q && sudo apt-get install -y -q postgresql-client-16 || sudo apt-get install -y -q postgresql-client
+          fi
+          pg_dump --version
+          openssl version
 
       - uses: actions/setup-python@v5
         with:

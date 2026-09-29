@@ -164,6 +164,9 @@ services:
       # 복원 리허설은 스크래치 DB를 만들어야 하므로 슈퍼유저를 쓴다(기존 비밀 — 새 비밀 도입 없음).
       RESTORE_PGUSER: postgres
       RESTORE_PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      # 복원은 소유를 kbos_owner로, 권한(ACL)은 그대로 — 리허설이 앱 역할(kbos_app)의 읽기 권한·append-only까지 검증한다.
+      RESTORE_ROLE: kbos_owner
+      RESTORE_APP_ROLE: kbos_app
       KBOS_BACKUP_PASSPHRASE: ${KBOS_BACKUP_PASSPHRASE:?백업 암호화 패스프레이즈(16자 이상)가 필요합니다}
       KBOS_BACKUP_RETENTION: ${KBOS_BACKUP_RETENTION:-14}
       FILES_DIR: /data/files

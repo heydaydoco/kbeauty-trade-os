@@ -232,8 +232,9 @@ def cert() -> Iterator[TestClient]:
 
 def test_the_api_is_admin_only_and_never_exposes_artifacts(cert: TestClient, root: Path) -> None:
     assert cert.get(BACKUPS).status_code == 403
-    routes = {getattr(r, "path", "") for r in app.routes}
-    assert not any("backups" in path and ("download" in path or "{" in path) for path in routes)
+    assert sorted(path for path in app.openapi()["paths"] if "backup" in path) == [
+        "/api/v1/system/backups"
+    ]
 
 
 def test_the_api_lists_sets_the_latest_rehearsal_and_problems_and_writes_an_audit_row(
@@ -289,3 +290,121 @@ def test_the_api_paginates_and_reports_an_unconfigured_volume(
     monkeypatch.setattr(settings, "kbos_backup_dir", None)
     empty = admin.get(BACKUPS).json()
     assert empty["configured"] is False and empty["items"] == [] and empty["problems"] == []
+
+
+# ═══ 적대 검증 반영 (S2-4 PR-3) ═══════════════════════════════════════════════
+
+
+def test_an_unreadable_backup_dir_is_reported_as_unreadable_not_as_missing_backups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """앱이 볼 수 없는 것(권한·마운트)을 '백업 없음'으로 오보하지 않는다"""
+    problems = backups.freshness_problems(Path("/nonexistent/backups-dir"), now=NOW)
+    assert [p.code for p in problems] == ["BACKUP_UNREADABLE"]
+
+
+def test_impossible_dates_in_names_are_skipped_instead_of_crashing_the_check(root: Path) -> None:
+    (root / "kbos-99999999T999999Z").mkdir()
+    (root / "rehearsal-20261340T000000Z.json").write_text("{}")
+    good = _write_set(root, NOW - timedelta(hours=1))
+    assert [v.name for v in backups.list_backups(root)] == [good.name]
+    assert backups.list_rehearsals(root) == []
+    assert backups.freshness_problems(root, now=NOW) == []
+
+
+def test_future_dated_entries_never_count_as_fresh(root: Path) -> None:
+    """시계 오차·손댄 매니페스트의 미래 시각이 '영원히 신선'을 만들지 않는다(1시간 여유 초과분은 무시)"""
+    _write_set(root, NOW + timedelta(days=30))
+    assert [p.code for p in backups.freshness_problems(root, now=NOW)] == ["NO_BACKUP"]
+    _write_set(root, NOW - timedelta(minutes=30))
+    _write_rehearsal(root, NOW + timedelta(days=5), ok=False)
+    assert (
+        backups.freshness_problems(root, now=NOW) == []
+    )  # 미래 리허설 결과는 무시, 정상 백업만 본다
+
+
+def test_the_manifest_time_wins_over_the_name_and_the_oldest_set_decides_no_rehearsal(
+    root: Path,
+) -> None:
+    newest = _write_set(root, NOW - timedelta(hours=1))
+    _write_set(root, NOW - timedelta(days=12))
+    _write_set(root, NOW - timedelta(days=3))
+    assert [p.code for p in backups.freshness_problems(root, now=NOW)] == [
+        "NO_REHEARSAL"
+    ]  # 가장 오래된 세트(12일) 기준
+    manifest = newest / "manifest.json"
+    data = json.loads(manifest.read_text())
+    data["created_at_utc"] = (NOW - timedelta(hours=50)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    manifest.write_text(json.dumps(data))
+    views = {v.name: v for v in backups.list_backups(root)}
+    assert views[newest.name].created_at == NOW - timedelta(
+        hours=50
+    )  # 이름이 아니라 매니페스트 시각
+
+
+def test_two_problem_kinds_alert_separately_and_the_day_is_kst(
+    root: Path, admin_ids: tuple[int, int]
+) -> None:
+    _write_set(root, NOW - timedelta(days=30))
+    _write_rehearsal(root, NOW - timedelta(days=30), ok=True)
+    first = backups.run_backup_freshness(now=NOW)
+    assert (
+        first["problems"] == 2 and first["alerted"] == 4
+    )  # BACKUP_STALE·REHEARSAL_STALE × ADMIN 2명
+    # KST 자정 경계: UTC 14:30(KST 23:30)과 UTC 15:30(KST 다음 날 00:30)은 UTC로는 같은 날이지만 KST로는 다른 날
+    late = datetime(2026, 9, 30, 14, 30, tzinfo=UTC)
+    after_midnight_kst = datetime(2026, 9, 30, 15, 30, tzinfo=UTC)
+    assert (
+        backups.run_backup_freshness(now=late)["alerted"] == 0
+    )  # NOW(KST 9/30 09:00)와 같은 KST 날 — 재발송 없음
+    assert backups.run_backup_freshness(now=late + timedelta(minutes=10))["alerted"] == 0
+    assert backups.run_backup_freshness(now=after_midnight_kst)["alerted"] == 4
+
+
+def test_worker_bootstrap_registers_new_jobs_and_keeps_disabled_ones_disabled() -> None:
+    """worker 기동 준비가 잡을 자동 등록한다(멱등) — 관리자가 끈 잡은 그대로"""
+    registered, _ = scheduler.bootstrap()
+    assert sorted(registered) == sorted(spec.code for spec in scheduler.JOB_REGISTRY)
+    with unit_of_work() as uow:
+        from app.modules.platform.models import ScheduledJob
+
+        row = uow.session.execute(
+            select(ScheduledJob).where(ScheduledJob.code == "backup-freshness")
+        ).scalar_one()
+        row.is_enabled = False
+    assert scheduler.bootstrap()[0] == []
+    with unit_of_work() as uow:
+        from app.modules.platform.models import ScheduledJob
+
+        row = uow.session.execute(
+            select(ScheduledJob).where(ScheduledJob.code == "backup-freshness")
+        ).scalar_one()
+        assert row.is_enabled is False
+
+
+def test_the_api_rejects_anonymous_and_writes_no_audit_row_for_forbidden_calls(
+    cert: TestClient, root: Path
+) -> None:
+    with TestClient(app) as anonymous:
+        assert anonymous.get(BACKUPS).status_code == 401
+    assert cert.get(BACKUPS).status_code == 403
+    with unit_of_work() as uow:
+        assert (
+            uow.session.execute(
+                select(AuditLog).where(AuditLog.action == "system.backups.viewed")
+            ).first()
+            is None
+        )
+
+
+def test_the_only_backup_route_is_the_admin_list_and_the_audit_detail_is_recorded(
+    admin: TestClient, root: Path
+) -> None:
+    paths = sorted(path for path in app.openapi()["paths"] if "backup" in path)
+    assert paths == ["/api/v1/system/backups"]  # 산출물·파일 경로가 어떤 이름으로도 없다
+    admin.get(BACKUPS, params={"page": 1, "size": 7})
+    with unit_of_work() as uow:
+        row = uow.session.execute(
+            select(AuditLog).where(AuditLog.action == "system.backups.viewed")
+        ).scalar_one()
+    assert row.detail == {"configured": True, "page": 1, "size": 7}  # type: ignore[comparison-overlap]

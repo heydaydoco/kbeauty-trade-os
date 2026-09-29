@@ -339,13 +339,14 @@ def test_the_job_reports_candidates_but_deletes_nothing_while_the_switch_is_off(
     assert not (root / stored).exists() and _purged(doc_id) is not None
 
 
-def test_a_failing_file_does_not_block_the_rest_and_fails_the_job(
+def test_a_failing_file_does_not_block_the_rest_fails_the_job_and_is_finished_by_the_next_run(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """삭제가 실패해도(기록은 이미 커밋) 나머지는 계속되고 잡은 실패로 알리며, 다음 실행이 남은 실물을 마무리한다"""
     _free(monkeypatch, 60)
     monkeypatch.setattr(settings, "kbos_file_purge_enabled", True)
     bad_id, bad = _doc(root, deleted_days_ago=60)
-    good_id, _good = _doc(root, deleted_days_ago=60)
+    good_id, good = _doc(root, deleted_days_ago=60)
     original = Path.unlink
 
     def flaky(self: Path, missing_ok: bool = False) -> None:
@@ -356,27 +357,99 @@ def test_a_failing_file_does_not_block_the_rest_and_fails_the_job(
     monkeypatch.setattr(Path, "unlink", flaky)
     with pytest.raises(RuntimeError, match="실패"):
         storage.run_storage_monitor(now=NOW)
-    assert _purged(good_id) is not None and _purged(bad_id) is None
-    assert (root / bad).exists()
+    assert _purged(good_id) is not None and not (root / good).exists()
+    assert _purged(bad_id) is not None and (root / bad).exists()  # 기록은 됐고 실물이 남은 상태
+    monkeypatch.setattr(Path, "unlink", original)
+    again = storage.purge_files(apply=True, now=NOW)  # 잔여물 정리가 마무리한다
+    assert again["failed"] == 0 and not (root / bad).exists()
 
 
-def test_retention_is_rechecked_after_locking(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """후보 계산 뒤 잠금 전에 보존기한이 늘어났으면 기록하지 않는다(TOCTOU)"""
-    doc_id, _stored = _doc(root, deleted_days_ago=60)
+@pytest.mark.parametrize(
+    "change",
+    [
+        "retention_until = DATE '2030-01-01', issued_on = DATE '2020-01-01'",  # 보존기한 연장
+        "deleted_at = NULL",  # 삭제 취소(복원)
+        "purged_at = now()",  # 다른 프로세스가 이미 정리
+    ],
+)
+def test_conditions_are_rechecked_after_locking_and_the_file_survives(
+    root: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    """후보 계산 뒤 잠금 전에 조건이 바뀌면 **실물을 지우지 않는다**(TOCTOU) — 잠금·재확인이 삭제보다 먼저다"""
+    doc_id, stored = _doc(root, deleted_days_ago=60)
     real = storage.purge_candidates
 
-    def then_extend(session: Any, **kwargs: Any) -> Any:
+    def then_change(session: Any, **kwargs: Any) -> Any:
         found = real(session, **kwargs)
         with unit_of_work() as other:
-            other.session.execute(
-                text("UPDATE documents SET retention_until = :d, issued_on = :i WHERE id = :id"),
-                {"d": date(2030, 1, 1), "i": date(2020, 1, 1), "id": doc_id},
-            )
+            if "purged_at" in change:
+                other.session.execute(
+                    text(
+                        "UPDATE documents SET deleted_at = COALESCE(deleted_at, now()), purged_at = now() WHERE id = :id"
+                    ),
+                    {"id": doc_id},
+                )
+            else:
+                other.session.execute(
+                    text(f"UPDATE documents SET {change} WHERE id = :id"), {"id": doc_id}
+                )
         return found
 
-    monkeypatch.setattr(storage, "purge_candidates", then_extend)
+    monkeypatch.setattr(storage, "purge_candidates", then_change)
     counts = storage.purge_files(apply=True, now=NOW)
-    assert counts["purged"] == 0 and _purged(doc_id) is None
+    assert counts["purged"] == 0
+    if "purged_at" not in change:
+        assert _purged(doc_id) is None
+        assert (root / stored).exists()  # ★ 실물이 그대로다
+    with unit_of_work() as uow:
+        assert (
+            uow.session.execute(
+                select(AuditLog).where(AuditLog.action == "documents.file.purged")
+            ).first()
+            is None
+        )
+
+
+def test_the_grace_period_comes_from_the_setting(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """유예기간은 설정값 — 7일로 낮추면 8일 전 삭제분만 후보(6일 전은 아님)"""
+    monkeypatch.setattr(settings, "kbos_file_purge_grace_days", 7)
+    _doc(root, deleted_days_ago=8)
+    _doc(root, deleted_days_ago=6)
+    assert storage.purge_files(apply=False, now=NOW)["candidates"] == 1
+    monkeypatch.setattr(settings, "kbos_file_purge_grace_days", 30)
+    assert storage.purge_files(apply=False, now=NOW)["candidates"] == 0
+
+
+def test_the_retention_day_is_judged_in_kst(root: Path) -> None:
+    """보존기한 KST 9/30인 문서 — KST 9/30 23:00(UTC 14:00)은 당일 잠금, KST 10/1 01:00(UTC 16:00)부터 후보"""
+    _doc(root, deleted_days_ago=90, retention=date(2026, 9, 30))
+    assert (
+        storage.purge_files(apply=False, now=datetime(2026, 9, 30, 14, 0, tzinfo=UTC))["candidates"]
+        == 0
+    )
+    assert (
+        storage.purge_files(apply=False, now=datetime(2026, 9, 30, 16, 0, tzinfo=UTC))["candidates"]
+        == 1
+    )
+
+
+def test_soft_deleted_files_within_the_grace_period_are_not_orphans(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """삭제됐지만 아직 정리 안 된 문서의 실물은 행이 있으므로 고아가 아니다"""
+    _free(monkeypatch, 60)
+    _doc(root, deleted_days_ago=3)
+    assert storage.scan_storage(now=NOW).orphan_files == []
+
+
+def test_a_zero_sized_volume_is_critical_not_a_crash(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(storage, "_disk_usage", lambda _root: _Usage(0, 0, 0))
+    report = storage.scan_storage(now=NOW)
+    assert report.free_pct == 0.0 and report.level == "CRITICAL"
 
 
 def test_purged_at_check_rejects_live_documents_and_links(root: Path) -> None:

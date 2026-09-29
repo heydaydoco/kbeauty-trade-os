@@ -94,8 +94,17 @@ def _disk_usage(root: Path) -> shutil._ntuple_diskusage:
 
 
 def scan_storage(*, now: datetime | None = None) -> StorageReport:
+    """DB 행을 **먼저** 읽고 디스크를 나중에 훑는다 — 그 사이에 커밋된 업로드가 '유실'로 잡히지 않게(반대 순서면 잡힌다)."""
     current = now or utcnow()
     root = storage_root()
+    with unit_of_work() as uow:
+        session = uow.session
+        rows = session.execute(
+            select(Document.id, Document.stored_name, Document.purged_at).where(
+                Document.storage_kind == "FILE"
+            )
+        ).all()
+        warn, critical, _ = _thresholds(session)
     on_disk: dict[str, float] = {}
     app_bytes = 0
     if root.is_dir():
@@ -105,17 +114,9 @@ def scan_storage(*, now: datetime | None = None) -> StorageReport:
                     stat = entry.stat(follow_symlinks=False)
                     on_disk[entry.name] = stat.st_mtime
                     app_bytes += stat.st_size
+
     usage = _disk_usage(root)
     free_pct = usage.free * 100 / usage.total if usage.total else 0.0
-
-    with unit_of_work() as uow:
-        session = uow.session
-        rows = session.execute(
-            select(Document.id, Document.stored_name, Document.purged_at).where(
-                Document.storage_kind == "FILE"
-            )
-        ).all()
-        warn, critical, _ = _thresholds(session)
     known = {row.stored_name for row in rows}
     cutoff = current.timestamp() - ORPHAN_MIN_AGE.total_seconds()
     orphans = sorted(
@@ -176,8 +177,33 @@ def purge_candidates(session: Session, *, cutoff: datetime, today: date) -> list
     ]
 
 
+def _sweep_purged_leftovers(root: Path) -> int:
+    """이미 정리 처리(purged_at)된 문서의 실물이 아직 남아 있으면 지운다 — 기록 뒤 삭제 전에 죽었거나 삭제가 실패한 경우."""
+    with unit_of_work() as uow:
+        names = list(
+            uow.session.execute(
+                select(Document.stored_name).where(
+                    Document.storage_kind == "FILE", Document.purged_at.is_not(None)
+                )
+            ).scalars()
+        )
+    removed = 0
+    for name in names:
+        path = root / str(name)
+        if path.is_file():
+            path.unlink()
+            removed += 1
+    return removed
+
+
 def purge_files(*, apply: bool, now: datetime | None = None) -> dict[str, int]:
-    """후보를 계산하고, apply일 때만 실물을 지운다. dry-run은 어떤 것도 바꾸지 않는다."""
+    """후보를 계산하고, apply일 때만 지운다. dry-run은 어떤 것도 바꾸지 않는다.
+
+    ★ 순서가 안전의 핵심이다: **잠금 → 조건 재확인 → purged_at·audit 기록(커밋) → 그 뒤에 실물 삭제**.
+      실물을 먼저 지우면 재확인이 실패해도(그 사이 보존기한이 늘었을 때) 파일은 이미 사라진 뒤다 — 되돌릴 수 없는
+      유일한 동작에서 그 순서는 방어가 아니다. 기록 뒤 삭제 전에 죽거나 삭제가 실패하면 다음 실행의 잔여물 정리가
+      마무리한다(행은 정리됨·실물은 남은 상태를 그대로 두지 않는다).
+    """
     current = now or utcnow()
     grace = max(1, int(settings.kbos_file_purge_grace_days))
     cutoff = current - timedelta(days=grace)
@@ -188,14 +214,17 @@ def purge_files(*, apply: bool, now: datetime | None = None) -> dict[str, int]:
     if not apply:
         return counts
     root = storage_root()
+    try:
+        _sweep_purged_leftovers(root)
+    except Exception:  # 잔여물 정리 실패는 이번 후보 처리를 막지 않는다 — 실패로 집계해 잡이 알린다
+        counts["failed"] += 1
     for candidate in candidates:
         try:
-            (root / candidate.stored_name).unlink(missing_ok=True)  # 파일 IO는 트랜잭션 밖
             with unit_of_work() as uow:
                 row = uow.session.execute(
                     select(Document).where(Document.id == candidate.id).with_for_update()
                 ).scalar_one_or_none()
-                # 잠금 뒤 재확인 — 그 사이 조건이 바뀌었으면(보존기한 갱신 등) 기록하지 않는다.
+                # 잠금 뒤 재확인 — 그 사이 조건이 바뀌었으면(보존기한 연장 등) 아무것도 하지 않는다(실물도 그대로).
                 if row is None or not _eligible(row, cutoff=cutoff, today=today):
                     continue
                 row.purged_at = utcnow()
@@ -212,6 +241,7 @@ def purge_files(*, apply: bool, now: datetime | None = None) -> dict[str, int]:
                 )
             counts["purged"] += 1
             counts["bytes"] += candidate.size_bytes
+            (root / candidate.stored_name).unlink(missing_ok=True)  # 커밋 뒤 — 트랜잭션 밖 파일 IO
         except Exception:  # 건별 격리 — 한 건 실패가 나머지를 막지 않는다(잡이 FAILED로 올린다)
             counts["failed"] += 1
     return counts

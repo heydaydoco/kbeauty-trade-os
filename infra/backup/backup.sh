@@ -5,8 +5,9 @@
 #   PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE  (덤프 계정 — 소유 계정 kbos_owner)
 # 선택: FILES_DIR(기본 /data/files) BACKUP_DIR(기본 /backups) KBOS_BACKUP_RETENTION(기본 14)
 #
-# 세트 = BACKUP_DIR/kbos-YYYYMMDDTHHMMSSZ/ { db.dump.enc, files.tar.gz.enc, manifest.json }  (파일 600·디렉터리 700)
-#   manifest.json은 평문이다 — 행수·해시·크기·마이그레이션 head뿐이고 데이터 본문이 없다(앱이 읽기 전용으로 목록화).
+# 세트 = BACKUP_DIR/kbos-YYYYMMDDTHHMMSSZ/ { db.dump.enc, files.tar.gz.enc, manifest.json }
+#   manifest.json은 평문(644)이다 — 행수·해시·크기·마이그레이션 head뿐이고 데이터 본문이 없다(앱이 읽기 전용으로 목록화).
+#   산출물(.enc)은 600, 세트 폴더는 755(앱이 매니페스트를 읽도록) — 산출물 본체는 앱이 읽을 수 없다.
 # ★ 행수는 **pg_dump와 같은 스냅샷**(pg_export_snapshot)에서 센다 — 백업 도중 쓰기가 있어도 덤프와 매니페스트가 일치한다.
 # ★ 임시 디렉터리에 만들고 성공했을 때만 최종 이름으로 rename한다 — 반쯤 만들어진 세트가 세트로 보이지 않는다.
 set -Eeuo pipefail
@@ -23,7 +24,11 @@ RETENTION="${KBOS_BACKUP_RETENTION:-14}"
 [[ "$RETENTION" =~ ^[0-9]+$ ]] && [ "$RETENTION" -ge 1 ] || die "KBOS_BACKUP_RETENTION은 1 이상의 정수여야 합니다."
 [ -d "$FILES_DIR" ] || die "파일 저장소가 없습니다: $FILES_DIR"
 mkdir -p "$BACKUP_DIR"
-chmod 700 "$BACKUP_DIR" 2>/dev/null || true
+# ★ 폴더·매니페스트는 앱(비root uid)이 읽을 수 있어야 한다(신선도 감시·GET /system/backups) — 매니페스트는 행수·해시뿐인
+#   평문 메타다. **산출물(.enc)만 600**이라 앱 침해로도 산출물은 읽히지 않는다(백업 컨테이너는 root로 돈다).
+chmod 755 "$BACKUP_DIR" 2>/dev/null || true
+# 비정상 종료(SIGKILL·전원 차단)로 남은 임시 폴더(평문 덤프가 들어 있을 수 있다)를 치운다 — 진행 중인 것은 60분 넘지 않는다.
+find "$BACKUP_DIR" -maxdepth 1 -type d -name '.tmp-kbos-*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 final="$BACKUP_DIR/kbos-$stamp"
@@ -35,6 +40,8 @@ cleanup() {
   rm -rf "$tmp"
 }
 trap cleanup EXIT
+trap 'exit 143' TERM   # docker stop — EXIT trap이 임시 폴더를 지운다
+trap 'exit 130' INT
 mkdir -p "$tmp"
 
 log "백업 시작: DB=$PGDATABASE files=$FILES_DIR → $final"
@@ -111,8 +118,9 @@ rm -f "$tmp/db.dump" "$tmp/files.tar.gz"   # 평문은 남기지 않는다
   printf '}\n'
 } > "$tmp/manifest.json"
 
-chmod 600 "$tmp"/db.dump.enc "$tmp"/files.tar.gz.enc "$tmp"/manifest.json
-chmod 700 "$tmp"
+chmod 600 "$tmp"/db.dump.enc "$tmp"/files.tar.gz.enc
+chmod 644 "$tmp"/manifest.json
+chmod 755 "$tmp"
 mv "$tmp" "$final"
 trap - EXIT
 log "백업 완료: $final"

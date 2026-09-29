@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -22,7 +23,11 @@ FORM = RUNBOOK / "forms" / "manual-record-form.md"
 SOP = RUNBOOK / "incident-sop.md"
 BACKUP_DOC = RUNBOOK / "backup-restore.md"
 
-needs_repo = pytest.mark.skipif(not (REPO / "docs").is_dir(), reason="리포 루트가 보이지 않는다")
+#: CI는 KBOS_REQUIRE_SCRIPT_TESTS=1을 주어 skip 대신 **실패**하게 한다 — 러너 이미지가 바뀌어 검증이 조용히 사라지는 것을 막는다.
+REQUIRED = os.environ.get("KBOS_REQUIRE_SCRIPT_TESTS") == "1"
+needs_repo = pytest.mark.skipif(
+    not (REPO / "docs").is_dir() and not REQUIRED, reason="리포 루트가 보이지 않는다"
+)
 
 
 def _text(path: Path) -> str:
@@ -97,7 +102,7 @@ def test_the_sop_states_the_date_rule_the_steps_and_the_one_time_reconciliation(
     assert "증빙일 = 실제 발생일" in sop and "입력일 = 복구일" in sop
     for heading in ("수기 기록", "소급 입력", "검산 1회"):
         assert heading in sop
-    assert "미래 날짜는 입력되지 않는다" in sop
+    assert "미래 날짜를 막는 필드는" in sop and "통신 기록의 오간 날" in sop
     assert "forms/manual-record-form.md" in sop and "backup-restore.md" in sop
 
 
@@ -171,3 +176,44 @@ def test_the_backup_scripts_exist_and_the_compose_command_runs_the_scheduler() -
         and "--snapshot" in scripts
         and "openssl" in _text(REPO / "infra" / "backup" / "common.sh")
     )
+
+
+@needs_repo
+def test_ui_labels_quoted_in_the_form_exist_in_the_screens() -> None:
+    """양식이 쓰는 화면 라벨(유효 시작일·유효기간 만료일)이 실제 화면 소스에 있다 — 화면 문구가 바뀌면 양식이 어긋난다"""
+    src = REPO / "frontend" / "src" / "routes"
+    if not src.is_dir():
+        pytest.skip("프런트 소스가 보이지 않는다")
+    form = _text(FORM)
+    assert "유효 시작일" in form and "유효 시작일" in _text(src / "certifications.tsx")
+    assert "유효기간 만료일" in form and "유효기간 만료일" in _text(src / "documents.tsx")
+
+
+@needs_repo
+def test_runbook_anchors_resolve_to_real_headings() -> None:
+    def slug(heading: str) -> str:
+        return re.sub(r"\s+", "-", re.sub(r"[^\w\s-]", "", heading.strip().lower()))
+
+    checked = 0
+    for path in RUNBOOK.rglob("*.md"):
+        for match in re.finditer(r"\]\(([^)#]+)#([^)]+)\)", _text(path)):
+            target = (path.parent / match.group(1)).resolve()
+            headings = {
+                slug(m.group(1)) for m in re.finditer(r"^#{1,6}\s+(.+)$", _text(target), re.M)
+            }
+            assert match.group(2) in headings, f"{path.name} → {match.group(1)}#{match.group(2)}"
+            checked += 1
+    assert checked >= 1
+
+
+@needs_repo
+def test_the_restore_procedure_uses_the_real_script_and_the_compose_restore_roles() -> None:
+    doc = _text(BACKUP_DOC)
+    assert "/scripts/restore.sh" in doc and "--target-db" in doc and "--allow-nonempty" in doc
+    assert (
+        "20-grants.sql" not in doc
+    )  # 권한은 ACL 복원이 맡는다 — 잘못된 '재실행으로 복구' 안내가 없다
+    assert (REPO / "infra" / "backup" / "restore.sh").is_file()
+    for name in ("docker-compose.yml", "docker-compose.prod.yml"):
+        env = yaml.safe_load(_text(REPO / name))["services"]["backup"]["environment"]
+        assert env["RESTORE_ROLE"] == "kbos_owner" and env["RESTORE_APP_ROLE"] == "kbos_app"

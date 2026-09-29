@@ -32,6 +32,8 @@ BACKUP_MAX_AGE = timedelta(hours=26)
 REHEARSAL_MAX_AGE = timedelta(days=8)
 
 #: 신선도 문제 종류 — dedup 키의 일부이자 관리자에게 보이는 코드다.
+#: 백업 폴더를 읽을 수 없다(권한·마운트 누락) — "백업 없음"으로 오보하지 않고 별도 종류로 알린다.
+BACKUP_UNREADABLE = "BACKUP_UNREADABLE"
 NO_BACKUP = "NO_BACKUP"
 BACKUP_STALE = "BACKUP_STALE"
 NO_REHEARSAL = "NO_REHEARSAL"
@@ -73,8 +75,12 @@ def backup_dir() -> Path | None:
     return Path(raw) if raw else None
 
 
-def _stamp(raw: str) -> datetime:
-    return datetime.strptime(raw, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+def _stamp(raw: str) -> datetime | None:
+    """이름의 시각 — 형식은 맞지만 날짜가 불가능한 이름(예: 99999999T999999Z)이면 None(그 항목은 건너뛴다)."""
+    try:
+        return datetime.strptime(raw, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -100,7 +106,10 @@ def list_backups(directory: Path) -> list[BackupView]:
         match = SET_NAME.match(entry.name)
         if match is None or not entry.is_dir():
             continue
-        created = _stamp(match.group(1))
+        named_at = _stamp(match.group(1))
+        if named_at is None:
+            continue
+        created = named_at
         manifest = _read_json(entry / "manifest.json")
         if manifest is None:
             views.append(BackupView(entry.name, created, None, None, None, None, None, None, False))
@@ -154,6 +163,8 @@ def list_rehearsals(directory: Path) -> list[RehearsalView]:
             continue
         data = _read_json(entry)
         finished = _stamp(match.group(1))
+        if finished is None:
+            continue
         if data is None:
             # 읽을 수 없는 결과 파일은 실패로 취급한다 — 성공으로 보이는 것보다 낫다.
             views.append(
@@ -174,12 +185,33 @@ def list_rehearsals(directory: Path) -> list[RehearsalView]:
     return views
 
 
+def _listable(directory: Path) -> bool:
+    try:
+        next(iter(directory.iterdir()), None)
+    except OSError:
+        return False
+    return True
+
+
+#: 미래 시각(시계 오차·손댄 매니페스트)은 "방금 백업"으로 인정하지 않는다 — 이 여유를 넘는 항목은 무시한다.
+FUTURE_TOLERANCE = timedelta(hours=1)
+
+
 def freshness_problems(directory: Path, *, now: datetime | None = None) -> list[FreshnessProblem]:
     """신선도 문제 목록 — 없으면 빈 목록(정상)."""
     current = now or utcnow()
+    if not _listable(directory):
+        return [
+            FreshnessProblem(
+                BACKUP_UNREADABLE,
+                "백업 폴더를 읽을 수 없습니다(폴더 없음·권한·볼륨 마운트 확인). 백업이 없다는 뜻이 아니라 앱이 볼 수 없다는 뜻입니다.",
+            )
+        ]
+    horizon = current + FUTURE_TOLERANCE
+    backups = [v for v in list_backups(directory) if v.manifest_ok and v.created_at <= horizon]
+    backups.sort(key=lambda v: v.created_at, reverse=True)
+    rehearsals = [v for v in list_rehearsals(directory) if v.finished_at <= horizon]
     problems: list[FreshnessProblem] = []
-    backups = [view for view in list_backups(directory) if view.manifest_ok]
-    rehearsals = list_rehearsals(directory)
 
     if not backups:
         problems.append(

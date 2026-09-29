@@ -34,3 +34,22 @@ require_passphrase() {
   [ -n "${KBOS_BACKUP_PASSPHRASE:-}" ] || die "KBOS_BACKUP_PASSPHRASE가 비어 있어 실행을 거부합니다(평문 백업 금지)."
   [ "${#KBOS_BACKUP_PASSPHRASE}" -ge 16 ] || die "KBOS_BACKUP_PASSPHRASE는 16자 이상이어야 합니다."
 }
+
+# ── 매니페스트 읽기(우리가 쓴 형식 — 한 줄에 한 항목) ────────────────────────
+mval() { grep -m1 "\"$1\":" "$set_dir/manifest.json" | sed -E 's/^[^:]*:[[:space:]]*"?([^",]*)"?,?[[:space:]]*$/\1/'; }
+art_sha() { grep -m1 "\"$1\":" "$set_dir/manifest.json" | sed -E 's/.*"sha256": "([0-9a-f]+)".*/\1/'; }
+
+# 세트의 산출물 해시를 검증하고 복호화해 $1(작업 폴더)에 db.dump·files.tar.gz를 만든다. 실패하면 메시지를 stdout에 남기고 1.
+# 전역 set_dir 필요. 평문이 생기므로 호출자가 작업 폴더를 반드시 지운다.
+verify_and_decrypt() {
+  local work="$1" art
+  for art in db.dump.enc files.tar.gz.enc; do
+    [ -f "$set_dir/$art" ] || { echo "산출물 없음: $art"; return 1; }
+    [ "$(file_sha256 "$set_dir/$art")" = "$(art_sha "$art")" ] || { echo "산출물 해시 불일치(변조·손상): $art"; return 1; }
+  done
+  decrypt_file "$set_dir/db.dump.enc" "$work/db.dump" 2>/dev/null || { echo "DB 덤프 복호화 실패(패스프레이즈 오류·손상)"; return 1; }
+  decrypt_file "$set_dir/files.tar.gz.enc" "$work/files.tar.gz" 2>/dev/null || { echo "파일 묶음 복호화 실패(패스프레이즈 오류·손상)"; return 1; }
+  [ "$(file_sha256 "$work/db.dump")" = "$(mval db_plain_sha256)" ] || { echo "복호화한 DB 덤프의 해시가 매니페스트와 다릅니다"; return 1; }
+  [ "$(file_sha256 "$work/files.tar.gz")" = "$(mval files_plain_sha256)" ] || { echo "복호화한 파일 묶음의 해시가 매니페스트와 다릅니다"; return 1; }
+  return 0
+}

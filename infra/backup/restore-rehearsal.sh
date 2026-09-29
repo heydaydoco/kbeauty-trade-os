@@ -4,6 +4,7 @@
 # 사용: restore-rehearsal.sh [세트 디렉터리]   (생략하면 BACKUP_DIR의 최신 세트)
 # 환경변수(필수): KBOS_BACKUP_PASSPHRASE, BACKUP_DIR(기본 /backups)
 #   RESTORE_PGHOST/PORT/USER/PASSWORD — 스크래치 DB를 만들 수 있는 계정(슈퍼유저). 기본은 PG* 값.
+#   RESTORE_ROLE(선택, 예: kbos_owner)·RESTORE_APP_ROLE(선택, 예: kbos_app) — 있으면 소유·권한까지 실제 복원과 같게 복원·검증(ⓕ)
 # 검증: ⓐ 복호화·산출물 해시 ⓑ 테이블별 행수 == 매니페스트(여분 테이블도 실패) ⓒ 마이그레이션 head 일치
 #       ⓓ FILE 문서 전건의 실물 존재+sha256 일치 ⓔ FILE 문서 수 == 매니페스트
 # 결과: BACKUP_DIR/rehearsal-<UTC>.json (ok·검사 항목·실패 사유) — **실패해도 기록**하고 종료 코드 1.
@@ -61,7 +62,7 @@ write_result() {
     for i in "${!failures[@]}"; do printf '%s%s' "$sep" "$(json_str "${failures[$i]}")"; sep=", "; done
     printf ']\n}\n'
   } > "$result"
-  chmod 600 "$result"
+  chmod 644 "$result"   # 앱이 읽는 메타(실패 사유 문자열 — 데이터 본문 없음)
 }
 finish() {
   local code=$?
@@ -74,30 +75,23 @@ finish() {
 }
 trap finish EXIT
 
-# 매니페스트에서 값 하나를 읽는다(단순 JSON — 한 줄에 한 항목 형식으로 우리가 쓴 파일만 읽는다).
-mval() { grep -m1 "\"$1\":" "$set_dir/manifest.json" | sed -E 's/^[^:]*:[[:space:]]*"?([^",]*)"?,?[[:space:]]*$/\1/'; }
-art_sha() { grep -m1 "\"$1\":" "$set_dir/manifest.json" | sed -E 's/.*"sha256": "([0-9a-f]+)".*/\1/'; }
-
 log "복원 리허설 시작: $(basename "$set_dir") → 스크래치 DB $scratch"
 
 # ⓐ 산출물 해시 → 복호화 → 평문 해시
-for art in db.dump.enc files.tar.gz.enc; do
-  [ -f "$set_dir/$art" ] || { fail "산출물 없음: $art"; exit 1; }
-  if [ "$(file_sha256 "$set_dir/$art")" != "$(art_sha "$art")" ]; then
-    fail "산출물 해시 불일치(변조·손상): $art"; exit 1
-  fi
-done
-ok "산출물 해시 일치"
-decrypt_file "$set_dir/db.dump.enc" "$work/db.dump" 2>/dev/null || { fail "DB 덤프 복호화 실패(패스프레이즈 오류·손상)"; exit 1; }
-decrypt_file "$set_dir/files.tar.gz.enc" "$work/files.tar.gz" 2>/dev/null || { fail "파일 묶음 복호화 실패(패스프레이즈 오류·손상)"; exit 1; }
-[ "$(file_sha256 "$work/db.dump")" = "$(mval db_plain_sha256)" ] || { fail "복호화한 DB 덤프의 해시가 매니페스트와 다릅니다"; exit 1; }
-[ "$(file_sha256 "$work/files.tar.gz")" = "$(mval files_plain_sha256)" ] || { fail "복호화한 파일 묶음의 해시가 매니페스트와 다릅니다"; exit 1; }
-ok "복호화·평문 해시 일치"
+if msg="$(verify_and_decrypt "$work")"; then ok "산출물 해시 일치·복호화·평문 해시 일치"; else fail "$msg"; exit 1; fi
 
 # 스크래치 DB 복원
-psql -X -q -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$scratch\" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C.UTF-8'"
-scratch_created=1
-pg_restore --no-owner --no-privileges --exit-on-error -d "$scratch" "$work/db.dump" || { fail "pg_restore 실패"; exit 1; }
+# RESTORE_ROLE(예: kbos_owner)이 있으면 실제 복원 절차와 같게 **소유를 그 역할로, 권한(ACL)은 그대로** 복원한다 —
+# 그래야 "복원본으로 앱이 도는가"(ⓕ)까지 검증된다. 없으면(역할이 없는 클러스터) 소유·권한 없이 복원한다.
+if [ -n "${RESTORE_ROLE:-}" ]; then
+  psql -X -q -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$scratch\" OWNER \"$RESTORE_ROLE\" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C.UTF-8'"
+  scratch_created=1
+  pg_restore --no-owner --role="$RESTORE_ROLE" --exit-on-error -d "$scratch" "$work/db.dump" || { fail "pg_restore 실패"; exit 1; }
+else
+  psql -X -q -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$scratch\" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C.UTF-8'"
+  scratch_created=1
+  pg_restore --no-owner --no-privileges --exit-on-error -d "$scratch" "$work/db.dump" || { fail "pg_restore 실패"; exit 1; }
+fi
 ok "스크래치 DB 복원"
 q() { psql -X -q -A -t -v ON_ERROR_STOP=1 -d "$scratch" -c "$1"; }
 
@@ -128,18 +122,42 @@ if [ "$(q "SELECT count(*) FROM information_schema.columns WHERE table_schema='p
   purged_filter=" AND purged_at IS NULL"   # 물리 정리된 문서는 실물이 없는 것이 정상
 fi
 doc_total=0; doc_bad=0
+# ★ 결과를 먼저 변수에 받는다 — `done < <(...)`(프로세스 치환)는 쿼리 실패가 set -e에 잡히지 않아 0건 검증으로 통과한다.
+doc_rows="$(q "SELECT stored_name || '|' || COALESCE(sha256, '') FROM documents WHERE storage_kind='FILE'$purged_filter ORDER BY id")"
+expected_docs="$(q "SELECT count(*) FROM documents WHERE storage_kind='FILE'$purged_filter")"
 while IFS='|' read -r stored sha; do
   [ -n "$stored" ] || continue
   doc_total=$((doc_total + 1))
   if [ ! -f "$work/files/$stored" ]; then fail "FILE 문서 실물 없음: $stored"; doc_bad=$((doc_bad + 1)); continue; fi
   if [ -n "$sha" ] && [ "$(file_sha256 "$work/files/$stored")" != "$sha" ]; then fail "FILE 문서 해시 불일치: $stored"; doc_bad=$((doc_bad + 1)); fi
-done < <(q "SELECT stored_name || '|' || COALESCE(sha256, '') FROM documents WHERE storage_kind='FILE'$purged_filter ORDER BY id")
-[ "$doc_bad" -eq 0 ] && ok "FILE 문서 ${doc_total}건 실물·해시 일치"
+done <<< "$doc_rows"
+[ "$doc_total" = "$expected_docs" ] || fail "FILE 문서 검증 건수 불일치: 대상 $expected_docs건 중 $doc_total건만 검증"
+[ "$doc_bad" -eq 0 ] && [ "$doc_total" = "$expected_docs" ] && ok "FILE 문서 ${doc_total}건 실물·해시 일치"
 
 # ⓔ FILE 문서 수
 if [ "$(q "SELECT count(*) FROM documents WHERE storage_kind='FILE'")" = "$(mval file_documents)" ]; then ok "FILE 문서 수 일치"; else fail "FILE 문서 수 불일치"; fi
 
+# ⓕ 복원본으로 앱이 도는가 — RESTORE_APP_ROLE(예: kbos_app)이 있을 때: 소유 역할 확인·앱 역할의 읽기 권한·append-only 유지
+if [ -n "${RESTORE_ROLE:-}" ] && [ -n "${RESTORE_APP_ROLE:-}" ]; then
+  wrong_owner="$(q "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tableowner <> '$RESTORE_ROLE'")"
+  [ "$wrong_owner" = "0" ] && ok "모든 테이블 소유자=$RESTORE_ROLE" || fail "소유자가 $RESTORE_ROLE 아닌 테이블 ${wrong_owner}개"
+  if psql -X -q -v ON_ERROR_STOP=1 -d "$scratch" -c "SET ROLE \"$RESTORE_APP_ROLE\"; SELECT count(*) FROM documents" >/dev/null 2>&1; then
+    ok "앱 역할($RESTORE_APP_ROLE)이 복원본을 읽을 수 있음"
+  else
+    fail "앱 역할($RESTORE_APP_ROLE)이 복원본의 documents를 읽지 못함(권한 복원 실패)"
+  fi
+  if [ "$(q "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename='audit_log'")" = "1" ]; then
+    if [ "$(q "SELECT has_table_privilege('$RESTORE_APP_ROLE', 'public.audit_log', 'UPDATE')")" = "f" ]; then
+      ok "append-only 유지(audit_log에 앱 역할 UPDATE 불가)"
+    else
+      fail "append-only 권한이 복원되지 않음(audit_log에 앱 역할 UPDATE 가능)"
+    fi
+  fi
+fi
+
 write_result
+# 결과 파일은 최근 30개만 보관한다(주 1회 — 무한 누적 방지).
+find "$BACKUP_DIR" -maxdepth 1 -type f -name 'rehearsal-*.json' -printf '%f\n' | sort | head -n -30 | while read -r old; do rm -f "$BACKUP_DIR/$old"; done
 if [ "${#failures[@]}" -gt 0 ]; then
   log "복원 리허설 실패: ${#failures[@]}건 — $result" >&2
   exit 1
