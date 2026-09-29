@@ -114,6 +114,11 @@ class ErrorCode(StrEnum):
     CERTIFICATIONS_TARGET_APPLIES_TO_MISMATCH = "CERTIFICATIONS.TARGET.APPLIES_TO_MISMATCH"
     #: 대상 실체(제품·SKU·성분·파트너)가 없다 — 폴리모픽이라 FK 대신 서비스 검증.
     CERTIFICATIONS_TARGET_NOT_FOUND = "CERTIFICATIONS.TARGET.NOT_FOUND"
+    #: 전달 서류 묶음이 상한(파일 100건·합계 200MiB)을 넘는다 — 사용자가 나누어 받는다(S2-4 PR-2).
+    CERTIFICATIONS_PACKAGE_TOO_LARGE = "CERTIFICATIONS.PACKAGE.TOO_LARGE"
+    #: 묶음에 넣을 실물이 유실·손상됐다 — 빠진 채 나간 전달본이 가장 위험하므로 조용히 빼지 않고
+    #: 목록과 함께 거부한다(S2-4 PR-2 안건 ④ (b)).
+    CERTIFICATIONS_PACKAGE_FILES_UNAVAILABLE = "CERTIFICATIONS.PACKAGE.FILES_UNAVAILABLE"
     #: 전이 표 밖 상태 전이 시도 — §5.2 "전이 외 변경 거부"(허용 27방향뿐).
     CERTIFICATIONS_TRANSITION_NOT_ALLOWED = "CERTIFICATIONS.TRANSITION.NOT_ALLOWED"
     #: 반려·중단 전이에 사유가 없다 — §5.2 "사유 필수"(DB CHECK가 마지막 층).
