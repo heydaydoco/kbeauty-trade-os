@@ -74,6 +74,15 @@ describe("라우팅", () => {
     expect(await screen.findByRole("heading", { name: "성분" })).toBeInTheDocument();
   });
 
+  it("/agencies는 대행사 화면을 연다 (S2-4 PR-1)", async () => {
+    stubLoggedIn();
+    renderWithProviders(<AppRoutes />, { route: "/agencies" });
+
+    expect(await screen.findByRole("heading", { name: "대행사" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "스코어카드" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "대행 계약" })).toBeInTheDocument();
+  });
+
   it("/materials는 자재 화면을 연다 (S1-2 PR-2)", async () => {
     stubLoggedIn();
     renderWithProviders(<AppRoutes />, { route: "/materials" });

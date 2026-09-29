@@ -120,11 +120,24 @@ const PARTNER_TYPE: Record<string, string> = {
   CERT_AGENCY: "인증대행",
 };
 
-// 문서 소유자 유형 (§4.7 — ADR-0028, 소비분 한정. S2-2 PR-2에서 인증 확장).
+// 문서 소유자 유형 (§4.7 — ADR-0028, 소비분 한정. S2-2 PR-2에서 인증, S2-4 PR-1에서 통신 기록 확장).
 const DOCUMENT_OWNER_TYPE: Record<string, string> = {
   SKU: "SKU",
   LABEL: "라벨",
   CERTIFICATION: "인증",
+  COMM_LOG: "통신 기록",
+};
+
+// 대행 협업 (§5.4 — S2-4 PR-1). 처리방식과 현재 액션 주체(공이 누구 쪽에 있는가).
+const HANDLING_MODE: Record<string, string> = {
+  DIRECT: "직접",
+  AGENCY: "대행",
+};
+
+const ACTION_OWNER: Record<string, string> = {
+  INTERNAL: "사내",
+  AGENCY: "대행사",
+  AUTHORITY: "기관",
 };
 
 // 문서 저장 형태 (§4.7 — FILE/LINK 2형).
@@ -163,6 +176,8 @@ export const partnerTypeLabel = (code: string): string => translate(PARTNER_TYPE
 export const documentOwnerTypeLabel = (code: string): string =>
   translate(DOCUMENT_OWNER_TYPE, code);
 export const storageKindLabel = (code: string): string => translate(STORAGE_KIND, code);
+export const handlingModeLabel = (code: string): string => translate(HANDLING_MODE, code);
+export const actionOwnerLabel = (code: string): string => translate(ACTION_OWNER, code);
 export const importStatusLabel = (code: string): string => translate(IMPORT_STATUS, code);
 export const importRowKindLabel = (code: string): string => translate(IMPORT_ROW_KIND, code);
 
