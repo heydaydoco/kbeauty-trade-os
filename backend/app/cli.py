@@ -31,7 +31,7 @@ from app.modules.deadlines import service as deadlines
 from app.modules.identity.models import Role, RoleCode, User, UserRole
 from app.modules.identity.passwords import hash_password
 from app.modules.identity.service import normalize_email
-from app.modules.platform import scheduler
+from app.modules.platform import scheduler, storage
 from app.modules.seeds import service as seeds
 
 MIN_PASSWORD_LENGTH = 12
@@ -188,6 +188,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     briefing.add_argument("--base-date", default=None, help="기준일(YYYY-MM-DD). 생략하면 KST 오늘")
 
+    # 파일 저장소 점검·실물 물리 정리 (S2-4 PR-3 — 되돌릴 수 없어 기본 dry-run).
+    commands.add_parser(
+        "storage-monitor",
+        help="파일 저장소 용량·고아/유실 점검 잡을 1회 실행한다(알림 생성 — 물리 정리는 설정이 켜진 경우만)",
+    )
+    purge = commands.add_parser(
+        "purge-files",
+        help="삭제된 문서의 실물 물리 정리 후보를 보고한다. --apply를 줘야 실제로 지운다(되돌릴 수 없음)",
+    )
+    purge.add_argument(
+        "--apply", action="store_true", help="실제로 실물을 삭제하고 purged_at을 기록한다"
+    )
+    purge.add_argument(
+        "--base-date",
+        default=None,
+        help="기준일(YYYY-MM-DD). 생략하면 지금. 유예기간·보존기한 판정의 기준",
+    )
+
     # 배치 레지스트리 등록 (§15 / 부채 #12 — 판정 요청 15의 앱 경로 등록).
     # 마이그레이션 시드는 항구 금지다(함정 ⑩ — scheduled_jobs가 users FK를 단다).
     commands.add_parser(
@@ -252,6 +270,30 @@ def main(argv: list[str] | None = None) -> int:
             f"·실패 {counts['failed']}건"
         )
         return 1 if counts["failed"] else 0
+    if args.command == "storage-monitor":
+        counts = storage.run_storage_monitor()
+        print(
+            f"저장소 점검 완료: 여유율 {counts['free_pct']}% · 고아 {counts['orphans']}건 · 유실 {counts['missing']}건 · "
+            f"물리 정리 후보 {counts['purge_candidates']}건(자동 정리 {'ON' if counts['purge_enabled'] else 'OFF'} — "
+            f"실제 정리 {counts['purged']}건) · 신규 알림 {counts['alerted']}건"
+        )
+        return 0
+    if args.command == "purge-files":
+        moment = (
+            storage.kst_midnight(date.fromisoformat(args.base_date)) if args.base_date else None
+        )
+        counts = storage.purge_files(apply=args.apply, now=moment)
+        if args.apply:
+            print(
+                f"물리 정리 실행: 후보 {counts['candidates']}건 중 {counts['purged']}건 삭제"
+                f"({counts['bytes']}바이트)·실패 {counts['failed']}건"
+            )
+            return 1 if counts["failed"] else 0
+        print(
+            f"[dry-run] 물리 정리 후보 {counts['candidates']}건 — 아무것도 바꾸지 않았습니다. "
+            "실제로 지우려면 --apply를 붙이세요(되돌릴 수 없음)."
+        )
+        return 0
     if args.command == "register-jobs":
         created = scheduler.register_jobs()
         if created:

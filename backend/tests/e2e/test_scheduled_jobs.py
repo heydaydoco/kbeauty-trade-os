@@ -55,6 +55,7 @@ def test_the_registry_is_visible_to_admins(admin: TestClient) -> None:
         "daily-briefing",
         "stagnation-scan",
         "backup-freshness",
+        "storage-monitor",
     }
     # 등록만 되고 안 도는 잡을 화면이 구분해 보여 준다.
     assert all(item["is_mapped"] for item in body["items"])

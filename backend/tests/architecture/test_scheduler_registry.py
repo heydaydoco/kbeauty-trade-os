@@ -130,6 +130,7 @@ def test_registered_jobs_stay_clear_of_the_four_bans() -> None:
             "deadline-scan",
             "daily-briefing",
             "stagnation-scan",  # S2-4 PR-1 — 정체 N일·다음 액션 독촉(읽기+alerts INSERT — 발송 없음)
+            "storage-monitor",  # S2-4 PR-3 — 용량·고아/유실 점검(+설정 시 물리 정리 — 기본 OFF, 알림만)
             "backup-freshness",  # S2-4 PR-3 — 백업 신선도 감시(백업 볼륨 읽기 전용+alerts INSERT — 발송 없음)
         }
     )

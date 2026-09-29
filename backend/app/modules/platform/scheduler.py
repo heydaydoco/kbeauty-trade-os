@@ -52,7 +52,7 @@ from app.modules.collaboration import stagnation
 from app.modules.deadlines import service as deadlines
 from app.modules.notifications import dispatcher
 from app.modules.notifications import service as notifications
-from app.modules.platform import backups
+from app.modules.platform import backups, storage
 from app.modules.platform.models import ScheduledJob
 
 #: 동시 기동 방지용 advisory lock 키 (임의 상수 — 이 앱의 실행기 전용).
@@ -155,6 +155,10 @@ def _run_stagnation_scan() -> dict[str, int]:
     return _fail_if_any_failed(stagnation.scan_stagnation(), what="정체 스캔")
 
 
+def _run_storage_monitor() -> dict[str, int]:
+    return storage.run_storage_monitor()
+
+
 def _run_backup_freshness() -> dict[str, int]:
     return backups.run_backup_freshness()
 
@@ -204,6 +208,13 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         # 들어가도록 브리핑보다 먼저 돈다(순서는 시각 차로만 보장한다).
         schedule="daily@07:00",
         run=_run_stagnation_scan,
+    ),
+    JobSpec(
+        code="storage-monitor",
+        name_ko="파일 저장소 용량·고아/유실 점검·(설정 시) 실물 물리 정리",
+        # 업무 시작 전·백업(03:00) 뒤. 물리 정리는 KBOS_FILE_PURGE_ENABLED가 켜졌을 때만 실행된다(기본 OFF).
+        schedule="daily@05:00",
+        run=_run_storage_monitor,
     ),
     JobSpec(
         code="backup-freshness",

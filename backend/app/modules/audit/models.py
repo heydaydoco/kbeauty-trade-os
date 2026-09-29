@@ -50,6 +50,8 @@ class AuditAction:
     LAST_ADMIN_PROTECTED = "identity.admin.last_one_protected"
     #: 백업 현황 조회(§2 접근 통제 — 매 호출 기록, S2-4 PR-3). 산출물 본체 접근 경로는 없다.
     BACKUPS_VIEWED = "system.backups.viewed"
+    #: 문서 실물 물리 정리(되돌릴 수 없음 — S2-4 PR-3). 행위자 없음(배치·CLI) — detail에 문서·저장명·해시.
+    DOCUMENT_FILE_PURGED = "documents.file.purged"
 
 
 class AuditLog(PkMixin, Base):

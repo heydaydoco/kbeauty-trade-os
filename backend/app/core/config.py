@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     # "미구성"으로 건너뛰고 백업 목록 API는 configured=false를 돌려준다. 앱은 매니페스트·리허설 결과만 읽는다.
     kbos_backup_dir: str | None = None
 
+    # ── 문서 실물 물리 정리 (S2-3 판정 요청 17 / S2-4 PR-3 — ADR-0050) ──────
+    # ★ 되돌릴 수 없는 동작이라 **기본 OFF**다. OFF면 배치는 후보 수만 보고하고 아무것도 지우지 않는다.
+    kbos_file_purge_enabled: bool = False
+    # 소프트 삭제 뒤 이 일수가 지나야 후보가 된다(복원 가능성을 위한 유예 — 삭제 복원 액션 도입 시에도 안전).
+    kbos_file_purge_grace_days: int = 30
+
     # ── DB 접속 (역할별로 분리 — ADR-0002) ───────────────────────────────
     # 런타임(kbos_app): 테이블을 만들 수 없다.
     database_url: SecretStr
