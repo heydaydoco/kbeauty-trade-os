@@ -58,6 +58,7 @@ from app.modules.ingredients.models import Ingredient
 from app.modules.markets.models import Market
 from app.modules.outbox import service as outbox
 from app.modules.partners.models import Partner
+from app.modules.partners.service import require_partner_of_type
 from app.modules.requirements.models import (
     ItemProfileRequirementTemplate,
     RequirementTemplate,
@@ -114,6 +115,13 @@ class CertificationView:
     assignee_name: str | None
     note: str | None
     version: int
+    #: 대행 협업(§5.4 — S2-4 PR-1). 처리방식·현재 액션 주체·대행사는 편집 필드이고
+    #: 상태 전이 표와 무관하다. 대행사명은 읽기 전용 표시 필드(일괄 선로딩 — N+1 없음).
+    handling_mode: str
+    action_owner: str
+    action_owner_changed_on: date | None
+    agency_partner_id: int | None
+    agency_partner_name: str | None
     #: 도과 계산값(안건 ⑦ — 저장하지 않는다). 만료일이 KST 오늘보다 앞이면 참.
     #: 갱신중(RENEWING)의 도과가 이 값의 존재 이유다 — 상태는 RENEWING 그대로이고
     #: (스윕 비대상) 표시·매트릭스·알림만 이 계산값을 본다. EXPIRED에서도 참이다.
@@ -155,6 +163,7 @@ class StatusLogView:
 #:   질의한다(실측: 캘린더 30건에서 질의 65회). 문자열 캐시는 그 영향을 받지 않는다.
 _TARGET_LABELS = "certifications.target_labels"
 _ASSIGNEE_NAMES = "certifications.assignee_names"
+_AGENCY_NAMES = "certifications.agency_names"
 
 
 def target_label(session: Session, target_type: str, target_id: int | None) -> str:
@@ -212,6 +221,29 @@ def preload_assignees(session: Session, assignee_ids: set[int | None]) -> None:
         cache[user_id] = str(display_name)
 
 
+def agency_partner_name(session: Session, partner_id: int | None) -> str | None:
+    """대행사 표시명. 삭제된 거래처도 이름은 남긴다 — 표기는 조회일 뿐 판정이 아니다."""
+    if partner_id is None:
+        return None
+    cached = session.info.get(_AGENCY_NAMES, {}).get(partner_id)
+    if cached is not None:
+        return str(cached)
+    partner = session.get(Partner, partner_id)
+    return partner.name_ko if partner is not None else None
+
+
+def preload_agency_partners(session: Session, partner_ids: set[int | None]) -> None:
+    """한 쪽분 대행사 표시명을 질의 한 번으로 채운다(N+1 방지)."""
+    ids = {value for value in partner_ids if value is not None}
+    if not ids:
+        return
+    cache: dict[int, str] = session.info.setdefault(_AGENCY_NAMES, {})
+    for partner_id, name_ko in session.execute(
+        select(Partner.id, Partner.name_ko).where(Partner.id.in_(ids))
+    ):
+        cache[partner_id] = str(name_ko)
+
+
 def _certification_view(
     session: Session, row: Certification, market_code: str
 ) -> CertificationView:
@@ -240,6 +272,11 @@ def _certification_view(
         assignee_name=assignee_name(session, row.assignee_id),
         note=row.note,
         version=row.version,
+        handling_mode=row.handling_mode,
+        action_owner=row.action_owner,
+        action_owner_changed_on=row.action_owner_changed_on,
+        agency_partner_id=row.agency_partner_id,
+        agency_partner_name=agency_partner_name(session, row.agency_partner_id),
         is_overdue=overdue_days is not None,
         overdue_days=overdue_days,
     )
@@ -262,7 +299,14 @@ def _market_code(session: Session, template_id: int) -> str:
 def _serialize(view: CertificationView) -> dict[str, Any]:
     """멱등 재생 본문 — JSONB에 담기도록 날짜는 ISO 문자열로 얼린다."""
     body = asdict(view)
-    for field in ("last_verified_on", "applied_on", "approved_on", "valid_from", "expires_on"):
+    for field in (
+        "last_verified_on",
+        "applied_on",
+        "approved_on",
+        "valid_from",
+        "expires_on",
+        "action_owner_changed_on",
+    ):
         if body[field] is not None:
             body[field] = body[field].isoformat()
     return body
@@ -784,14 +828,84 @@ def create_certification(
         return 201, body
 
 
+# ── 대행 협업 필드 (§5.4 — S2-4 PR-1) ────────────────────────────────────────
+
+_AGENCY_FIELDS = ("handling_mode", "action_owner", "action_owner_changed_on", "agency_partner_id")
+
+
+def _require_agency_partner(session: Session, partner_id: int) -> None:
+    """대행사는 존재하는 거래처이고 인증대행(CERT_AGENCY) 유형이어야 한다."""
+    require_partner_of_type(
+        session,
+        partner_id,
+        "CERT_AGENCY",
+        field="agency_partner_id",
+        type_label="인증대행",
+    )
+
+
+def _apply_agency_fields(session: Session, row: Certification, payload: dict[str, Any]) -> None:
+    """처리방식·현재 액션 주체·대행사 편집 — 적용 **후** 상태가 일관돼야 한다.
+
+    DB CHECK(handling_agency_pair·agency_owner_requires_agency)가 마지막 방어선이지만
+    500이 아니라 필드별 422 안내가 사용자에게 가야 하므로 서비스가 먼저 판정한다.
+    공이 넘어간 날(action_owner_changed_on)은 주체가 실제로 바뀌면 오늘(KST)로 기록하고,
+    사람이 명시한 날짜가 있으면 그 날짜가 이긴다(소급 입력 — §21 날짜 규율).
+    """
+    if not any(field in payload for field in _AGENCY_FIELDS):
+        return
+    mode = payload.get("handling_mode", row.handling_mode)
+    owner = payload.get("action_owner", row.action_owner)
+    raw_partner_id = payload.get("agency_partner_id", row.agency_partner_id)
+    partner_id = int(raw_partner_id) if raw_partner_id is not None else None
+
+    problems: dict[str, str] = {}
+    if mode == "AGENCY" and partner_id is None:
+        problems["agency_partner_id"] = (
+            "대행 처리는 대행사를 지정해야 합니다. 대행사를 선택해 주세요."
+        )
+    if mode == "DIRECT" and partner_id is not None:
+        problems["agency_partner_id"] = (
+            "직접 처리에는 대행사를 지정할 수 없습니다. 대행사 지정을 함께 해제해 주세요."
+        )
+    if owner == "AGENCY" and mode != "AGENCY":
+        problems["action_owner"] = (
+            "공이 대행사에 있으려면 처리방식이 '대행'이어야 합니다. 처리방식을 먼저 확인해 주세요."
+        )
+    changed_on = (
+        _as_date(payload["action_owner_changed_on"])
+        if "action_owner_changed_on" in payload
+        else None
+    )
+    if changed_on is not None and changed_on > today_kst():
+        problems["action_owner_changed_on"] = "공이 넘어간 날은 오늘 이후일 수 없습니다."
+    if problems:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail=problems,
+            log_context={"certification_id": row.id},
+        )
+
+    if partner_id is not None and partner_id != row.agency_partner_id:
+        _require_agency_partner(session, partner_id)
+
+    row.handling_mode = str(mode)
+    row.agency_partner_id = partner_id
+    if owner != row.action_owner:
+        row.action_owner = str(owner)
+        row.action_owner_changed_on = changed_on or today_kst()
+    elif "action_owner_changed_on" in payload:
+        row.action_owner_changed_on = changed_on
+
+
 # ── 편집 (비상태 필드 — status는 스키마에 없다) ──────────────────────────────
 
 
 def update_certification(
     *, actor: AuthenticatedUser, certification_id: int, payload: dict[str, Any]
 ) -> CertificationView:
-    """비상태 필드 편집 — 인증번호·담당자·메모는 상시, 만료일 정정은 달력 파생
-    3태 한정(그 직후 즉시 수렴 — 조건 A)."""
+    """비상태 필드 편집 — 인증번호·담당자·메모·대행 협업 필드(처리방식·현재 액션 주체·
+    대행사 — §5.4)는 상시, 만료일 정정은 달력 파생 3태 한정(그 직후 즉시 수렴 — 조건 A)."""
     with unit_of_work() as uow:
         session = uow.session
         row = require_certification(session, certification_id, for_update=True)
@@ -821,6 +935,7 @@ def update_certification(
             row.assignee_id = int(assignee_id) if assignee_id is not None else None
         if "note" in payload:
             row.note = payload["note"]
+        _apply_agency_fields(session, row, payload)
 
         row.updated_by_id = actor.id
         # 조건 A — 만료일이 바뀌었으면 같은 트랜잭션 말미에 즉시 수렴한다.
@@ -872,6 +987,7 @@ def list_certifications(
             .limit(limit)
         ).all()
         preload_assignees(session, {row.assignee_id for row, _ in rows})
+        preload_agency_partners(session, {row.agency_partner_id for row, _ in rows})
         preload_targets(session, {(row.target_type, row.target_id) for row, _ in rows})
         return [_certification_view(session, row, code) for row, code in rows], total
 

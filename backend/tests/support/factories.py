@@ -362,6 +362,11 @@ def create_certification_instance(
     lead_days: int | None = 90,
     assignee_id: int | None = None,
     valid_from: object | None = None,
+    handling_mode: str = "DIRECT",
+    action_owner: str = "INTERNAL",
+    agency_partner_id: int | None = None,
+    action_owner_changed_on: object | None = None,
+    created_at: object | None = None,
 ) -> int:
     """인증 인스턴스 행을 직접 만든다 — 상태·만료일을 자유롭게 심는 **픽스처 한정** 경로.
 
@@ -369,14 +374,20 @@ def create_certification_instance(
       (층2). 매트릭스처럼 "이 상태에서 무슨 색인가"를 보는 테스트는 상태를 심어야
       하므로 여기서 직접 만든다 — 전이 규칙 자체는 상태머신 테스트의 몫이다.
     """
-    from datetime import date
+    from datetime import date, datetime
 
     from app.modules.certifications.models import Certification
 
-    for label, value in (("expires_on", expires_on), ("valid_from", valid_from)):
+    for label, value in (
+        ("expires_on", expires_on),
+        ("valid_from", valid_from),
+        ("action_owner_changed_on", action_owner_changed_on),
+    ):
         # 문자열 등을 조용히 무기한(NULL)으로 바꾸지 않는다 — 준비 실수가 기능 결함처럼 보인다.
         if value is not None and not isinstance(value, date):
             raise TypeError(f"{label}은 date여야 합니다: {value!r}")
+    if created_at is not None and not isinstance(created_at, datetime):
+        raise TypeError(f"created_at은 datetime이어야 합니다: {created_at!r}")
     with unit_of_work() as uow:
         row = Certification(
             template_id=template_id,
@@ -389,7 +400,15 @@ def create_certification_instance(
             expires_on=expires_on if isinstance(expires_on, date) else None,
             valid_from=valid_from if isinstance(valid_from, date) else None,
             assignee_id=assignee_id,
+            handling_mode=handling_mode,
+            action_owner=action_owner,
+            agency_partner_id=agency_partner_id,
+            action_owner_changed_on=(
+                action_owner_changed_on if isinstance(action_owner_changed_on, date) else None
+            ),
         )
+        if created_at is not None:
+            row.created_at = created_at
         uow.session.add(row)
         uow.session.flush()
         return row.id

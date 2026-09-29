@@ -4,6 +4,7 @@ import {
   formatMinorAmount,
   formatMoney,
   minorUnitsOf,
+  toDecimalInput,
   toMinorAmount,
   type Currency,
 } from "./money";
@@ -125,5 +126,27 @@ describe("통화 자릿수 출처 단일화", () => {
     expect(violates("// 1234 / 100 은 부동소수라 쓰지 않는다")).toBe(false);
     expect(violates("/* const UNITS = { KRW: 0 }; 이렇게 하지 말 것 */")).toBe(false);
     expect(violates("const units = minorUnitsOf(code, currencies);")).toBe(false);
+  });
+});
+
+describe("입력칸용 십진 표기", () => {
+  it("쉼표 없이 자릿수만 옮긴다 — 서버가 받는 표기(12.34)와 같은 꼴이다", () => {
+    expect(toDecimalInput(123456, 2)).toBe("1234.56");
+    expect(toDecimalInput(1234, 2)).toBe("12.34");
+    expect(toDecimalInput(5000, 0)).toBe("5000");
+  });
+
+  it("최소단위보다 짧은 금액도 자릿수를 채운다 — 0과 5센트", () => {
+    expect(toDecimalInput(0, 2)).toBe("0.00");
+    expect(toDecimalInput(5, 2)).toBe("0.05");
+  });
+
+  it("음수도 부호를 잃지 않는다", () => {
+    expect(toDecimalInput(-1234, 2)).toBe("-12.34");
+  });
+
+  it("표시 서식(formatMinorAmount)과 달리 천 단위 쉼표가 없다 — 입력칸에 쉼표가 들어가면 서버 검증에 걸린다", () => {
+    expect(formatMinorAmount(123456789, 2)).toBe("1,234,567.89");
+    expect(toDecimalInput(123456789, 2)).toBe("1234567.89");
   });
 });

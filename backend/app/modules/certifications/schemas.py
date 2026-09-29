@@ -22,6 +22,9 @@ TargetType = Literal["PRODUCT", "SKU", "FACILITY", "COMPANY", "INGREDIENT"]
 #: 전이 도달값 — 값 형식은 스키마가 거르고, 허용 여부(§5.2 전이 표)는 서비스가
 #: 409로 판정한다(110쌍 전수는 서비스 층 테스트 — 조건 C). machine.
 #: CERTIFICATION_STATUSES와의 일치는 아키텍처 테스트가 고정한다.
+#: 대행 협업 열거 — models.HANDLING_MODES·ACTION_OWNERS와의 일치는 K 테스트가 고정한다.
+HandlingMode = Literal["DIRECT", "AGENCY"]
+ActionOwner = Literal["INTERNAL", "AGENCY", "AUTHORITY"]
 Status = Literal[
     "NOT_STARTED",
     "PREPARING",
@@ -84,6 +87,16 @@ class CertificationUpdateRequest(BaseModel):
     cert_number: str | None = Field(default=None, max_length=100)
     assignee_id: int | None = Field(default=None, ge=1)
     note: str | None = None
+    # ── 대행 협업(§5.4 — S2-4 PR-1). 상태가 아니라 편집 필드다.
+    #: handling_mode·action_owner는 null이 될 수 없다 — `Literal`(Optional 아님)이라 명시
+    #: null은 422다. 기본값은 exclude_unset 의미론에서 쓰이지 않는다(안 보내면 안 바뀐다).
+    handling_mode: HandlingMode = "DIRECT"
+    action_owner: ActionOwner = "INTERNAL"
+    #: 공이 넘어간 날(KST 업무일) — 주체가 바뀌면 서버가 오늘로 채우고, 명시하면 그 날짜(소급 입력).
+    #: null = 기록 해제(생성일로 읽는다).
+    action_owner_changed_on: date | None = None
+    #: 대행사(거래처 유형 CERT_AGENCY). null = 해제 — 처리방식 AGENCY ⇔ 대행사 지정.
+    agency_partner_id: int | None = Field(default=None, ge=1)
 
 
 class TaskAddRequest(BaseModel):
@@ -145,6 +158,13 @@ class CertificationSummary(BaseModel):
     assignee_name: str | None = None
     note: str | None
     version: int
+    #: 대행 협업(§5.4). 멱등 재생 본문(JSONB)이 이 필드 이전에 얼려진 것일 수 있어
+    #: 기본값을 둔다 — 재생이 500이 되면 안 된다(assignee_name과 같은 사유).
+    handling_mode: str = "DIRECT"
+    action_owner: str = "INTERNAL"
+    action_owner_changed_on: date | None = None
+    agency_partner_id: int | None = None
+    agency_partner_name: str | None = None
     #: 도과 계산값(안건 ⑦) — 갱신중 도과 표시의 근거. 저장 컬럼이 아니다.
     #: 기본값을 두는 이유: 멱등 재생 본문(JSONB)은 생성 시점에 얼린 것이라
     #: 이 필드가 생기기 전 요청의 재생에는 없다 — 재생이 500이 되면 안 된다.

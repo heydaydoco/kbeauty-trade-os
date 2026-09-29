@@ -48,6 +48,7 @@ from app.core.db.uow import unit_of_work
 from app.core.logging.redaction import scrub_text
 from app.core.time import KST, utcnow
 from app.modules.certifications import service as certifications
+from app.modules.collaboration import stagnation
 from app.modules.deadlines import service as deadlines
 from app.modules.notifications import dispatcher
 from app.modules.notifications import service as notifications
@@ -149,6 +150,10 @@ def _run_daily_briefing() -> dict[str, int]:
     return _fail_if_any_failed(deadlines.send_daily_briefing(), what="데일리 브리핑")
 
 
+def _run_stagnation_scan() -> dict[str, int]:
+    return _fail_if_any_failed(stagnation.scan_stagnation(), what="정체 스캔")
+
+
 @dataclass(frozen=True, slots=True)
 class JobSpec:
     code: str
@@ -186,6 +191,14 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         # 업무 시작 시각 고정(관찰 등재 — 설정화 트리거: 사용자 요구).
         schedule="daily@09:00",
         run=_run_daily_briefing,
+    ),
+    JobSpec(
+        code="stagnation-scan",
+        name_ko="인증 정체 N일·다음 액션 기한 독촉 스캔",
+        # 기일 스캔(06:30) 뒤·브리핑(09:00) 앞 — 브리핑의 "미확인 알림" 집계에 오늘 독촉분이
+        # 들어가도록 브리핑보다 먼저 돈다(순서는 시각 차로만 보장한다).
+        schedule="daily@07:00",
+        run=_run_stagnation_scan,
     ),
 )
 

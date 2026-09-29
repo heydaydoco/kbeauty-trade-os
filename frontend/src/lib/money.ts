@@ -69,6 +69,19 @@ export function formatMinorAmount(amount: MinorAmount | number, minorUnits: numb
   return `${negative ? "-" : ""}${whole}${fraction}`;
 }
 
+/**
+ * 최소단위 정수를 **입력칸용** 십진 문자열로(쉼표 없음 — 12345 USD 2자리 → "123.45").
+ * 수정 폼의 초기값이다. 서버가 요청에서 받는 표기(사람이 쓰는 12.34)와 같은 꼴이라 그대로 되돌려 보낼 수
+ * 있다. 나눗셈 없이 자릿수만 옮긴다(formatMinorAmount와 같은 이유).
+ */
+export function toDecimalInput(amount: MinorAmount | number, minorUnits: number): string {
+  const negative = amount < 0;
+  const digits = String(Math.abs(amount)).padStart(minorUnits + 1, "0");
+  const cut = digits.length - minorUnits;
+  const fraction = minorUnits === 0 ? "" : `.${digits.slice(cut)}`;
+  return `${negative ? "-" : ""}${digits.slice(0, cut)}${fraction}`;
+}
+
 /** 화면에 그대로 쓰는 표시 문자열. 통화 코드를 뒤에 붙인다. */
 export function formatMoney(
   amount: MinorAmount | number,

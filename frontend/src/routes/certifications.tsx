@@ -18,10 +18,17 @@ import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { ApiError, apiDelete, apiFetch } from "../lib/api";
 import { toKstDisplay } from "../lib/datetime";
-import { appliesToLabel, certificationStatusLabel, orEmpty } from "../lib/labels";
+import {
+  actionOwnerLabel,
+  appliesToLabel,
+  certificationStatusLabel,
+  handlingModeLabel,
+  orEmpty,
+} from "../lib/labels";
 import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
+import { CertificationEditPanel, CommLogsPanel } from "./certification-collaboration";
 import type { DocumentRow } from "./documents";
 import type { RequirementTemplate } from "./requirement-templates";
 
@@ -50,6 +57,13 @@ export interface Certification {
   assignee_name: string | null;
   note: string | null;
   version: number;
+  /** 대행 협업(§5.4 — S2-4 PR-1). 처리방식·공이 누구 쪽에 있는가·대행사. 상태 전이와 무관한 편집 필드다. */
+  handling_mode: string;
+  action_owner: string;
+  /** 공이 현재 주체에게 넘어온 날(KST) — 없으면 생성일로 읽는다(정체 시계의 기준). */
+  action_owner_changed_on: string | null;
+  agency_partner_id: number | null;
+  agency_partner_name: string | null;
   /** 도과 계산값(S2-3 PR-2 안건 ⑦) — 서버가 KST 오늘 기준으로 계산한다. 갱신중(RENEWING)은
    *  스윕 비대상이라 상태가 그대로 남는데, 만료일이 지났다는 사실은 이 값이 말한다. */
   is_overdue: boolean;
@@ -956,14 +970,33 @@ export function CertificationsPage() {
             {selected.cert_number !== null && ` · 인증번호 ${selected.cert_number}`}
             {selected.assignee_name !== null && ` · 담당자 ${selected.assignee_name}`}
           </p>
+          <p className="mt-1 text-sm text-gray-600">
+            처리방식 {handlingModeLabel(selected.handling_mode)}
+            {selected.agency_partner_name !== null && `(${selected.agency_partner_name})`}
+            {" · "}공이 있는 곳 {actionOwnerLabel(selected.action_owner)}
+            {selected.action_owner_changed_on !== null &&
+              `(${selected.action_owner_changed_on}부터)`}
+          </p>
           {canEdit && (
             <TransitionPanel
               row={selected}
               onDone={(fresh) => setSelected(fresh)}
             />
           )}
+          {canEdit && (
+            <CertificationEditPanel
+              // 저장하면 version이 오른다 — key로 폼 상태를 새 값에서 다시 시작한다.
+              key={`${selected.id}-${selected.version}`}
+              row={selected}
+              onDone={(fresh) => {
+                void client.invalidateQueries({ queryKey: CERTIFICATIONS_QUERY_KEY });
+                setSelected(fresh);
+              }}
+            />
+          )}
           <PrerequisiteHint row={selected} />
           <TasksPanel row={selected} canEdit={canEdit} />
+          <CommLogsPanel row={selected} canEdit={canEdit} />
           <HistoryPanel row={selected} />
         </div>
       )}

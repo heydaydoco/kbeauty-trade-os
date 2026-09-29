@@ -61,7 +61,10 @@ from app.core.db.mixins import (
 #: SKU — MSDS 등 SKU 단위 문서(ADR-0020 승격). LABEL — 라벨 아트웍 파일.
 #: CERTIFICATION — 인증 인스턴스 서류(S2-2 PR-2 — 판정 안건 ⑤. 확장은 이
 #: 1종까지이고, GMP류 공용 서류의 소유 공백은 관찰 원장 등재분이다).
-DOCUMENT_OWNER_TYPES = ("SKU", "LABEL", "CERTIFICATION")
+#: COMM_LOG — 커뮤니케이션 기록 첨부(S2-4 PR-1 — 계획 §5 자율 확정 2. §5.4 "요지·첨부").
+#: GMP류 공용 서류의 소유 공백은 이번에도 열거 확장 없이 태스크 서류 링크로 흡수한다
+#: (전달 서류 zip이 링크된 문서를 소유 무관하게 담는다 — PR-2).
+DOCUMENT_OWNER_TYPES = ("SKU", "LABEL", "CERTIFICATION", "COMM_LOG")
 
 #: 문서의 저장 형태. FILE — 서버 저장 실물. LINK — 외부 URL(승격 이관분 포함).
 DOCUMENT_STORAGE_KINDS = ("FILE", "LINK")
