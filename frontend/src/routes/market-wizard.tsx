@@ -12,6 +12,8 @@ import { Link, useSearchParams } from "react-router";
 import { apiFetch } from "../lib/api";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
+import { MARKETS_QUERY_KEY } from "./markets";
+import { REQUIREMENT_TEMPLATES_QUERY_KEY } from "./requirement-templates";
 
 interface WizardStep {
   step: number;
@@ -106,6 +108,9 @@ export function MarketWizardPage() {
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: WIZARD_KEY });
       void client.invalidateQueries({ queryKey: SEED_KEY });
+      // 투입은 시장·요건 템플릿 목록도 바꾼다 — 30초 캐시가 옛 목록을 보이지 않게 한다.
+      void client.invalidateQueries({ queryKey: MARKETS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: REQUIREMENT_TEMPLATES_QUERY_KEY });
     },
   });
 

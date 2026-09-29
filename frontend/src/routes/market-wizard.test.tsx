@@ -4,10 +4,13 @@
 // ② 협정은 "모듈 도래 전"으로 보이고 진행률 분모에서 빠진다(서버 값) ③ 고지문은 서버 문구 ④ T1 투입 버튼은
 // 인증+관리자만 — 요청은 {markets:[코드]} ⑤ 카탈로그에 없는 시장은 투입 대신 안내 ⑥ 서버 오류 문구 표시.
 
+import { QueryClient } from "@tanstack/react-query";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
 import { TRADER, jsonResponse, renderWithProviders } from "../test/render";
+import { MARKETS_QUERY_KEY } from "./markets";
+import { REQUIREMENT_TEMPLATES_QUERY_KEY } from "./requirement-templates";
 
 const CERT_USER = { id: 2, email: "cert@example.com", display_name: "인증 담당", roles: ["CERT"] };
 
@@ -193,5 +196,41 @@ describe("신규 시장 개설 위저드", () => {
     renderWithProviders(<AppRoutes />, { route: "/market-wizard" });
     fireEvent.click(await screen.findByRole("button", { name: /EU 유럽연합/ }));
     await waitFor(() => expect(calls.some((call) => call.url.includes("/v1/market-wizard/EU"))).toBe(true));
+  });
+
+  it("다른 시장으로 옮기면 앞 시장의 투입 결과 문구가 남지 않는다", async () => {
+    const calls: Recorded[] = [];
+    stubApi(CERT_USER, calls);
+    renderWithProviders(<AppRoutes />, { route: "/market-wizard?market=US" });
+    fireEvent.click(await screen.findByRole("button", { name: "T1 초안 5건 투입" }));
+    expect(await screen.findByText("초안 2건 투입 · 1건 건너뜀")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /EU 유럽연합/ }));
+    // 새 시장의 위저드가 다시 그려진 뒤에도(투입 버튼이 돌아온 뒤) 앞 시장의 결과 문구가 없어야 한다.
+    await waitFor(() => expect(calls.some((call) => call.url.endsWith("/v1/market-wizard/EU"))).toBe(true));
+    expect(await screen.findByRole("button", { name: "T1 초안 5건 투입" })).toBeInTheDocument();
+    expect(screen.queryByText("초안 2건 투입 · 1건 건너뜀")).not.toBeInTheDocument();
+  });
+
+  it("투입이 성공하면 시장·요건 템플릿 목록 캐시도 무효화한다", async () => {
+    stubApi(CERT_USER);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 30_000 }, mutations: { retry: false } },
+    });
+    client.setQueryData(MARKETS_QUERY_KEY, { items: [] });
+    client.setQueryData(REQUIREMENT_TEMPLATES_QUERY_KEY, { items: [] });
+    renderWithProviders(<AppRoutes />, { route: "/market-wizard?market=US", client });
+    fireEvent.click(await screen.findByRole("button", { name: "T1 초안 5건 투입" }));
+    await screen.findByText("초안 2건 투입 · 1건 건너뜀");
+    await waitFor(() => {
+      expect(client.getQueryState(MARKETS_QUERY_KEY)?.isInvalidated).toBe(true);
+      expect(client.getQueryState(REQUIREMENT_TEMPLATES_QUERY_KEY)?.isInvalidated).toBe(true);
+    });
+  });
+
+  it("관리자도 투입 버튼을 본다 · 시장 등록 접두 문구 · 미등록 칩 표기", async () => {
+    stubApi({ ...CERT_USER, roles: ["ADMIN"] });
+    renderWithProviders(<AppRoutes />, { route: "/market-wizard?market=US" });
+    expect(await screen.findByRole("button", { name: "T1 초안 5건 투입" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /EU 유럽연합 ·미등록/ })).toBeInTheDocument();
   });
 });

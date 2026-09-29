@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
@@ -27,6 +27,9 @@ from app.modules.requirements.service import add_draft_template
 from app.modules.seeds.catalog import Catalog, CatalogMarket, load_catalog
 
 APPLY_ENDPOINT = "POST /api/v1/seeds/t1/apply"
+#: 투입 직렬화용 어드바이저리 락 키 — 서로 다른 멱등 키의 동시 투입이 같은 (시장, 이름)에서 부딪혀
+#: 유일 제약 위반(500)이 되지 않게 한다(트랜잭션 종료 시 자동 해제).
+_APPLY_LOCK_KEY = 4_900_001
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +221,7 @@ def apply_t1(
         )
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
+        session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _APPLY_LOCK_KEY})
         results = [
             _apply_market(session, actor_id=actor.id, market=catalog.market(code))  # type: ignore[arg-type]
             for code in ordered

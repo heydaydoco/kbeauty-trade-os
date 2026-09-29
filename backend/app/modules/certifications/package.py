@@ -38,7 +38,9 @@ MAX_FILES = 100
 MAX_TOTAL_BYTES = 200 * 1024 * 1024
 SPOOL_BYTES = 8 * 1024 * 1024
 _CHUNK = 64 * 1024
-_UNSAFE = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
+_UNSAFE = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]')
+#: Windows 예약 장치명 — 압축을 풀 때 실패하므로 밑줄을 접두한다.
+_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))})
 
 MANIFEST_HEADER = (
     "순번",
@@ -84,10 +86,20 @@ class PackageSource:
     items: list[PackageItem]
 
 
-def _component(raw: str) -> str:
-    """zip 경로 조각 — 경로 구분자·제어·예약 문자를 걷어 zip-slip과 OS별 금지 문자를 막는다."""
-    cleaned = _UNSAFE.sub("_", raw).strip().strip(".")
-    return (cleaned or "file")[:120]
+def _component(raw: str, limit: int = 120) -> str:
+    """zip 경로 조각 — 경로 구분자·제어·예약 문자를 걷어 zip-slip과 OS별 금지 문자를 막는다.
+
+    길이 제한은 **확장자를 보존**한 채 본문만 자른다(확장자가 잘리면 받는 쪽이 파일을 못 연다)."""
+    cleaned = _UNSAFE.sub("_", raw).strip().strip(".") or "file"
+    if cleaned.split(".")[0].upper() in _RESERVED:
+        cleaned = "_" + cleaned
+    if len(cleaned) > limit:
+        stem, dot, ext = cleaned.rpartition(".")
+        if dot and stem and 0 < len(ext) <= 10:
+            cleaned = stem[: limit - len(ext) - 1] + "." + ext
+        else:
+            cleaned = cleaned[:limit]
+    return cleaned
 
 
 def load_source(certification_id: int) -> PackageSource:

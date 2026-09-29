@@ -356,3 +356,136 @@ def test_path_components_drop_separators_reserved_characters_and_dots() -> None:
     assert package._component("..") == "file" and package._component("") == "file"
     assert package._component("x\x00y\n") == "x_y_"
     assert len(package._component("가" * 500)) == 120
+
+
+# ═══ 적대 검증 반영 (S2-4 PR-2 렌즈 C) ═══════════════════════════════════════
+
+
+def test_only_this_certifications_documents_go_in_never_comm_log_or_foreign_links(
+    cert: TestClient,
+) -> None:
+    """실제 통신 기록 첨부·소유 유형이 다른데 owner_id만 같은 문서·다른 인증 태스크가 연결한 문서는 새지 않는다"""
+    certification_id = _certification()
+    other = _certification()
+    log = cert.post(
+        "/api/v1/comm-logs",
+        json={
+            "subject_type": "CERTIFICATION",
+            "subject_id": certification_id,
+            "occurred_on": "2026-01-02",
+            "summary": "회신",
+        },
+        headers={"Idempotency-Key": f"pkg-log-{next(_SEQ)}"},
+    ).json()
+    create_link_document(log["id"], valid_until=None, owner_type="COMM_LOG", document_type="CFS")
+    # owner_type만 다르고 owner_id가 이 인증의 id와 같은 문서 — 소유 유형 조건이 없으면 새어 들어온다
+    create_link_document(certification_id, valid_until=None, owner_type="SKU", document_type="GMP")
+    # 다른 인증의 태스크가 연결한 SKU 문서 — 태스크의 인증 조건이 없으면 새어 들어온다
+    foreign_sku = _sku_of(other)
+    foreign_doc = create_link_document(
+        foreign_sku, valid_until=None, owner_type="SKU", document_type="CFS", tag="foreign"
+    )
+    _link_task(cert, other, foreign_doc, seq=1)
+    own = _upload(cert, certification_id, filename="mine.pdf", content=b"MINE")
+
+    archive = _zip(_package(cert, certification_id))
+    rows = _manifest(archive)[1:]
+    assert len(rows) == 1 and rows[0][6] == own["sha256"]
+    assert sorted(archive.namelist()) == sorted(["README.txt", "manifest.csv", rows[0][2]])
+
+
+def test_the_manifest_carries_dates_and_orders_by_document_type_with_matching_sequence(
+    cert: TestClient,
+) -> None:
+    """manifest 전 열 — 순번은 zip 경로 접두와 일치, 서류종류 이름순, 발급일·유효기간 그대로"""
+    certification_id = _certification()
+
+    def upload_dated(document_type: str, filename: str, issued: str, valid: str) -> None:
+        response = cert.post(
+            f"{DOCUMENTS}/files",
+            data={
+                "owner_type": "CERTIFICATION",
+                "owner_id": str(certification_id),
+                "document_type": document_type,
+                "issued_on": issued,
+                "valid_until": valid,
+            },
+            files={"file": (filename, b"X" + filename.encode(), "application/pdf")},
+            headers={"Idempotency-Key": f"pkg-dated-{next(_SEQ)}"},
+        )
+        assert response.status_code == 201, response.text
+
+    upload_dated("GMP", "gmp.pdf", "2026-01-05", "2027-01-04")
+    upload_dated("CFS", "cfs.pdf", "2026-02-06", "2027-02-05")
+    _, *rows = _manifest(_zip(_package(cert, certification_id)))
+    assert [row[0] for row in rows] == ["1", "2"]
+    assert rows[0][1] < rows[1][1]  # 서류종류 이름순
+    for row in rows:
+        assert row[2].startswith(f"documents/{int(row[0]):02d}_")
+    by_type = {row[1]: row for row in rows}
+    dates = sorted((row[4], row[5]) for row in by_type.values())
+    assert dates == [("2026-01-05", "2027-01-04"), ("2026-02-06", "2027-02-05")]
+
+
+def test_limits_are_the_documented_constants_and_links_are_not_counted(
+    cert: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """상수 고정(100건·200MiB·8MiB) — LINK는 실물이 없어 파일 상한에 세지 않는다"""
+    assert (package.MAX_FILES, package.MAX_TOTAL_BYTES, package.SPOOL_BYTES) == (
+        100,
+        200 * 1024 * 1024,
+        8 * 1024 * 1024,
+    )
+    certification_id = _certification()
+    for tag in ("a", "b", "c"):
+        create_link_document(
+            certification_id, valid_until=None, owner_type="CERTIFICATION", tag=tag
+        )
+    monkeypatch.setattr(package, "MAX_FILES", 1)
+    assert _package(cert, certification_id).status_code == 200
+
+
+def test_every_unavailable_file_is_listed_at_once_including_task_linked_ones(
+    cert: TestClient, _isolated_storage: Path
+) -> None:
+    """유실 2건(하나는 태스크 연결 SKU 문서)+손상 1건 — 첫 문제에서 멈추지 않고 전부·순서대로 알린다"""
+    certification_id = _certification()
+    sku_id = _sku_of(certification_id)
+    docs = [
+        _upload(cert, certification_id, filename="a.pdf", content=b"AAA"),
+        _upload(cert, certification_id, filename="b.pdf", content=b"BBB"),
+        _upload(
+            cert, sku_id, filename="c.pdf", content=b"CCC", owner_type="SKU", document_type="CFS"
+        ),
+    ]
+    _link_task(cert, certification_id, docs[2]["id"], seq=1)
+    with unit_of_work() as uow:
+        names = {row.id: row.stored_name for row in uow.session.execute(select(Document)).scalars()}
+    (_isolated_storage / names[docs[0]["id"]]).write_bytes(b"CORRUPT")
+    (_isolated_storage / names[docs[1]["id"]]).unlink()
+    (_isolated_storage / names[docs[2]["id"]]).unlink()
+    response = _package(cert, certification_id)
+    assert response.status_code == 409
+    listed = {
+        item["document_id"]: item["reason"]
+        for item in response.json()["error"]["detail"]["documents"]
+    }
+    assert listed == {
+        docs[0]["id"]: "HASH_MISMATCH",
+        docs[1]["id"]: "MISSING",
+        docs[2]["id"]: "MISSING",
+    }
+
+
+def test_long_names_keep_their_extension_and_reserved_device_names_are_prefixed(
+    cert: TestClient,
+) -> None:
+    """긴 한글 파일명은 확장자를 보존해 자르고, Windows 예약 장치명은 밑줄을 접두한다"""
+    name = package._component("가" * 300 + ".pdf")
+    assert name.endswith(".pdf") and len(name) == 120
+    assert package._component("CON") == "_CON" and package._component("nul.txt") == "_nul.txt"
+    assert package._component("COM1.pdf") == "_COM1.pdf"
+    assert package._component("console.pdf") == "console.pdf"
+    assert package._component("a\x7fb") == "a_b"
+    assert package._component("x." + "e" * 40) == ("x." + "e" * 40)[:120]  # 긴 '확장자'는 본문 취급
+    assert cert  # fixture 사용 표시

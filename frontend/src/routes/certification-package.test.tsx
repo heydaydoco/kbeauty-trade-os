@@ -103,4 +103,40 @@ describe("전달 서류 zip 버튼", () => {
     fireEvent.click(screen.getByRole("button", { name: "전달 서류 zip 받기" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("한 번에 묶을 수 없습니다");
   });
+
+  it("네트워크 오류·파일명 헤더 없음도 처리한다 — 서버 문구가 없으면 기본 파일명으로 저장", async () => {
+    const clicked: string[] = [];
+    const original = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+      clicked.push(this.download);
+    };
+    try {
+      vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("offline"))));
+      render(<PackagePanel row={ROW} />);
+      fireEvent.click(screen.getByRole("button", { name: "전달 서류 zip 받기" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("서버에 연결할 수 없습니다");
+      // 재시도 성공 — 헤더가 없으면 기본 파일명, 이전 오류 문구는 사라진다
+      vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response(200, null))));
+      fireEvent.click(screen.getByRole("button", { name: "전달 서류 zip 받기" }));
+      await waitFor(() => expect(clicked).toEqual(["인증7_전달서류.zip"]));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      HTMLAnchorElement.prototype.click = original;
+    }
+  });
+
+  it("만드는 동안에는 버튼이 잠긴다(이중 다운로드 방지)", async () => {
+    let release: (value: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>((resolve) => (release = resolve))),
+    );
+    render(<PackagePanel row={ROW} />);
+    fireEvent.click(screen.getByRole("button", { name: "전달 서류 zip 받기" }));
+    const busy = await screen.findByRole("button", { name: "만드는 중…" });
+    expect(busy).toBeDisabled();
+    release(response(409, { error: { code: "X", message: "거부", detail: {}, request_id: "r" } }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("거부");
+    expect(screen.getByRole("button", { name: "전달 서류 zip 받기" })).toBeEnabled();
+  });
 });

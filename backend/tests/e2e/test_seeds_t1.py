@@ -355,6 +355,7 @@ def test_the_wizard_follows_seeding_confirming_hs_and_rules(cert: TestClient) ->
     assert templates["counts"] == {
         "draft": _catalog_count("JP"),
         "confirmed": 0,
+        "retired": 0,
         "total": _catalog_count("JP"),
     }
 
@@ -439,11 +440,132 @@ def test_templates_step_stays_in_progress_while_any_draft_remains_and_ignores_ot
     assert eu["counts"] == {
         "draft": _catalog_count("EU") - 1,
         "confirmed": 1,
+        "retired": 0,
         "total": _catalog_count("EU"),
     }
     us = _step(cert.get(f"{WIZARD}/US").json(), "templates")
     assert us["counts"] == {
         "draft": _catalog_count("US"),
         "confirmed": 0,
+        "retired": 0,
         "total": _catalog_count("US"),
     }
+
+
+# ═══ 적대 검증 반영 (S2-4 PR-2 렌즈 C) ═══════════════════════════════════════
+
+
+def test_the_wizard_ignores_other_countries_rules_and_counts_every_row(
+    cert: TestClient,
+) -> None:
+    """성분 규칙·HS 건수는 그 국가만, 여러 건이면 전부 센다"""
+    from tests.support.factories import create_ingredient, create_ingredient_rule, create_sku
+
+    create_ingredient_rule(create_ingredient("Aqua"), country_code="JP")
+    body = cert.get(f"{WIZARD}/US").json()
+    assert _step(body, "ingredient_rules")["counts"] == {"rules": 0}
+    for name in ("Glycerin", "Niacinamide", "Retinol"):
+        create_ingredient_rule(create_ingredient(name), country_code="US")
+    _add_hs(create_sku("SKU-WIZ-A"), "US")
+    _add_hs(create_sku("SKU-WIZ-B"), "US")
+    body = cert.get(f"{WIZARD}/US").json()
+    assert _step(body, "ingredient_rules")["counts"] == {"rules": 3}
+    assert _step(body, "hs")["counts"] == {"hs_codes": 2}
+
+
+def test_only_retired_templates_leave_the_step_as_todo_and_registered_without_seed_is_todo(
+    cert: TestClient,
+) -> None:
+    """등록만 하고 미투입 → 할 일, 은퇴(RETIRED)만 남아도 진행 중이 아니라 할 일"""
+    create_market("AU", name_ko="호주")
+    assert _step(cert.get(f"{WIZARD}/AU").json(), "templates")["status"] == "TODO"
+    _apply(cert, "SG")
+    (row,) = _templates("SG")
+    retired = cert.patch(
+        f"/api/v1/requirement-templates/{row.id}", json=_edit_body(row, status="RETIRED")
+    )
+    assert retired.status_code == 200, retired.text
+    step = _step(cert.get(f"{WIZARD}/SG").json(), "templates")
+    assert step["status"] == "TODO"
+    assert step["counts"] == {"draft": 0, "confirmed": 0, "retired": 1, "total": 1}
+
+
+def test_a_prerequisite_that_already_exists_is_linked_by_name(cert: TestClient) -> None:
+    """사람이 먼저 만든 같은 이름의 RP가 있으면 새 CPNP의 선행요건은 그 행이다(링크가 조용히 사라지지 않는다)"""
+    catalog = {item.key: item for item in load_catalog().market("EU").templates}  # type: ignore[union-attr]
+    market_id = create_market("EU")
+    with unit_of_work() as uow:
+        manual = RequirementTemplate(
+            market_id=market_id,
+            name=catalog["eu-rp"].name,
+            applies_to="COMPANY",
+            requirement_type="MANUAL",
+        )
+        uow.session.add(manual)
+        uow.session.flush()
+        manual_id = manual.id
+    result = _apply(cert, "EU").json()["results"][0]
+    assert "eu-rp" in result["skipped"] and "eu-cpnp" in result["created"]
+    cpnp = next(row for row in _templates("EU") if row.name == catalog["eu-cpnp"].name)
+    with unit_of_work() as uow:
+        links = list(
+            uow.session.execute(
+                select(TemplatePrerequisite.prerequisite_template_id).where(
+                    TemplatePrerequisite.template_id == cpnp.id
+                )
+            ).scalars()
+        )
+    assert links == [manual_id]
+
+
+def test_concurrent_applies_with_different_keys_never_fail(cert: TestClient) -> None:
+    """서로 다른 멱등 키로 동시에 같은 시장을 투입해도 유일 제약 위반 없이 한쪽만 만들고 나머지는 건너뛴다
+
+    ★ TestClient는 요청을 한 줄로 세우므로 서비스를 스레드로 직접 부른다(연결이 따로 열린다)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.modules.identity.service import AuthenticatedUser
+    from app.modules.seeds import service as seeds
+
+    actor = AuthenticatedUser(
+        id=create_user("seed-race@example.com", roles=(RoleCode.CERT,)),
+        email="seed-race@example.com",
+        display_name="경쟁",
+        roles=frozenset({RoleCode.CERT}),
+        session_id=0,
+    )
+
+    def call(index: int) -> dict[str, Any]:
+        return seeds.apply_t1(
+            actor=actor, idempotency_key=f"seed-race-{index}", payload={"markets": ["US"]}
+        )[1]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        bodies = list(pool.map(call, range(4)))
+    created = sum(len(body["results"][0]["created"]) for body in bodies)
+    assert created == _catalog_count("US")
+    assert len(_templates("US")) == _catalog_count("US")
+    assert cert  # fixture 사용 표시
+
+
+def test_admin_and_disabled_cli_actor(capsys: pytest.CaptureFixture[str]) -> None:
+    """관리자는 투입 가능(인증+관리자), CLI는 비활성 계정을 투입자로 받지 않는다"""
+    from app.cli import main as cli_main
+    from app.modules.identity.models import User
+
+    admin_id = create_user("seed-admin@example.com", roles=(RoleCode.ADMIN,))
+    with TestClient(app) as client:
+        assert (
+            client.post(
+                LOGIN, json={"email": "seed-admin@example.com", "password": DEFAULT_PASSWORD}
+            ).status_code
+            == 200
+        )
+        assert _apply(client, "CA").status_code == 200
+    with unit_of_work() as uow:
+        user = uow.session.get(User, admin_id)
+        assert user is not None
+        user.is_active = False
+    assert cli_main(["seed-t1", "--market", "AU", "--actor-email", "seed-admin@example.com"]) == 1
+    assert "찾을 수 없습니다" in capsys.readouterr().err
+    assert _templates("AU") == []

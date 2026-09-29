@@ -98,10 +98,12 @@ def market_wizard(code: str) -> WizardView:
 
     draft = template_counts.get("DRAFT", 0)
     confirmed = template_counts.get("CONFIRMED", 0)
+    retired = template_counts.get("RETIRED", 0)
     total_templates = sum(template_counts.values())
+    #: 은퇴(RETIRED)만 남은 시장은 "진행 중"이 아니다 — 활성(초안+확정)이 0이면 할 일이다.
     if confirmed > 0 and draft == 0:
         template_status: StepStatus = "DONE"
-    elif total_templates > 0:
+    elif draft + confirmed > 0:
         template_status = "IN_PROGRESS"
     else:
         template_status = "TODO"
@@ -112,7 +114,7 @@ def market_wizard(code: str) -> WizardView:
             "templates",
             "요건 템플릿",
             template_status,
-            {"draft": draft, "confirmed": confirmed, "total": total_templates},
+            {"draft": draft, "confirmed": confirmed, "retired": retired, "total": total_templates},
             "초안은 근거링크를 열어 확인일을 입력한 뒤 확정해야 합니다.",
         ),
         WizardStep(

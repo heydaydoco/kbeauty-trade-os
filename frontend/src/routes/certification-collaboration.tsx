@@ -691,7 +691,8 @@ export function PackagePanel({ row }: { row: Certification }) {
       anchor.href = url;
       anchor.download = filename;
       anchor.click();
-      URL.revokeObjectURL(url);
+      // 즉시 해제하면 일부 브라우저에서 저장이 시작되기 전에 주소가 사라진다 — 잠시 뒤 해제한다.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
     } catch (caught) {
       setError(caught instanceof ApiError ? unavailableText(caught) : "내려받지 못했습니다.");
     } finally {
