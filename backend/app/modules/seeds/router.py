@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.modules.identity.models import RoleCode
-from app.modules.seeds import service
-from app.modules.seeds.schemas import ApplyT1Request, ApplyT1Response, CatalogStatusSummary
+from app.modules.seeds import service, wizard
+from app.modules.seeds.schemas import (
+    ApplyT1Request,
+    ApplyT1Response,
+    CatalogStatusSummary,
+    WizardSummary,
+)
 
 CAN_EDIT = (RoleCode.CERT,)
 
 router = APIRouter(prefix="/seeds", tags=["seeds"])
+wizard_router = APIRouter(prefix="/market-wizard", tags=["seeds"])
 
 
 @router.get("/t1", summary="T1 시드 카탈로그와 시장별 투입 현황")
@@ -29,3 +37,8 @@ def apply_t1(payload: ApplyT1Request, current: CurrentUser, key: IdempotencyKey)
         actor=current, idempotency_key=key, payload=payload.model_dump(mode="json")
     )
     return ApplyT1Response.model_validate(body)
+
+
+@wizard_router.get("/{code}", summary="신규 시장 위저드 — 5단계 진행 계산(읽기 전용·저장 없음)")
+def market_wizard(code: str, current: CurrentUser) -> WizardSummary:
+    return WizardSummary.model_validate(asdict(wizard.market_wizard(code)))

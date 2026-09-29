@@ -293,3 +293,124 @@ def test_the_cli_seeds_with_a_registered_actor_and_fails_cleanly_otherwise(
     assert cli_main(["seed-t1", "--market", "US", "--actor-email", "seed-cli@example.com"]) == 0
     assert "기존" in capsys.readouterr().out
     assert len(_templates("US")) == _catalog_count("US")
+
+
+# ═══ 신규 시장 위저드 ═════════════════════════════════════════════════════════
+
+WIZARD = "/api/v1/market-wizard"
+
+
+def _step(body: dict[str, Any], key: str) -> dict[str, Any]:
+    return next(step for step in body["steps"] if step["key"] == key)
+
+
+def _add_hs(sku_id: int, country: str) -> None:
+    from app.core.time import today_kst
+    from app.modules.catalog.models import SkuHsCode
+
+    create_market(country)
+    with unit_of_work() as uow:
+        uow.session.add(
+            SkuHsCode(
+                sku_id=sku_id,
+                country_code=country,
+                hs_version="HS2022",
+                hs_code="330499",
+                source_url="https://example.com/hs",
+                last_verified_on=today_kst(),
+            )
+        )
+
+
+def test_the_wizard_for_an_unregistered_market_is_all_todo_except_the_unavailable_step(
+    cert: TestClient,
+) -> None:
+    """시장 부재 — 1단계 TODO, 협정은 '모듈 도래 전'으로 완료 계산에서 제외"""
+    body = cert.get(f"{WIZARD}/us").json()  # 소문자도 정규화
+    assert body["code"] == "US" and body["market_id"] is None
+    assert [step["status"] for step in body["steps"]] == [
+        "TODO",
+        "TODO",
+        "TODO",
+        "NOT_AVAILABLE",
+        "TODO",
+    ]
+    assert (body["counted_steps"], body["done_steps"]) == (4, 0)
+    assert body["catalog_available"] is True and body["catalog_template_count"] == _catalog_count(
+        "US"
+    )
+    assert _step(body, "agreements")["note"]
+
+
+def test_the_wizard_follows_seeding_confirming_hs_and_rules(cert: TestClient) -> None:
+    """투입 전→후→확정→HS·성분 규칙 등록까지 단계가 데이터에서 계산된다"""
+    from tests.support.factories import create_ingredient, create_ingredient_rule, create_sku
+
+    seeded = _apply(cert, "JP")
+    assert seeded.status_code == 200
+    body = cert.get(f"{WIZARD}/JP").json()
+    assert _step(body, "market")["status"] == "DONE"
+    templates = _step(body, "templates")
+    assert templates["status"] == "IN_PROGRESS"
+    assert templates["counts"] == {
+        "draft": _catalog_count("JP"),
+        "confirmed": 0,
+        "total": _catalog_count("JP"),
+    }
+
+    # 전부 확정하면 DONE — 확인일 입력 후 확정
+    for row in _templates("JP"):
+        patched = cert.patch(
+            f"/api/v1/requirement-templates/{row.id}",
+            json=_edit_body(row, last_verified_on=date(2026, 9, 30).isoformat()),
+        )
+        assert patched.status_code == 200, patched.text
+        assert (
+            cert.post(
+                f"/api/v1/requirement-templates/{row.id}/confirm",
+                json={"version": patched.json()["version"]},
+                headers=_key(),
+            ).status_code
+            == 200
+        )
+    body = cert.get(f"{WIZARD}/JP").json()
+    assert _step(body, "templates")["status"] == "DONE"
+
+    assert (
+        _step(body, "hs")["status"] == "TODO"
+        and _step(body, "ingredient_rules")["status"] == "TODO"
+    )
+    _add_hs(create_sku("SKU-WIZ-1"), "JP")
+    create_ingredient_rule(create_ingredient("Glycerin"), country_code="JP")
+    body = cert.get(f"{WIZARD}/JP").json()
+    assert _step(body, "hs")["counts"] == {"hs_codes": 1}
+    assert _step(body, "ingredient_rules")["counts"] == {"rules": 1}
+    assert (body["counted_steps"], body["done_steps"]) == (4, 4)
+    # 다른 나라의 HS는 세지 않는다
+    other = cert.get(f"{WIZARD}/US").json()
+    assert _step(other, "hs")["status"] == "TODO"
+
+
+def test_the_wizard_rejects_a_bad_code_and_is_readable_by_every_role(
+    viewer: TestClient,
+) -> None:
+    assert viewer.get(f"{WIZARD}/USA").status_code == 422
+    assert viewer.get(f"{WIZARD}/1").status_code == 422
+    assert viewer.get(f"{WIZARD}/ZZ").status_code == 200  # 카탈로그 밖 시장도 위저드는 열린다
+    assert viewer.get(f"{WIZARD}/ZZ").json()["catalog_available"] is False
+
+
+def test_a_market_with_drafts_only_is_in_progress_and_a_deleted_market_counts_as_unregistered(
+    cert: TestClient,
+) -> None:
+    from app.core.time import utcnow
+
+    _apply(cert, "SG")
+    assert _step(cert.get(f"{WIZARD}/SG").json(), "templates")["status"] == "IN_PROGRESS"
+    market_id = _market_id("SG")
+    with unit_of_work() as uow:
+        row = uow.session.get(Market, market_id)
+        assert row is not None
+        row.deleted_at = utcnow()
+    body = cert.get(f"{WIZARD}/SG").json()
+    assert body["market_id"] is None and _step(body, "market")["status"] == "TODO"

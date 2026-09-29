@@ -52,3 +52,23 @@ class MarketApplySummary(BaseModel):
 class ApplyT1Response(BaseModel):
     version: str
     results: list[MarketApplySummary]
+
+
+class WizardStepSummary(BaseModel):
+    step: int
+    key: str
+    title: str
+    status: str
+    counts: dict[str, int]
+    note: str | None
+
+
+class WizardSummary(BaseModel):
+    code: str
+    market_id: int | None
+    market_name: str | None
+    catalog_available: bool
+    catalog_template_count: int
+    steps: list[WizardStepSummary]
+    counted_steps: int
+    done_steps: int
