@@ -8,11 +8,18 @@ import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 
-export function renderWithProviders(ui: ReactElement, { route = "/" } = {}) {
-  const client = new QueryClient({
-    // 테스트에서 재시도는 실패를 느리게 만들 뿐이다.
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+export function renderWithProviders(
+  ui: ReactElement,
+  { route = "/", client: injected }: { route?: string; client?: QueryClient } = {},
+) {
+  // `client`는 운영 캐시 설정(staleTime 30초 등)을 그대로 재현해야 하는 테스트용이다 —
+  // 기본 클라이언트(staleTime 0)로는 "돌아왔을 때 옛 값이 남는" 류의 결함이 가려진다.
+  const client =
+    injected ??
+    new QueryClient({
+      // 테스트에서 재시도는 실패를 느리게 만들 뿐이다.
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>

@@ -89,6 +89,23 @@ const CERTIFICATION_STATUS: Record<string, string> = {
   SUSPENDED: "중단",
 };
 
+// 시장 준비도 셀 색 4값 (§5.3). 색만으로 구분하지 않도록 글자를 함께 쓴다. "판매가능"은
+// §5.3 명문 라벨이며 집계 모집합 밖 축(성분)은 범례가 공개한다(S2-3 조건 A).
+const READINESS_COLOR: Record<string, string> = {
+  GREEN: "판매가능",
+  YELLOW: "진행·임박",
+  RED: "미충족",
+  GRAY: "대상외",
+};
+
+// 준비도 요건의 대상 축 — 필수 집합의 출처(ADR-0047).
+const READINESS_AXIS: Record<string, string> = {
+  SKU: "SKU",
+  PRODUCT: "제품",
+  COMPANY: "자사(기업)",
+  FACILITY: "제조사(시설)",
+};
+
 // 거래처 유형 (§4.6 열거 10종 — ADR-0026).
 const PARTNER_TYPE: Record<string, string> = {
   SUPPLIER: "공급사",
@@ -140,6 +157,8 @@ export const appliesToLabel = (code: string): string => translate(APPLIES_TO, co
 export const templateStatusLabel = (code: string): string => translate(TEMPLATE_STATUS, code);
 export const certificationStatusLabel = (code: string): string =>
   translate(CERTIFICATION_STATUS, code);
+export const readinessColorLabel = (code: string): string => translate(READINESS_COLOR, code);
+export const readinessAxisLabel = (code: string): string => translate(READINESS_AXIS, code);
 export const partnerTypeLabel = (code: string): string => translate(PARTNER_TYPE, code);
 export const documentOwnerTypeLabel = (code: string): string =>
   translate(DOCUMENT_OWNER_TYPE, code);

@@ -13,6 +13,8 @@ import { ItemProfilesPage } from "./routes/item-profiles";
 import { LoginPage } from "./routes/login";
 import { MarketsPage } from "./routes/markets";
 import { CertificationsPage } from "./routes/certifications";
+import { CertificationBoardPage } from "./routes/certification-board";
+import { ReadinessPage } from "./routes/readiness";
 import { RequirementTemplatesPage } from "./routes/requirement-templates";
 import { MaterialsPage } from "./routes/materials";
 import { NotFoundPage } from "./routes/not-found";
@@ -82,7 +84,9 @@ export function AppRoutes() {
         <Route path="/materials" element={<MaterialsPage />} />
         <Route path="/markets" element={<MarketsPage />} />
         <Route path="/requirement-templates" element={<RequirementTemplatesPage />} />
+        <Route path="/readiness" element={<ReadinessPage />} />
         <Route path="/certifications" element={<CertificationsPage />} />
+        <Route path="/certification-board" element={<CertificationBoardPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/partners" element={<PartnersPage />} />
         <Route path="/documents" element={<DocumentsPage />} />

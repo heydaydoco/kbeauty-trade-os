@@ -89,6 +89,7 @@ def create_sku(
     *,
     name_ko: str = "테스트 SKU",
     product_id: int | None = None,
+    status: str = "ACTIVE",
 ) -> int:
     """단품 SKU를 만들고 id를 돌려준다 (§4.1 — 단품은 처방 없이 존재할 수 없다)."""
     if product_id is None:
@@ -99,6 +100,7 @@ def create_sku(
             name_ko=name_ko,
             kind="SINGLE",
             product_id=product_id,
+            status=status,
         )
         uow.session.add(sku)
         uow.session.flush()
@@ -246,3 +248,183 @@ def create_material(
         uow.session.add(material)
         uow.session.flush()
         return material.id
+
+
+# ── 준비도 매트릭스용 (S2-3 PR-3) — 요건 세트·인스턴스·세트 SKU ────────────────
+
+
+def create_requirement_template(
+    market: str = "US",
+    name: str = "MoCRA 제품 리스팅",
+    applies_to: str = "SKU",
+    *,
+    status: str = "CONFIRMED",
+    lead_days: int | None = 90,
+    profile_id: int | None = None,
+) -> int:
+    """요건 템플릿을 만들고(선택: 품목군 세트에 연결) id를 돌려준다.
+
+    ★ 근거 2필드를 채워 두어 CONFIRMED 게이트(DB CHECK)를 통과한다 — 게이트 자체는
+      requirement_templates 테스트의 몫이고, 여기는 확정된 요건이 필요한 테스트의 준비다.
+    """
+    from datetime import date
+
+    from app.modules.requirements.models import RequirementTemplate
+
+    market_id = create_market(market)
+    with unit_of_work() as uow:
+        row = RequirementTemplate(
+            market_id=market_id,
+            name=name,
+            applies_to=applies_to,
+            requirement_type="REGISTRATION",
+            source_url="https://example.test/rule",
+            last_verified_on=date(2026, 9, 1),
+            renewal_lead_days=lead_days,
+            status=status,
+        )
+        uow.session.add(row)
+        uow.session.flush()
+        template_id = row.id
+    if profile_id is not None:
+        link_profile_template(profile_id, template_id)
+    return template_id
+
+
+def link_profile_template(profile_id: int, template_id: int, *, deleted: bool = False) -> None:
+    """품목군의 요건 세트에 템플릿을 잇는다(deleted=True면 해제된 연결)."""
+    from app.core.time import utcnow
+    from app.modules.requirements.models import ItemProfileRequirementTemplate
+
+    with unit_of_work() as uow:
+        link = ItemProfileRequirementTemplate(
+            item_profile_id=profile_id, requirement_template_id=template_id
+        )
+        if deleted:
+            link.deleted_at = utcnow()
+        uow.session.add(link)
+
+
+def create_sku_with_axes(
+    sku_code: str,
+    *,
+    profile_id: int | None = None,
+    product_profile_id: int | None = None,
+    manufacturer_id: int | None = None,
+    name_ko: str = "테스트 SKU",
+    status: str = "ACTIVE",
+) -> tuple[int, int]:
+    """(sku_id, product_id) — 품목군은 SKU·제품에 **따로** 붙는다(자동 적용 축 검증의 전제)."""
+    product_id = create_product(f"P-{sku_code}"[:40])
+    sku_id = create_sku(sku_code, name_ko=name_ko, product_id=product_id, status=status)
+    with unit_of_work() as uow:
+        sku = uow.session.get(Sku, sku_id)
+        product = uow.session.get(Product, product_id)
+        assert sku is not None and product is not None
+        sku.item_profile_id = profile_id
+        sku.manufacturer_partner_id = manufacturer_id
+        product.item_profile_id = product_profile_id
+    return sku_id, product_id
+
+
+def create_set_sku(
+    sku_code: str,
+    components: list[int],
+    *,
+    profile_id: int | None = None,
+    manufacturer_id: int | None = None,
+) -> int:
+    """세트 SKU(구성품 수량 1)를 만들고 id를 돌려준다 (§4.2 — SET은 처방을 갖지 않는다)."""
+    from app.modules.catalog.models import SetComponent
+
+    with unit_of_work() as uow:
+        sku = Sku(
+            sku_code=sku_code,
+            name_ko="테스트 세트",
+            kind="SET",
+            item_profile_id=profile_id,
+            manufacturer_partner_id=manufacturer_id,
+        )
+        uow.session.add(sku)
+        uow.session.flush()
+        for component in components:
+            uow.session.add(SetComponent(set_sku_id=sku.id, component_sku_id=component, quantity=1))
+        return sku.id
+
+
+def create_certification_instance(
+    template_id: int,
+    target_type: str,
+    target_id: int | None,
+    *,
+    status: str,
+    expires_on: object | None = None,
+    lead_days: int | None = 90,
+    assignee_id: int | None = None,
+    valid_from: object | None = None,
+) -> int:
+    """인증 인스턴스 행을 직접 만든다 — 상태·만료일을 자유롭게 심는 **픽스처 한정** 경로.
+
+    ★ 서비스 경로(create_certification)는 항상 미착수로 시작하고 상태 대입을 막는다
+      (층2). 매트릭스처럼 "이 상태에서 무슨 색인가"를 보는 테스트는 상태를 심어야
+      하므로 여기서 직접 만든다 — 전이 규칙 자체는 상태머신 테스트의 몫이다.
+    """
+    from datetime import date
+
+    from app.modules.certifications.models import Certification
+
+    for label, value in (("expires_on", expires_on), ("valid_from", valid_from)):
+        # 문자열 등을 조용히 무기한(NULL)으로 바꾸지 않는다 — 준비 실수가 기능 결함처럼 보인다.
+        if value is not None and not isinstance(value, date):
+            raise TypeError(f"{label}은 date여야 합니다: {value!r}")
+    with unit_of_work() as uow:
+        row = Certification(
+            template_id=template_id,
+            target_type=target_type,
+            target_id=target_id,
+            status=status,
+            template_name="스냅샷",
+            requirement_type="REGISTRATION",
+            renewal_lead_days=lead_days,
+            expires_on=expires_on if isinstance(expires_on, date) else None,
+            valid_from=valid_from if isinstance(valid_from, date) else None,
+            assignee_id=assignee_id,
+        )
+        uow.session.add(row)
+        uow.session.flush()
+        return row.id
+
+
+def create_link_document(
+    owner_id: int,
+    *,
+    valid_until: object | None,
+    owner_type: str = "SKU",
+    document_type: str = "CFS",
+    tag: str = "doc",
+) -> int:
+    """LINK형 문서 행을 직접 만든다(유효기간 지정) — 등록 경로의 계약은 documents 테스트의 몫."""
+    from datetime import date
+
+    from app.modules.documents.models import Document, DocumentType
+
+    if valid_until is not None and not isinstance(valid_until, date):
+        raise TypeError(f"valid_until은 date여야 합니다: {valid_until!r}")
+    with unit_of_work() as uow:
+        type_id = uow.session.execute(
+            select(DocumentType.id).where(
+                DocumentType.code == document_type, DocumentType.deleted_at.is_(None)
+            )
+        ).scalar_one()
+        row = Document(
+            owner_type=owner_type,
+            owner_id=owner_id,
+            document_type_id=type_id,
+            storage_kind="LINK",
+            url=f"https://example.com/{tag}-{owner_id}.pdf",
+            issued_on=date(2025, 1, 1),
+            valid_until=valid_until if isinstance(valid_until, date) else None,
+        )
+        uow.session.add(row)
+        uow.session.flush()
+        return row.id

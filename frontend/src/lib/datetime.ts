@@ -21,3 +21,15 @@ export function toKstDisplay(isoUtc: string): string {
   }
   return `${KST_FORMATTER.format(parsed)} (KST)`;
 }
+
+const KST_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+/** KST 기준 오늘 날짜 'YYYY-MM-DD' — 업무 날짜는 KST다(§22 렌즈 6). 브라우저 시간대에 의존하지 않는다. */
+export function todayKst(now: Date = new Date()): string {
+  return KST_DATE_FORMATTER.format(now);
+}

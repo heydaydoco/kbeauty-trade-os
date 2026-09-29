@@ -141,6 +141,8 @@ class CertificationSummary(BaseModel):
     valid_from: date | None
     expires_on: date | None
     assignee_id: int | None
+    #: 담당자 표시명(읽기 전용). 멱등 재생 본문이 이 필드 이전에 얼려진 것이면 없다 — 기본값.
+    assignee_name: str | None = None
     note: str | None
     version: int
     #: 도과 계산값(안건 ⑦) — 갱신중 도과 표시의 근거. 저장 컬럼이 아니다.

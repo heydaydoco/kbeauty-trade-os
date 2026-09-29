@@ -2,7 +2,8 @@
 //
 // ★ 상태는 전이 버튼으로만 바뀐다 — 전이 표 밖은 서버가 409로 거부한다(§5.2).
 //   여기의 HUMAN_TRANSITIONS는 UX용 사본이고 정본은 서버 machine.py다(사본이
-//   낡아도 서버가 막는다). 칸반+캘린더 보드는 S2-3 몫(판정 ⑪ — WBS v1.4).
+//   낡아도 서버가 막는다). 칸반+캘린더 보드는 /certification-board(S2-3 PR-3)이고, 보드·
+//   매트릭스가 `?id=` 딥링크로 이 화면의 상세 패널을 연다.
 // ★ 편집(등록·전이·태스크)은 인증+관리자다(판정 ⑫) — 화면 게이트는 표시일 뿐
 //   실제 차단은 서버(§18.1).
 // ★ 드롭다운(템플릿·대상)은 전부 ?size=200 우회다 — 대상(SKU 수백 규모)의
@@ -10,11 +11,12 @@
 // ★ 날짜·상태 표시는 셀에서 전제를 확인하고 그린다(함정 ⑦ — 던질 수 있는
 //   표시 함수를 가드 없이 부르면 화면 백지).
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
-import { apiDelete, apiFetch } from "../lib/api";
+import { ApiError, apiDelete, apiFetch } from "../lib/api";
 import { toKstDisplay } from "../lib/datetime";
 import { appliesToLabel, certificationStatusLabel, orEmpty } from "../lib/labels";
 import { usePagedList, usePagedQuery } from "../lib/paging";
@@ -44,6 +46,8 @@ export interface Certification {
   valid_from: string | null;
   expires_on: string | null;
   assignee_id: number | null;
+  /** 담당자 표시명(읽기 전용) — 보드 카드가 이름을 보인다. */
+  assignee_name: string | null;
   note: string | null;
   version: number;
   /** 도과 계산값(S2-3 PR-2 안건 ⑦) — 서버가 KST 오늘 기준으로 계산한다. 갱신중(RENEWING)은
@@ -688,6 +692,40 @@ export function CertificationsPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [selected, setSelected] = useState<Certification | null>(null);
 
+  // 딥링크 — 보드·매트릭스가 `?id=`로 넘긴 인증을 상세 패널로 연다. 목록은 쪽 단위라 그 인증이
+  // 1쪽에 없을 수 있으므로 단건을 따로 조회한다(목록에서 찾으면 2쪽 이후의 인증이 안 열린다).
+  const [searchParams] = useSearchParams();
+  const focusParam = Number(searchParams.get("id"));
+  const focusId = Number.isInteger(focusParam) && focusParam > 0 ? focusParam : null;
+  const focused = useQuery({
+    queryKey: [...CERTIFICATIONS_QUERY_KEY, "focus", focusId],
+    queryFn: () => apiFetch<Certification>(`/v1/certifications/${focusId}`),
+    enabled: focusId !== null,
+  });
+  // 표가 길면(쪽당 50행) 상세 패널이 화면 밖 아래에 열려 눌러도 무반응처럼 보인다 — 다른 인증이
+  // 선택될 때마다(딥링크 포함) 패널을 보이는 곳으로 가져온다. 같은 인증의 갱신은 다시 스크롤하지 않는다.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const selectedId = selected?.id ?? null;
+  useEffect(() => {
+    if (selectedId !== null) {
+      panelRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    }
+  }, [selectedId]);
+
+  // 링크 하나당 한 번만 연다 — 사용자가 패널을 닫거나 다른 행을 고른 뒤 창 복귀 갱신 등으로
+  // 대상 데이터가 바뀌어 다시 도착해도 열린 상태를 되돌리지 않는다.
+  const appliedFocus = useRef<number | null>(null);
+  useEffect(() => {
+    if (focusId === null) {
+      appliedFocus.current = null;
+      return;
+    }
+    if (focused.data !== undefined && appliedFocus.current !== focusId) {
+      appliedFocus.current = focusId;
+      setSelected(focused.data);
+    }
+  }, [focused.data, focusId]);
+
   const listPath =
     statusFilter === "" ? "/v1/certifications" : `/v1/certifications?status=${statusFilter}`;
   const list = usePagedList<Certification>(
@@ -737,6 +775,14 @@ export function CertificationsPage() {
           만료일 기준으로 자동 부여됩니다. 확정된 템플릿에서만 등록할 수 있습니다.
         </p>
       </header>
+
+      {focusId !== null && focused.isError && (
+        <p role="alert" className="mt-4 rounded border border-signal-amber/60 p-2 text-sm">
+          {focused.error instanceof ApiError && focused.error.status === 404
+            ? `링크가 가리키는 인증(#${focusId})을 찾을 수 없습니다. 삭제되었거나 존재하지 않는 인증입니다.`
+            : `링크가 가리키는 인증(#${focusId})을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.`}
+        </p>
+      )}
 
       {canEdit && (
         <form
@@ -889,15 +935,26 @@ export function CertificationsPage() {
       </div>
 
       {selected && (
-        <div className="mt-6 rounded-lg border border-gray-300 p-4">
-          <h2 className="font-semibold">
-            [{selected.market_code}] {selected.template_name} — {selected.target_label}
-          </h2>
+        <div ref={panelRef} className="mt-6 rounded-lg border border-gray-300 p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="font-semibold">
+              [{selected.market_code}] {selected.template_name} — {selected.target_label}
+            </h2>
+            {/* 딥링크로 연 인증은 목록 쪽에 없을 수 있어 행의 "상세 닫기"로는 닫을 수 없다. */}
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              className="ml-auto text-sm text-gray-500 underline"
+            >
+              닫기
+            </button>
+          </div>
           <p className="mt-1 text-sm text-gray-600">
             상태 {certificationStatusLabel(selected.status)}
             <OverdueBadge row={selected} />
             {selected.expires_on !== null && ` · 만료일 ${selected.expires_on}`}
             {selected.cert_number !== null && ` · 인증번호 ${selected.cert_number}`}
+            {selected.assignee_name !== null && ` · 담당자 ${selected.assignee_name}`}
           </p>
           {canEdit && (
             <TransitionPanel

@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from app.api.v1 import system
 from app.modules.catalog import router as catalog_router
 from app.modules.certifications import router as certifications_router
+from app.modules.deadlines import router as deadlines_router
 from app.modules.documents import router as documents_router
 from app.modules.handover import router as handover_router
 from app.modules.identity import router as identity_router
@@ -17,6 +18,7 @@ from app.modules.materials import router as materials_router
 from app.modules.notifications import router as notifications_router
 from app.modules.partners import router as partners_router
 from app.modules.platform import router as platform_router
+from app.modules.readiness import router as readiness_router
 from app.modules.requirements import router as requirements_router
 from app.modules.worklist import router as worklist_router
 
@@ -37,6 +39,8 @@ api_router.include_router(markets_router.router)
 api_router.include_router(requirements_router.router)
 api_router.include_router(requirements_router.profile_requirement_templates_router)
 api_router.include_router(certifications_router.router)
+api_router.include_router(readiness_router.router)
+api_router.include_router(deadlines_router.router)
 api_router.include_router(ingredients_router.router)
 api_router.include_router(ingredients_router.product_ingredients_router)
 api_router.include_router(ingredients_router.ingredient_rules_router)
