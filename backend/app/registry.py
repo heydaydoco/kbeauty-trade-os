@@ -11,6 +11,7 @@ from app.core.db.base import Base
 from app.modules.audit import models as audit_models
 from app.modules.catalog import models as catalog_models
 from app.modules.certifications import models as certifications_models
+from app.modules.collaboration import models as collaboration_models
 from app.modules.documents import models as documents_models
 from app.modules.idempotency import models as idempotency_models
 from app.modules.identity import models as identity_models
@@ -31,6 +32,7 @@ __all__ = [
     "audit_models",
     "catalog_models",
     "certifications_models",
+    "collaboration_models",
     "documents_models",
     "idempotency_models",
     "identity_models",

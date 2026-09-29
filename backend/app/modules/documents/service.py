@@ -46,6 +46,7 @@ from app.core.time import today_kst, utcnow
 from app.modules.catalog.models import Sku
 from app.modules.catalog.profiles import require_profile
 from app.modules.certifications.models import Certification, CertificationTask
+from app.modules.collaboration.models import CommLog
 from app.modules.documents.models import (
     DOCUMENT_OWNER_TYPES,
     Document,
@@ -272,6 +273,19 @@ def _require_owner(
                 log_context={"owner_type": owner_type, "owner_id": owner_id},
             )
         return _certification_display(cert.id, cert.template_name)
+    if owner_type == "COMM_LOG":
+        log = session.execute(
+            select(CommLog).where(CommLog.id == owner_id, CommLog.deleted_at.is_(None))
+        ).scalar_one_or_none()
+        if log is None:
+            raise AppError(
+                ErrorCode.VALIDATION_INVALID_FIELD,
+                detail={
+                    "owner_id": "존재하지 않는 통신 기록입니다. 인증 상세에서 다시 선택해 주세요."
+                },
+                log_context={"owner_type": owner_type, "owner_id": owner_id},
+            )
+        return _comm_log_display(log.id, log.occurred_on)
     raise AppError(
         ErrorCode.VALIDATION_INVALID_FIELD,
         detail={
@@ -284,6 +298,11 @@ def _require_owner(
 
 def _label_display(sku_code: str, country_code: str, label_version: int, language: str) -> str:
     return f"{sku_code} · {country_code} v{label_version}({language})"
+
+
+def _comm_log_display(log_id: int, occurred_on: date) -> str:
+    """통신 기록 식별 표시 — 요지는 길 수 있어 번호와 오간 날만 싣는다."""
+    return f"통신 기록 #{log_id} · {occurred_on.isoformat()}"
 
 
 def _certification_display(certification_id: int, template_name: str) -> str:
@@ -322,6 +341,12 @@ def owner_displays(session: Session, keys: set[tuple[str, int]]) -> dict[tuple[s
             displays[("CERTIFICATION", certification_id)] = _certification_display(
                 certification_id, template_name
             )
+    comm_log_ids = [owner_id for owner_type, owner_id in keys if owner_type == "COMM_LOG"]
+    if comm_log_ids:
+        for log_id, occurred_on in session.execute(
+            select(CommLog.id, CommLog.occurred_on).where(CommLog.id.in_(comm_log_ids))
+        ):
+            displays[("COMM_LOG", log_id)] = _comm_log_display(log_id, occurred_on)
     return displays
 
 

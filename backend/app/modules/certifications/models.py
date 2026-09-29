@@ -65,6 +65,15 @@ from app.modules.requirements.models import APPLIES_TO_VALUES
 #: 대상 유형 = 템플릿 적용단위와 같은 열거 (§5.1 — 생성 시 일치 강제).
 TARGET_TYPES = APPLIES_TO_VALUES
 
+#: 처리방식 (§5.4 "처리방식[직접/대행]") — 대행이면 대행사(거래처 유형 CERT_AGENCY)가
+#: 지정돼야 한다(양방향 CHECK). 상태가 아니라 **편집 필드**라 상태머신 27전이 표를 건드리지 않는다.
+HANDLING_MODES = ("DIRECT", "AGENCY")
+
+#: 현재 액션 주체 (§5.4 "현재 액션 주체[사내/대행사/기관]") — 공이 누구 쪽에 있는가.
+#: 정체 N일 알림(stagnation-scan)의 기준이다. 사람이 기록하는 값이라 상태 변경으로
+#: 자동 추정하지 않는다(추측 금지 — 대행 여부·기관 대기 여부는 사실이 아니라 사람의 판단).
+ACTION_OWNERS = ("INTERNAL", "AGENCY", "AUTHORITY")
+
 #: 활성 유니크가 제외하는 종결 2태 — machine.TERMINAL_STATUSES와 같은 값이다.
 #: (모델 층은 문자열 술어가 필요해 여기 다시 적고, 두 정의의 일치는
 #: tests/architecture/test_certification_machine.py가 고정한다.)
@@ -109,9 +118,35 @@ class Certification(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, Acto
     )
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # ── 대행 협업 (§5.4 — S2-4 PR-1 / ADR-0048) ──
+    #: 실비 컬럼은 두지 않는다 — S2-2 판정("인스턴스 비용 컬럼 0 — 실비=S3-4 원장").
+    handling_mode: Mapped[str] = mapped_column(String(6), nullable=False, server_default="DIRECT")
+    action_owner: Mapped[str] = mapped_column(String(9), nullable=False, server_default="INTERNAL")
+    #: 공이 현재 주체에게 넘어온 날(KST 업무일). NULL이면 생성일로 본다 — 자동 적용·이관
+    #: 분처럼 기록되지 않은 행이 정체 계산에서 조용히 빠지지 않게 하는 읽기 규칙이다.
+    action_owner_changed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: 대행사 = 거래처(유형 CERT_AGENCY — 서비스 검증). handling_mode=AGENCY ⇔ NOT NULL.
+    agency_partner_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("partners.id", ondelete="RESTRICT"), nullable=True
+    )
+
     __table_args__ = (
         value_in("status", CERTIFICATION_STATUSES),
         value_in("target_type", TARGET_TYPES),
+        value_in("handling_mode", HANDLING_MODES),
+        value_in("action_owner", ACTION_OWNERS),
+        # 대행 처리 ⇔ 대행사 지정 — 양방향이라 "대행인데 누구인지 모름"과 "직접인데
+        # 대행사가 붙어 있음"이 다 막힌다(스코어카드 귀속이 모호한 행 차단).
+        CheckConstraint(
+            "(handling_mode = 'AGENCY') = (agency_partner_id IS NOT NULL)",
+            name="handling_agency_pair",
+        ),
+        # 공이 대행사에 있다는 말은 대행 처리일 때만 성립한다.
+        CheckConstraint(
+            "action_owner <> 'AGENCY' OR handling_mode = 'AGENCY'",
+            name="agency_owner_requires_agency",
+        ),
+        Index("ix_certifications_agency_partner_id", "agency_partner_id"),
         # COMPANY=자사 단일이라 target_id 없음, 그 외는 반드시 있음 — 양방향.
         CheckConstraint(
             "(target_type = 'COMPANY') = (target_id IS NULL)",

@@ -217,6 +217,35 @@ def partner_has_type(session: Session, partner_id: int, type_code: str) -> bool:
     return type_code in partner_type_codes(session, partner_id)
 
 
+def require_partner_of_type(
+    session: Session, partner_id: int, type_code: str, *, field: str, type_label: str
+) -> Partner:
+    """존재하고 지정 유형을 가진 거래처 — 아니면 필드별 422 안내.
+
+    소비처: 인증 대행사 지정·대행 계약(CERT_AGENCY). 폴리모픽·유형 참조는 FK로 표현할 수
+    없어 서비스 층이 판정 지점이다(materials._live_supplier·catalog._live_manufacturer와 같은 꼴).
+    """
+    partner = session.execute(
+        select(Partner).where(Partner.id == partner_id, Partner.deleted_at.is_(None))
+    ).scalar_one_or_none()
+    if partner is None:
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={field: "존재하지 않는 거래처입니다. 거래처를 먼저 등록해 주세요."},
+            log_context={field: partner_id},
+        )
+    if not partner_has_type(session, partner_id, type_code):
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                field: f"'{type_label}' 유형이 아닌 거래처입니다. "
+                f"거래처 화면에서 유형에 '{type_label}'을(를) 추가한 뒤 지정해 주세요."
+            },
+            log_context={field: partner_id, "type_code": type_code},
+        )
+    return partner
+
+
 def _require_sku(session: Session, sku_id: int) -> Sku:
     row = session.execute(
         select(Sku).where(Sku.id == sku_id, Sku.deleted_at.is_(None))

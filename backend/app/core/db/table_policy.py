@@ -104,6 +104,12 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # 서는 시점의 의무다 — "행이 없으니 나중에"가 곧 조용한 누락이다.
         "notification_channels",
         "webhook_subscriptions",
+        # S2-4 — 대행 협업 (§5.4). 계약 대장·통신 기록은 사람이 화면에서 고치는
+        # 편집 마스터다(다음 액션 완료 처리·정정 = UPDATE, 삭제 = soft delete).
+        # 통신 기록의 "불변"은 요구되지 않는다 — 감사가 필요한 사실은 audit_log·
+        # 낙관 잠금(version)·감사 컬럼이 맡고, 통신 요지는 오기 정정이 정상 업무다.
+        "agency_contracts",
+        "comm_logs",
     }
 )
 
