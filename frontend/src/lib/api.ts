@@ -142,3 +142,33 @@ export async function apiDelete(path: string): Promise<void> {
     await throwFromEnvelope(response);
   }
 }
+
+/**
+ * 파일 내려받기(GET → Blob) — 에러(409·422 등)는 JSON 봉투로 오므로 브라우저 이동(<a href>) 대신
+ * fetch로 받아 한국어 message를 화면에 보인다. 파일명은 Content-Disposition의 `filename*`(RFC 5987)에서 읽는다.
+ */
+export async function apiDownload(
+  path: string,
+  fallbackName: string,
+): Promise<{ blob: Blob; filename: string }> {
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, { method: "GET" });
+  } catch {
+    throw new ApiError(0, NETWORK_ERROR);
+  }
+  if (!response.ok) {
+    await throwFromEnvelope(response);
+  }
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  let filename = fallbackName;
+  if (encoded !== undefined) {
+    try {
+      filename = decodeURIComponent(encoded);
+    } catch {
+      filename = fallbackName;
+    }
+  }
+  return { blob: await response.blob(), filename };
+}

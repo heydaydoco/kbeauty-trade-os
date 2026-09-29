@@ -17,10 +17,12 @@ import argparse
 import getpass
 import sys
 from datetime import date
+from uuid import uuid4
 
 from sqlalchemy import select
 
 from app.core.db.uow import unit_of_work
+from app.core.errors.exceptions import AppError
 from app.modules.audit import service as audit
 from app.modules.audit.models import AuditAction
 from app.modules.certifications.service import sweep_date_transitions
@@ -30,6 +32,7 @@ from app.modules.identity.models import Role, RoleCode, User, UserRole
 from app.modules.identity.passwords import hash_password
 from app.modules.identity.service import normalize_email
 from app.modules.platform import scheduler
+from app.modules.seeds import service as seeds
 
 MIN_PASSWORD_LENGTH = 12
 
@@ -95,6 +98,42 @@ def _read_password(supplied: str | None) -> str:
     return password
 
 
+def _seed_t1(markets: list[str], actor_email: str) -> int:
+    """등록된 계정을 투입자로 T1 초안을 투입한다 — 계정이 없으면 만들지 않고 실패한다."""
+    from app.modules.identity.service import AuthenticatedUser
+
+    normalized = normalize_email(actor_email)
+    with unit_of_work() as uow:
+        user = uow.session.execute(
+            select(User).where(User.email == normalized, User.deleted_at.is_(None))
+        ).scalar_one_or_none()
+        if user is None or not user.is_active:
+            print(f"투입자 계정을 찾을 수 없습니다(또는 비활성): {normalized}", file=sys.stderr)
+            return 1
+        actor = AuthenticatedUser(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            roles=frozenset(),
+            session_id=0,
+        )
+    try:
+        _, body = seeds.apply_t1(
+            actor=actor,
+            idempotency_key=f"cli-seed-t1-{uuid4().hex}",
+            payload={"markets": markets},
+        )
+    except AppError as exc:
+        print(f"투입 실패: {exc.detail}", file=sys.stderr)
+        return 1
+    for result in body["results"]:
+        print(
+            f"{result['code']}: 시장 {'신규 등록' if result['market_created'] else '기존'}"
+            f" · 초안 {len(result['created'])}건 투입 · {len(result['skipped'])}건 건너뜀"
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="app.cli", description="kbeauty-trade-os 운영 명령")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -156,6 +195,21 @@ def main(argv: list[str] | None = None) -> int:
         help="레지스트리의 배치를 scheduled_jobs에 등록한다(멱등 — 있는 건 건드리지 않음)",
     )
 
+    # T1 요건 템플릿 초안 투입 (S2-4 PR-2 — 앱 경로 시드, 마이그레이션 시드 아님).
+    seed = commands.add_parser(
+        "seed-t1",
+        help="선택한 시장의 T1 요건 템플릿 초안을 투입한다(멱등 — 있는 템플릿은 건너뜀, 확정은 사람이)",
+    )
+    seed.add_argument(
+        "--market",
+        action="append",
+        required=True,
+        help="투입할 시장 코드(예: US). 여러 시장은 --market을 반복한다",
+    )
+    seed.add_argument(
+        "--actor-email", required=True, help="투입자(등록된 계정) 이메일 — 감사 컬럼에 남는다"
+    )
+
     # 실행기 진입점 — compose의 worker 서비스가 이 명령으로 뜬다.
     commands.add_parser("run-scheduler", help="배치 실행기를 기동한다(무한 루프)")
 
@@ -205,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("새로 등록할 배치가 없습니다(전건 등록 상태).")
         return 0
+    if args.command == "seed-t1":
+        return _seed_t1(args.market, args.actor_email)
     if args.command == "run-scheduler":
         return scheduler.run_forever()
     return 1  # pragma: no cover — argparse가 먼저 막는다

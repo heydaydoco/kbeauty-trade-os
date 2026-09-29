@@ -11,7 +11,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiDelete, apiFetch, apiUpload } from "../lib/api";
+import { ApiError, apiDelete, apiDownload, apiFetch, apiUpload } from "../lib/api";
 import { toKstDisplay, todayKst } from "../lib/datetime";
 import { actionOwnerLabel, handlingModeLabel, orEmpty } from "../lib/labels";
 import { FRESH_EVERY_TIME, usePagedQuery } from "../lib/paging";
@@ -654,6 +654,72 @@ export function CommLogsPanel({ row, canEdit }: { row: Certification; canEdit: b
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+
+/** 실물 유실·손상 목록(409)을 사람이 읽는 문장으로 — 문서 id와 사유만 안다(서버 detail). */
+function unavailableText(error: ApiError): string {
+  const docs = error.detail.documents;
+  if (!Array.isArray(docs) || docs.length === 0) return error.message;
+  const parts = (docs as { document_id: number; reason: string }[]).map(
+    (doc) => `문서 #${doc.document_id}(${doc.reason === "MISSING" ? "파일 없음" : "내용 불일치"})`,
+  );
+  return `${error.message} — ${parts.join(", ")}`;
+}
+
+/**
+ * 전달 서류 zip — 인증 소유 문서+태스크가 서류로 연결한 문서를 한 묶음으로 내려받는다.
+ * ★ 생성까지가 시스템이고 발송은 사람이다(§5.4). 통신 기록 첨부는 들어가지 않는다.
+ * ★ 실물이 없거나 손상된 서류가 있으면 서버가 조용히 빼지 않고 거부한다(409) — 그 문장을 그대로 보인다.
+ */
+export function PackagePanel({ row }: { row: Certification }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function download() {
+    setBusy(true);
+    setError(null);
+    try {
+      const { blob, filename } = await apiDownload(
+        `/v1/certifications/${row.id}/package`,
+        `인증${row.id}_전달서류.zip`,
+      );
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      // 즉시 해제하면 일부 브라우저에서 저장이 시작되기 전에 주소가 사라진다 — 잠시 뒤 해제한다.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? unavailableText(caught) : "내려받지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded border p-3">
+      <h3 className="font-medium">전달 서류 묶음</h3>
+      <p className="mt-1 break-keep text-sm text-gray-600">
+        이 인증의 서류(인증 소유 문서+태스크에 연결된 문서)를 zip 한 파일로 받습니다. 보내는 일은 사람이
+        합니다.
+      </p>
+      <button
+        type="button"
+        className="cell-nowrap mt-2 rounded bg-gray-800 px-3 py-1 text-sm text-white disabled:opacity-50"
+        disabled={busy}
+        onClick={() => void download()}
+      >
+        {busy ? "만드는 중…" : "전달 서류 zip 받기"}
+      </button>
+      {error !== null && (
+        <p role="alert" className="mt-2 break-keep text-sm text-signal-red">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

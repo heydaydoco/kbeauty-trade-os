@@ -8,13 +8,17 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from collections.abc import Iterator
+from typing import IO, Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.core.pagination import Page, PageParams
-from app.modules.certifications import service
+from app.core.time import today_kst
+from app.modules.certifications import package, service
 from app.modules.certifications.schemas import (
     CertificationCreateRequest,
     CertificationSummary,
@@ -116,6 +120,37 @@ def update_certification(
         payload=payload.model_dump(mode="json", exclude_unset=True),
     )
     return CertificationSummary.of(view)
+
+
+def _stream_and_close(spool: IO[bytes]) -> Iterator[bytes]:
+    try:
+        while chunk := spool.read(64 * 1024):
+            yield chunk
+    finally:
+        spool.close()
+
+
+@router.get(
+    "/{certification_id}/package",
+    summary="전달 서류 zip — 인증 소유+태스크 연결 문서 (실물 유실 409·상한 422·발송은 사람)",
+)
+def download_certification_package(
+    certification_id: int, current: CurrentUser
+) -> StreamingResponse:
+    source = package.load_source(certification_id)  # 메타 조회(트랜잭션) — 파일 IO는 그 밖
+    spool = package.build_package(source)
+    size = spool.seek(0, 2)
+    spool.seek(0)
+    filename = f"인증{certification_id}_전달서류_{today_kst().isoformat()}.zip"
+    return StreamingResponse(
+        _stream_and_close(spool),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Content-Length": str(size),
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/{certification_id}/status-log", summary="상태 변경 이력 (불변 — §17.5 확장)")

@@ -8,6 +8,8 @@
 
 > **구현 부기(2026-09-29 PR-1)**: 아래 §2 안건 ①②의 세부 문면 중 마지막 활동일 원천(다음 액션 완료일 추가)·dedup 키 표기(복수형 `certifications`·`comm_logs`)·CHECK(`agency_owner_requires_agency` 추가)·인증 편집 폼의 담당자 필드(비포함)는 구현에서 조정됐다 — **정본은 DESIGN §5.4 부기·[M2] 보강(S2-4 PR-1)과 ADR-0048 부기**이다.
 
+> **구현 부기(2026-09-29 PR-2)**: 안건 ⑤의 API 경로는 `GET /api/v1/seeds/t1`·`POST /api/v1/seeds/t1/apply`, 위저드는 `GET /api/v1/market-wizard/{code}`, 전달 서류 zip은 `GET /api/v1/certifications/{id}/package`로 구현됐다(스키마 변경 0). 정본은 DESIGN §5.5 부기·[M2] 보강(S2-4 PR-2)과 ADR-0049.
+
 ---
 
 ## 0-1. 착수 반영 (2026-09-29 — 이 커밋)

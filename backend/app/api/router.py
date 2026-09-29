@@ -21,6 +21,7 @@ from app.modules.partners import router as partners_router
 from app.modules.platform import router as platform_router
 from app.modules.readiness import router as readiness_router
 from app.modules.requirements import router as requirements_router
+from app.modules.seeds import router as seeds_router
 from app.modules.worklist import router as worklist_router
 
 api_router = APIRouter(prefix="/api/v1")
@@ -37,6 +38,8 @@ api_router.include_router(catalog_router.item_profiles_router)
 api_router.include_router(catalog_router.products_router)
 api_router.include_router(catalog_router.router)
 api_router.include_router(markets_router.router)
+api_router.include_router(seeds_router.router)
+api_router.include_router(seeds_router.wizard_router)
 api_router.include_router(requirements_router.router)
 api_router.include_router(requirements_router.profile_requirement_templates_router)
 api_router.include_router(certifications_router.router)

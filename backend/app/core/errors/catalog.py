@@ -173,6 +173,16 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "인증 대상을 찾을 수 없습니다. 대상이 등록돼 있는지 확인해 주세요.",
     ),
+    ErrorCode.CERTIFICATIONS_PACKAGE_TOO_LARGE: ErrorSpec(
+        422,
+        "전달 서류가 너무 많거나 커서 한 번에 묶을 수 없습니다(파일 100건·합계 200MB 이하). "
+        "서류를 나누어 내려받아 주세요.",
+    ),
+    ErrorCode.CERTIFICATIONS_PACKAGE_FILES_UNAVAILABLE: ErrorSpec(
+        409,
+        "일부 서류 파일을 읽을 수 없어 전달 묶음을 만들지 않았습니다(빠진 채 나가면 더 위험합니다). "
+        "아래 서류를 문서 보관소에서 다시 올린 뒤 시도해 주세요.",
+    ),
     ErrorCode.CERTIFICATIONS_TRANSITION_NOT_ALLOWED: ErrorSpec(
         409,
         # §5.2 전이 외 변경 거부 — detail에 현재 상태·시도 상태가 실린다.
