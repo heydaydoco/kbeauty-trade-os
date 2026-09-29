@@ -702,6 +702,16 @@ export function CertificationsPage() {
     queryFn: () => apiFetch<Certification>(`/v1/certifications/${focusId}`),
     enabled: focusId !== null,
   });
+  // 표가 길면(쪽당 50행) 상세 패널이 화면 밖 아래에 열려 눌러도 무반응처럼 보인다 — 다른 인증이
+  // 선택될 때마다(딥링크 포함) 패널을 보이는 곳으로 가져온다. 같은 인증의 갱신은 다시 스크롤하지 않는다.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const selectedId = selected?.id ?? null;
+  useEffect(() => {
+    if (selectedId !== null) {
+      panelRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    }
+  }, [selectedId]);
+
   // 링크 하나당 한 번만 연다 — 사용자가 패널을 닫거나 다른 행을 고른 뒤 창 복귀 갱신 등으로
   // 대상 데이터가 바뀌어 다시 도착해도 열린 상태를 되돌리지 않는다.
   const appliedFocus = useRef<number | null>(null);
@@ -925,7 +935,7 @@ export function CertificationsPage() {
       </div>
 
       {selected && (
-        <div className="mt-6 rounded-lg border border-gray-300 p-4">
+        <div ref={panelRef} className="mt-6 rounded-lg border border-gray-300 p-4">
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="font-semibold">
               [{selected.market_code}] {selected.template_name} — {selected.target_label}

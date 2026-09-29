@@ -252,7 +252,8 @@ describe("딥링크 (?id=) — 보드가 넘긴 인증을 상세로 연다", () 
     );
     renderWithProviders(<AppRoutes />, { route: "/certifications?id=77" });
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("불러오지 못했습니다");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("링크가 가리키는 인증(#77)을 불러오지 못했습니다"); // 목록 오류 문구와 구분
   });
 
   it("사용자가 닫은 상세 패널은 대상 데이터가 갱신돼 다시 도착해도 되살아나지 않는다", async () => {
@@ -286,21 +287,62 @@ describe("딥링크 (?id=) — 보드가 넘긴 인증을 상세로 연다", () 
     expect(screen.queryByText(/딥링크 요건/, { selector: "h2" })).toBeNull();
   });
 
-  it("id가 숫자가 아니면 단건 조회를 하지 않는다", async () => {
-    const seen: string[] = [];
+  it("상세 패널은 열릴 때 화면으로 스크롤된다 — 딥링크·행 클릭 모두, 같은 인증의 갱신에는 다시 하지 않는다", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    stubApi(TRADER);
+    renderWithProviders(<AppRoutes />, { route: "/certifications" });
+
+    fireEvent.click(await screen.findByRole("button", { name: "상세" }));
+    await screen.findByText(/MoCRA 제품 리스팅 —/, { selector: "h2" });
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: "nearest" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "닫기" }));
+    fireEvent.click(screen.getByRole("button", { name: "상세" }));
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(2));
+  });
+
+  it("딥링크로 열린 패널도 화면으로 스크롤된다", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
     vi.stubGlobal(
       "fetch",
       vi.fn((input: string) => {
-        seen.push(input);
         if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.endsWith("/v1/certifications/77"))
+          return Promise.resolve(jsonResponse({ ...ROW, id: 77, template_name: "딥링크 요건" }));
+        if (input.includes("/status-log")) return Promise.resolve(jsonResponse(page([])));
+        if (input.includes("/tasks")) return Promise.resolve(jsonResponse(page([])));
+        if (input.includes("/prerequisites")) return Promise.resolve(jsonResponse(page([])));
         return Promise.resolve(jsonResponse(page([ROW])));
       }),
     );
-    renderWithProviders(<AppRoutes />, { route: "/certifications?id=abc" });
+    renderWithProviders(<AppRoutes />, { route: "/certifications?id=77" });
 
-    await screen.findByText("MoCRA 제품 리스팅");
-    expect(seen.some((path) => /\/v1\/certifications\/[^?]/.test(path))).toBe(false);
+    await screen.findByText(/딥링크 요건/, { selector: "h2" });
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
   });
+
+  it.each(["abc", "0", "-1", "1.5", ""])(
+    "id=%s 처럼 양의 정수가 아니면 단건 조회를 하지 않는다",
+    async (bad) => {
+      const seen: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string) => {
+          seen.push(input);
+          if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+          return Promise.resolve(jsonResponse(page([ROW])));
+        }),
+      );
+      renderWithProviders(<AppRoutes />, { route: `/certifications?id=${bad}` });
+
+      await screen.findByText("MoCRA 제품 리스팅");
+      expect(seen.some((path) => /\/v1\/certifications\/[^?]/.test(path))).toBe(false);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
 });
 
 // ── 태스크 서류 링크 (S2-2 PR-2 — §5.1 "서류 링크") ─────────────────────────

@@ -6,6 +6,7 @@
 // 새 범위를 묻는다 ⑥ 보드에는 상태를 바꾸는 조작이 없다(전이 통로는 상세 폼 하나).
 
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
 import { VIEWER, jsonResponse, renderWithProviders } from "../test/render";
@@ -45,29 +46,51 @@ function cert(id: number, status: string, extra: Partial<Certification> = {}): C
 
 function stubApi(options: {
   certifications?: Certification[];
+  /** 시장 코드별 카드 — market_code 파라미터가 오면 이 표로 답한다. */
+  byMarket?: Record<string, Certification[]>;
+  markets?: { code: string; name_ko: string }[];
   total?: number;
   calendar?: CalendarItem[];
   calendarTotal?: number;
+  /** 캘린더 응답을 이 약속이 풀릴 때까지 붙든다(로딩 표시 검증). */
+  calendarGate?: Promise<void>;
+  calendarStatus?: number;
   seen?: string[];
 }) {
   vi.stubGlobal(
     "fetch",
-    vi.fn((input: string) => {
+    vi.fn(async (input: string) => {
       options.seen?.push(input);
-      if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(VIEWER));
+      if (input.includes("/auth/me")) return jsonResponse(VIEWER);
       if (input.includes("/deadlines/calendar")) {
+        await options.calendarGate;
+        if (options.calendarStatus !== undefined && options.calendarStatus >= 400) {
+          return jsonResponse(
+            { error: { code: "COMMON.INTERNAL", message: "캘린더 오류", detail: {} } },
+            options.calendarStatus,
+          );
+        }
         const items = options.calendar ?? [];
-        return Promise.resolve(
-          jsonResponse({ items, total: options.calendarTotal ?? items.length, page: 1, size: 200 }),
-        );
+        return jsonResponse({
+          items,
+          total: options.calendarTotal ?? items.length,
+          page: 1,
+          size: 200,
+        });
+      }
+      if (input.includes("/v1/markets")) {
+        const markets = (options.markets ?? []).map((m, index) => ({ id: index + 1, ...m }));
+        return jsonResponse({ items: markets, total: markets.length, page: 1, size: 200 });
       }
       if (input.includes("/v1/certifications")) {
-        const items = options.certifications ?? [];
-        return Promise.resolve(
-          jsonResponse({ items, total: options.total ?? items.length, page: 1, size: 200 }),
-        );
+        const code = new URL(input, "http://x").searchParams.get("market_code");
+        const items =
+          code !== null && options.byMarket
+            ? (options.byMarket[code] ?? [])
+            : (options.certifications ?? []);
+        return jsonResponse({ items, total: options.total ?? items.length, page: 1, size: 200 });
       }
-      return Promise.resolve(jsonResponse({ items: [], total: 0, page: 1, size: 50 }));
+      return jsonResponse({ items: [], total: 0, page: 1, size: 50 });
     }),
   );
 }
@@ -171,7 +194,113 @@ describe("인증 보드 — 칸반", () => {
 
     expect(await screen.findByText(/카드를 끌어서 옮기는 기능은 없습니다/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /전이|이동|상태 변경/ })).not.toBeInTheDocument();
-    expect(document.querySelector("[draggable='true']")).toBeNull();
+    expect(document.querySelector("[draggable]")).toBeNull(); // 값과 무관하게 draggable 속성 자체가 없다
+  });
+
+  it("칸반은 카드 200장 크기로 묻는다 — 시장을 고르지 않으면 시장 조건이 없다", async () => {
+    const seen: string[] = [];
+    stubApi({ certifications: [cert(1, "APPROVED")], seen });
+    renderWithProviders(<AppRoutes />, { route: "/certification-board" });
+
+    await screen.findByRole("region", { name: "승인(유효) 컬럼" });
+    const asked = seen.filter((path) => path.includes("/v1/certifications"));
+    expect(asked).toEqual(["/api/v1/certifications?size=200"]);
+  });
+
+  it("시장 필터가 서버 질의로 나가고 그 시장의 카드만 보인다", async () => {
+    const seen: string[] = [];
+    stubApi({
+      markets: [
+        { code: "CA", name_ko: "캐나다" },
+        { code: "US", name_ko: "미국" },
+      ],
+      certifications: [
+        cert(1, "APPROVED", { market_code: "US" }),
+        cert(2, "NOT_STARTED", { market_code: "CA" }),
+      ],
+      byMarket: { CA: [cert(2, "NOT_STARTED", { market_code: "CA" })] },
+      seen,
+    });
+    renderWithProviders(<AppRoutes />, { route: "/certification-board" });
+
+    await screen.findByRole("region", { name: "승인(유효) 컬럼" });
+    expect(
+      within(screen.getByRole("region", { name: "승인(유효) 컬럼" })).getAllByRole("link"),
+    ).toHaveLength(1);
+    await screen.findByRole("option", { name: "CA 캐나다" });
+
+    fireEvent.change(screen.getByLabelText("시장"), { target: { value: "CA" } });
+    await waitFor(() =>
+      expect(seen.some((path) => path.includes("size=200&market_code=CA"))).toBe(true),
+    );
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("region", { name: "승인(유효) 컬럼" })).queryAllByRole("link"),
+      ).toHaveLength(0),
+    );
+    expect(
+      within(screen.getByRole("region", { name: "미착수 컬럼" })).getAllByRole("link"),
+    ).toHaveLength(1);
+
+    // 전체로 돌아오면 시장 조건이 빠진다
+    fireEvent.change(screen.getByLabelText("시장"), { target: { value: "" } });
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("region", { name: "승인(유효) 컬럼" })).getAllByRole("link"),
+      ).toHaveLength(1),
+    );
+  });
+
+  it("잘림 안내는 실제로 가능한 조치를 말한다 — 시장을 골라 좁히기", async () => {
+    stubApi({
+      markets: [{ code: "US", name_ko: "미국" }],
+      certifications: [cert(1, "APPROVED")],
+      byMarket: { US: [cert(1, "APPROVED")] },
+      total: 431,
+    });
+    renderWithProviders(<AppRoutes />, { route: "/certification-board" });
+
+    expect(await screen.findByRole("status")).toHaveTextContent("시장을 골라 좁혀 보거나");
+    await screen.findByRole("option", { name: "US 미국" });
+    fireEvent.change(screen.getByLabelText("시장"), { target: { value: "US" } });
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("나머지는 인증 화면에서 확인해 주세요"),
+    );
+  });
+
+  it("도과가 아닌 카드에는 도과 배지가 없다 (배지는 서버 계산값이 참일 때만)", async () => {
+    stubApi({ certifications: [cert(1, "APPROVED"), cert(2, "RENEWING")] });
+    renderWithProviders(<AppRoutes />, { route: "/certification-board" });
+
+    await screen.findByRole("region", { name: "갱신중 컬럼" });
+    expect(screen.queryByText(/도과/)).not.toBeInTheDocument();
+  });
+
+  it("서버가 준 상태가 컬럼 표에 없으면 카드가 사라지지 않고 기타 상태 컬럼에 모인다", async () => {
+    stubApi({ certifications: [cert(1, "APPROVED"), cert(2, "ON_HOLD")] });
+    renderWithProviders(<AppRoutes />, { route: "/certification-board" });
+
+    const other = await screen.findByRole("region", { name: "기타 상태 컬럼" });
+    expect(within(other).getByRole("link")).toHaveAttribute("href", "/certifications?id=2");
+    expect(other).toHaveTextContent("기타 상태 1");
+    expect(screen.getAllByRole("region", { name: /컬럼$/ })).toHaveLength(12);
+  });
+
+  it("운영 캐시(staleTime 30초)에서도 다시 들어오면 새로 가져온다 — 전이 직후 옛 카드가 남지 않는다", async () => {
+    const seen: string[] = [];
+    stubApi({ certifications: [cert(1, "APPROVED")], seen });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+    });
+    const first = renderWithProviders(<AppRoutes />, { route: "/certification-board", client });
+    await screen.findByRole("region", { name: "승인(유효) 컬럼" });
+    const count = () => seen.filter((path) => path.includes("/v1/certifications")).length;
+    expect(count()).toBe(1);
+    first.unmount();
+
+    renderWithProviders(<AppRoutes />, { route: "/certification-board", client });
+    await screen.findByRole("region", { name: "승인(유효) 컬럼" });
+    await waitFor(() => expect(count()).toBeGreaterThanOrEqual(2));
   });
 
   it("인증이 없으면 조치를 안내한다", async () => {
@@ -289,9 +418,14 @@ describe("인증 보드 — 캘린더", () => {
     await openCalendar();
     const chip = await screen.findByRole("link", { name: /수분 세럼 \(도과\)/ });
     expect(chip.className).toContain("bg-red-100");
+    expect(chip).toHaveTextContent("도과"); // aria-label이 아니라 눈에 보이는 글자
     const ok = screen.getByRole("link", { name: /\[CA\] CNF 통보/ });
     expect(ok.className).not.toContain("bg-red-100");
+    expect(ok).not.toHaveTextContent("도과");
     expect(ok.getAttribute("aria-label")).not.toContain("도과");
+    // 안내문도 색이 아니라 표시 글자를 가리킨다
+    expect(screen.getByText(/도과.{1,3}표시는 기일이 지난 건입니다/)).toBeInTheDocument();
+    expect(screen.queryByText(/붉은 항목/)).not.toBeInTheDocument();
   });
 
   it("월 이동이 새 범위를 서버에 묻는다 — 연말·연초 경계 포함", async () => {
@@ -345,5 +479,101 @@ describe("인증 보드 — 캘린더", () => {
     await openCalendar();
     expect(screen.getByRole("tab", { name: "캘린더" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "칸반" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("응답이 오기 전에는 불러오는 중이라고 말한다 — 빈 달과 구분된다", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stubApi({ calendar: ITEMS, calendarGate: gate });
+    renderWithProviders(<AppRoutes />, { route: "/certification-board" });
+    fireEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+
+    expect(await screen.findByText("불러오는 중…")).toBeInTheDocument();
+    expect(screen.queryByText(/만료일·유효기간이 있는 항목이 없습니다/)).not.toBeInTheDocument();
+    release();
+    await waitFor(() => expect(screen.queryByText("불러오는 중…")).not.toBeInTheDocument());
+    expect(await screen.findByRole("link", { name: /\[CA\] CNF 통보/ })).toBeInTheDocument();
+  });
+
+  it("캘린더 조회가 실패하면 서버 문구로 알린다", async () => {
+    stubApi({ calendar: [], calendarStatus: 500 });
+    renderWithProviders(<AppRoutes />, { route: "/certification-board" });
+    fireEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("캘린더 오류");
+  });
+
+  it("요일 머리와 1일의 칸이 맞다 — 2026-09-01은 화요일이라 앞 빈칸 2개", async () => {
+    await openCalendar();
+    const first = await screen.findByLabelText("9월 1일");
+    const grid = first.parentElement as HTMLElement;
+    const children = Array.from(grid.children);
+    expect(children.slice(0, 7).map((child) => child.textContent)).toEqual([
+      "일",
+      "월",
+      "화",
+      "수",
+      "목",
+      "금",
+      "토",
+    ]);
+    expect(children.indexOf(first)).toBe(7 + 2); // 머리 7칸 + 앞 빈칸 2칸
+    expect((children.length - 7) % 7).toBe(0); // 마지막 주는 빈칸으로 채워 7의 배수
+    expect(screen.getByLabelText("9월 30일")).toBeInTheDocument();
+    expect(screen.queryByLabelText("9월 31일")).not.toBeInTheDocument();
+  });
+
+  it("윤년 2월은 29일까지, 평년 2월은 28일까지이고 조회 범위도 그에 맞다", async () => {
+    const seen: string[] = [];
+    vi.setSystemTime(new Date("2028-02-15T03:00:00Z")); // KST 2028-02-15 (윤년)
+    stubApi({ calendar: [], seen });
+    renderWithProviders(<AppRoutes />, { route: "/certification-board" });
+    fireEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+
+    expect(await screen.findByRole("heading", { name: "2028년 2월" })).toBeInTheDocument();
+    expect(screen.getByLabelText("2월 29일")).toBeInTheDocument();
+    expect(screen.queryByLabelText("2월 30일")).not.toBeInTheDocument();
+    // 2028-02-01은 화요일 — 앞 빈칸 2개
+    const first = screen.getByLabelText("2월 1일");
+    expect(Array.from((first.parentElement as HTMLElement).children).indexOf(first)).toBe(7 + 2);
+    await waitFor(() =>
+      expect(seen.some((path) => path.includes("from=2028-02-01&to=2028-02-29"))).toBe(true),
+    );
+  });
+
+  it("평년 2월은 28일까지", async () => {
+    const seen: string[] = [];
+    vi.setSystemTime(new Date("2027-02-10T03:00:00Z"));
+    stubApi({ calendar: [], seen });
+    renderWithProviders(<AppRoutes />, { route: "/certification-board" });
+    fireEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+
+    expect(await screen.findByRole("heading", { name: "2027년 2월" })).toBeInTheDocument();
+    expect(screen.getByLabelText("2월 28일")).toBeInTheDocument();
+    expect(screen.queryByLabelText("2월 29일")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(seen.some((path) => path.includes("from=2027-02-01&to=2027-02-28"))).toBe(true),
+    );
+  });
+
+  it("운영 캐시(staleTime 30초)에서도 다시 들어오면 기일을 새로 가져온다", async () => {
+    const seen: string[] = [];
+    stubApi({ calendar: ITEMS, seen });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+    });
+    const count = () => seen.filter((path) => path.includes("/deadlines/calendar")).length;
+
+    const first = renderWithProviders(<AppRoutes />, { route: "/certification-board", client });
+    fireEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await screen.findByRole("heading", { name: "2026년 9월" });
+    await waitFor(() => expect(count()).toBe(1));
+    first.unmount();
+
+    renderWithProviders(<AppRoutes />, { route: "/certification-board", client });
+    fireEvent.click(await screen.findByRole("tab", { name: "캘린더" }));
+    await waitFor(() => expect(count()).toBeGreaterThanOrEqual(2));
   });
 });

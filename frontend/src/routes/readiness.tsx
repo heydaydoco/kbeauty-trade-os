@@ -9,12 +9,17 @@
 // ★ 저장된 값이 아니다 — 열 때마다 계산한다(기준일을 화면에 밝힌다). 만료일을 고치면
 //   다음 조회에서 바로 바뀐다.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
-import { certificationStatusLabel, readinessAxisLabel, readinessColorLabel } from "../lib/labels";
-import { type Page, usePagedList } from "../lib/paging";
+import {
+  certificationStatusLabel,
+  readinessAxisLabel,
+  readinessColorLabel,
+  statusLabel,
+} from "../lib/labels";
+import { FRESH_EVERY_TIME, type Page, usePagedList } from "../lib/paging";
 
 export interface MatrixMarket {
   id: number;
@@ -116,11 +121,19 @@ function DetailPanel({
   market: MatrixMarket | undefined;
   onClose: () => void;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // 표가 길면(최대 50행) 패널이 화면 밖에 열려 클릭이 무반응처럼 보인다 — 열릴 때 가져온다.
+    ref.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, []);
   return (
-    <div className="mt-6 rounded-lg border border-gray-300 p-4" aria-label="셀 상세">
+    <div ref={ref} className="mt-6 rounded-lg border border-gray-300 p-4" aria-label="셀 상세">
       <div className="flex flex-wrap items-center gap-3">
         <h2 className="font-semibold">
-          {row.sku_code} · {market?.name_ko ?? cell.market_code}({cell.market_code})
+          {row.sku_code} ·{" "}
+          <span className="cell-nowrap">
+            {market?.name_ko ?? cell.market_code}({cell.market_code})
+          </span>
         </h2>
         <span className={`cell-nowrap rounded px-2 py-0.5 text-sm ${CELL_CLASS[cell.color] ?? ""}`}>
           {readinessColorLabel(cell.color)}
@@ -137,8 +150,8 @@ function DetailPanel({
       </p>
       {cell.items.length === 0 ? (
         <p className="mt-3 text-sm text-gray-500">
-          이 시장에서 이 SKU에 걸리는 필수 요건이 없습니다(대상외). 품목군의 요건 세트에 확정된 요건이
-          연결돼 있어야 집계됩니다.
+          이 시장에서 이 SKU에 걸리는 필수 요건이 없습니다(대상외). 품목군의 요건 세트에 확정된
+          요건이 연결돼 있어야 집계됩니다.
         </p>
       ) : (
         <ul className="mt-3 space-y-2 text-sm">
@@ -158,7 +171,9 @@ function DetailPanel({
                 {item.status === null ? "인스턴스 없음" : certificationStatusLabel(item.status)}
               </span>
               {item.via_component_sku_code !== null && (
-                <span className="cell-nowrap text-gray-500">(구성품 {item.via_component_sku_code})</span>
+                <span className="cell-nowrap text-gray-500">
+                  (구성품 {item.via_component_sku_code})
+                </span>
               )}
               {item.note !== null && <span className="text-gray-600">— {item.note}</span>}
               {item.certification_id !== null && (
@@ -192,7 +207,13 @@ export function ReadinessPage() {
   if (applied.kind !== "") params.set("kind", applied.kind);
   const query = params.toString();
   const path = `/v1/readiness/matrix${query === "" ? "" : `?${query}`}`;
-  const list = usePagedList<MatrixRow, MatrixPageData>([...MATRIX_QUERY_KEY, applied], path);
+  // 계산값 화면 — 다른 화면에서 만료일을 고치고 돌아오면 옛 색이 남지 않도록 캐시를 믿지 않는다.
+  const list = usePagedList<MatrixRow, MatrixPageData>(
+    [...MATRIX_QUERY_KEY, applied],
+    path,
+    true,
+    FRESH_EVERY_TIME,
+  );
 
   const data = list.data;
   const markets = data?.markets ?? [];
@@ -204,7 +225,7 @@ export function ReadinessPage() {
       <header>
         <h1 className="text-2xl font-bold">시장 준비도</h1>
         <p className="mt-1 text-sm text-gray-500">
-          SKU가 각 시장에서 팔 준비가 됐는지를 한눈에 봅니다. 저장된 값이 아니라 열 때마다 인증 진행
+          SKU별로 시장마다 필요한 인증 요건의 진행 상태를 한눈에 봅니다. 저장된 값이 아니라 열 때마다 인증 진행
           상태와 만료일로 계산한 값이라, 만료일을 고치면 바로 바뀝니다.
           {data !== undefined && <> 기준일 {data.as_of}(KST).</>}
         </p>
@@ -303,32 +324,51 @@ export function ReadinessPage() {
                   >
                     <span className="cell-nowrap font-medium">{row.sku_code}</span>
                     {row.kind === "SET" && (
-                      <span className="cell-nowrap ml-1 rounded bg-gray-200 px-1 text-xs">세트</span>
+                      <span className="cell-nowrap ml-1 rounded bg-gray-200 px-1 text-xs">
+                        세트
+                      </span>
+                    )}
+                    {row.status !== "ACTIVE" && (
+                      <span className="cell-nowrap ml-1 rounded bg-gray-200 px-1 text-xs">
+                        {statusLabel(row.status)}
+                      </span>
+                    )}
+                    {row.item_profile_id === null && (
+                      <span
+                        className="cell-nowrap ml-1 text-xs text-gray-500"
+                        title="품목군이 지정되지 않아 요건 세트가 걸리지 않았습니다 — '대상외'는 요건이 없다는 뜻이 아니라 아직 정해지지 않았다는 뜻일 수 있습니다."
+                      >
+                        품목군 미지정
+                      </span>
                     )}
                     <span className="block text-xs text-gray-500">{row.name_ko}</span>
                   </th>
-                  {row.cells.map((cell) => (
-                    <td key={cell.market_id} className="p-1 text-center">
-                      <button
-                        type="button"
-                        title={tooltip(row, cell)}
-                        aria-label={`${row.sku_code} ${cell.market_code} ${readinessColorLabel(cell.color)}`}
-                        aria-pressed={
-                          selected?.skuId === row.sku_id && selected.marketId === cell.market_id
-                        }
-                        onClick={() =>
-                          setSelected((prev) =>
-                            prev?.skuId === row.sku_id && prev.marketId === cell.market_id
-                              ? null
-                              : { skuId: row.sku_id, marketId: cell.market_id },
-                          )
-                        }
-                        className={`w-full rounded px-2 py-1 ${CELL_CLASS[cell.color] ?? ""}`}
-                      >
-                        <CellBadge cell={cell} />
-                      </button>
-                    </td>
-                  ))}
+                  {row.cells.map((cell) => {
+                    const isSelected =
+                      selected?.skuId === row.sku_id && selected.marketId === cell.market_id;
+                    return (
+                      <td key={cell.market_id} className="p-1 text-center">
+                        <button
+                          type="button"
+                          title={tooltip(row, cell)}
+                          aria-label={`${row.sku_code} ${cell.market_code} ${readinessColorLabel(cell.color)}`}
+                          aria-pressed={isSelected}
+                          onClick={() =>
+                            setSelected((prev) =>
+                              prev?.skuId === row.sku_id && prev.marketId === cell.market_id
+                                ? null
+                                : { skuId: row.sku_id, marketId: cell.market_id },
+                            )
+                          }
+                          className={`w-full rounded px-2 py-1 ${CELL_CLASS[cell.color] ?? ""} ${
+                            isSelected ? "ring-2 ring-gray-900 dark:ring-gray-100" : ""
+                          }`}
+                        >
+                          <CellBadge cell={cell} />
+                        </button>
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -340,6 +380,7 @@ export function ReadinessPage() {
 
       {selectedRow !== undefined && selectedCell !== undefined && (
         <DetailPanel
+          key={`${selectedRow.sku_id}-${selectedCell.market_id}`}
           row={selectedRow}
           cell={selectedCell}
           market={markets.find((market) => market.id === selectedCell.market_id)}

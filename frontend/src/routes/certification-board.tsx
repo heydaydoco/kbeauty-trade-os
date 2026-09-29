@@ -7,14 +7,19 @@
 // ★ 잘림은 숨기지 않는다 — 칸반은 200장, 캘린더는 한 달 200건까지만 싣고, 넘으면 총계와 함께
 //   알린다(관찰 등재 #3 — 조용한 잘림 금지).
 // ★ 캘린더는 기일 엔진의 화면이다: 인증 만료일 + 문서 유효기간, 도과는 서버가 계산한 값(is_overdue).
+// ★ 계산값 화면이라 캐시를 믿지 않는다(FRESH_EVERY_TIME) — 인증 화면에서 전이·정정을 하고 돌아왔을 때
+//   옛 카드·옛 기일이 남으면 이 보드의 존재 이유(현재 상태를 한눈에)가 거짓이 된다.
+// ★ 필터는 기본만이다: 칸반의 시장 필터(서버 측 — 200장 상한을 시장별로 나눠 볼 수 있게 한다).
+//   상태 필터는 컬럼이 곧 상태라 두지 않는다. 고도화(담당자·기간 등)는 비포함(계획 ⑥).
 
 import { useState } from "react";
 import { Link } from "react-router";
 import { ListState } from "../components/list-state";
 import { todayKst } from "../lib/datetime";
 import { certificationStatusLabel } from "../lib/labels";
-import { usePagedQuery } from "../lib/paging";
+import { FRESH_EVERY_TIME, usePagedQuery } from "../lib/paging";
 import type { Certification } from "./certifications";
+import { MARKETS_SELECT_PATH, type Market } from "./markets";
 
 /** 칸반 컬럼 순서 — §5.2 진행 순(미착수→…→승인→만료임박→갱신중) 뒤에 만료·반려·중단을 둔다. */
 export const BOARD_COLUMNS = [
@@ -85,32 +90,65 @@ function KanbanCard({ row }: { row: Certification }) {
 }
 
 function Kanban() {
+  const [market, setMarket] = useState("");
+  const markets = usePagedQuery<Market>(["markets", "options"], MARKETS_SELECT_PATH);
+  const path =
+    `/v1/certifications?size=${BOARD_CARD_LIMIT}` + (market === "" ? "" : `&market_code=${market}`);
   const list = usePagedQuery<Certification>(
-    ["certification-board", "kanban"],
-    `/v1/certifications?size=${BOARD_CARD_LIMIT}`,
+    ["certification-board", "kanban", market],
+    path,
+    true,
+    FRESH_EVERY_TIME,
   );
   const items = list.data?.items ?? [];
   const byStatus = new Map<string, Certification[]>();
   for (const row of items) {
     byStatus.set(row.status, [...(byStatus.get(row.status) ?? []), row]);
   }
+  // 서버가 상태를 늘렸는데 화면 컬럼 표가 낡았을 때 카드가 조용히 사라지지 않게 마지막 컬럼에 모은다.
+  const known = new Set<string>(BOARD_COLUMNS);
+  const others = items.filter((row) => !known.has(row.status));
 
   return (
     <div>
       <p className="mt-3 text-sm text-gray-500">
-        상태는 카드를 눌러 <strong>인증 상세의 전이 폼</strong>에서만 바꿀 수 있습니다 — 카드를
-        끌어서 옮기는 기능은 없습니다(전이에는 사유·신청일 같은 기록이 함께 필요합니다).
+        사람이 하는 상태 변경은 카드를 눌러 <strong>인증 상세의 전이 폼</strong>에서만 합니다
+        (만료임박·만료는 만료일 기준으로 자동 반영됩니다) — 카드를 끌어서 옮기는 기능은
+        없습니다(전이에는 사유·신청일 같은 기록이 함께 필요합니다).
       </p>
+      <label className="mt-3 flex items-center gap-2 text-sm">
+        <span className="cell-nowrap text-gray-600">시장</span>
+        <select
+          value={market}
+          onChange={(event) => setMarket(event.target.value)}
+          className="rounded border border-gray-300 px-2 py-1"
+        >
+          <option value="">전체</option>
+          {(markets.data?.items ?? []).map((row) => (
+            <option key={row.code} value={row.code}>
+              {row.code} {row.name_ko}
+            </option>
+          ))}
+        </select>
+      </label>
       <ListState
         isPending={list.isPending}
         error={list.error}
         isEmpty={items.length === 0}
-        emptyHint="등록된 인증이 없습니다. 인증 화면에서 확정 템플릿으로 인증을 등록하세요."
+        emptyHint={
+          market === ""
+            ? "등록된 인증이 없습니다. 인증 화면에서 확정 템플릿으로 인증을 등록하세요."
+            : "이 시장에 등록된 인증이 없습니다. 시장을 바꾸거나 인증 화면에서 등록하세요."
+        }
       >
         <TruncationNotice
           total={list.data?.total ?? 0}
           shown={items.length}
-          what="나머지는 인증 화면에서 상태·요건으로 좁혀 확인해 주세요."
+          what={
+            market === ""
+              ? "시장을 골라 좁혀 보거나 인증 화면에서 확인해 주세요."
+              : "나머지는 인증 화면에서 확인해 주세요."
+          }
         />
         <div className="mt-3 overflow-x-auto pb-2">
           <div className="flex gap-3">
@@ -134,6 +172,21 @@ function Kanban() {
                 </section>
               );
             })}
+            {others.length > 0 && (
+              <section
+                aria-label="기타 상태 컬럼"
+                className="w-56 shrink-0 rounded-lg bg-gray-50 p-2 dark:bg-gray-900"
+              >
+                <h2 className="cell-nowrap mb-2 text-sm font-semibold">
+                  기타 상태 <span className="num font-normal text-gray-500">{others.length}</span>
+                </h2>
+                <ul className="space-y-2">
+                  {others.map((row) => (
+                    <KanbanCard key={row.id} row={row} />
+                  ))}
+                </ul>
+              </section>
+            )}
           </div>
         </div>
       </ListState>
@@ -181,6 +234,7 @@ function CalendarChip({ item }: { item: CalendarItem }) {
       aria-label={label}
       className={`block truncate rounded px-1 py-0.5 text-xs ${tone}`}
     >
+      {item.is_overdue && <span className="font-semibold">도과 </span>}
       <span className="font-semibold">{isCertification ? "인증" : "문서"}</span> {item.title}
     </Link>
   );
@@ -194,7 +248,12 @@ function Calendar() {
   }));
   const bounds = monthBounds(cursor.year, cursor.month);
   const path = `/v1/deadlines/calendar?from=${bounds.from}&to=${bounds.to}&size=${BOARD_CARD_LIMIT}`;
-  const list = usePagedQuery<CalendarItem>(["certification-board", "calendar", bounds.from], path);
+  const list = usePagedQuery<CalendarItem>(
+    ["certification-board", "calendar", bounds.from],
+    path,
+    true,
+    FRESH_EVERY_TIME,
+  );
   const items = list.data?.items ?? [];
 
   const byDay = new Map<number, CalendarItem[]>();
@@ -238,7 +297,7 @@ function Calendar() {
           이번 달
         </button>
         <span className="text-sm text-gray-500">
-          인증 만료일과 문서 유효기간입니다. 붉은 항목은 기일이 지난 건입니다(계산값).
+          인증 만료일과 문서 유효기간입니다. &lsquo;도과&rsquo; 표시는 기일이 지난 건입니다(계산값).
         </span>
       </div>
 
@@ -248,6 +307,7 @@ function Calendar() {
         </ListState>
       ) : (
         <>
+          {list.isPending && <p className="mt-3 text-sm text-gray-500">불러오는 중…</p>}
           <TruncationNotice
             total={list.data?.total ?? 0}
             shown={items.length}

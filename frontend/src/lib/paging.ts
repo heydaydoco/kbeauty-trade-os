@@ -21,12 +21,29 @@ export interface Page<T> {
 /** 서버 기본값과 같은 값. 화면이 임의로 키우면 §18.4의 상한 규율이 흐려진다. */
 export const DEFAULT_PAGE_SIZE = 50;
 
+/**
+ * 계산값 화면(준비도 매트릭스·인증 보드)용 옵션 — 캐시를 신선하다고 보지 않는다.
+ * 앱 기본(staleTime 30초)이면 다른 화면에서 만료일을 고치고 돌아왔을 때 옛 색·옛 카드가
+ * 남는다("만료일을 고치면 바로 바뀝니다"가 화면에서 거짓이 된다) — 마운트마다 다시 가져온다.
+ */
+export const FRESH_EVERY_TIME = { staleTime: 0 } as const;
+
+export interface FreshnessOptions {
+  staleTime?: number;
+}
+
 /** 쪽 이동 없는 단순 조회 — 드롭다운(?size=200 우회)·부착물 소형 목록용. */
-export function usePagedQuery<T>(key: readonly unknown[], path: string, enabled = true) {
+export function usePagedQuery<T>(
+  key: readonly unknown[],
+  path: string,
+  enabled = true,
+  freshness: FreshnessOptions = {},
+) {
   return useQuery({
     queryKey: key,
     queryFn: () => apiFetch<Page<T>>(path),
     enabled,
+    ...freshness,
   });
 }
 
@@ -45,6 +62,7 @@ export function usePagedList<T, E extends Page<T> = Page<T>>(
   key: readonly unknown[],
   path: string,
   enabled = true,
+  freshness: FreshnessOptions = {},
 ) {
   // 쪽 상태는 경로와 한 쌍이다 — 경로(필터·선택 대상)가 바뀌면 **같은 렌더에서**
   // 1쪽으로 돌아간다. effect로 미루면 '새 경로+옛 쪽 번호' 조회가 한 번 나간다
@@ -60,6 +78,7 @@ export function usePagedList<T, E extends Page<T> = Page<T>>(
     // E는 Page 봉투를 확장한 응답(예: 매트릭스 — markets·as_of를 더 싣는다)을 위한 자리다.
     queryFn: () => apiFetch<E>(withPage(path, page)),
     enabled,
+    ...freshness,
   });
 
   // 마지막 쪽의 행이 줄어(삭제 등) 쪽 번호가 범위를 벗어나면 실제 마지막 쪽으로.
