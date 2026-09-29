@@ -40,7 +40,16 @@ SPOOL_BYTES = 8 * 1024 * 1024
 _CHUNK = 64 * 1024
 _UNSAFE = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]')
 #: Windows 예약 장치명 — 압축을 풀 때 실패하므로 밑줄을 접두한다.
-_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))})
+_RESERVED = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+)
 
 MANIFEST_HEADER = (
     "순번",
