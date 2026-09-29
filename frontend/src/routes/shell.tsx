@@ -6,6 +6,7 @@ import { useLogout, useSession } from "../lib/session";
 import { useQuery } from "@tanstack/react-query";
 
 const NAV = [
+  { to: "/readiness", label: "시장 준비도" },
   { to: "/skus", label: "SKU" },
   { to: "/products", label: "제품(처방)" },
   { to: "/ingredients", label: "성분" },

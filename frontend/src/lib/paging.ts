@@ -41,7 +41,11 @@ function withPage(path: string, page: number): string {
  * 쿼리 키에 쪽이 덧붙지만 prefix 무효화(등록·삭제 후 invalidateQueries)는
  * 부분 일치라 그대로 걸린다.
  */
-export function usePagedList<T>(key: readonly unknown[], path: string, enabled = true) {
+export function usePagedList<T, E extends Page<T> = Page<T>>(
+  key: readonly unknown[],
+  path: string,
+  enabled = true,
+) {
   // 쪽 상태는 경로와 한 쌍이다 — 경로(필터·선택 대상)가 바뀌면 **같은 렌더에서**
   // 1쪽으로 돌아간다. effect로 미루면 '새 경로+옛 쪽 번호' 조회가 한 번 나간다
   // (리뷰 확정 발견 — 렌더 단계 상태 보정 패턴으로 낭비 요청 0).
@@ -53,7 +57,8 @@ export function usePagedList<T>(key: readonly unknown[], path: string, enabled =
 
   const query = useQuery({
     queryKey: [...key, { page }],
-    queryFn: () => apiFetch<Page<T>>(withPage(path, page)),
+    // E는 Page 봉투를 확장한 응답(예: 매트릭스 — markets·as_of를 더 싣는다)을 위한 자리다.
+    queryFn: () => apiFetch<E>(withPage(path, page)),
     enabled,
   });
 
