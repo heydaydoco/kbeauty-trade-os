@@ -145,7 +145,8 @@ class Policy:
 def _policy(session: Session, event_type: str) -> Policy:
     rules = notifications.matching_rules(session, event_type)
     rule = rules[0] if rules else None
-    days = normalize_days((rule.config or {}).get("days") if rule else None)
+    config = rule.config if rule is not None and isinstance(rule.config, dict) else {}
+    days = normalize_days(config.get("days"))
     return Policy(event_type=event_type, rule=rule, days=days)
 
 

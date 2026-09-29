@@ -616,3 +616,11 @@ def test_the_cli_runs_the_scan_and_reports_counts(
     output = capsys.readouterr().out
     assert code == 0
     assert "정체 스캔 완료" in output and "정체 1" in output and "실패 0건" in output
+
+
+def test_a_non_object_rule_config_does_not_break_the_scan(assignee: int) -> None:
+    """알림 규칙 config가 객체가 아니어도(배열 등) 스캔은 기본값으로 돈다 — 건마다 실패하지 않는다"""
+    _rule(config=["x"])
+    _cert(changed_on=BASE - timedelta(days=8), assignee_id=assignee)
+    counts = _scan()
+    assert counts["failed"] == 0 and counts["stagnant"] == 1

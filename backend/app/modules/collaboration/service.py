@@ -630,7 +630,11 @@ def update_comm_log(
         due = row.next_action_due
         done_on = row.next_action_done_on
         if "next_action" in payload:
-            next_action = _clean_text(payload["next_action"])
+            new_text = _clean_text(payload["next_action"])
+            if new_text is not None and new_text != next_action:
+                # 다른 액션으로 바뀌면 이전 액션의 완료 표시를 이어받지 않는다(새 액션이 처음부터 "완료"로 보이는 것 방지).
+                done_on = None
+            next_action = new_text
             if next_action is None:
                 # 다음 액션을 지우면 딸린 날짜도 함께 지운다 — 명시된 날짜가 있으면 아래 검증이 거절.
                 due = None

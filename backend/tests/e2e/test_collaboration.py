@@ -1039,3 +1039,16 @@ def test_the_scorecard_reflects_an_agency_assignment_immediately(cert: TestClien
 def test_the_scorecard_rejects_oversized_pages(viewer: TestClient) -> None:
     """size 상한(200) 초과는 422 — 무페이지네이션 금지(§18.4)"""
     assert viewer.get(SCORECARD, params={"size": 201}).status_code == 422
+
+
+def test_changing_the_next_action_text_reopens_a_completed_follow_up(cert: TestClient) -> None:
+    """완료된 기록의 다음 액션을 다른 내용으로 바꾸면 완료 표시를 이어받지 않는다(명시 완료일이 있으면 그것이 이긴다)"""
+    log = _log(cert, _certification(), next_action="회신")
+    done = cert.patch(
+        COMM_LOG_URL(log),
+        json={"version": 1, "next_action_done_on": today_kst().isoformat()},
+    )
+    assert done.json()["follow_up_open"] is False
+    changed = cert.patch(COMM_LOG_URL(log), json={"version": 2, "next_action": "새 요청 발송"})
+    assert changed.status_code == 200
+    assert changed.json()["follow_up_open"] is True and changed.json()["next_action_done_on"] is None
