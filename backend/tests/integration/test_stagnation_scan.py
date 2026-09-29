@@ -624,3 +624,40 @@ def test_a_non_object_rule_config_does_not_break_the_scan(assignee: int) -> None
     _cert(changed_on=BASE - timedelta(days=8), assignee_id=assignee)
     counts = _scan()
     assert counts["failed"] == 0 and counts["stagnant"] == 1
+
+
+# ═══ 리뷰 보강 (S2-4 PR-1 렌즈 C) ═════════════════════════════════════════════
+
+
+def test_activity_of_another_certification_does_not_reset_the_clock(assignee: int) -> None:
+    """다른 인증의 상태 이력·통신 기록은 이 인증의 시계를 되돌리지 않는다(활동원천 조회의 소유 조건)"""
+    quiet = _cert(changed_on=BASE - timedelta(days=20), assignee_id=assignee)
+    busy = _cert(changed_on=BASE - timedelta(days=20), assignee_id=assignee)
+    _status_log(busy, datetime(2026, 9, 29, 3, 0, tzinfo=UTC))
+    _log(busy, occurred_on=BASE - timedelta(days=1))
+    assert _scan()["stagnant"] == 1
+    (alert,) = _stagnation_alerts()
+    assert alert.dedup_key.startswith(f"stagnation:certifications:{quiet}:")
+
+
+def test_follow_up_alerts_follow_their_own_rule_and_recipient(admins: tuple[int, int]) -> None:
+    """다음 액션 독촉은 comm_logs.follow_up.due 규칙의 수신자·규칙 연결을 쓴다 — 정체 규칙과 섞이지 않는다"""
+    boss = create_user("followup-boss@example.com", roles=(RoleCode.CERT,))
+    stagnation_boss = create_user("stagnation-boss@example.com", roles=(RoleCode.CERT,))
+    rule_id = _rule(stagnation.FOLLOW_UP_EVENT, recipient_user_id=boss)
+    _rule(stagnation.STAGNATION_EVENT, recipient_user_id=stagnation_boss, code="RULE-OTHER")
+    certification_id = _cert(changed_on=BASE)  # 담당자 없음
+    _log(certification_id, occurred_on=BASE - timedelta(days=3), next_action="회신", due=BASE)
+    _scan()
+    (alert,) = _follow_up_alerts()
+    assert alert.recipient_user_id == boss and alert.alert_rule_id == rule_id
+
+
+def test_an_unassigned_follow_up_without_a_rule_falls_back_to_admins(
+    admins: tuple[int, int],
+) -> None:
+    """담당자도 규칙도 없으면 독촉도 ADMIN 전원 — 조용한 미발송 0"""
+    certification_id = _cert(changed_on=BASE)
+    _log(certification_id, occurred_on=BASE - timedelta(days=3), next_action="회신", due=BASE)
+    _scan()
+    assert {row.recipient_user_id for row in _follow_up_alerts()} == set(admins)

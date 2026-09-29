@@ -12,8 +12,9 @@ import { TRADER, jsonResponse, page, renderWithProviders } from "../test/render"
 
 const CERT_USER = { id: 2, email: "cert@example.com", display_name: "인증 담당", roles: ["CERT"] };
 
-// KST 2026-09-30 12:00 — 모든 날짜 기본값 검증의 기준일(Date만 고정하고 타이머는 그대로 둔다).
-const NOW = new Date("2026-09-30T03:00:00Z");
+// KST 2026-09-30 01:00 = UTC 2026-09-29 16:00 — UTC와 KST의 날짜가 갈리는 시각이라 "KST 오늘"을
+// 쓰지 않고 UTC 날짜를 쓰면 검증이 깨진다(Date만 고정하고 타이머는 그대로 둔다).
+const NOW = new Date("2026-09-29T16:00:00Z");
 const TODAY = "2026-09-30";
 
 const BASE_ROW = {

@@ -92,6 +92,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "인증 체크리스트가 서류로 연결 중인 문서는 삭제할 수 없습니다. 해당 인증의 태스크에서 서류 연결을 먼저 해제한 뒤 다시 시도해 주세요.",
     ),
+    ErrorCode.COLLABORATION_COMM_LOG_HAS_ATTACHMENTS: ErrorSpec(
+        409,
+        "첨부 문서가 남은 통신 기록은 삭제할 수 없습니다. 첨부를 먼저 삭제한 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.IMPORTS_FILE_TOO_LARGE: ErrorSpec(
         413,
         "파일이 너무 큽니다(최대 20MB). 파일을 나누어 다시 업로드해 주세요.",

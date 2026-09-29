@@ -707,6 +707,132 @@ def test_soft_deleted_attachments_are_not_counted(cert: TestClient) -> None:
     assert cert.get(COMM_LOG_URL(log)).json()["attachment_count"] == 1
 
 
+def test_a_comm_log_with_attachments_cannot_be_deleted_until_they_are_removed(
+    cert: TestClient,
+) -> None:
+    """첨부가 남은 기록은 409(선삭제 후 삭제) — 주인 없는 활성 문서·고아 유효기간 알림을 막는다"""
+    log = _log(cert, _certification())
+    document_id = create_link_document(
+        log["id"], valid_until=None, owner_type="COMM_LOG", document_type="CFS"
+    )
+    blocked = cert.delete(COMM_LOG_URL(log))
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "COLLABORATION.COMM_LOG.HAS_ATTACHMENTS"
+    assert cert.delete(f"/api/v1/documents/{document_id}").status_code == 204
+    assert cert.delete(COMM_LOG_URL(log)).status_code == 204
+
+
+def test_comm_log_attachments_are_listed_with_their_owner_display(cert: TestClient) -> None:
+    """문서 목록(owner_type=COMM_LOG)이 소유 표시를 일괄 조회로 채운다"""
+    log = _log(cert, _certification())
+    create_link_document(log["id"], valid_until=None, owner_type="COMM_LOG", document_type="CFS")
+    listed = cert.get(
+        "/api/v1/documents", params={"owner_type": "COMM_LOG", "owner_id": log["id"]}
+    ).json()
+    assert listed["total"] == 1
+    assert listed["items"][0]["owner_display"].startswith(f"통신 기록 #{log['id']}")
+
+
+def test_trade_may_attach_documents_to_a_comm_log(trader: TestClient, cert: TestClient) -> None:
+    """첨부는 문서 보관소 권한(무역+인증)을 따른다 — 통신 기록 본문 편집(인증)보다 넓다는 것을 못 박는다"""
+    log = _log(cert, _certification())
+    created = trader.post(
+        "/api/v1/documents/links",
+        json={
+            "owner_type": "COMM_LOG",
+            "owner_id": log["id"],
+            "document_type": "CERTIFICATE",
+            "url": "https://example.com/trade.pdf",
+        },
+        headers=_key(),
+    )
+    assert created.status_code == 201, created.text
+
+
+def test_comm_log_edits_are_validated_like_registration(cert: TestClient) -> None:
+    """수정 경로도 등록과 같은 검증 — 없는 상대·공백 요지·미래 발생일"""
+    log = _log(cert, _certification())
+    version = log["version"]
+    missing_partner = cert.patch(COMM_LOG_URL(log), json={"version": version, "partner_id": 999999})
+    assert missing_partner.status_code == 422 and "partner_id" in _errors(missing_partner)
+    blank = cert.patch(COMM_LOG_URL(log), json={"version": version, "summary": "   "})
+    assert blank.status_code == 422 and "summary" in _errors(blank)
+    future = cert.patch(
+        COMM_LOG_URL(log),
+        json={"version": version, "occurred_on": (today_kst() + timedelta(days=1)).isoformat()},
+    )
+    assert future.status_code == 422 and "occurred_on" in _errors(future)
+    later_than_due = cert.patch(
+        COMM_LOG_URL(log),
+        json={
+            "version": version,
+            "next_action": "회신",
+            "next_action_due": (today_kst() - timedelta(days=5)).isoformat(),
+            "occurred_on": today_kst().isoformat(),
+        },
+    )
+    assert later_than_due.status_code == 422
+
+
+def test_a_comm_log_cannot_be_registered_on_a_deleted_certification(cert: TestClient) -> None:
+    """삭제된 인증에는 통신 기록을 남길 수 없다"""
+    from app.core.db.uow import unit_of_work
+    from app.core.time import utcnow
+    from app.modules.certifications.models import Certification
+
+    certification_id = _certification()
+    with unit_of_work() as uow:
+        row = uow.session.get(Certification, certification_id)
+        assert row is not None
+        row.deleted_at = utcnow()
+    response = cert.post(
+        COMM_LOGS,
+        json={
+            "subject_type": "CERTIFICATION",
+            "subject_id": certification_id,
+            "occurred_on": today_kst().isoformat(),
+            "summary": "x",
+        },
+        headers=_key(),
+    )
+    assert response.status_code == 422 and "subject_id" in _errors(response)
+
+
+def test_a_fee_without_its_currency_is_rejected_on_edit(cert: TestClient) -> None:
+    """수수료·통화는 쌍으로만 바뀐다 — 한쪽만 보내면 옛 통화에 조용히 붙지 않고 422"""
+    body = _contract(cert, _agency(), fee="1.00", fee_currency="USD")
+    only_fee = cert.patch(f"{CONTRACTS}/{body['id']}", json={"version": 1, "fee": "5"})
+    only_currency = cert.patch(
+        f"{CONTRACTS}/{body['id']}", json={"version": 1, "fee_currency": "KRW"}
+    )
+    assert only_fee.status_code == 422 and only_currency.status_code == 422
+
+
+def test_deleted_partners_cannot_be_used_as_agency_or_counterpart(cert: TestClient) -> None:
+    """삭제된 거래처는 상대 거래처로 지정할 수 없다"""
+    from app.core.db.uow import unit_of_work
+    from app.core.time import utcnow
+    from app.modules.partners.models import Partner
+
+    partner_id = _agency("AGY-DEL", "삭제될 대행사")
+    with unit_of_work() as uow:
+        row = uow.session.get(Partner, partner_id)
+        assert row is not None
+        row.deleted_at = utcnow()
+    response = cert.post(
+        COMM_LOGS,
+        json={
+            "subject_type": "CERTIFICATION",
+            "subject_id": _certification(),
+            "occurred_on": today_kst().isoformat(),
+            "summary": "x",
+            "partner_id": partner_id,
+        },
+        headers=_key(),
+    )
+    assert response.status_code == 422 and "partner_id" in _errors(response)
+
+
 def test_deleting_a_comm_log_hides_it(cert: TestClient) -> None:
     """삭제는 soft delete — 상세 404·목록 제외"""
     certification_id = _certification()
@@ -1051,4 +1177,6 @@ def test_changing_the_next_action_text_reopens_a_completed_follow_up(cert: TestC
     assert done.json()["follow_up_open"] is False
     changed = cert.patch(COMM_LOG_URL(log), json={"version": 2, "next_action": "새 요청 발송"})
     assert changed.status_code == 200
-    assert changed.json()["follow_up_open"] is True and changed.json()["next_action_done_on"] is None
+    assert (
+        changed.json()["follow_up_open"] is True and changed.json()["next_action_done_on"] is None
+    )

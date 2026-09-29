@@ -4,7 +4,7 @@
 직전 리비전: f619b469c74d
 생성 시각(UTC): 2026-09-29 13:35:03.037632+00:00
 
-대행 협업 스키마 (§5.4 / WBS S2-4 / s2-4-plan.md §2 안건 ① — ADR-0048 예정):
+대행 협업 스키마 (§5.4 / WBS S2-4 / s2-4-plan.md §2 안건 ① — ADR-0048):
   ① 신규 테이블 2 — agency_contracts(대행 계약 대장)·comm_logs(폴리모픽 통신 기록)
   ② certifications 컬럼 4 — handling_mode·action_owner·action_owner_changed_on·
      agency_partner_id (+ CHECK 4·FK·인덱스)

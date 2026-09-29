@@ -662,6 +662,11 @@ def update_comm_log(
 def delete_comm_log(*, actor: AuthenticatedUser, log_id: int) -> None:
     with unit_of_work() as uow:
         row = require_comm_log(uow.session, log_id, for_update=True)
+        if _attachment_counts(uow.session, [row.id]).get(row.id, 0) > 0:
+            raise AppError(
+                ErrorCode.COLLABORATION_COMM_LOG_HAS_ATTACHMENTS,
+                log_context={"comm_log_id": row.id},
+            )
         row.deleted_at = utcnow()
         row.updated_by_id = actor.id
         uow.session.flush()

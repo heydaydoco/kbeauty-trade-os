@@ -362,9 +362,9 @@ export function AgenciesPage() {
                 <th className="cell-nowrap px-4 py-2">대행사</th>
                 <th className="cell-nowrap px-4 py-2 text-center">담당 건수</th>
                 <th className="cell-nowrap px-4 py-2 text-center">승인</th>
-                <th className="cell-nowrap px-4 py-2">소요일</th>
-                <th className="cell-nowrap px-4 py-2">보완율</th>
-                <th className="px-4 py-2">현행 계약(비용)</th>
+                <th className="cell-nowrap px-4 py-2 text-center">소요일</th>
+                <th className="cell-nowrap px-4 py-2 text-center">보완율</th>
+                <th className="cell-nowrap px-4 py-2">현행 계약(비용)</th>
               </tr>
             </thead>
             <tbody>
@@ -373,8 +373,8 @@ export function AgenciesPage() {
                   <td className="px-4 py-2">{score.partner_name}</td>
                   <td className="cell-nowrap px-4 py-2 text-center">{score.case_count}</td>
                   <td className="cell-nowrap px-4 py-2 text-center">{score.approved_count}</td>
-                  <td className="cell-nowrap px-4 py-2">{leadText(score)}</td>
-                  <td className="cell-nowrap px-4 py-2">{rateText(score)}</td>
+                  <td className="cell-nowrap px-4 py-2 text-center">{leadText(score)}</td>
+                  <td className="cell-nowrap px-4 py-2 text-center">{rateText(score)}</td>
                   <td className="px-4 py-2">
                     {score.current_contract === null ? (
                       orEmpty(null)
@@ -441,9 +441,9 @@ export function AgenciesPage() {
               <tr>
                 <th className="cell-nowrap px-4 py-2">대행사</th>
                 <th className="cell-nowrap px-4 py-2">계약 번호</th>
-                <th className="cell-nowrap px-4 py-2">기간</th>
-                <th className="cell-nowrap px-4 py-2">수수료</th>
-                <th className="px-4 py-2">범위·수수료 기준</th>
+                <th className="cell-nowrap px-4 py-2 text-center">기간</th>
+                <th className="cell-nowrap px-4 py-2 text-center">수수료</th>
+                <th className="cell-nowrap px-4 py-2">범위·수수료 기준</th>
                 <th className="px-4 py-2" />
               </tr>
             </thead>
@@ -454,10 +454,10 @@ export function AgenciesPage() {
                   <td className="cell-nowrap px-4 py-2">
                     {contract.contract_no} <ContractBadge contract={contract} />
                   </td>
-                  <td className="cell-nowrap px-4 py-2">
+                  <td className="cell-nowrap px-4 py-2 text-center">
                     {contract.start_on} ~ {contract.end_on ?? "기간 미정"}
                   </td>
-                  <td className="cell-nowrap px-4 py-2">
+                  <td className="cell-nowrap px-4 py-2 text-center">
                     {feeText(contract.fee_amount, contract.fee_currency, currencyItems)}
                   </td>
                   <td className="px-4 py-2">{orEmpty(contract.scope_note)}</td>

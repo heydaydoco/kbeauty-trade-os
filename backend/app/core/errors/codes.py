@@ -59,6 +59,9 @@ class ErrorCode(StrEnum):
     #: (S2-3 판정 요청 19 (나)). 기일 스캔이 활성 문서만 돌므로, 링크된 채 삭제되면
     #: 그 문서의 만료 알림이 조용히 사라진다.
     DOCUMENTS_LINKED_TO_TASK = "DOCUMENTS.DOCUMENT.LINKED_TO_TASK"
+    #: 첨부(활성 문서)가 남은 통신 기록의 삭제 시도 — 첨부를 먼저 지운 뒤 삭제(S2-4 PR-1 리뷰).
+    #: 주인 없는 활성 문서가 남으면 그 문서의 유효기간 알림이 붙일 곳 없이 계속 나간다.
+    COLLABORATION_COMM_LOG_HAS_ATTACHMENTS = "COLLABORATION.COMM_LOG.HAS_ATTACHMENTS"
 
     # 엑셀 임포트 (S1-3 / §12.2 / ADR-09·0027)
     #: 업로드 크기 상한 초과 — 수치는 imports.service.MAX_UPLOAD_BYTES가 유일

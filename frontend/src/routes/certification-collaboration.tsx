@@ -633,7 +633,7 @@ export function CommLogsPanel({ row, canEdit }: { row: Certification; canEdit: b
                     type="button"
                     className="cell-nowrap text-xs text-signal-red underline"
                     onClick={() => {
-                      if (window.confirm("이 통신 기록을 삭제할까요? 첨부는 문서보관소에 남습니다.")) {
+                      if (window.confirm("이 통신 기록을 삭제할까요? 첨부가 있으면 첨부를 먼저 삭제해야 합니다.")) {
                         remove.mutate(log);
                       }
                     }}
