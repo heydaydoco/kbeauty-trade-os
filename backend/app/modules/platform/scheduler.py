@@ -52,6 +52,7 @@ from app.modules.collaboration import stagnation
 from app.modules.deadlines import service as deadlines
 from app.modules.notifications import dispatcher
 from app.modules.notifications import service as notifications
+from app.modules.platform import backups
 from app.modules.platform.models import ScheduledJob
 
 #: 동시 기동 방지용 advisory lock 키 (임의 상수 — 이 앱의 실행기 전용).
@@ -154,6 +155,10 @@ def _run_stagnation_scan() -> dict[str, int]:
     return _fail_if_any_failed(stagnation.scan_stagnation(), what="정체 스캔")
 
 
+def _run_backup_freshness() -> dict[str, int]:
+    return backups.run_backup_freshness()
+
+
 @dataclass(frozen=True, slots=True)
 class JobSpec:
     code: str
@@ -199,6 +204,14 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         # 들어가도록 브리핑보다 먼저 돈다(순서는 시각 차로만 보장한다).
         schedule="daily@07:00",
         run=_run_stagnation_scan,
+    ),
+    JobSpec(
+        code="backup-freshness",
+        name_ko="백업 신선도 감시(최신 백업·복원 리허설·리허설 실패)",
+        # 백업(03:00 KST)·일요일 리허설(04:00 KST) 뒤, 브리핑(09:00) 앞 — 브리핑의 미확인 알림 집계에 들어간다.
+        # 백업 볼륨이 구성되지 않은 환경(KBOS_BACKUP_DIR 없음)에서는 건너뛴다(OK).
+        schedule="daily@08:00",
+        run=_run_backup_freshness,
     ),
 )
 

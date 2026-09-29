@@ -48,6 +48,8 @@ class AuditAction:
     ASSIGNMENTS_HANDED_OVER = "identity.assignments.handed_over"
     #: 마지막 관리자를 지우려는 시도. 막힌 시도야말로 남아야 하는 기록이다.
     LAST_ADMIN_PROTECTED = "identity.admin.last_one_protected"
+    #: 백업 현황 조회(§2 접근 통제 — 매 호출 기록, S2-4 PR-3). 산출물 본체 접근 경로는 없다.
+    BACKUPS_VIEWED = "system.backups.viewed"
 
 
 class AuditLog(PkMixin, Base):

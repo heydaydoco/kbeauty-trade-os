@@ -104,11 +104,14 @@ services:
       MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_dev
       # 업로드 실물 저장 루트 (§4.7 / ADR-0029) — 정적 서빙 경로 밖.
       FILE_STORAGE_ROOT: /data/files
+      # 백업 매니페스트 조회(읽기 전용 — GET /api/v1/system/backups)·신선도 감시(backup-freshness) — S2-4 PR-3.
+      KBOS_BACKUP_DIR: /backups
     volumes:
       # 업로드 파일 저장소. named volume이 없으면 컨테이너 재생성 때 파일이
       # 소실된다. 이미지의 /data/files(appuser 소유)가 첫 마운트에 복사되어
       # 비root 실행(uid 10001)에서도 쓰기가 된다. S2-4가 pg_dump와 세트 백업.
       - files_data:/data/files
+      - backups:/backups:ro
     # 포트 미게시 — nginx(web)를 통해서만 접근한다.
     restart: unless-stopped
 
@@ -131,9 +134,45 @@ services:
       DATABASE_URL: postgresql+psycopg://kbos_app:${KBOS_APP_PASSWORD:?}@db:5432/kbos_dev
       MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:${KBOS_OWNER_PASSWORD:?}@db:5432/kbos_dev
       FILE_STORAGE_ROOT: /data/files
+      KBOS_BACKUP_DIR: /backups
     volumes:
       - files_data:/data/files
+      - backups:/backups:ro
     command: ["python", "-m", "app.cli", "run-scheduler"]
+    restart: unless-stopped
+
+  # ── 백업 (§21 / S2-4 PR-3 — ADR-0050) ───────────────────────────────────
+  # postgres:16.14 이미지를 재사용한다(pg_dump·pg_restore·openssl 동봉 — 앱 이미지에 클라이언트를 넣지 않는다).
+  # 일일 백업 03:00 KST + 주 1회(일요일 04:00 KST) 스크래치 DB 복원 리허설. 산출물은 AES-256 암호화.
+  # ★ KBOS_BACKUP_PASSPHRASE 필수(16자 이상) — 없으면 기동 거부(평문 백업 금지). 분실하면 백업을 못 푼다 — 별도 보관.
+  # ★ 산출물은 backups 볼륨에만 쌓인다 — 이 볼륨을 **호스트 밖(다른 디스크·클라우드)으로 복제**하는 것은 운영자의 몫이다
+  #   (같은 디스크의 백업은 디스크 장애에 무력하다 — docs/runbook/backup-restore.md).
+  backup:
+    image: postgres:16.14
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      TZ: UTC
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: kbos_owner
+      PGPASSWORD: ${KBOS_OWNER_PASSWORD:?}
+      PGDATABASE: kbos_dev
+      # 복원 리허설은 스크래치 DB를 만들어야 하므로 슈퍼유저를 쓴다(기존 비밀 — 새 비밀 도입 없음).
+      RESTORE_PGUSER: postgres
+      RESTORE_PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      KBOS_BACKUP_PASSPHRASE: ${KBOS_BACKUP_PASSPHRASE:?백업 암호화 패스프레이즈(16자 이상)가 필요합니다}
+      KBOS_BACKUP_RETENTION: ${KBOS_BACKUP_RETENTION:-14}
+      FILES_DIR: /data/files
+      BACKUP_DIR: /backups
+    volumes:
+      - files_data:/data/files:ro
+      - backups:/backups
+      - ./infra/backup:/scripts:ro
+    command: ["bash", "/scripts/scheduler.sh"]
     restart: unless-stopped
 
   web:
@@ -153,3 +192,4 @@ services:
 volumes:
   pgdata:
   files_data:
+  backups:

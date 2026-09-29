@@ -122,10 +122,14 @@ def test_registered_jobs_stay_clear_of_the_four_bans() -> None:
     지출 확정·법적 판정·대외 발송·장부 확정을 하는 잡이 들어오면 이 목록이
     먼저 바뀌므로, 그때 판정을 거치게 된다.
     """
-    assert {spec.code for spec in scheduler.JOB_REGISTRY} == {
-        "certification-sweep",
-        "outbox-dispatch",
-        "deadline-scan",
-        "daily-briefing",
-        "stagnation-scan",  # S2-4 PR-1 — 정체 N일·다음 액션 독촉(읽기+alerts INSERT — 발송 없음)
-    }
+    assert (
+        {spec.code for spec in scheduler.JOB_REGISTRY}
+        == {
+            "certification-sweep",
+            "outbox-dispatch",
+            "deadline-scan",
+            "daily-briefing",
+            "stagnation-scan",  # S2-4 PR-1 — 정체 N일·다음 액션 독촉(읽기+alerts INSERT — 발송 없음)
+            "backup-freshness",  # S2-4 PR-3 — 백업 신선도 감시(백업 볼륨 읽기 전용+alerts INSERT — 발송 없음)
+        }
+    )

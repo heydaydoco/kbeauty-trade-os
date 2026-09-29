@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # S2-4 백업이 이 루트를 pg_dump와 세트로 통째 백업한다(§2 "files/ 세트").
     file_storage_root: str = "var/files"
 
+    # ── 백업 (§21 / S2-4 PR-3 — ADR-0050) ────────────────────────────────
+    # 백업 컨테이너가 쌓는 세트의 위치를 **읽기 전용으로** 가리킨다. 없으면(dev 기본) 백업 신선도 감시는
+    # "미구성"으로 건너뛰고 백업 목록 API는 configured=false를 돌려준다. 앱은 매니페스트·리허설 결과만 읽는다.
+    kbos_backup_dir: str | None = None
+
     # ── DB 접속 (역할별로 분리 — ADR-0002) ───────────────────────────────
     # 런타임(kbos_app): 테이블을 만들 수 없다.
     database_url: SecretStr

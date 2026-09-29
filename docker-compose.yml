@@ -190,6 +190,44 @@ services:
     command: ["python", "-m", "app.cli", "run-scheduler"]
     restart: unless-stopped
 
+  # ── 백업 (§21 / S2-4 PR-3 — ADR-0050) ───────────────────────────────────
+  # postgres:16.14 이미지를 재사용한다(pg_dump·pg_restore·openssl 동봉 — 앱 이미지에 클라이언트를 넣지 않는다).
+  # 일일 백업 03:00 KST + 주 1회(일요일 04:00 KST) 스크래치 DB 복원 리허설. 산출물은 AES-256 암호화.
+  # ★ KBOS_BACKUP_PASSPHRASE 필수(16자 이상) — 없으면 기동 거부(평문 백업 금지). 분실하면 백업을 못 푼다 — 별도 보관.
+  # ★ 산출물은 backups 볼륨에만 쌓인다 — 이 볼륨을 **호스트 밖(다른 디스크·클라우드)으로 복제**하는 것은 운영자의 몫이다
+  #   (같은 디스크의 백업은 디스크 장애에 무력하다 — docs/runbook/backup-restore.md).
+  backup:
+    image: postgres:16.14
+    # dev 기본 기동에서 제외(profile) — 영준 PC의 `docker compose up` 흐름에 영향이 없다. 필요할 때만:
+    #   docker compose --profile backup up -d backup
+    profiles: ["backup"]
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      TZ: UTC
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: kbos_owner
+      PGPASSWORD: ${KBOS_OWNER_PASSWORD:?}
+      PGDATABASE: kbos_dev
+      # 복원 리허설은 스크래치 DB를 만들어야 하므로 슈퍼유저를 쓴다(기존 비밀 — 새 비밀 도입 없음).
+      RESTORE_PGUSER: postgres
+      RESTORE_PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      # dev는 값이 없어도 compose 렌더가 통과해야 한다(profile 미기동 — 첫 실행 흐름 보호). 비면 스크립트가 실행을 거부한다(fail-closed).
+      KBOS_BACKUP_PASSPHRASE: ${KBOS_BACKUP_PASSPHRASE:-}
+      KBOS_BACKUP_RETENTION: ${KBOS_BACKUP_RETENTION:-14}
+      FILES_DIR: /data/files
+      BACKUP_DIR: /backups
+    volumes:
+      - files_data:/data/files:ro
+      - backups:/backups
+      - ./infra/backup:/scripts:ro
+    command: ["bash", "/scripts/scheduler.sh"]
+    restart: unless-stopped
+
   # ── 프런트엔드 (Vite dev server) ──────────────────────────────────────────
   web:
     build:
@@ -242,3 +280,4 @@ volumes:
   web_node_modules:
   pgadmin_data:
   files_data:
+  backups:
