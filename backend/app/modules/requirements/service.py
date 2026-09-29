@@ -305,6 +305,20 @@ def _duplicate_name(exc: IntegrityError, market_id: int, name: Any) -> AppError:
 # ── 템플릿 헤더 ─────────────────────────────────────────────────────────────
 
 
+def add_draft_template(
+    session: Session, *, market: Market, actor_id: int, payload: dict[str, Any]
+) -> RequirementTemplate:
+    """DRAFT 템플릿 1건을 세션에 더하고 flush한다(호출자의 트랜잭션 안 — 시드 투입 경로).
+
+    생성 API와 같은 내용 검증(`_apply_content`)을 쓴다 — 두 경로의 검증이 갈라지지 않는다.
+    이름 중복은 호출자가 먼저 걸러야 한다(여기서는 DB 유일 제약이 마지막 방어선)."""
+    row = RequirementTemplate(market_id=market.id, created_by_id=actor_id)
+    _apply_content(row, payload)
+    session.add(row)
+    session.flush()
+    return row
+
+
 def create_template(
     *, actor: AuthenticatedUser, idempotency_key: str, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:

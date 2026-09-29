@@ -1,0 +1,319 @@
+{
+  "version": "2026-09-29.1",
+  "purpose": "T1 시장의 요건 템플릿 초안 카탈로그 (DESIGN.md §5.5 T1 문면 — 실제 진출 시장분만 투입)",
+  "notice": [
+    "이 카탈로그는 사람이 시장 단위로 선택해 투입하는 초안(DRAFT) 데이터입니다 — 시스템이 규제를 단정하지 않습니다(DESIGN §21).",
+    "적용단위·요건유형·주기는 초안 판단이며 확정 전에 사람이 조정합니다. 문면에 없는 세부(수수료·기한 일수 등)는 담지 않았고 note에 '확인 필요'로 남깁니다.",
+    "근거 링크(source_url)는 공식 기관·법령 사이트의 주소이며, 이 카탈로그를 작성한 환경에서는 외부 접속이 제한돼 링크의 유효성을 자동 검증하지 못했습니다. 확정 전에 사람이 링크를 열어 내용을 확인하고 확인일(last_verified_on)을 입력해야 확정됩니다(3층 확정 게이트).",
+    "선행요건(prerequisites)은 도메인 판정이 있는 두 경우(중국 비안=경내책임자+안전성 자료, EU 통보=RP)에만 담았습니다."
+  ],
+  "markets": [
+    {
+      "code": "US",
+      "name_ko": "미국",
+      "templates": [
+        {
+          "key": "us-mocra-facility",
+          "name": "MoCRA 시설 등록",
+          "applies_to": "FACILITY",
+          "requirement_type": "FACILITY_REGISTRATION",
+          "renewal_cycle_months": 24,
+          "source_url": "https://www.fda.gov/cosmetics/cosmetics-laws-regulations/modernization-cosmetics-regulation-act-2022-mocra",
+          "note": "DESIGN §5.5 문면: 시설등록 격년(24개월 주기). 갱신 기준일·리드타임은 확인 필요."
+        },
+        {
+          "key": "us-mocra-product-listing",
+          "name": "MoCRA 제품 리스팅",
+          "applies_to": "PRODUCT",
+          "requirement_type": "PRODUCT_LISTING",
+          "renewal_cycle_months": 12,
+          "source_url": "https://www.fda.gov/cosmetics/cosmetics-laws-regulations/modernization-cosmetics-regulation-act-2022-mocra",
+          "note": "DESIGN §5.5 문면: 제품 리스팅 연간(12개월 주기). 적용단위(처방/SKU)는 초안 판단 — 확정 전 확인."
+        },
+        {
+          "key": "us-agent",
+          "name": "미국 대리인(US Agent) 지정",
+          "applies_to": "COMPANY",
+          "requirement_type": "US_AGENT",
+          "source_url": "https://www.fda.gov/cosmetics/cosmetics-laws-regulations/modernization-cosmetics-regulation-act-2022-mocra",
+          "note": "DESIGN §5.5 문면: US Agent. 지정 범위(시설 등록 연계 여부)는 확인 필요."
+        },
+        {
+          "key": "us-mocra-label",
+          "name": "MoCRA 라벨 요건",
+          "applies_to": "SKU",
+          "requirement_type": "LABEL",
+          "source_url": "https://www.fda.gov/cosmetics/cosmetics-laws-regulations/modernization-cosmetics-regulation-act-2022-mocra",
+          "note": "DESIGN §5.5 문면: 라벨. 표시 항목 세부는 라벨 모듈(S1-2)과 연결해 확인 필요."
+        },
+        {
+          "key": "us-mocra-adverse-event",
+          "name": "MoCRA 부작용 보고 체계",
+          "applies_to": "COMPANY",
+          "requirement_type": "ADVERSE_EVENT_REPORTING",
+          "source_url": "https://www.fda.gov/cosmetics/cosmetics-laws-regulations/modernization-cosmetics-regulation-act-2022-mocra",
+          "note": "DESIGN §5.5 문면: 부작용 보고. 보고 기한·기록 보관 기간 등 세부는 확인 필요."
+        }
+      ]
+    },
+    {
+      "code": "EU",
+      "name_ko": "유럽연합",
+      "templates": [
+        {
+          "key": "eu-rp",
+          "name": "EU 책임자(RP) 지정",
+          "applies_to": "COMPANY",
+          "requirement_type": "RESPONSIBLE_PERSON",
+          "source_url": "https://eur-lex.europa.eu/eli/reg/2009/1223/oj",
+          "note": "DESIGN §5.5 문면: RP. 화장품 규정(EC) No 1223/2009의 책임자 — 조문 확인 필요."
+        },
+        {
+          "key": "eu-cpnp",
+          "name": "CPNP 제품 통보",
+          "applies_to": "PRODUCT",
+          "requirement_type": "CPNP_NOTIFICATION",
+          "source_url": "https://eur-lex.europa.eu/eli/reg/2009/1223/oj",
+          "prerequisites": ["eu-rp"],
+          "note": "DESIGN §5.5 문면: CPNP. 선행요건 = RP(도메인 판정). 적용단위는 초안 판단."
+        },
+        {
+          "key": "eu-pif-cpsr",
+          "name": "PIF/CPSR (제품정보파일·화장품 안전성 보고서)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "PIF_CPSR",
+          "source_url": "https://eur-lex.europa.eu/eli/reg/2009/1223/oj",
+          "note": "DESIGN §5.5 문면: PIF/CPSR 10년. '10년'은 보관 기간 문면으로 읽어 유효기간 컬럼에 넣지 않았다 — 의미 확인 필요."
+        }
+      ]
+    },
+    {
+      "code": "GB",
+      "name_ko": "영국",
+      "templates": [
+        {
+          "key": "gb-uk-rp",
+          "name": "영국 책임자(UK RP) 지정",
+          "applies_to": "COMPANY",
+          "requirement_type": "RESPONSIBLE_PERSON",
+          "source_url": "https://www.legislation.gov.uk/uksi/2019/696/contents",
+          "note": "DESIGN §5.5 문면: UK RP. 근거 법령 링크는 확인 필요."
+        },
+        {
+          "key": "gb-scpn",
+          "name": "SCPN 제품 통보",
+          "applies_to": "PRODUCT",
+          "requirement_type": "SCPN_NOTIFICATION",
+          "source_url": "https://www.legislation.gov.uk/uksi/2019/696/contents",
+          "prerequisites": ["gb-uk-rp"],
+          "note": "DESIGN §5.5 문면: SCPN. 선행요건 = UK RP(EU 통보 선례와 같은 구조로 둔 초안 — 확인 필요)."
+        }
+      ]
+    },
+    {
+      "code": "CN",
+      "name_ko": "중국",
+      "templates": [
+        {
+          "key": "cn-domestic-rp",
+          "name": "중국 경내책임자 지정",
+          "applies_to": "COMPANY",
+          "requirement_type": "DOMESTIC_RP",
+          "source_url": "https://www.nmpa.gov.cn/",
+          "note": "DESIGN §5.5 문면: 경내책임자."
+        },
+        {
+          "key": "cn-safety-data",
+          "name": "NMPA 안전성 자료",
+          "applies_to": "PRODUCT",
+          "requirement_type": "SAFETY_DATA",
+          "source_url": "https://www.nmpa.gov.cn/",
+          "note": "도메인 판정: 중국 비안의 선행 요건(안전성 자료). 세부 항목은 확인 필요."
+        },
+        {
+          "key": "cn-nmpa-filing",
+          "name": "NMPA 비안/허가",
+          "applies_to": "PRODUCT",
+          "requirement_type": "NMPA_FILING",
+          "source_url": "https://www.nmpa.gov.cn/",
+          "prerequisites": ["cn-domestic-rp", "cn-safety-data"],
+          "note": "DESIGN §5.5 문면: NMPA 비안/허가. 선행요건 = 경내책임자+안전성 자료(도메인 판정). 비안/허가 구분은 제품 분류에 따라 확인 필요."
+        },
+        {
+          "key": "cn-cbec",
+          "name": "CBEC(교차국경 전자상거래) 판매 요건",
+          "applies_to": "PRODUCT",
+          "requirement_type": "CBEC",
+          "source_url": "https://www.mofcom.gov.cn/",
+          "note": "DESIGN §5.5 문면: CBEC 별도 템플릿 — 일반 무역 비안과 별도 경로. 시장 축이 아니라 템플릿 축이다(S2-1 판정). 요건 세부는 확인 필요."
+        }
+      ]
+    },
+    {
+      "code": "JP",
+      "name_ko": "일본",
+      "templates": [
+        {
+          "key": "jp-mah-partner",
+          "name": "제조판매업 파트너 지정",
+          "applies_to": "COMPANY",
+          "requirement_type": "MARKETING_AUTHORIZATION_HOLDER",
+          "source_url": "https://www.mhlw.go.jp/",
+          "note": "DESIGN §5.5 문면: 제조판매업 파트너."
+        },
+        {
+          "key": "jp-ingredient-lists",
+          "name": "성분 포지티브/네거티브 리스트 적합성",
+          "applies_to": "PRODUCT",
+          "requirement_type": "INGREDIENT_LIST_CHECK",
+          "source_url": "https://www.mhlw.go.jp/",
+          "note": "DESIGN §5.5 문면: 성분 포지티브/네거티브. 성분 규칙(S1-2)의 스크리닝과 연결해 확인 — 시스템은 판정하지 않는다."
+        },
+        {
+          "key": "jp-quasi-drug",
+          "name": "의약부외품 판별",
+          "applies_to": "PRODUCT",
+          "requirement_type": "QUASI_DRUG_CLASSIFICATION",
+          "source_url": "https://www.mhlw.go.jp/",
+          "note": "DESIGN §5.5 문면: 의약부외품 판별. 분류 기준은 확인 필요."
+        }
+      ]
+    },
+    {
+      "code": "ID",
+      "name_ko": "인도네시아",
+      "templates": [
+        {
+          "key": "id-acd-notification",
+          "name": "ACD 통지 (인도네시아)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "ACD_NOTIFICATION",
+          "source_url": "https://asean.org/",
+          "note": "DESIGN §5.5 문면: 아세안 ACD Notification. 국가별 절차·기관 링크는 확인 필요."
+        },
+        {
+          "key": "id-halal-track",
+          "name": "할랄 트랙 (인도네시아)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "HALAL_TRACK",
+          "source_url": "https://halal.go.id/",
+          "note": "DESIGN §5.5 문면: 인니 할랄 트랙."
+        }
+      ]
+    },
+    {
+      "code": "MY",
+      "name_ko": "말레이시아",
+      "templates": [
+        {
+          "key": "my-acd-notification",
+          "name": "ACD 통지 (말레이시아)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "ACD_NOTIFICATION",
+          "source_url": "https://asean.org/",
+          "note": "DESIGN §5.5 문면: 아세안 ACD Notification. 국가별 절차·기관 링크는 확인 필요."
+        },
+        {
+          "key": "my-halal-track",
+          "name": "할랄 트랙 (말레이시아)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "HALAL_TRACK",
+          "source_url": "https://www.halal.gov.my/",
+          "note": "DESIGN §5.5 문면: 말레이 할랄 트랙."
+        }
+      ]
+    },
+    {
+      "code": "SG",
+      "name_ko": "싱가포르",
+      "templates": [
+        {
+          "key": "sg-acd-notification",
+          "name": "ACD 통지 (싱가포르)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "ACD_NOTIFICATION",
+          "source_url": "https://asean.org/",
+          "note": "DESIGN §5.5 문면: 아세안 ACD Notification. 아세안 6 구성국(초안 판단: ID·MY·SG·TH·VN·PH)은 실제 진출국만 투입."
+        }
+      ]
+    },
+    {
+      "code": "TH",
+      "name_ko": "태국",
+      "templates": [
+        {
+          "key": "th-acd-notification",
+          "name": "ACD 통지 (태국)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "ACD_NOTIFICATION",
+          "source_url": "https://asean.org/",
+          "note": "DESIGN §5.5 문면: 아세안 ACD Notification. 국가별 절차·기관 링크는 확인 필요."
+        }
+      ]
+    },
+    {
+      "code": "VN",
+      "name_ko": "베트남",
+      "templates": [
+        {
+          "key": "vn-acd-notification",
+          "name": "ACD 통지 (베트남)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "ACD_NOTIFICATION",
+          "source_url": "https://asean.org/",
+          "note": "DESIGN §5.5 문면: 아세안 ACD Notification. 국가별 절차·기관 링크는 확인 필요."
+        }
+      ]
+    },
+    {
+      "code": "PH",
+      "name_ko": "필리핀",
+      "templates": [
+        {
+          "key": "ph-acd-notification",
+          "name": "ACD 통지 (필리핀)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "ACD_NOTIFICATION",
+          "source_url": "https://asean.org/",
+          "note": "DESIGN §5.5 문면: 아세안 ACD Notification. 국가별 절차·기관 링크는 확인 필요."
+        }
+      ]
+    },
+    {
+      "code": "CA",
+      "name_ko": "캐나다",
+      "templates": [
+        {
+          "key": "ca-cnf",
+          "name": "CNF (화장품 통지 양식)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "CNF_NOTIFICATION",
+          "source_url": "https://www.canada.ca/en/health-canada/services/consumer-product-safety/cosmetics.html",
+          "note": "DESIGN §5.5 문면: CNF. 통지 기한 등 세부는 확인 필요."
+        }
+      ]
+    },
+    {
+      "code": "AU",
+      "name_ko": "호주",
+      "templates": [
+        {
+          "key": "au-aicis",
+          "name": "AICIS 등록",
+          "applies_to": "COMPANY",
+          "requirement_type": "AICIS_REGISTRATION",
+          "source_url": "https://www.industrialchemicals.gov.au/",
+          "note": "DESIGN §5.5 문면: AICIS. 등록·신고 구분과 적용 대상은 확인 필요."
+        },
+        {
+          "key": "au-tga",
+          "name": "TGA 확인 (치료용품 해당 여부)",
+          "applies_to": "PRODUCT",
+          "requirement_type": "TGA_CHECK",
+          "source_url": "https://www.tga.gov.au/",
+          "note": "DESIGN §5.5 문면: TGA. 화장품과 치료용품의 경계 판단 기준은 확인 필요 — 시스템은 판정하지 않는다."
+        }
+      ]
+    }
+  ]
+}
