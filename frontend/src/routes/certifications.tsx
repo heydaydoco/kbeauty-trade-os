@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
-import { apiDelete, apiFetch } from "../lib/api";
+import { ApiError, apiDelete, apiFetch } from "../lib/api";
 import { toKstDisplay } from "../lib/datetime";
 import { appliesToLabel, certificationStatusLabel, orEmpty } from "../lib/labels";
 import { usePagedList, usePagedQuery } from "../lib/paging";
@@ -754,6 +754,14 @@ export function CertificationsPage() {
           만료일 기준으로 자동 부여됩니다. 확정된 템플릿에서만 등록할 수 있습니다.
         </p>
       </header>
+
+      {focusId !== null && focused.isError && (
+        <p role="alert" className="mt-4 rounded border border-signal-amber/60 p-2 text-sm">
+          {focused.error instanceof ApiError && focused.error.status === 404
+            ? `링크가 가리키는 인증(#${focusId})을 찾을 수 없습니다. 삭제되었거나 존재하지 않는 인증입니다.`
+            : `링크가 가리키는 인증(#${focusId})을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.`}
+        </p>
+      )}
 
       {canEdit && (
         <form

@@ -16,7 +16,7 @@ import { certificationStatusLabel } from "../lib/labels";
 import { usePagedQuery } from "../lib/paging";
 import type { Certification } from "./certifications";
 
-/** 칸반 컬럼 순서 — §5.2 진행 순(미착수→…→승인→만료임박→갱신중)에 종결 계열을 뒤에 둔다. */
+/** 칸반 컬럼 순서 — §5.2 진행 순(미착수→…→승인→만료임박→갱신중) 뒤에 만료·반려·중단을 둔다. */
 export const BOARD_COLUMNS = [
   "NOT_STARTED",
   "PREPARING",

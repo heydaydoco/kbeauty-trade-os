@@ -218,6 +218,43 @@ describe("딥링크 (?id=) — 보드가 넘긴 인증을 상세로 연다", () 
     expect(seen.some((path) => path.endsWith("/v1/certifications/77"))).toBe(true);
   });
 
+  it("링크 대상 인증이 없으면(404) 조용히 넘기지 않고 안내한다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.endsWith("/v1/certifications/77"))
+          return Promise.resolve(
+            jsonResponse({ error: { code: "COMMON.NOT_FOUND", message: "없음", detail: {} } }, 404),
+          );
+        return Promise.resolve(jsonResponse(page([ROW])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/certifications?id=77" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "링크가 가리키는 인증(#77)을 찾을 수 없습니다",
+    );
+    expect(await screen.findByText("MoCRA 제품 리스팅")).toBeInTheDocument(); // 목록은 그대로
+  });
+
+  it("링크 대상 조회가 서버 오류(500)면 다시 시도 안내를 한다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input.includes("/auth/me")) return Promise.resolve(jsonResponse(TRADER));
+        if (input.endsWith("/v1/certifications/77"))
+          return Promise.resolve(
+            jsonResponse({ error: { code: "COMMON.INTERNAL", message: "오류", detail: {} } }, 500),
+          );
+        return Promise.resolve(jsonResponse(page([ROW])));
+      }),
+    );
+    renderWithProviders(<AppRoutes />, { route: "/certifications?id=77" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("불러오지 못했습니다");
+  });
+
   it("id가 숫자가 아니면 단건 조회를 하지 않는다", async () => {
     const seen: string[] = [];
     vi.stubGlobal(
