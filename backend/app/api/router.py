@@ -17,6 +17,7 @@ from app.modules.materials import router as materials_router
 from app.modules.notifications import router as notifications_router
 from app.modules.partners import router as partners_router
 from app.modules.platform import router as platform_router
+from app.modules.readiness import router as readiness_router
 from app.modules.requirements import router as requirements_router
 from app.modules.worklist import router as worklist_router
 
@@ -37,6 +38,7 @@ api_router.include_router(markets_router.router)
 api_router.include_router(requirements_router.router)
 api_router.include_router(requirements_router.profile_requirement_templates_router)
 api_router.include_router(certifications_router.router)
+api_router.include_router(readiness_router.router)
 api_router.include_router(ingredients_router.router)
 api_router.include_router(ingredients_router.product_ingredients_router)
 api_router.include_router(ingredients_router.ingredient_rules_router)

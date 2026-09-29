@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 from sqlalchemy import ColumnElement, func, select
@@ -35,6 +35,7 @@ from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError, VersionConflictError
 from app.core.time import today_kst, utcnow
 from app.modules.catalog.models import Product, Sku
+from app.modules.certifications.calendar import derived_date_status, overdue_days
 from app.modules.certifications.machine import (
     AUTO_TRANSITIONS,
     DATE_DERIVED_STATUSES,
@@ -190,14 +191,8 @@ def _certification_view(
 
 
 def overdue_days_of(row: Certification, *, base_date: date | None = None) -> int | None:
-    """만료일 도과 일수 — 도과가 아니면(무기한·미도래·종결) None (안건 ⑦ 계산값).
-
-    종결 2태(반려·중단)는 만료일이 남아 있어도 도과가 아니다 — 이미 닫힌 건이다.
-    """
-    if row.expires_on is None or row.status in TERMINAL_STATUSES:
-        return None
-    elapsed = ((base_date or today_kst()) - row.expires_on).days
-    return elapsed if elapsed > 0 else None
+    """만료일 도과 일수 (안건 ⑦ 계산값) — 정의는 `calendar.overdue_days` 하나다."""
+    return overdue_days(row.status, row.expires_on, base_date or today_kst())
 
 
 def _market_code(session: Session, template_id: int) -> str:
@@ -333,21 +328,8 @@ def _record_transition(
 
 
 def _derived_date_status(row: Certification, base_date: date) -> str:
-    """달력 파생 3태의 정답 — 만료일·리드타임의 순수 함수 (§5.2 자동 부여).
-
-    만료일이 없으면 무기한이라 APPROVED가 정답이고, 리드가 없으면 임박 단계가
-    없다(임의 기본값 발명 금지 — 필요하면 템플릿에 리드타임을 입력하는 것이
-    정공법).
-    """
-    if row.expires_on is None:
-        return "APPROVED"
-    if base_date > row.expires_on:
-        return "EXPIRED"
-    if row.renewal_lead_days is not None and base_date >= row.expires_on - timedelta(
-        days=row.renewal_lead_days
-    ):
-        return "EXPIRING"
-    return "APPROVED"
+    """달력 파생 3태의 정답 — 정의는 `calendar.derived_date_status` 하나다(§5.2 자동 부여)."""
+    return derived_date_status(row.expires_on, row.renewal_lead_days, base_date)
 
 
 def _converge(session: Session, row: Certification, *, base_date: date | None = None) -> str | None:
