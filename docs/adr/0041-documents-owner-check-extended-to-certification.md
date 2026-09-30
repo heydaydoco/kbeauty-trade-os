@@ -13,3 +13,5 @@
 **기각한 대안** — SHIPMENT 등 동반 선확장(소비 세션 부재 — 과확장 억제 판정 문면), GMP류 공용 서류의 시설 소유 신설(정본 귀속처 판정은 관찰 등재 — 트리거: S2-4 전달 서류 zip 또는 실등록 수요), 특정 인스턴스 소유로의 공용 서류 등록(공용 문면과 상충).
 
 **되돌리기 비용** — 낮다. downgrade는 구 정의·구 폭 복원이고, CERTIFICATION 소유 행이 있으면 실패하는 것이 올바른 실패다(데이터가 제약보다 넓다 — a7c3e9f2d4b8 선례).
+
+**부기(2026-09-30 — S3-1 계획)** — (자율 확정 — 사후 번복 가능. 위 원문 결정은 고치지 않는다.) **SO 후반 4값(PARTIALLY_ALLOCATED·ALLOCATED·IN_SHIPMENT·COMPLETED)과 PO 후반 3값(PARTIALLY_RECEIVED·FULLY_RECEIVED·CLOSED)은 이 ADR의 "죽은 열거"(DESIGN 근거·소비 세션이 없는 값)가 아니다.** 값은 §7.2 문면·WBS "그대로 열거"라는 DESIGN 근거가 있고 소비 세션이 확정(SO: S4-2·S3-2)되었거나 WBS v1.5로 배정(PO 후반: S4-1)되었다. 그래서 값은 CHECK·StrEnum에 지금 싣고 **엣지는 0(`machine.RESERVED`)**으로 두며, 후속 세션이 엣지를 추가하면서 RESERVED에서 값을 빼고 총수 테스트·ADR 부기를 함께 갱신한다. 반대로 승인 유형 5종(임계 초과 비용·신규 파트너·권고 외 소싱·폐기·실사 차이)은 소비 세션·소비 코드가 없어 열거·CHECK 어디에도 예약하지 않는다(ADR-0060). 근거: ADR-0051·0060 / design-B.md B1, design-C.md C1.

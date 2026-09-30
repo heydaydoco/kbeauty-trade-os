@@ -13,3 +13,5 @@
 **기각한 대안** — UUID PK(이점 무효·인덱스 팽창) / PG ENUM(마이그레이션 취약) / async SQLAlchemy(픽스처 복잡·이득 소멸) / LC_CTYPE 'C'(한국어 검색 폐쇄) / LC_COLLATE 'C.UTF-8'(glibc 인덱스 파손 위험, 'C'는 datcollversion=NULL로 면역).
 
 **되돌리기 비용** — 로케일·PK 타입은 최상위(덤프 후 DB 재생성). 나머지는 테이블 0개인 지금이 유일하게 싼 시점.
+
+**부기(2026-09-30 — S3-1 계획)** — (자율 확정 — 사후 번복 가능. 위 원문 결정은 고치지 않는다.) DESIGN §2 ADR-02("soft delete·감사 컬럼 전 테이블")는 별도 ADR 파일이 없고 이 ADR이 ADR-02를 구체화하므로 여기에 부기한다. **예외 명문화**: S3-1의 `approvals`·`delegations`·`approval_events`는 삭제 개념이 없어 SoftDelete 믹스인을 두지 않는다(`approvals`·`delegations`는 Timestamp·Version·Actor를 유지하고 종료·소비는 상태·`revoked_at`으로 표현, `approval_events`는 PkMixin+Base의 IMMUTABLE 이력). 기존 관행(`user_sessions`·`events`·`doc_number_seq`·`idempotency_keys`)과 같은 결이며, 같은 논리로 상태이력 4표·`gate_evaluations`·`gate_overrides`·`payments`도 삭제가 없는 원장형 불변 테이블이다(ADR-0040 서식). 근거: ADR-0060·0051·0063·0064 / design-C.md C1.
