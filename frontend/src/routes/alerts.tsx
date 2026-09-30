@@ -9,6 +9,8 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Link } from "react-router";
+import { alertRoute } from "../lib/alert-routes";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
@@ -79,6 +81,20 @@ function recipientLabel(rule: AlertRule): string {
   if (rule.recipient_user_id !== null) return `사용자 #${rule.recipient_user_id}`;
   if (rule.recipient_role !== null) return `${rule.recipient_role} 역할 전원`;
   return "담당자";
+}
+
+/** 알림 대상 — 이동 표(lib/alert-routes)에 있는 종류만 링크, 없으면 글자만(없는 화면으로 보내지 않는다). */
+function AlertTarget({ alert }: { alert: Alert }) {
+  if (!alert.entity_type) return <>{orEmpty(null)}</>;
+  const text = `${alert.entity_type} #${alert.entity_id}`;
+  const target = alertRoute(alert.entity_type, alert.entity_id);
+  return target ? (
+    <Link to={target} className="underline" aria-label={`${text} 열기`}>
+      {text}
+    </Link>
+  ) : (
+    <>{text}</>
+  );
 }
 
 export function AlertsPage() {
@@ -199,7 +215,7 @@ export function AlertsPage() {
                     {alert.body && <p className="mt-1 text-gray-500">{alert.body}</p>}
                   </td>
                   <td className="cell-nowrap px-4 py-2 text-gray-500">
-                    {alert.entity_type ? `${alert.entity_type} #${alert.entity_id}` : orEmpty(null)}
+                    <AlertTarget alert={alert} />
                   </td>
                   <td className="cell-nowrap px-4 py-2 text-center">
                     {alert.acknowledged_at ? (
