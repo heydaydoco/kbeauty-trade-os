@@ -17,9 +17,9 @@ from tests.support.astscan import app_sources, module_of, parse_source, referenc
 pytestmark = pytest.mark.group_k
 
 #: 전표 도메인 모듈 — 각 전표 PR이 자기 모듈을 여기 더한다(스캔 대상 확장).
-DOC_MODULES = {"trade_docs", "quotations", "trade_chain"}
-DOC_MODEL_NAMES = {"Quotation", "QuotationLine"}
-STATUS_LOG_NAMES = {"QuotationStatusLog"}
+DOC_MODULES = {"trade_docs", "quotations", "proforma_invoices", "trade_chain"}
+DOC_MODEL_NAMES = {"Quotation", "QuotationLine", "ProformaInvoice", "ProformaInvoiceLine"}
+STATUS_LOG_NAMES = {"QuotationStatusLog", "ProformaInvoiceStatusLog"}
 PREFIX_LITERALS = {"QT", "PI", "SO", "PO"}
 
 TRANSITION = "modules/trade_docs/transition.py"
@@ -27,6 +27,7 @@ CONSTANTS = "modules/trade_docs/constants.py"
 DOC_NUMBER = "modules/trade_docs/doc_number.py"
 NUMBERING = "modules/numbering/service.py"
 QT_SERVICE = "modules/quotations/service.py"
+PI_SERVICE = "modules/proforma_invoices/service.py"
 
 
 def _flatten(target: ast.expr) -> list[ast.expr]:
@@ -115,6 +116,10 @@ ALLOWED_SITES: frozenset[tuple[str, str, str]] = frozenset(
         (QT_SERVICE, "insert_draft", "total_amount"),  # 생성 시점 합계(라인 합을 미리 계산)
         (QT_SERVICE, "insert_draft", "doc_number"),  # 채번은 생성자에서만
         (QT_SERVICE, "insert_draft", UNKNOWN),  # **header — _header_columns의 화이트리스트 결과
+        # PI 생성 착지 — 참조 생성 오케스트레이터(reference._plan)가 만든 헤더 dict(리터럴 키만, 아래 자기검사가 확인)
+        (PI_SERVICE, "insert_issued", "total_amount"),
+        (PI_SERVICE, "insert_issued", "doc_number"),
+        (PI_SERVICE, "insert_issued", UNKNOWN),
         # 헤더 편집: setattr(row, name, value)의 name은 _header_columns가 만든 화이트리스트 cols의 키(아래 자기검사가 확인)
         (QT_SERVICE, "update_quotation", UNKNOWN),
         (QT_SERVICE, "update_meta", UNKNOWN),
@@ -245,7 +250,9 @@ def protected_write_sites(
 
 def raw_sql_doc_writes(tree: ast.Module) -> list[int]:
     """문자열 SQL로 전표 테이블을 쓰는 지점(`UPDATE quotations …`) — ORM 통로를 우회하는 길."""
-    pattern = re.compile(r"(?is)\b(update|insert\s+into|delete\s+from)\s+quotations?\b")
+    pattern = re.compile(
+        r"(?is)\b(update|insert\s+into|delete\s+from)\s+(quotations?|proforma_invoices?)\b"
+    )
     return [
         node.lineno
         for node in ast.walk(tree)
@@ -342,12 +349,14 @@ def test_the_dynamic_write_allowlist_entries_are_bounded_by_whitelists() -> None
     assert literals and not _dict_keys(literals[0]) & (PROTECTED | {UNKNOWN})
 
 
-def test_totals_and_numbers_have_a_single_creator() -> None:
-    """생성자의 total_amount=·doc_number=는 견적 서비스 insert_draft 한 곳 · 헤더 합계는 recompute_total의 setattr로만 오른다"""
+def test_totals_and_numbers_have_a_single_creator_per_document() -> None:
+    """생성자의 total_amount=·doc_number=는 전표별 생성 착지 한 곳씩(QT insert_draft·PI insert_issued) · 헤더 합계는 recompute_total의 setattr로만 오른다"""
     sites = all_protected_sites()
+    creators = {(QT_SERVICE, "insert_draft"), (PI_SERVICE, "insert_issued")}
     for column in ("total_amount", "doc_number"):
-        assert {k[:2] for k in sites if k[2] == column} == {(QT_SERVICE, "insert_draft")}, column
-        assert len(sites[(QT_SERVICE, "insert_draft", column)]) == 1
+        assert {k[:2] for k in sites if k[2] == column} == creators, column
+        for creator in creators:
+            assert len(sites[(*creator, column)]) == 1
     editing = app_sources()["modules/trade_docs/editing.py"]
     assert any(
         isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "setattr"
@@ -371,7 +380,7 @@ def test_document_headers_are_never_soft_deleted_and_doc_number_is_never_reassig
         for rel, tree in _doc_module_sources().items()
         if keyword_calls(tree, "doc_number", DOC_MODEL_NAMES)
     ]
-    assert users == [QT_SERVICE]
+    assert sorted(users) == sorted([QT_SERVICE, PI_SERVICE])
 
 
 def test_document_numbers_are_issued_only_through_the_kernel_wrapper() -> None:
@@ -449,6 +458,12 @@ def test_no_http_delete_on_the_document_itself() -> None:
         if "delete" in operations and "/quotations" in path
     }
     assert deletes == {"/api/v1/quotations/{qt_id}/lines/{line_id}"}
+    # PI에는 어떤 DELETE도 없다(라인 편집도 없다 — 생성=발행=동결)
+    assert not {
+        path
+        for path, operations in app.openapi()["paths"].items()
+        if "delete" in operations and "/proforma-invoices" in path
+    }
 
 
 # ── 자기검사: 스캐너가 위반 코퍼스를 실제로 잡는다 ────────────────────────────────

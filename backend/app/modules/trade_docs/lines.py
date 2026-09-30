@@ -46,3 +46,27 @@ def require_sellable_sku(
             log_context={"sku_id": sku_id},
         )
     return sku
+
+
+def unusable_sku_reasons(session: Session, sku_ids: list[int]) -> dict[int, str]:
+    """참조 생성(PI·SO)이 원천 라인을 복사하기 전의 SKU 재검사 — 사용할 수 없는 SKU만 {id: 사유}로 돌려준다.
+
+    원천 라인은 동결 값이라 복사는 마스터를 다시 읽지 않지만, **새로 만드는 전표에 단종·삭제된 SKU가 실려 나가는 것**은
+    막는다(A11 — 사용자가 그 라인을 제외하도록 detail이 목록을 준다). 이미 발행된 원천 전표 자체는 영향이 없다.
+    """
+    if not sku_ids:
+        return {}
+    found = {
+        sku.id: sku
+        for sku in session.execute(
+            select(Sku).where(Sku.id.in_(set(sku_ids)), Sku.deleted_at.is_(None))
+        ).scalars()
+    }
+    reasons: dict[int, str] = {}
+    for sku_id in sku_ids:
+        sku = found.get(sku_id)
+        if sku is None:
+            reasons[sku_id] = "삭제된 SKU"
+        elif sku.status == "DISCONTINUED":
+            reasons[sku_id] = f"단종된 SKU: {sku.sku_code}"
+    return reasons

@@ -14,23 +14,15 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
+from app.modules.trade_docs.schemas import (
+    IncotermIn,
+    IncotermOut,
+    PaymentTermsIn,
+    PaymentTermsOut,
+    StatusLogOut,
+)
 
-class PaymentTermsIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    payment_type: StrictStr
-    #: 퍼센트 문자열("30", "33.33" — 소수 2자리까지). 프런트는 산술하지 않는다.
-    advance_pct: StrictStr | None = None
-    balance_anchor: StrictStr | None = None
-    balance_days: StrictInt | None = None
-
-
-class IncotermIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    code: StrictStr
-    place: StrictStr
-    year: StrictInt = 2020
+__all__ = ["StatusLogOut"]  # 라우터가 이 모듈에서 가져온다(공용 조각의 재노출)
 
 
 class QuotationLineIn(BaseModel):
@@ -143,20 +135,6 @@ class QuotationLineOut(BaseModel):
     price_reason: str | None
 
 
-class PaymentTermsOut(BaseModel):
-    payment_type: str | None
-    advance_pct: str | None
-    advance_pct_bp: int | None
-    balance_anchor: str | None
-    balance_days: int | None
-
-
-class IncotermOut(BaseModel):
-    code: str | None
-    place: str | None
-    year: int | None
-
-
 class QuotationSummary(BaseModel):
     id: int
     doc_number: str
@@ -203,14 +181,3 @@ class LineMutationOut(BaseModel):
     header_version: int
     total_amount: int
     total_text: str
-
-
-class StatusLogOut(BaseModel):
-    id: int
-    occurred_at: datetime
-    from_status: str | None
-    to_status: str
-    reason: str | None
-    actor_user_id: int | None
-    actor_name: str | None
-    automatic: bool

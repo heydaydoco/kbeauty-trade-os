@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1 import system
+from app.modules.bank_accounts import router as bank_accounts_router
 from app.modules.catalog import router as catalog_router
 from app.modules.certifications import router as certifications_router
 from app.modules.collaboration import router as collaboration_router
@@ -20,6 +21,7 @@ from app.modules.notifications import router as notifications_router
 from app.modules.partners import router as partners_router
 from app.modules.platform import router as platform_router
 from app.modules.policies import router as policies_router
+from app.modules.proforma_invoices import router as proforma_invoices_router
 from app.modules.quotations import router as quotations_router
 from app.modules.readiness import router as readiness_router
 from app.modules.requirements import router as requirements_router
@@ -39,6 +41,9 @@ api_router.include_router(platform_router.router)
 api_router.include_router(policies_router.router)
 api_router.include_router(quotations_router.router)
 api_router.include_router(trade_chain_router.router)
+api_router.include_router(trade_chain_router.pi_router)
+api_router.include_router(proforma_invoices_router.router)
+api_router.include_router(bank_accounts_router.router)
 api_router.include_router(catalog_router.brands_router)
 api_router.include_router(catalog_router.item_profiles_router)
 api_router.include_router(catalog_router.products_router)

@@ -122,6 +122,7 @@ def test_registering_is_idempotent() -> None:
         "certification-sweep",
         "daily-briefing",
         "deadline-scan",
+        "document-expiry-sweep",
         "outbox-dispatch",
         "stagnation-scan",
         "storage-monitor",

@@ -27,8 +27,10 @@ from app.core.time import today_kst
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.partners import service as partners
+from app.modules.proforma_invoices import service as proforma_invoices
 from app.modules.quotations import service as quotations
 from app.modules.quotations.models import Quotation, QuotationLine
+from app.modules.trade_chain.chain_ops import converge_parent, lock_chain
 from app.modules.trade_docs.chain import live_children_numbers
 from app.modules.trade_docs.constants import REVISION_CANCEL_REASON, DocKind
 from app.modules.trade_docs.locking import lock_document
@@ -39,6 +41,7 @@ KIND = DocKind.QUOTATION
 ISSUE_ENDPOINT = "POST /api/v1/quotations/{id}/issue"
 TRANSITION_ENDPOINT = "POST /api/v1/quotations/{id}/transitions"
 REVISION_ENDPOINT = "POST /api/v1/quotations/{id}/revisions"
+PI_TRANSITION_ENDPOINT = "POST /api/v1/proforma-invoices/{id}/transitions"
 
 
 def _lock_buyer_then_quotation(session: Any, qt_id: int, version: int) -> Quotation:
@@ -285,3 +288,39 @@ def create_revision(
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=201, body=body)
         return 201, body
+
+
+def transition_proforma_invoice(
+    *,
+    actor: AuthenticatedUser,
+    idempotency_key: str,
+    pi_id: int,
+    to: str,
+    version: int,
+    reason: str | None,
+) -> tuple[int, dict[str, Any]]:
+    """PI 범용 사람 전이(취소뿐 — 입금 수렴·만료는 자동 엣지라 이 통로로 못 넘는다).
+
+    잠금 순서 (0)→(3)→(4): 멱등 → QT → PI(`lock_chain`, PI version 대조). 입금이 붙은 PI(PARTIALLY_PAID·PAID)는 취소 엣지가
+    없어 409이고, 살아 있는 후속 SO가 있으면 엣지 검사보다 먼저 409 SUCCESSOR_ALIVE다. 취소 뒤에는 부모 QT를 수렴시킨다
+    (유효기간이 지났고 붙잡는 후속이 없어졌으면 같은 트랜잭션에서 QT를 EXPIRED로 — 이력 2행).
+    """
+    kind = DocKind.PROFORMA_INVOICE
+    with unit_of_work() as uow:
+        session = uow.session
+        claim = idempotency.claim(
+            session,
+            actor_user_id=actor.id,
+            endpoint=PI_TRANSITION_ENDPOINT,
+            key=idempotency_key,
+            request_body={"pi_id": pi_id, "to": to, "version": version, "reason": reason},
+        )
+        if claim.replay is not None:
+            return claim.replay.status_code, claim.replay.body
+        row = lock_chain(session, kind, pi_id, expected_version=version)[kind]
+        record_transition(session, row, to, actor_user_id=actor.id, reason=reason, automatic=False)
+        converge_parent(session, kind, row, actor_user_id=actor.id)
+        body = proforma_invoices.detail_body(session, row)
+        assert claim.record is not None
+        idempotency.complete(session, claim.record, status_code=200, body=body)
+        return 200, body

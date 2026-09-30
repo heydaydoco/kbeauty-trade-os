@@ -1,7 +1,7 @@
 """A·J. 전표 커널 — 잔량 산식·소비 직렬화·합계 검산 잡·스냅샷 통로 (S3-1 PR-5a / ADR-0052·0056 / design-B B5·design-A A14).
 
-잔량은 파생(SUM)이다: 소비자 레지스트리(LINE_CONSUMERS)는 이 PR에 등록 0건이라, 임시 소비자 테이블을 끼워 산식·경계·
-직렬화 계약을 시험한다(운영 스키마에 소비 코드 없는 테이블을 만들지 않는다 — B5 (f)).
+잔량은 파생(SUM)이다: 소비자 레지스트리(LINE_CONSUMERS)의 실등록(PI 라인)과 무관하게 임시 소비자 테이블을 레지스트리에 끼워 산식·경계·
+직렬화 계약을 시험한다(운영 스키마에 소비 코드 없는 테이블을 만들지 않는다 — B5 (f)). 실등록 소비는 test_proforma_invoices가 시험한다.
 """
 
 from __future__ import annotations
@@ -108,10 +108,12 @@ def _make_qt_line() -> tuple[int, int]:
         return qt["id"], qt["lines"][0]["id"]
 
 
-def test_open_quantity_without_consumers_equals_the_ordered_quantity() -> None:
-    """소비자 등록 0건(이 PR의 상태) → 잔량 = 주문량 · 없는 라인 id는 결과에서 빠진다 · 빈 입력은 빈 결과"""
+def test_open_quantity_without_consumers_equals_the_ordered_quantity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """소비자가 없으면 잔량 = 주문량 · 없는 라인 id는 결과에서 빠진다 · 빈 입력은 빈 결과"""
     _qt, line = _make_qt_line()
-    assert quantities.LINE_CONSUMERS["QT_LINE"] == ()
+    monkeypatch.setitem(quantities.LINE_CONSUMERS, "QT_LINE", ())
     assert _open(line) == OpenQuantity(ordered=10, consumed=0) and _open(line).open == 10
     with unit_of_work() as uow:
         assert quantities.open_quantity(uow.session, "QT_LINE", []) == {}

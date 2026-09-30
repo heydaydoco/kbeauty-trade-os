@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from app.core.db.base import Base
 from app.modules.audit import models as audit_models
+from app.modules.bank_accounts import models as bank_accounts_models
 from app.modules.catalog import models as catalog_models
 from app.modules.certifications import models as certifications_models
 from app.modules.collaboration import models as collaboration_models
@@ -25,6 +26,7 @@ from app.modules.outbox import models as outbox_models
 from app.modules.partners import models as partners_models
 from app.modules.platform import models as platform_models
 from app.modules.policies import models as policies_models
+from app.modules.proforma_invoices import models as proforma_invoices_models
 from app.modules.quotations import models as quotations_models
 from app.modules.requirements import models as requirements_models
 from app.modules.trade_docs import models as trade_docs_models
@@ -33,6 +35,7 @@ from app.modules.worklist import models as worklist_models
 __all__ = [
     "Base",
     "audit_models",
+    "bank_accounts_models",
     "catalog_models",
     "certifications_models",
     "collaboration_models",
@@ -49,6 +52,7 @@ __all__ = [
     "partners_models",
     "platform_models",
     "policies_models",
+    "proforma_invoices_models",
     "quotations_models",
     "requirements_models",
     "trade_docs_models",

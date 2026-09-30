@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from decimal import Decimal
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -24,8 +23,8 @@ from sqlalchemy.orm import Session
 from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
-from app.core.money import Money, minor_units
-from app.core.time import to_kst, today_kst, utcnow
+from app.core.money import minor_units
+from app.core.time import today_kst, utcnow
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.models import User
 from app.modules.identity.service import AuthenticatedUser
@@ -33,7 +32,7 @@ from app.modules.markets import service as markets
 from app.modules.partners import service as partners
 from app.modules.quotations.models import Quotation, QuotationLine
 from app.modules.trade_docs import editing
-from app.modules.trade_docs.constants import MAX_VALIDITY_DAYS, DocKind
+from app.modules.trade_docs.constants import DocKind
 from app.modules.trade_docs.doc_number import issue_document_number
 from app.modules.trade_docs.expiry import is_lapsed
 from app.modules.trade_docs.fx import require_known_currency, resolve_fx
@@ -58,6 +57,14 @@ from app.modules.trade_docs.snapshot import (
     validate_quantity,
 )
 from app.modules.trade_docs.transition import record_birth
+from app.modules.trade_docs.validation import (
+    blank_to_none,
+    check_doc_date,
+    check_valid_until,
+    invalid,
+    require_active_user,
+)
+from app.modules.trade_docs.views import created_date_kst, money_text, rate_text
 
 KIND = DocKind.QUOTATION
 QUOTATION_CREATE_ENDPOINT = "POST /api/v1/quotations"
@@ -70,41 +77,6 @@ _NOT_NULLABLE = frozenset(
 
 
 # ── 공통 검증 ───────────────────────────────────────────────────────────────
-
-
-def _invalid(field: str, message: str) -> AppError:
-    return AppError(ErrorCode.VALIDATION_INVALID_FIELD, detail={field: message})
-
-
-def _require_active_user(session: Session, user_id: int, *, field: str = "assignee_id") -> None:
-    found = session.execute(
-        select(User.id).where(
-            User.id == user_id, User.deleted_at.is_(None), User.is_active.is_(True)
-        )
-    ).scalar_one_or_none()
-    if found is None:
-        raise _invalid(field, "활성 사용자가 아닙니다. 담당자를 다시 선택해 주세요.")
-
-
-def _check_doc_date(doc_date: date) -> None:
-    if doc_date > today_kst():
-        raise _invalid("doc_date", "증빙일은 오늘(KST)보다 미래일 수 없습니다.")
-
-
-def _check_valid_until(valid_until: date | None, doc_date: date) -> None:
-    if valid_until is None:
-        return
-    if valid_until < doc_date:
-        raise _invalid("valid_until", "유효기간은 증빙일 이후여야 합니다.")
-    if valid_until > doc_date + timedelta(days=MAX_VALIDITY_DAYS):
-        raise _invalid(
-            "valid_until", f"유효기간은 증빙일로부터 {MAX_VALIDITY_DAYS}일 이내여야 합니다."
-        )
-
-
-def _blank_to_none(value: object) -> str | None:
-    text = str(value).strip() if value is not None else ""
-    return text or None
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,11 +102,11 @@ def _header_columns(
 
     for field in _NOT_NULLABLE & values.keys():
         if values[field] is None:
-            raise _invalid(field, "이 항목은 비울 수 없습니다.")
+            raise invalid(field, "이 항목은 비울 수 없습니다.")
 
     doc_date = values.get("doc_date", current.doc_date if current else today_kst())
     if "doc_date" in values or current is None:
-        _check_doc_date(doc_date)
+        check_doc_date(doc_date)
         cols["doc_date"] = doc_date
 
     currency = require_known_currency(values.get("currency", current.currency if current else ""))
@@ -156,15 +128,15 @@ def _header_columns(
         if "buyer_name" not in values and changed_buyer:
             cols["buyer_name"] = partner.name_en or partner.name_ko
         if "buyer_address" not in values and changed_buyer:
-            cols["buyer_address"] = _blank_to_none(partner.address_en)
+            cols["buyer_address"] = blank_to_none(partner.address_en)
 
     if "buyer_name" in values:
-        name = _blank_to_none(values["buyer_name"])
+        name = blank_to_none(values["buyer_name"])
         if name is None:
-            raise _invalid("buyer_name", "바이어 표기를 비울 수 없습니다.")
+            raise invalid("buyer_name", "바이어 표기를 비울 수 없습니다.")
         cols["buyer_name"] = name
     if "buyer_address" in values:
-        cols["buyer_address"] = _blank_to_none(values["buyer_address"])
+        cols["buyer_address"] = blank_to_none(values["buyer_address"])
 
     if "dest_market_code" in values or current is None:
         code = str(values["dest_market_code"]).strip().upper()
@@ -176,7 +148,7 @@ def _header_columns(
         currency_changed = current is not None and currency != current.currency
         # 통화가 바뀌면 옛 환율은 의미가 없다(다른 통화의 1단위=x KRW) — 새로 입력받는다(KRW는 서버가 1을 채운다).
         carry = current is not None and not currency_changed
-        rate_raw = values.get("fx_rate", _rate_text(current.fx_rate) if carry and current else None)
+        rate_raw = values.get("fx_rate", rate_text(current.fx_rate) if carry and current else None)
         rate_date = values.get("fx_rate_date", current.fx_rate_date if carry and current else None)
         rate, rate_on = resolve_fx(currency, rate_raw, rate_date, doc_date)
         cols["fx_rate"], cols["fx_rate_date"] = rate, rate_on
@@ -195,20 +167,16 @@ def _header_columns(
 
     if "valid_until" in values or "doc_date" in values:
         valid_until = values.get("valid_until", current.valid_until if current else None)
-        _check_valid_until(valid_until, doc_date)
+        check_valid_until(valid_until, doc_date)
         if "valid_until" in values or current is None:
             cols["valid_until"] = valid_until
 
     if "internal_note" in values:
-        cols["internal_note"] = _blank_to_none(values["internal_note"])
+        cols["internal_note"] = blank_to_none(values["internal_note"])
     if "assignee_id" in values and values["assignee_id"] is not None:
-        _require_active_user(session, values["assignee_id"])
+        require_active_user(session, values["assignee_id"])
         cols["assignee_id"] = values["assignee_id"]
     return cols
-
-
-def _rate_text(rate: Decimal | None) -> str | None:
-    return None if rate is None else format(rate.normalize(), "f")
 
 
 def _terms_of(row: Quotation) -> dict[str, Any]:
@@ -231,12 +199,6 @@ def _content_changes(row: Quotation, cols: dict[str, Any]) -> list[str]:
 # ── 뷰 ─────────────────────────────────────────────────────────────────────
 
 
-def _money_text(amount: int | None, currency: str) -> str | None:
-    if amount is None:
-        return None
-    return format(Money(amount, currency).to_decimal(), "f")
-
-
 def _line_body(line: QuotationLine) -> dict[str, Any]:
     cur = line.currency
     return {
@@ -250,11 +212,11 @@ def _line_body(line: QuotationLine) -> dict[str, Any]:
         "quantity": line.quantity,
         "buyer_item_code": line.buyer_item_code,
         "unit_price_amount": line.unit_price_amount,
-        "unit_price_text": _money_text(line.unit_price_amount, cur),
+        "unit_price_text": money_text(line.unit_price_amount, cur),
         "list_price_amount": line.list_price_amount,
-        "list_price_text": _money_text(line.list_price_amount, cur),
+        "list_price_text": money_text(line.list_price_amount, cur),
         "line_amount": line.line_amount,
-        "line_amount_text": _money_text(line.line_amount, cur),
+        "line_amount_text": money_text(line.line_amount, cur),
         "price_basis": line.price_basis,
         "is_free": line.is_free,
         "price_reason": line.price_reason,
@@ -272,7 +234,7 @@ def _summary_body(row: Quotation) -> dict[str, Any]:
         "dest_market_code": row.dest_market_code,
         "currency": row.currency,
         "total_amount": row.total_amount,
-        "total_text": _money_text(row.total_amount, row.currency),
+        "total_text": money_text(row.total_amount, row.currency),
         "valid_until": row.valid_until.isoformat() if row.valid_until else None,
         "is_lapsed": is_lapsed(KIND, row.status, row.valid_until, today_kst()),
         "assignee_id": row.assignee_id,
@@ -296,7 +258,7 @@ def detail_body(session: Session, row: Quotation) -> dict[str, Any]:
     body.update(
         {
             "minor_units": minor_units(row.currency),
-            "fx_rate": _rate_text(row.fx_rate),
+            "fx_rate": rate_text(row.fx_rate),
             "fx_rate_date": row.fx_rate_date.isoformat() if row.fx_rate_date else None,
             "fx_rate_age_days": (today_kst() - row.fx_rate_date).days if row.fx_rate_date else None,
             "payment_terms": {
@@ -580,11 +542,6 @@ def list_quotations(
         return [_summary_body(row) for row in rows], total
 
 
-def created_date_kst(created_at: datetime) -> str:
-    """CSV "생성일" — 저장은 UTC지만 사람이 보는 날짜는 KST다(UTC 15:00 이후는 KST 다음 날)."""
-    return to_kst(created_at).date().isoformat()
-
-
 def export_rows(
     *,
     status: str | None = None,
@@ -609,7 +566,7 @@ def export_rows(
             select(func.count()).select_from(Quotation).where(*conditions)
         ).scalar_one()
         if total > EXPORT_MAX_ROWS:
-            raise _invalid(
+            raise invalid(
                 "size",
                 f"내보낼 자료가 너무 많습니다({total:,}건). {EXPORT_MAX_ROWS:,}건 이하가 되도록 조건을 좁혀 주세요.",
             )
@@ -627,7 +584,7 @@ def export_rows(
                 r.buyer_name,
                 r.dest_market_code,
                 r.currency,
-                _money_text(r.total_amount, r.currency),
+                money_text(r.total_amount, r.currency),
                 r.valid_until.isoformat() if r.valid_until else "",
                 r.payment_type or "",
                 advance_pct_text(r.advance_pct_bp) or "",
@@ -755,7 +712,7 @@ def update_quotation(
             editing.assert_editable(KIND, row.status, fields=changed)
         if "currency" in changed and row.last_line_no > 0:
             # 라인이 한 번이라도 있었으면(제외된 라인 포함) 복합 FK (qt_id, currency)가 통화 변경을 막는다.
-            raise _invalid(
+            raise invalid(
                 "currency",
                 "이미 라인을 입력한 견적은 통화를 바꿀 수 없습니다(가격은 통화별입니다). 새 견적을 작성해 주세요.",
             )
@@ -800,7 +757,7 @@ def update_meta(*, actor: AuthenticatedUser, qt_id: int, payload: dict[str, Any]
         session = uow.session
         row = lock_document(session, Quotation, qt_id, expected_version=payload["version"])
         if "assignee_id" in values and values["assignee_id"] is None:
-            raise _invalid("assignee_id", "담당자를 비울 수 없습니다.")
+            raise invalid("assignee_id", "담당자를 비울 수 없습니다.")
         cols = _header_columns(session, values, current=row)
         for name, value in cols.items():
             setattr(row, name, value)
@@ -870,7 +827,7 @@ def _finish_line_change(
         "line": _line_body(line) if line is not None else None,
         "header_version": header.version,
         "total_amount": header.total_amount,
-        "total_text": _money_text(header.total_amount, header.currency),
+        "total_text": money_text(header.total_amount, header.currency),
     }
 
 
@@ -918,7 +875,7 @@ def update_line(
         raw = {k: v for k, v in payload.items() if k != "version"}
         if "quantity" in raw:
             if raw["quantity"] is None:
-                raise _invalid("quantity", "수량을 비울 수 없습니다.")
+                raise invalid("quantity", "수량을 비울 수 없습니다.")
             line.quantity = validate_quantity(raw["quantity"])
         if {"unit_price", "is_free", "price_reason"} & raw.keys():
             unit, basis, free, reason = reprice(

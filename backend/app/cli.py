@@ -33,6 +33,7 @@ from app.modules.identity.passwords import hash_password
 from app.modules.identity.service import normalize_email
 from app.modules.platform import scheduler, storage
 from app.modules.seeds import service as seeds
+from app.modules.trade_chain import expiry_sweep
 from app.modules.trade_docs import verify as trade_docs_verify
 
 MIN_PASSWORD_LENGTH = 12
@@ -161,6 +162,17 @@ def main(argv: list[str] | None = None) -> int:
         help="기준일(YYYY-MM-DD). 생략하면 KST 오늘 — 업무 날짜는 KST다(§22 렌즈 6)",
     )
 
+    # 견적·PI 유효기간 만료 스윕 수동 실행 (S3-1 PR-6a — 스윕과 같은 "스케줄 + CLI 겸용" 계보).
+    expiry = commands.add_parser(
+        "document-expiry-sweep",
+        help="견적·PI 유효기간 만료 스윕을 1회 실행한다(미입금 발행·후속 없는 문서만 — 멱등)",
+    )
+    expiry.add_argument(
+        "--base-date",
+        default=None,
+        help="기준일(YYYY-MM-DD). 생략하면 KST 오늘 — 유효기간은 당일 KST 24:00까지 유효하다",
+    )
+
     # 기일 스캔·브리핑 수동 실행 (S2-3 PR-2 — 스윕과 같은 "스케줄 + CLI 겸용" 계보).
     # 기준일을 지정해 과거·미래 날짜로 관통 실측하는 통로다(안건 ② (e)).
     scan = commands.add_parser(
@@ -251,6 +263,14 @@ def main(argv: list[str] | None = None) -> int:
             if "->" in key:
                 print(f"  {key}: {counts[key]}건")
         return 0
+    if args.command == "document-expiry-sweep":
+        base = date.fromisoformat(args.base_date) if args.base_date else None
+        counts = expiry_sweep.sweep_expired_documents(base_date=base)
+        print(
+            f"만료 스윕 완료: 견적 {counts['expired_qt']}건·PI {counts['expired_pi']}건 만료 — "
+            f"건너뜀 {counts['skipped']}·실패 {counts['failed']}건"
+        )
+        return 1 if counts["failed"] else 0
     if args.command == "deadline-scan":
         base = date.fromisoformat(args.base_date) if args.base_date else None
         counts = deadlines.scan_deadlines(base_date=base)

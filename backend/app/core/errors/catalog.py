@@ -244,6 +244,18 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "이 문서의 현재 상태에서는 수량을 사용할 수 없습니다. 문서 상태를 확인한 뒤 다시 시도해 주세요.",
     ),
+    ErrorCode.TRADE_DOCS_PARENT_NOT_USABLE: ErrorSpec(
+        409,
+        "원천 문서의 현재 상태에서는 후속 문서를 만들 수 없습니다. 발행된 견적인지 확인하거나 새 문서를 작성해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_VALIDITY_EXPIRED: ErrorSpec(
+        422,
+        "유효기간이 지난 문서로는 진행할 수 없습니다. 새 견적 또는 PI를 발행한 뒤 다시 시도해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_PAYMENT_PI_NOT_OPEN: ErrorSpec(
+        409,
+        "취소되었거나 만료된 PI에는 입금을 반영할 수 없습니다. 새 PI를 발행한 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

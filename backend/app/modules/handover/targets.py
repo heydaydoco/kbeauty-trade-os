@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.modules.certifications.models import Certification
+from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.quotations.models import Quotation
 from app.modules.worklist.models import Alert, AlertRule, Task
 
@@ -51,6 +52,7 @@ ASSIGNMENT_TARGETS: tuple[AssignmentTarget, ...] = (
     # S3-1 — 전표 담당자(§2 "담당 건(전표…)"). 동결 후에도 FREE 열이라 이관이 통과한다(ADR-0053).
     # 나머지 전표(PI·SO·PO)와 order_intakes는 각 PR이 자기 행을 더한다.
     AssignmentTarget("quotations", Quotation, Quotation.assignee_id),
+    AssignmentTarget("proforma_invoices", ProformaInvoice, ProformaInvoice.assignee_id),
 )
 
 
@@ -66,6 +68,7 @@ USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
     ("idempotency_keys", "actor_user_id"): "ACTOR_LOG",
     ("certification_status_log", "actor_user_id"): "ACTOR_LOG",
     ("quotation_status_log", "actor_user_id"): "ACTOR_LOG",
+    ("proforma_invoice_status_log", "actor_user_id"): "ACTOR_LOG",
     ("import_staging", "confirmed_by_id"): "ACTOR_LOG",
     ("user_roles", "user_id"): "IDENTITY_LINK",
     ("user_sessions", "user_id"): "IDENTITY_LINK",

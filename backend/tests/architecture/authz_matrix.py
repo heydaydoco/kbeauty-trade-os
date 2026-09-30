@@ -26,6 +26,8 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/users/lookup",
     "/api/v1/policies",
     "/api/v1/quotations",
+    "/api/v1/proforma-invoices",
+    "/api/v1/bank-accounts",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -74,6 +76,71 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
     ("POST", "/api/v1/quotations/{qt_id}/revisions"): {
         A: ALLOW,
         T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    # S3-1 PR-6a — QT→PI 참조 생성·미리보기는 무역(관리자 상시 통과) 쓰기.
+    ("POST", "/api/v1/quotations/{qt_id}/proforma-invoices"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/quotations/{qt_id}/proforma-invoices/preview"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    # PI — 조회는 전 역할(원가·마진 필드 없음), 쓰기·취소는 무역(관리자 상시 통과).
+    ("GET", "/api/v1/proforma-invoices"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/proforma-invoices/export.csv"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("GET", "/api/v1/proforma-invoices/{pi_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("GET", "/api/v1/proforma-invoices/{pi_id}/status-log"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("PATCH", "/api/v1/proforma-invoices/{pi_id}/meta"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/proforma-invoices/{pi_id}/transitions"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    # 은행 계좌 — 쓰기는 ADMIN 전용, 조회는 ADMIN·TRADE(PI 선택용), 나머지 403(설계 §2.7).
+    ("GET", "/api/v1/bank-accounts"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("GET", "/api/v1/bank-accounts/export.csv"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("GET", "/api/v1/bank-accounts/{account_id}"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("POST", "/api/v1/bank-accounts"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
+    ("PATCH", "/api/v1/bank-accounts/{account_id}"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
+    ("DELETE", "/api/v1/bank-accounts/{account_id}"): {
+        A: ALLOW,
+        T: DENY,
         L: DENY,
         C: DENY,
         V: DENY,

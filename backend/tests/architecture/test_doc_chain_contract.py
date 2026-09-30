@@ -21,9 +21,9 @@ pytestmark = pytest.mark.group_k
 
 CHAIN_TABLES = set(DOC_TABLES.values()) | set(LINE_TABLES.values())
 
-#: 아직 만들어지지 않은 후속 테이블 — 각 전표 PR(PR-6: proforma_invoices, PR-7: sales_orders)이 테이블을 만들면서
-#: 이 집합에서 **지워야** 한다(안 지우면 아래 테스트가 실패해 CHILD_LINKS 편입을 상기시킨다).
-PENDING_CHILD_TABLES = {"proforma_invoices", "sales_orders"}
+#: 아직 만들어지지 않은 후속 테이블 — 각 전표 PR(PR-7: sales_orders)이 테이블을 만들면서
+#: 이 집합에서 **지워야** 한다(안 지우면 아래 테스트가 실패해 CHILD_LINKS 편입을 상기시킨다). PR-6a가 proforma_invoices를 지웠다.
+PENDING_CHILD_TABLES = {"sales_orders"}
 
 
 def _fks_to_chain_tables() -> set[tuple[str, str, str]]:
@@ -72,7 +72,7 @@ def test_the_allowlist_carries_reasons_and_has_no_dead_entries() -> None:
 
 
 def test_pending_child_tables_are_exactly_the_ones_not_yet_created() -> None:
-    """CHILD_LINKS의 후속 테이블은 (a) metadata에 있거나 (b) PENDING에 명시돼 있다 — PR-6·7이 PENDING을 줄인다"""
+    """CHILD_LINKS의 후속 테이블은 (a) metadata에 있거나 (b) PENDING에 명시돼 있다 — PR-7이 PENDING을 줄인다"""
     absent = {
         link.child_table for link in CHILD_LINKS if link.child_table not in Base.metadata.tables
     }
