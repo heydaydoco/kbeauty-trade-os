@@ -20,9 +20,11 @@ from app.modules.notifications import router as notifications_router
 from app.modules.partners import router as partners_router
 from app.modules.platform import router as platform_router
 from app.modules.policies import router as policies_router
+from app.modules.quotations import router as quotations_router
 from app.modules.readiness import router as readiness_router
 from app.modules.requirements import router as requirements_router
 from app.modules.seeds import router as seeds_router
+from app.modules.trade_chain import router as trade_chain_router
 from app.modules.worklist import router as worklist_router
 
 api_router = APIRouter(prefix="/api/v1")
@@ -35,6 +37,8 @@ api_router.include_router(notifications_router.router)
 api_router.include_router(notifications_router.rules_router)
 api_router.include_router(platform_router.router)
 api_router.include_router(policies_router.router)
+api_router.include_router(quotations_router.router)
+api_router.include_router(trade_chain_router.router)
 api_router.include_router(catalog_router.brands_router)
 api_router.include_router(catalog_router.item_profiles_router)
 api_router.include_router(catalog_router.products_router)

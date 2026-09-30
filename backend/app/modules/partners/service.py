@@ -655,13 +655,14 @@ def require_partner_of_any_type(
 ) -> Partner:
     """거래처가 주어진 유형 중 **하나라도** 가지는지 확인한다(예: 발주 상대 = SUPPLIER 또는 OEM).
 
-    lock=True면 거래처 행을 FOR SHARE로 잡는다 — 유형 해제 임포트(FOR UPDATE)와 직렬화되어
-    "유형 없는 거래처로 확정"이 성립하지 않는다(S3-1 F11 ③, 전역 잠금 순서의 최상위).
+    lock=True면 거래처 행을 **FOR KEY SHARE**로 잡는다 — 유형 해제 임포트(FOR UPDATE)와는 충돌해 직렬화되므로
+    "유형 없는 거래처로 확정"이 성립하지 않고, 여신 직렬화 경로의 FOR NO KEY UPDATE와는 충돌하지 않아 전표 생성이
+    확정을 막지 않는다(S3-1 F11 ③ + design-integrated X-37 — PR-3의 FOR SHARE를 PR-5a가 정정한다).
     미존재·삭제·유형 불일치는 모두 422(fail-closed)다.
     """
     query = select(Partner).where(Partner.id == partner_id, Partner.deleted_at.is_(None))
     if lock:
-        query = query.with_for_update(read=True)
+        query = query.with_for_update(read=True, key_share=True)
     partner = session.execute(query).scalar_one_or_none()
     if partner is None or not (set(type_codes) & set(partner_type_codes(session, partner.id))):
         raise AppError(

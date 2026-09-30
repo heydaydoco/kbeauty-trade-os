@@ -22,7 +22,11 @@ ALLOW = "allow"
 DENY = "deny"
 
 #: 이 접두어 아래의 모든 (메서드, 경로)는 표에 있어야 한다. 소비 PR이 자기 접두어를 추가한다.
-GOVERNED_PREFIXES: tuple[str, ...] = ("/api/v1/users/lookup", "/api/v1/policies")
+GOVERNED_PREFIXES: tuple[str, ...] = (
+    "/api/v1/users/lookup",
+    "/api/v1/policies",
+    "/api/v1/quotations",
+)
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
     # F9 — 담당자·수임자 선택기(표시명만)
@@ -30,4 +34,48 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
     # E8 — 정책 설정은 관리자 전용(조회·저장 모두). 게이트 응답이 실효값·출처를 전 역할에 읽기로 싣는다.
     ("GET", "/api/v1/policies"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
     ("PUT", "/api/v1/policies/{policy_key}"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
+    # S3-1 PR-5a — 견적. 조회는 전 역할(원가·마진 필드 없음), 쓰기·전이는 무역(관리자 상시 통과).
+    ("GET", "/api/v1/quotations"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/quotations/export.csv"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/quotations/{qt_id}"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/quotations/{qt_id}/status-log"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("POST", "/api/v1/quotations"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("PATCH", "/api/v1/quotations/{qt_id}"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("PATCH", "/api/v1/quotations/{qt_id}/meta"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("POST", "/api/v1/quotations/{qt_id}/lines"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("PATCH", "/api/v1/quotations/{qt_id}/lines/{line_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("DELETE", "/api/v1/quotations/{qt_id}/lines/{line_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/quotations/{qt_id}/issue"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("POST", "/api/v1/quotations/{qt_id}/transitions"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/quotations/{qt_id}/revisions"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
 }

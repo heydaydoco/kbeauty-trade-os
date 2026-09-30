@@ -125,6 +125,7 @@ def test_registering_is_idempotent() -> None:
         "outbox-dispatch",
         "stagnation-scan",
         "storage-monitor",
+        "trade-docs-totals-verify",
     ]
     assert scheduler.register_jobs() == []
     assert len(_jobs()) == len(scheduler.JOB_REGISTRY)

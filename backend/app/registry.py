@@ -25,7 +25,9 @@ from app.modules.outbox import models as outbox_models
 from app.modules.partners import models as partners_models
 from app.modules.platform import models as platform_models
 from app.modules.policies import models as policies_models
+from app.modules.quotations import models as quotations_models
 from app.modules.requirements import models as requirements_models
+from app.modules.trade_docs import models as trade_docs_models
 from app.modules.worklist import models as worklist_models
 
 __all__ = [
@@ -47,6 +49,8 @@ __all__ = [
     "partners_models",
     "platform_models",
     "policies_models",
+    "quotations_models",
     "requirements_models",
+    "trade_docs_models",
     "worklist_models",
 ]

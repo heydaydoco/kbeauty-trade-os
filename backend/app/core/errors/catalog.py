@@ -196,6 +196,54 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "만료일 정정은 승인·만료임박·만료 상태에서만 할 수 있습니다. 승인 전 만료일은 승인 기록에 함께 입력해 주세요.",
     ),
+    ErrorCode.TRADE_DOCS_DOCUMENT_INCOMPLETE: ErrorSpec(
+        422,
+        "발행·확정에 필요한 항목이 비어 있습니다. 표시된 항목을 입력한 뒤 다시 시도해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_DOCUMENT_FROZEN: ErrorSpec(
+        409,
+        "이미 발행·확정되어 수정할 수 없는 항목입니다. 내용을 바꿔야 하면 취소 후 새 문서로 작성해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_LINE_SKU_DISCONTINUED: ErrorSpec(
+        422,
+        "단종된 SKU는 새 라인으로 추가할 수 없습니다. 마스터에서 SKU 상태를 확인하거나 다른 SKU를 선택해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_LINE_SKU_DUPLICATE: ErrorSpec(
+        409,
+        "같은 SKU의 유상 또는 무상 라인이 이미 있습니다. 기존 라인의 수량을 수정해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_LINE_AMOUNT_OUT_OF_RANGE: ErrorSpec(
+        422,
+        "금액 또는 라인 수가 허용 범위를 넘었습니다. 수량·단가를 확인하거나 문서를 나누어 작성해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_PAYMENT_LC_DISABLED: ErrorSpec(
+        422,
+        "L/C 결제조건은 현재 사용할 수 없습니다. 선수금 T/T 또는 후불 T/T를 선택하시거나 관리자에게 문의해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_TRANSITION_NOT_ALLOWED: ErrorSpec(
+        409,
+        "현재 상태에서 허용되지 않는 전이입니다. 화면을 새로 고쳐 현재 상태를 확인해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_TRANSITION_REASON_REQUIRED: ErrorSpec(
+        422,
+        "이 전이에는 사유가 필요합니다. 사유를 입력해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_COPY_SOURCE_NOT_ELIGIBLE: ErrorSpec(
+        409,
+        "복제할 수 없는 원본 문서입니다. 취소 또는 만료된 동일 거래처의 문서인지 확인해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_CANCEL_SUCCESSOR_ALIVE: ErrorSpec(
+        409,
+        "이 문서에서 파생된 후속 문서가 아직 살아 있습니다. 후속 문서를 먼저 취소한 뒤 다시 시도해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_QUANTITY_EXCEEDS_OPEN: ErrorSpec(
+        409,
+        "요청 수량이 남은 수량을 넘었습니다. 남은 수량을 확인한 뒤 수량을 줄여 다시 시도해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_QUANTITY_DOCUMENT_NOT_CONSUMABLE: ErrorSpec(
+        409,
+        "이 문서의 현재 상태에서는 수량을 사용할 수 없습니다. 문서 상태를 확인한 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

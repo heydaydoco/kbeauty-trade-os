@@ -137,5 +137,7 @@ def test_registered_jobs_stay_clear_of_the_four_bans() -> None:
             "stagnation-scan",  # S2-4 PR-1 — 정체 N일·다음 액션 독촉(읽기+alerts INSERT — 발송 없음)
             "storage-monitor",  # S2-4 PR-3 — 용량·고아/유실 점검(+설정 시 물리 정리 — 기본 OFF, 알림만)
             "backup-freshness",  # S2-4 PR-3 — 백업 신선도 감시(백업 볼륨 읽기 전용+alerts INSERT — 발송 없음)
+            # S3-1 PR-5a — 전표 합계 검산(읽기 전용+ADMIN 인앱 알림 — 자동 보정·상태 변경·대외 발송·장부 확정 없음)
+            "trade-docs-totals-verify",
         }
     )
