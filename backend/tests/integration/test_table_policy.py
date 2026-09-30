@@ -66,3 +66,70 @@ def test_immutable_tables_have_no_app_write_grants() -> None:
 def test_no_table_is_in_both_sets() -> None:
     """한 테이블이 불변이면서 동시에 가변일 수는 없다"""
     assert not (IMMUTABLE_TABLES & MUTABLE_TABLES)
+
+
+# --- S3-1 PR-2: 컬럼 단위 UPDATE 권한 (ADR-0060) ---------------------------------------------
+
+
+class _OwnerOp:
+    """마이그레이션의 `op.execute`를 owner 연결로 흉내 낸다."""
+
+    def __init__(self, connection) -> None:  # type: ignore[no-untyped-def]
+        self._connection = connection
+
+    def execute(self, statement: str) -> None:
+        self._connection.execute(text(statement))
+
+
+def test_restrict_update_columns_is_enforced_by_the_database(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """허용 컬럼만 UPDATE되고 나머지·DELETE는 DB가 거부한다(앱 계정으로 실측)"""
+    from sqlalchemy.exc import ProgrammingError
+
+    from app.core.db import table_policy
+    from app.core.db.session import engine
+
+    allowed = frozenset({"status", "version"})
+    monkeypatch.setitem(table_policy.COLUMN_UPDATE_ALLOWLIST, "zz_col_grant", allowed)
+    with owner_engine.begin() as owner:
+        owner.execute(
+            text(
+                "CREATE TABLE public.zz_col_grant (id int PRIMARY KEY, status text,"
+                " version int, amount_frozen bigint)"
+            )
+        )
+        owner.execute(text("GRANT SELECT, INSERT, UPDATE, DELETE ON public.zz_col_grant TO kbos_app"))
+        table_policy.restrict_update_columns(_OwnerOp(owner), "zz_col_grant", allowed)
+        owner.execute(text("INSERT INTO public.zz_col_grant VALUES (1, 'A', 1, 100)"))
+    try:
+        with engine.begin() as app:
+            app.execute(text("UPDATE public.zz_col_grant SET status = 'B', version = 2 WHERE id = 1"))
+        for bad in (
+            "UPDATE public.zz_col_grant SET amount_frozen = 1 WHERE id = 1",
+            "DELETE FROM public.zz_col_grant WHERE id = 1",
+        ):
+            with pytest.raises(ProgrammingError) as caught, engine.begin() as app:
+                app.execute(text(bad))
+            assert "permission denied" in str(caught.value.orig).lower(), bad
+        with owner_engine.connect() as owner:
+            assert owner.execute(
+                text("SELECT status, amount_frozen FROM public.zz_col_grant WHERE id = 1")
+            ).one() == ("B", 100)
+    finally:
+        with owner_engine.begin() as owner:
+            owner.execute(text("DROP TABLE IF EXISTS public.zz_col_grant"))
+
+
+def test_restrict_update_columns_rejects_unregistered_or_immutable() -> None:
+    """등록 없는 테이블·불변 테이블·빈 허용 목록은 마이그레이션에서 즉시 실패한다"""
+    from app.core.db.table_policy import restrict_update_columns
+
+    class _Op:
+        def execute(self, statement: str) -> None:  # pragma: no cover
+            raise AssertionError("실행되면 안 된다")
+
+    with pytest.raises(ValueError, match="COLUMN_UPDATE_ALLOWLIST"):
+        restrict_update_columns(_Op(), "not_registered", frozenset({"a"}))
+    with pytest.raises(ValueError, match="비어"):
+        restrict_update_columns(_Op(), "x", frozenset())
+    with pytest.raises(ValueError, match="IMMUTABLE"):
+        restrict_update_columns(_Op(), "audit_log", frozenset({"a"}))
