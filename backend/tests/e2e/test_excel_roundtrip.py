@@ -53,7 +53,10 @@ def _client(email: str, *roles: RoleCode) -> Iterator[TestClient]:
 
 @pytest.fixture
 def trader() -> Iterator[TestClient]:
-    yield from _client("trade@example.com", RoleCode.TRADE)
+    # 여신한도 열이 있는 거래처 왕복은 확정 행위자가 ADMIN이어야 한다(S3-1 E9). 이 파일의
+    # 왕복 케이스는 역할이 아니라 diff·검증을 보므로 무역+관리자 겸직으로 둔다 — 역할 통제
+    # 자체는 test_credit_limit_admin_only.py가 고정한다.
+    yield from _client("trade@example.com", RoleCode.TRADE, RoleCode.ADMIN)
 
 
 @pytest.fixture

@@ -82,6 +82,8 @@ class ErrorCode(StrEnum):
     #: 스테이징 후 확정 전에 대상 행이 먼저 수정·삭제됐다 — 부분 반영 없이
     #: 전체를 거부한다(사람이 검토한 diff와 다른 결과를 만들지 않는다).
     IMPORTS_CONFIRM_VERSION_CONFLICT = "IMPORTS.CONFIRM.VERSION_CONFLICT"
+    #: 여신한도 등록·변경은 관리자만 — 무역 담당이 한도를 올린 뒤 확정하는 우회를 닫는다(S3-1 E9).
+    PARTNERS_CREDIT_LIMIT_ADMIN_ONLY = "PARTNERS.CREDIT_LIMIT.ADMIN_ONLY"
 
     # 시장 (S2-1 / §5.1 / 판정 조건 6)
     #: 라벨·성분 규칙·HS 세번이 참조하는 시장이 등록돼 있지 않다 — FK가

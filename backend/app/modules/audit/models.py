@@ -52,6 +52,9 @@ class AuditAction:
     BACKUPS_VIEWED = "system.backups.viewed"
     #: 문서 실물 물리 정리(되돌릴 수 없음 — S2-4 PR-3). 행위자 없음(배치·CLI) — detail에 문서·저장명·해시.
     DOCUMENT_FILE_PURGED = "documents.file.purged"
+    #: 여신한도 최초 설정·변경(S3-1 E9) — detail에 전·후 금액·통화(여신한도는 마스킹 비대상).
+    PARTNER_CREDIT_LIMIT_SET = "partners.credit_limit.set"
+    PARTNER_CREDIT_LIMIT_CHANGED = "partners.credit_limit.changed"
 
 
 class AuditLog(PkMixin, Base):

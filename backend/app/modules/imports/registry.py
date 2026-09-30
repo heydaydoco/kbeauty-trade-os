@@ -31,6 +31,8 @@ from sqlalchemy.orm import Session
 from app.core.errors.exceptions import AppError
 from app.core.money import Money
 from app.core.time import utcnow
+from app.modules.audit import service as audit
+from app.modules.audit.models import AuditAction
 from app.modules.catalog import service as catalog_service
 from app.modules.catalog.models import SKU_KINDS, SKU_STATUSES, Product, Sku
 from app.modules.materials.models import MATERIAL_TYPES, Material
@@ -148,6 +150,8 @@ class PartnersImportTarget:
 
     code = "partners"
     label_ko = "거래처"
+    #: 확정 행위자가 ADMIN이 아니면 이 필드를 건드리는 배치는 통째로 거부된다(S3-1 E9).
+    admin_only_fields: frozenset[str] = frozenset({"credit_limit_amount", "credit_limit_currency"})
     #: 파일 안 중복을 잡는 자연키 필드(활성 행 유일키와 같은 축).
     code_field = "partner_code"
     #: 왕복으로 바꿀 수 없는 필드 — 변경 diff에 잡히면 오류 행이 된다(서비스 공통 검사).
@@ -327,6 +331,18 @@ class PartnersImportTarget:
                 PartnerTypeLink(partner_id=partner.id, type_code=type_code, created_by_id=actor_id)
             )
         session.flush()
+        if payload["credit_limit_amount"] is not None:
+            audit.record(
+                session,
+                action=AuditAction.PARTNER_CREDIT_LIMIT_SET,
+                actor_user_id=actor_id,
+                entity_type="partners",
+                entity_id=partner.id,
+                detail={
+                    "amount": payload["credit_limit_amount"],
+                    "currency": payload["credit_limit_currency"],
+                },
+            )
         return partner.id
 
     def apply_changes(
@@ -348,9 +364,25 @@ class PartnersImportTarget:
             "name_en",
             "address_en",
         )
+        credit_changed = bool(changed_fields & {"credit_limit_amount", "credit_limit_currency"})
+        before = (target.credit_limit_amount, target.credit_limit_currency)
         for field in scalar_fields:
             if field in changed_fields:
                 setattr(target, field, payload[field])
+        if credit_changed:
+            audit.record(
+                session,
+                action=AuditAction.PARTNER_CREDIT_LIMIT_CHANGED,
+                actor_user_id=actor_id,
+                entity_type="partners",
+                entity_id=target.id,
+                detail={
+                    "old_amount": before[0],
+                    "old_currency": before[1],
+                    "new_amount": target.credit_limit_amount,
+                    "new_currency": target.credit_limit_currency,
+                },
+            )
         # ★ 유형만 바뀌어도 부모 행을 **반드시** dirty로 만든다(리뷰 검출).
         #   version_id_col은 partners 행 자신의 UPDATE에서만 증가하므로, 여기서
         #   행을 안 건드리면 유형 전용 변경이 version을 안 올리고 — 겹쳐 있던
@@ -383,10 +415,29 @@ class PartnersImportTarget:
         session.flush()
 
     def verify_references(
-        self, session: Session, rows: list[tuple[int, dict[str, Any]]]
+        self, session: Session, rows: list[tuple[int, dict[str, Any], int | None]]
     ) -> list[str]:
-        """확정 시점 참조 재검증 — 거래처 왕복에는 외부 참조가 없다."""
-        return []
+        """확정 시점 재검증 — 유형 해제가 이미 성립한 마스터 의존을 깨면 배치 전체를 거부한다.
+
+        해제 대상 = (현재 활성 유형 − 페이로드 유형). 스테이징 이후 자재·SKU가 이 거래처를
+        참조하기 시작한 창도 여기서 잡힌다(확정 시점 재검증 — 함정 TOCTOU). 거래처 행은
+        `load_targets_for_update`가 이미 FOR UPDATE로 잡고 있다.
+        """
+        problems: list[str] = []
+        for row_no, payload, target_id in rows:
+            if target_id is None:  # 신규 행 — 해제할 유형이 없다
+                continue
+            released = set(partners_service.partner_type_codes(session, target_id)) - set(
+                payload["type_codes"]
+            )
+            for blocker in partners_service.find_type_release_blockers(
+                session, target_id, released
+            ):
+                problems.append(
+                    f"{row_no}행(유형 해제 불가 — {blocker.type_code}: "
+                    f"{blocker.what} {blocker.count}건. 먼저 그 참조를 바꿔 주세요)"
+                )
+        return problems
 
 
 class MaterialsImportTarget:
@@ -603,7 +654,7 @@ class MaterialsImportTarget:
         session.flush()
 
     def verify_references(
-        self, session: Session, rows: list[tuple[int, dict[str, Any]]]
+        self, session: Session, rows: list[tuple[int, dict[str, Any], int | None]]
     ) -> list[str]:
         """확정 시점의 기본공급사 재검증 — 스테이징~확정 사이 창을 닫는다(리뷰 검출).
 
@@ -613,7 +664,7 @@ class MaterialsImportTarget:
         """
         wanted = {
             payload["default_supplier_partner_id"]
-            for _, payload in rows
+            for _, payload, _t in rows
             if payload.get("default_supplier_partner_id") is not None
         }
         if not wanted:
@@ -633,7 +684,7 @@ class MaterialsImportTarget:
             ).scalars()
         )
         problems: list[str] = []
-        for row_no, payload in rows:
+        for row_no, payload, _target_id in rows:
             partner_id = payload.get("default_supplier_partner_id")
             if partner_id is None:
                 continue
@@ -1020,7 +1071,7 @@ class SkusImportTarget:
         session.flush()
 
     def verify_references(
-        self, session: Session, rows: list[tuple[int, dict[str, Any]]]
+        self, session: Session, rows: list[tuple[int, dict[str, Any], int | None]]
     ) -> list[str]:
         """확정 시점의 제품·제조사 재검증 — materials 기본공급사 재검증과 같은 계약.
 
@@ -1029,11 +1080,13 @@ class SkusImportTarget:
         없이 반영하면 확정 경로만 [M1] 보강(S1-3) ⑤(제조사=OEM)를 우회한다.
         """
         product_ids = {
-            payload["product_id"] for _, payload in rows if payload.get("product_id") is not None
+            payload["product_id"]
+            for _, payload, _t in rows
+            if payload.get("product_id") is not None
         }
         manufacturer_ids = {
             payload["manufacturer_partner_id"]
-            for _, payload in rows
+            for _, payload, _t in rows
             if payload.get("manufacturer_partner_id") is not None
         }
         live_products: set[int] = set()
@@ -1065,7 +1118,7 @@ class SkusImportTarget:
                 ).scalars()
             )
         problems: list[str] = []
-        for row_no, payload in rows:
+        for row_no, payload, _target_id in rows:
             product_id = payload.get("product_id")
             if product_id is not None and product_id not in live_products:
                 problems.append(f"{row_no}행(제품이 삭제됨)")

@@ -18,8 +18,11 @@ from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.money import minor_units
+from app.modules.audit import service as audit
+from app.modules.audit.models import AuditAction
 from app.modules.catalog.models import Sku
 from app.modules.idempotency import service as idempotency
+from app.modules.identity.models import RoleCode
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.outbox import service as outbox
 from app.modules.partners.models import (
@@ -209,6 +212,50 @@ def require_partner(session: Session, partner_id: int) -> Partner:
     return row
 
 
+@dataclass(frozen=True, slots=True)
+class TypeReleaseBlocker:
+    """유형 해제를 막는 참조 — 어떤 유형을 몇 건의 마스터가 쓰고 있는가."""
+
+    type_code: str
+    count: int
+    what: str
+
+
+def find_type_release_blockers(
+    session: Session, partner_id: int, released_type_codes: set[str]
+) -> list[TypeReleaseBlocker]:
+    """유형을 해제하면 깨지는 **이미 성립한 마스터 의존**을 센다(S3-1 F11).
+
+    SUPPLIER 해제 → 그 거래처를 기본공급사로 쓰는 활성 자재, OEM 해제 → 제조사로 쓰는 활성 SKU
+    (단종 SKU 포함). §7.7 "차단 지점은 등록이 아니라 게이트"는 미완성 값을 등록에서 막지
+    말라는 사상이라, 이미 성립한 의존을 조용히 깨는 변경을 막는 것과 충돌하지 않는다.
+    전표는 여기서 막지 않는다 — 진행 중 전표는 확정 시점 유형 재검증(fail-closed)이 잡고,
+    종결·역사 전표가 유형 정리를 영구 봉쇄하지 않게 한다.
+    """
+    from app.modules.materials.models import Material  # 순환 임포트 회피
+
+    blockers: list[TypeReleaseBlocker] = []
+    if "SUPPLIER" in released_type_codes:
+        count = session.execute(
+            select(func.count())
+            .select_from(Material)
+            .where(
+                Material.default_supplier_partner_id == partner_id, Material.deleted_at.is_(None)
+            )
+        ).scalar_one()
+        if count:
+            blockers.append(TypeReleaseBlocker("SUPPLIER", count, "기본공급사로 쓰는 자재"))
+    if "OEM" in released_type_codes:
+        count = session.execute(
+            select(func.count())
+            .select_from(Sku)
+            .where(Sku.manufacturer_partner_id == partner_id, Sku.deleted_at.is_(None))
+        ).scalar_one()
+        if count:
+            blockers.append(TypeReleaseBlocker("OEM", count, "제조사로 쓰는 SKU"))
+    return blockers
+
+
 def partner_type_codes(session: Session, partner_id: int) -> list[str]:
     rows = session.execute(
         select(PartnerTypeLink.type_code).where(
@@ -308,6 +355,13 @@ def create_partner(
 
         type_codes = normalized_type_codes(payload)
         credit_amount, credit_currency = parse_credit_limit(payload)
+        # 여신한도를 값으로 실은 등록은 관리자만(S3-1 E9) — 한도 없이 등록은 무역도 가능하다.
+        # 판정은 상태를 바꾸기 전이라 롤백돼도 잃는 기록이 없다.
+        if credit_amount is not None and RoleCode.ADMIN not in actor.roles:
+            raise AppError(
+                ErrorCode.PARTNERS_CREDIT_LIMIT_ADMIN_ONLY,
+                log_context={"actor_id": actor.id},
+            )
 
         partner = Partner(
             partner_code=str(payload["partner_code"]).strip(),
@@ -339,6 +393,15 @@ def create_partner(
                 PartnerTypeLink(partner_id=partner.id, type_code=code, created_by_id=actor.id)
             )
         session.flush()
+        if credit_amount is not None:
+            audit.record(
+                session,
+                action=AuditAction.PARTNER_CREDIT_LIMIT_SET,
+                actor_user_id=actor.id,
+                entity_type="partners",
+                entity_id=partner.id,
+                detail={"amount": credit_amount, "currency": credit_currency},
+            )
 
         outbox.publish(
             session,

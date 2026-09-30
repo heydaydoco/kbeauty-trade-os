@@ -36,6 +36,7 @@ from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.time import utcnow
 from app.modules.documents.service import sanitize_filename
 from app.modules.idempotency import service as idempotency
+from app.modules.identity.models import RoleCode
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.imports import parser
 from app.modules.imports.models import ImportStaging, ImportStagingRow
@@ -581,6 +582,24 @@ def confirm_staging(
             ).scalars()
         )
 
+        # 관리자 전용 필드(예: 거래처 여신한도)를 건드리는 배치는 확정 행위자가 ADMIN이어야
+        # 한다 — 판정 시점은 스테이징 생성자가 아니라 **확정 시점 행위자**다(무역이 올린 파일을
+        # 관리자가 확정하는 것은 허용). 한 행이라도 걸리면 배치 전체를 거부한다(부분 반영 없음).
+        admin_fields: frozenset[str] = getattr(target, "admin_only_fields", frozenset())
+        if admin_fields and RoleCode.ADMIN not in actor.roles:
+            touched = [
+                row.row_no
+                for row in rows
+                if (row.kind == "NEW" and any(row.payload.get(f) is not None for f in admin_fields))
+                or (row.kind == "CHANGED" and admin_fields & set(row.changes or {}))
+            ]
+            if touched:
+                raise AppError(
+                    ErrorCode.PARTNERS_CREDIT_LIMIT_ADMIN_ONLY,
+                    detail={"rows": ", ".join(f"{no}행" for no in touched)},
+                    log_context={"staging_id": staging_id, "rows": len(touched)},
+                )
+
         # 1) 충돌 전수 검사 — 하나라도 어긋나면 아무것도 반영하지 않는다.
         changed = [row for row in rows if row.kind == "CHANGED"]
         current_targets = target.load_targets_for_update(
@@ -597,7 +616,9 @@ def confirm_staging(
         # 참조 재검증(리뷰 검출 TOCTOU) — 스테이징이 굳힌 참조가 그 사이 무효해졌으면
         # 같은 409로 전체 거부한다(부분 반영 없음의 같은 원칙).
         conflicts.extend(
-            target.verify_references(session, [(row.row_no, row.payload) for row in rows])
+            target.verify_references(
+                session, [(row.row_no, row.payload, row.target_id) for row in rows]
+            )
         )
         if conflicts:
             raise AppError(
