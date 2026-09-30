@@ -16,7 +16,7 @@ from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError
 from app.core.money import CURRENCY_MINOR_UNITS, Money, minor_units
 
-_RATE = re.compile(r"^\d{1,10}(?:\.\d{1,8})?$")
+_RATE = re.compile(r"^[0-9]{1,10}(?:\.[0-9]{1,8})?$")
 MAX_RATE = Decimal(1_000_000)
 
 
@@ -32,6 +32,14 @@ def require_known_currency(currency: str, *, field: str = "currency") -> str:
     return code
 
 
+def _parse_rate(rate_raw: object) -> Decimal:
+    """환율 문자열 → Decimal. 형식(ASCII 숫자·소수 8자리)이 아니면 422 — KRW·비KRW 공통 관문."""
+    text = str(rate_raw).strip()
+    if not _RATE.match(text):
+        raise _invalid("fx_rate", "환율은 숫자(소수 8자리까지)로 입력해 주세요.")
+    return Decimal(text)
+
+
 def resolve_fx(
     currency: str, rate_raw: object | None, rate_date: date | None, doc_date: date
 ) -> tuple[Decimal | None, date | None]:
@@ -41,17 +49,14 @@ def resolve_fx(
     기준일은 증빙일 이후일 수 없다. rate가 없으면 (None, None) — 동결(발행·확정) 시 필수는 frozen_complete가 강제한다.
     """
     if currency == "KRW":
-        if rate_raw is not None and Decimal(str(rate_raw)) != 1:
+        if rate_raw is not None and _parse_rate(rate_raw) != 1:
             raise _invalid("fx_rate", "원화(KRW) 전표의 환율은 1입니다.")
         return Decimal(1), doc_date
     if rate_raw is None:
         if rate_date is not None:
             raise _invalid("fx_rate_date", "환율 없이 기준일만 입력할 수 없습니다.")
         return None, None
-    text = str(rate_raw).strip()
-    if not _RATE.match(text):
-        raise _invalid("fx_rate", "환율은 숫자(소수 8자리까지)로 입력해 주세요.")
-    rate = Decimal(text)
+    rate = _parse_rate(rate_raw)
     if not 0 < rate <= MAX_RATE:
         raise _invalid("fx_rate", "환율은 0보다 크고 1,000,000 이하여야 합니다.")
     effective = rate_date or doc_date

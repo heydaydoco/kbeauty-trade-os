@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError
 from app.modules.trade_docs import fx
 from app.modules.trade_docs.constants import MAX_QUANTITY, MAX_SAFE_INTEGER, DocKind
@@ -168,9 +169,16 @@ def test_fx_resolution_rules() -> None:
         ("2", None, "KRW"), ("0", None, "USD"), ("-1", None, "USD"), ("1000000.01", None, "USD"),
         ("1.123456789", None, "USD"), ("1e3", None, "USD"), ("", None, "USD"),
         ("1350", date(2026, 9, 11), "USD"), (None, date(2026, 9, 1), "USD"),
+        ("abc", None, "KRW"), ("1e2", None, "KRW"), ("", None, "KRW"), ("１", None, "KRW"),
+        ("１", None, "USD"), ("NaN", None, "KRW"), (" ", None, "KRW"),
     ]:  # fmt: skip
         with pytest.raises(AppError):
             fx.resolve_fx(cur, rate, rate_date, doc)
+    for bad_krw in ("abc", "１", "1e2", ""):  # KRW도 형식 오류는 500이 아니라 422(검증 오류)
+        with pytest.raises(AppError) as info:
+            fx.resolve_fx("KRW", bad_krw, None, doc)
+        assert info.value.code == ErrorCode.VALIDATION_INVALID_FIELD
+    assert fx.resolve_fx("KRW", "1.0", None, doc) == (Decimal(1), doc)
     with pytest.raises(AppError):
         fx.require_known_currency("ZZZ")
     assert fx.require_known_currency(" usd ") == "USD"

@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import ast
+import re
+from collections.abc import Iterator
 
 import pytest
 
-from tests.support.astscan import app_sources, module_of, parse_source
+from tests.support.astscan import app_sources, module_of, parse_source, referenced_names
 
 pytestmark = pytest.mark.group_k
 
@@ -27,22 +29,31 @@ NUMBERING = "modules/numbering/service.py"
 QT_SERVICE = "modules/quotations/service.py"
 
 
+def _flatten(target: ast.expr) -> list[ast.expr]:
+    """튜플·리스트·스타 언패킹 대입(`a.status, b = …`)까지 펼친다."""
+    if isinstance(target, ast.Tuple | ast.List):
+        return [leaf for element in target.elts for leaf in _flatten(element)]
+    if isinstance(target, ast.Starred):
+        return _flatten(target.value)
+    return [target]
+
+
 def _targets(node: ast.AST) -> list[ast.expr]:
     if isinstance(node, ast.Assign):
-        return list(node.targets)
+        return [leaf for target in node.targets for leaf in _flatten(target)]
     if isinstance(node, ast.AugAssign | ast.AnnAssign):
-        return [node.target]
+        return _flatten(node.target)
     return []
 
 
 def attribute_assignments(tree: ast.Module, attr: str) -> list[tuple[int, str]]:
-    """`<receiver>.<attr> = …` 대입 위치 (줄, 수신자 이름 또는 '?')."""
+    """`<receiver>.<attr> = …` 대입 위치 (줄, 수신자 이름 또는 '?') — 튜플 언패킹 포함."""
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         for target in _targets(node):
             if isinstance(target, ast.Attribute) and target.attr == attr:
                 receiver = target.value.id if isinstance(target.value, ast.Name) else "?"
-                found.append((node.lineno, receiver))
+                found.append((target.lineno, receiver))
     return found
 
 
@@ -85,6 +96,176 @@ def call_lines(tree: ast.Module, names: set[str]) -> list[int]:
     return lines
 
 
+# ── 보호 열 쓰기 지점 탐지 (통로 밖 대입 차단의 공통 엔진) ─────────────────────────────
+
+#: 통로(record_transition·recompute_total·insert_draft) 밖에서 쓰면 안 되는 헤더 열.
+PROTECTED = frozenset(
+    {"status", "frozen_at", "confirmed_at", "total_amount", "total_cost", "doc_number"}
+)
+#: 키를 정적으로 알 수 없는 쓰기(`**dict`·동적 setattr·비리터럴 values) 표식.
+UNKNOWN = "**?"
+
+#: 허용된 쓰기 지점 — (파일, 함수, 열). **파일:함수 단위**로 좁게 둔다. 각 항목은 실제로 쓰여야 한다(썩은 허용 목록 방지).
+ALLOWED_SITES: frozenset[tuple[str, str, str]] = frozenset(
+    {
+        (TRANSITION, "record_birth", "status"),  # 탄생 상태 대입(이력·이벤트와 한 쌍)
+        (TRANSITION, "record_transition", "status"),  # 유일한 전이 통로
+        (TRANSITION, "record_transition", UNKNOWN),  # setattr(doc, FREEZE_COLUMN[kind], now)
+        ("modules/trade_docs/editing.py", "recompute_total", UNKNOWN),  # setattr(헤더 합계 열)
+        (QT_SERVICE, "insert_draft", "total_amount"),  # 생성 시점 합계(라인 합을 미리 계산)
+        (QT_SERVICE, "insert_draft", "doc_number"),  # 채번은 생성자에서만
+        (QT_SERVICE, "insert_draft", UNKNOWN),  # **header — _header_columns의 화이트리스트 결과
+        # 헤더 편집: setattr(row, name, value)의 name은 _header_columns가 만든 화이트리스트 cols의 키(아래 자기검사가 확인)
+        (QT_SERVICE, "update_quotation", UNKNOWN),
+        (QT_SERVICE, "update_meta", UNKNOWN),
+        # 담당 이관: update(target.model).values({target.column.key: …}) — 열은 ASSIGNMENT_TARGETS(아래 테스트가 확인)
+        ("modules/handover/service.py", "reassign_all", UNKNOWN),
+    }
+)
+_MODEL_CALLS = DOC_MODEL_NAMES
+_WRITE_STARTERS = {"update", "insert"}
+
+
+def _call_name(node: ast.Call) -> str:
+    return node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+
+
+def _dict_keys(node: ast.expr) -> set[str]:
+    if not isinstance(node, ast.Dict):
+        return {UNKNOWN}
+    keys: set[str] = set()
+    for key in node.keys:
+        keys.add(
+            key.value if isinstance(key, ast.Constant) and isinstance(key.value, str) else UNKNOWN
+        )
+    return keys
+
+
+def _write_keys(call: ast.Call) -> set[str]:
+    """호출이 쓰는 열 이름들 — 키워드·`**{…}`·위치 dict. 리터럴이 아니면 UNKNOWN."""
+    keys: set[str] = set()
+    for kw in call.keywords:
+        keys |= {kw.arg} if kw.arg else _dict_keys(kw.value)
+    for arg in call.args:
+        keys |= _dict_keys(arg)
+    return keys
+
+
+def _root_name(node: ast.expr) -> str:
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else ""
+
+
+def _targets_doc_or_dynamic(arg: ast.expr) -> bool:
+    """update()의 대상이 전표 모델이거나, 정적으로 알 수 없는 모델(`target.model`처럼 대문자 클래스명이 아닌 것)인가."""
+    root = _root_name(arg)
+    return root in DOC_MODEL_NAMES or not root[:1].isupper()
+
+
+def _chain_targets_doc_model(call: ast.Call) -> bool:
+    """`update(Quotation)…values(…)` 체인의 뿌리가 전표 모델인가."""
+    node: ast.expr = call.func
+    while True:
+        if isinstance(node, ast.Attribute):
+            node = node.value
+        elif isinstance(node, ast.Call):
+            if (
+                _call_name(node) in _WRITE_STARTERS
+                and node.args
+                and _targets_doc_or_dynamic(node.args[0])
+            ):
+                return True
+            node = node.func
+        else:
+            return False
+
+
+def walk_with_function(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
+    """(노드, 둘러싼 함수 이름) — 재귀 순회라 BFS/DFS 순서에 기대지 않는다. 최상위는 '<module>'."""
+
+    def visit(node: ast.AST, function: str) -> Iterator[tuple[ast.AST, str]]:
+        yield node, function
+        inner = node.name if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) else function
+        for child in ast.iter_child_nodes(node):
+            yield from visit(child, inner)
+
+    yield from visit(tree, "<module>")
+
+
+def is_doc_scope(rel: str, tree: ast.Module) -> bool:
+    """전표 모듈이거나 전표 모델을 언급하는 파일(예: handover) — 속성 대입·setattr 스캔 대상."""
+    return module_of(rel) in DOC_MODULES or bool(referenced_names(tree) & DOC_MODEL_NAMES)
+
+
+def protected_write_sites(
+    rel: str, tree: ast.Module, *, doc_scope: bool
+) -> list[tuple[int, str, str, str]]:
+    """보호 열을 쓰는(또는 쓸 수 있는) 모든 지점 — (줄, 함수, 열, 방식).
+
+    범위 밖 파일은 전표 모델 생성자·`update(전표)…values`만 본다(다른 모델의 같은 이름 열은 무관).
+    """
+    sites: list[tuple[int, str, str, str]] = []
+    for node, function in walk_with_function(tree):
+        if doc_scope:
+            for target in _targets(node):
+                if isinstance(target, ast.Attribute) and target.attr in PROTECTED:
+                    sites.append((target.lineno, function, target.attr, "attr"))
+        if not isinstance(node, ast.Call):
+            continue
+        name = _call_name(node)
+        if (
+            doc_scope
+            and name == "setattr"
+            and isinstance(node.func, ast.Name)
+            and len(node.args) >= 2
+        ):
+            arg = node.args[1]
+            column = (
+                arg.value
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                else UNKNOWN
+            )
+            if column in PROTECTED or column == UNKNOWN:
+                sites.append((node.lineno, function, column, "setattr"))
+        elif name in _MODEL_CALLS:
+            sites.extend(
+                (node.lineno, function, key, "ctor")
+                for key in _write_keys(node)
+                if key in PROTECTED or key == UNKNOWN
+            )
+        elif name == "values" and (doc_scope or _chain_targets_doc_model(node)):
+            sites.extend(
+                (node.lineno, function, key, "values")
+                for key in _write_keys(node)
+                if key in PROTECTED or key == UNKNOWN
+            )
+    return sites
+
+
+def raw_sql_doc_writes(tree: ast.Module) -> list[int]:
+    """문자열 SQL로 전표 테이블을 쓰는 지점(`UPDATE quotations …`) — ORM 통로를 우회하는 길."""
+    pattern = re.compile(r"(?is)\b(update|insert\s+into|delete\s+from)\s+quotations?\b")
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and pattern.search(node.value)
+    ]
+
+
+def all_protected_sites() -> dict[tuple[str, str, str], list[int]]:
+    """앱 전체의 보호 열 쓰기 지점 — (파일, 함수, 열) → 줄들."""
+    found: dict[tuple[str, str, str], list[int]] = {}
+    for rel, tree in app_sources().items():
+        for line, function, column, _how in protected_write_sites(
+            rel, tree, doc_scope=is_doc_scope(rel, tree)
+        ):
+            found.setdefault((rel, function, column), []).append(line)
+    return found
+
+
 def _doc_module_sources() -> dict[str, ast.Module]:
     return {rel: tree for rel, tree in app_sources().items() if module_of(rel) in DOC_MODULES}
 
@@ -98,53 +279,85 @@ def test_the_scan_is_not_vacuous() -> None:
     )
 
 
-def test_status_is_assigned_only_by_the_transition_channel() -> None:
-    """`.status =`·`status=` 생성자·setattr·update().values(status=)는 transition.py 밖 전표 모듈에 0건 (B9 #1)"""
-    offenders: list[str] = []
-    for rel, tree in _doc_module_sources().items():
-        if rel == TRANSITION:
-            continue
-        for line, _receiver in attribute_assignments(tree, "status"):
-            offenders.append(f"{rel}:{line} .status = …")
-        for line in keyword_calls(tree, "status", DOC_MODEL_NAMES | {"values"}):
-            offenders.append(f"{rel}:{line} status=…")
-        for line in setattr_with_literal(tree, "status"):
-            offenders.append(f"{rel}:{line} setattr(…, 'status')")
-    assert offenders == [], f"상태 대입 통로 밖의 대입: {offenders}"
+def test_protected_columns_are_written_only_at_allowed_sites() -> None:
+    """상태·동결 시각·합계·번호는 허용 지점(파일:함수) 밖에서 쓰지 않는다 — 속성 대입·튜플 언패킹·setattr(리터럴·동적)·
+    생성자 키워드(`**dict` 포함)·`update(전표).values(키워드·dict·**dict)`, 전표 모듈 밖(handover 등)까지 (B9 #1)"""
+    sites = all_protected_sites()
+    offenders = sorted(
+        f"{rel}:{fn} {column} @{lines}"
+        for (rel, fn, column), lines in sites.items()
+        if (rel, fn, column) not in ALLOWED_SITES
+    )
+    assert offenders == [], f"통로 밖 쓰기: {offenders}"
+    stale = sorted(ALLOWED_SITES - set(sites))
+    assert stale == [], f"쓰이지 않는 허용 항목(목록에서 제거): {stale}"
 
 
-def test_freeze_marker_is_written_only_through_the_transition_channel() -> None:
-    """동결 시각(frozen_at·confirmed_at)은 record_transition이 setattr(FREEZE_COLUMN)로만 쓴다 — 직접 대입 0건"""
-    offenders = [
-        f"{rel}:{line}"
-        for rel, tree in _doc_module_sources().items()
-        for attr in ("frozen_at", "confirmed_at")
-        for line, _r in attribute_assignments(tree, attr)
-    ]
-    assert offenders == []
-    source = app_sources()[TRANSITION]
-    assert any(
-        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr"
-        for node in ast.walk(source)
-    ), "transition.py가 동결 시각을 setattr로 쓰지 않는다"
-
-
-def test_totals_are_never_assigned_directly_and_only_the_create_path_passes_them() -> None:
-    """헤더 합계는 대입하지 않는다(recompute_total의 setattr뿐) · 생성자 total_amount=는 견적 서비스 insert_draft 한 곳"""
-    for rel, tree in _doc_module_sources().items():
-        for attr in ("total_amount", "total_cost"):
-            assert attribute_assignments(tree, attr) == [], f"{rel}: {attr} 직접 대입"
-    creators = {
-        rel: keyword_calls(tree, "total_amount", DOC_MODEL_NAMES)
-        for rel, tree in _doc_module_sources().items()
+def test_raw_sql_never_writes_document_tables() -> None:
+    """문자열 SQL(`UPDATE quotations …`)로 ORM 통로를 우회하는 길 0건"""
+    offenders = {
+        rel: raw_sql_doc_writes(tree)
+        for rel, tree in app_sources().items()
+        if raw_sql_doc_writes(tree)
     }
-    assert {rel for rel, lines in creators.items() if lines} == {QT_SERVICE}
-    assert len(creators[QT_SERVICE]) == 1
+    assert offenders == {}
+
+
+def test_the_dynamic_write_allowlist_entries_are_bounded_by_whitelists() -> None:
+    """허용 목록의 동적 쓰기(UNKNOWN)가 실제로는 좁은 화이트리스트를 거친다 — 보호 열이 그 안에 들어갈 수 없다"""
+    from app.modules.handover.targets import ASSIGNMENT_TARGETS
+    from app.modules.quotations.service import _FREE_FIELDS, CONTENT_REQUEST_FIELDS
+    from app.modules.trade_docs.incoterms import EMPTY_INCOTERM_COLUMNS
+    from app.modules.trade_docs.payment_terms import EMPTY_TERMS_COLUMNS, build_payment_terms
+
+    assert not {t.column.key for t in ASSIGNMENT_TARGETS} & PROTECTED  # 담당 이관이 쓰는 열
+    assert not (set(_FREE_FIELDS) | CONTENT_REQUEST_FIELDS) & PROTECTED  # 헤더 편집 요청 필드
+    assert not set(EMPTY_TERMS_COLUMNS) & PROTECTED and not set(EMPTY_INCOTERM_COLUMNS) & PROTECTED
+    terms = build_payment_terms({"payment_type": "LC"})
+    assert terms is not None and not set(terms.columns()) & PROTECTED
+    # _header_columns가 cols에 넣는 키는 전부 리터럴(동적 키 0)이고 보호 열이 아니다
+    tree = app_sources()[QT_SERVICE]
+    function = next(
+        n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_header_columns"
+    )
+    keys: list[ast.expr] = [
+        node.slice
+        for node in ast.walk(function)
+        if isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "cols"
+    ]
+    assert keys and all(isinstance(k, ast.Constant) for k in keys), "cols에 동적 키가 들어간다"
+    assert not {k.value for k in keys if isinstance(k, ast.Constant)} & PROTECTED
+    # 개정 초안의 헤더 dict 리터럴도 보호 열을 싣지 않는다
+    lifecycle = app_sources()["modules/trade_chain/lifecycle.py"]
+    literals = [
+        n.value
+        for n in ast.walk(lifecycle)
+        if isinstance(n, ast.AnnAssign)
+        and isinstance(n.target, ast.Name)
+        and n.target.id == "header"
+        and isinstance(n.value, ast.Dict)
+    ]
+    assert literals and not _dict_keys(literals[0]) & (PROTECTED | {UNKNOWN})
+
+
+def test_totals_and_numbers_have_a_single_creator() -> None:
+    """생성자의 total_amount=·doc_number=는 견적 서비스 insert_draft 한 곳 · 헤더 합계는 recompute_total의 setattr로만 오른다"""
+    sites = all_protected_sites()
+    for column in ("total_amount", "doc_number"):
+        assert {k[:2] for k in sites if k[2] == column} == {(QT_SERVICE, "insert_draft")}, column
+        assert len(sites[(QT_SERVICE, "insert_draft", column)]) == 1
     editing = app_sources()["modules/trade_docs/editing.py"]
     assert any(
         isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "setattr"
         for n in ast.walk(editing)
     ), "recompute_total이 합계를 setattr로 쓰지 않는다"
+    source = app_sources()[TRANSITION]
+    assert any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr"
+        for node in ast.walk(source)
+    ), "transition.py가 동결 시각을 setattr로 쓰지 않는다"
 
 
 def test_document_headers_are_never_soft_deleted_and_doc_number_is_never_reassigned() -> None:
@@ -193,18 +406,37 @@ def test_status_log_rows_are_created_only_by_the_transition_channel() -> None:
                 assert node.value.id != "STATUS_LOG_MODELS", rel
 
 
+def _calls_in_source_order(function: ast.FunctionDef) -> list[str]:
+    """호출 이름을 **소스 위치 순**으로(ast.walk의 BFS 순서에 기대지 않는다)."""
+    calls = [c for c in ast.walk(function) if isinstance(c, ast.Call)]
+    calls.sort(key=lambda c: (c.lineno, c.col_offset))
+    return [
+        c.func.attr if isinstance(c.func, ast.Attribute) else getattr(c.func, "id", "")
+        for c in calls
+    ]
+
+
 def test_line_writes_go_through_the_editable_guard() -> None:
     """라인 쓰기 3함수(add·update·remove)는 assert_editable을 호출하고 헤더를 lock_document로 먼저 잠근다 (B9 #7)"""
     tree = app_sources()[QT_SERVICE]
-    functions = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     for name in ("add_line", "update_line", "remove_line"):
-        calls = [
-            c.func.attr if isinstance(c.func, ast.Attribute) else getattr(c.func, "id", "")
-            for c in ast.walk(functions[name])
-            if isinstance(c, ast.Call)
-        ]
+        calls = _calls_in_source_order(functions[name])
         assert "assert_editable" in calls and "lock_document" in calls, name
         assert calls.index("lock_document") < calls.index("assert_editable"), f"{name}: 잠금이 먼저"
+
+
+def test_the_lock_order_of_a_line_write_is_checked_in_source_order() -> None:
+    """공회전 방지 — 중첩 호출이 있어도 소스 위치 순으로 잠금이 먼저인지 가려낸다"""
+    good = ast.parse("def f():\n    g(lock_document(a))\n    assert_editable(x)\n").body[0]
+    bad = ast.parse(
+        "def f():\n    assert_editable(lock_document_later(x))\n    lock_document(a)\n"
+    ).body[0]
+    assert isinstance(good, ast.FunctionDef) and isinstance(bad, ast.FunctionDef)
+    order_good = _calls_in_source_order(good)
+    order_bad = _calls_in_source_order(bad)
+    assert order_good.index("lock_document") < order_good.index("assert_editable")
+    assert order_bad.index("assert_editable") < order_bad.index("lock_document")
 
 
 def test_no_http_delete_on_the_document_itself() -> None:
@@ -242,3 +474,74 @@ def test_scanners_detect_violations_in_a_synthetic_corpus() -> None:
     assert attribute_assignments(good, "status") == []
     assert attribute_assignments(good, "deleted_at") == [(1, "line")]
     assert keyword_calls(good, "status", DOC_MODEL_NAMES) == []
+
+
+def _sites(
+    source: str, *, rel: str = "modules/other/x.py", doc_scope: bool = False
+) -> set[tuple[str, str, str]]:
+    tree = parse_source(source)
+    return {
+        (fn, col, how) for _l, fn, col, how in protected_write_sites(rel, tree, doc_scope=doc_scope)
+    }
+
+
+def test_the_protected_write_scan_catches_every_bypass_shape() -> None:
+    """양성 표본 — 우회 형태마다 위반 소스가 실제로 잡힌다(스캔 공회전 방지)"""
+    assert ("f", "status", "attr") in _sites("def f(d):\n    d.status = 'X'\n", doc_scope=True)
+    assert ("f", "status", "attr") in _sites(
+        "def f(a, d):\n    a, d.status = 1, 'X'\n", doc_scope=True
+    )  # 튜플 언패킹
+    assert ("f", "total_amount", "attr") in _sites(
+        "def f(d):\n    d.total_amount += 1\n", doc_scope=True
+    )
+    assert ("f", "status", "setattr") in _sites(
+        "def f(d):\n    setattr(d, 'status', 'X')\n", doc_scope=True
+    )
+    assert ("f", UNKNOWN, "setattr") in _sites(
+        "def f(d, n):\n    setattr(d, n, 'X')\n", doc_scope=True
+    )  # 동적 setattr
+    assert ("f", "frozen_at", "ctor") in _sites(
+        "def f():\n    Quotation(frozen_at=now)\n"
+    )  # 범위 밖 파일도
+    assert ("f", UNKNOWN, "ctor") in _sites("def f(p):\n    Quotation(**p)\n")
+    assert ("f", "status", "ctor") in _sites("def f():\n    Quotation(**{'status': 'X'})\n")
+    assert ("f", "total_amount", "values") in _sites(
+        "def f():\n    session.execute(update(Quotation).values(total_amount=5))\n"
+    )  # DOC_MODEL_NAMES 밖 모듈에서의 합계 쓰기
+    assert ("f", "status", "values") in _sites(
+        "def f():\n    session.execute(update(Quotation).where(x).values({'status': 'X'}))\n"
+    )
+    assert ("f", "status", "values") in _sites(
+        "def f():\n    session.execute(update(Quotation).values(**{'status': 'X'}))\n"
+    )
+    assert ("f", UNKNOWN, "values") in _sites(
+        "def f(c):\n    session.execute(update(Quotation).values({c: 1}))\n"
+    )
+    assert ("f", "doc_number", "values") in _sites(
+        "def f():\n    session.execute(insert(Quotation.__table__).values(doc_number='x'))\n"
+    )
+
+
+def test_the_protected_write_scan_is_quiet_on_legitimate_code() -> None:
+    """정상 표본 — 다른 모델의 같은 이름 열·전표의 자유 열 쓰기·라인 생성은 조용하다"""
+    assert (
+        _sites("def f(c):\n    c.status = 'X'\n    setattr(c, n, 1)\n") == set()
+    )  # 범위 밖 파일의 다른 모델
+    assert _sites("def f():\n    update(Certification).values(status='X')\n") == set()
+    assert _sites("def f():\n    update(Quotation).values(assignee_id=3)\n") == set()
+    assert _sites("def f():\n    QuotationLine(qt_id=1, quantity=2)\n") == set()
+    assert _sites("def f(d):\n    d.internal_note = 'x'\n", doc_scope=True) == set()
+
+
+def test_raw_sql_scan_catches_a_document_write_string() -> None:
+    """양성 표본 — 문자열 SQL로 전표를 쓰면 잡힌다"""
+    assert raw_sql_doc_writes(parse_source("s = 'UPDATE quotations SET status = 1'")) == [1]
+    assert raw_sql_doc_writes(parse_source("s = 'SELECT 1 FROM quotations'")) == []
+
+
+def test_the_allowlist_is_narrow_and_scoped_by_function() -> None:
+    """허용 목록은 파일:함수 단위 — 같은 파일의 다른 함수가 같은 열을 쓰면 위반으로 잡힌다"""
+    sites = _sites("def other(d, n):\n    setattr(d, n, 1)\n", rel=QT_SERVICE, doc_scope=True)
+    assert ("other", UNKNOWN, "setattr") in sites
+    assert (QT_SERVICE, "other", UNKNOWN) not in ALLOWED_SITES
+    assert all(len(entry) == 3 and entry[1] != "<module>" for entry in ALLOWED_SITES)

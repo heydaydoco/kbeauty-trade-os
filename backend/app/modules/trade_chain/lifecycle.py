@@ -90,6 +90,33 @@ def quotations_line_count(session: Any, qt_id: int) -> int:
     )
 
 
+def _lock_issue_targets(
+    session: Any, qt_id: int, version: int
+) -> tuple[Quotation, Quotation | None]:
+    """발행 잠금: 바이어(KEY SHARE) → (개정본이면) 원본 QT → 본 QT — id 오름차순(원본이 항상 더 오래된 행).
+
+    바이어·원본 id는 무잠금 조회로 얻고 QT를 잠근 뒤 그대로인지 재확인한다(달라졌으면 409 — 재시도 안내).
+    """
+    peek = session.execute(
+        select(Quotation.buyer_partner_id, Quotation.copied_from_id).where(
+            Quotation.id == qt_id, Quotation.deleted_at.is_(None)
+        )
+    ).one_or_none()
+    if peek is None:
+        return lock_document(session, Quotation, qt_id, expected_version=version), None  # NotFound
+    peek_buyer, peek_source = peek
+    partners.require_partner_of_any_type(
+        session, peek_buyer, ("BUYER",), field="buyer_partner_id", type_label="바이어", lock=True
+    )
+    source: Quotation | None = None
+    if peek_source is not None and peek_source < qt_id:
+        source = lock_document(session, Quotation, peek_source)
+    row = lock_document(session, Quotation, qt_id, expected_version=version)
+    if row.buyer_partner_id != peek_buyer or row.copied_from_id != peek_source:
+        raise VersionConflictError(log_context={"quotation_id": qt_id})
+    return row, source
+
+
 def issue_quotation(
     *, actor: AuthenticatedUser, idempotency_key: str, qt_id: int, version: int
 ) -> tuple[int, dict[str, Any]]:
@@ -106,16 +133,7 @@ def issue_quotation(
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
 
-        # 개정본이면 원본을 먼저(id 오름차순 — 원본이 항상 더 오래된 행) 잠근다.
-        peek_source = session.execute(
-            select(Quotation.copied_from_id).where(Quotation.id == qt_id)
-        ).scalar_one_or_none()
-        source: Quotation | None = None
-        if peek_source is not None and peek_source < qt_id:
-            source = lock_document(session, Quotation, peek_source)
-        row = _lock_buyer_then_quotation(session, qt_id, version)
-        if row.copied_from_id != peek_source:
-            raise VersionConflictError(log_context={"quotation_id": qt_id})
+        row, source = _lock_issue_targets(session, qt_id, version)
 
         if row.status != "DRAFT":
             raise AppError(

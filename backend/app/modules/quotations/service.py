@@ -12,8 +12,9 @@ L1: 이 모듈은 **전이를 하지 않는다**(발행·취소·개정은 trade
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -24,7 +25,7 @@ from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.money import Money, minor_units
-from app.core.time import today_kst, utcnow
+from app.core.time import to_kst, today_kst, utcnow
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.models import User
 from app.modules.identity.service import AuthenticatedUser
@@ -579,6 +580,11 @@ def list_quotations(
         return [_summary_body(row) for row in rows], total
 
 
+def created_date_kst(created_at: datetime) -> str:
+    """CSV "생성일" — 저장은 UTC지만 사람이 보는 날짜는 KST다(UTC 15:00 이후는 KST 다음 날)."""
+    return to_kst(created_at).date().isoformat()
+
+
 def export_rows(
     *,
     status: str | None = None,
@@ -627,7 +633,7 @@ def export_rows(
                 advance_pct_text(r.advance_pct_bp) or "",
                 f"{r.incoterm_code} {r.incoterm_place}" if r.incoterm_code else "",
                 name or "",
-                r.created_at.date().isoformat(),
+                created_date_kst(r.created_at),
             )
             for r, name in rows
         ]
@@ -705,6 +711,23 @@ CONTENT_REQUEST_FIELDS: frozenset[str] = frozenset(
 )
 
 
+def _prelock_new_buyer(session: Session, buyer_partner_id: int) -> None:
+    """잠금 순서 (3 partners) → (4 quotations): 바꿀 바이어를 QT보다 **먼저** FOR KEY SHARE로 잠근다.
+
+    검증 실패(미존재·유형 불일치)는 여기서 삼킨다 — 같은 검증이 QT 잠금 뒤 `_header_columns`에서 다시 돌아
+    동결 상태 우선 규칙(FROZEN이 검증 오류보다 먼저)과 함께 같은 오류를 낸다. 이미 잡은 잠금은 트랜잭션 끝까지 유지된다.
+    """
+    with contextlib.suppress(AppError):
+        partners.require_partner_of_any_type(
+            session,
+            buyer_partner_id,
+            ("BUYER",),
+            field="buyer_partner_id",
+            type_label="바이어",
+            lock=True,
+        )
+
+
 def update_quotation(
     *, actor: AuthenticatedUser, qt_id: int, payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -717,6 +740,8 @@ def update_quotation(
     content_keys = sorted(CONTENT_REQUEST_FIELDS & values.keys())
     with unit_of_work() as uow:
         session = uow.session
+        if values.get("buyer_partner_id") is not None:
+            _prelock_new_buyer(session, values["buyer_partner_id"])
         row = lock_document(session, Quotation, qt_id, expected_version=payload["version"])
         editable = row.status in EDITABLE_STATES[KIND]
         try:
@@ -734,12 +759,38 @@ def update_quotation(
                 "currency",
                 "이미 라인을 입력한 견적은 통화를 바꿀 수 없습니다(가격은 통화별입니다). 새 견적을 작성해 주세요.",
             )
+        buyer_changed = (
+            "buyer_partner_id" in cols and cols["buyer_partner_id"] != row.buyer_partner_id
+        )
         for name, value in cols.items():
             if getattr(row, name) != value:
                 setattr(row, name, value)
         row.updated_by_id = actor.id
+        if buyer_changed:
+            _rederive_buyer_item_codes(session, row, actor.id)
         session.flush()
         return detail_body(session, row)
+
+
+def _rederive_buyer_item_codes(session: Session, header: Quotation, actor_id: int) -> None:
+    """바이어가 바뀌면 살아 있는 라인 전건의 바이어 품번을 새 바이어 기준으로 다시 정한다(라인 추가와 같은 규칙).
+
+    새 바이어에 매핑이 없거나(0건) 여러 개(2건 이상, 사용자가 골라야 함)이면 NULL — 옛 바이어 품번이 남지 않는다.
+    금액은 바뀌지 않으므로 합계 재계산은 없고, 헤더 version은 헤더 편집 UPDATE 1회로 이미 +1이다(라인은 version 없음).
+    """
+    lines = session.execute(
+        select(QuotationLine).where(
+            QuotationLine.qt_id == header.id, QuotationLine.deleted_at.is_(None)
+        )
+    ).scalars()
+    for line in lines:
+        code = resolve_buyer_item_code(
+            session, header.buyer_partner_id, line.sku_id, None, field="buyer_item_code"
+        )
+        if code != line.buyer_item_code:
+            line.buyer_item_code = code
+            line.updated_by_id = actor_id
+            line.updated_at = utcnow()
 
 
 def update_meta(*, actor: AuthenticatedUser, qt_id: int, payload: dict[str, Any]) -> dict[str, Any]:

@@ -6,14 +6,16 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.exc import DBAPIError
 
-from app.core.db.session import owner_engine
+from app.core.db.session import engine, owner_engine
 from app.core.db.uow import unit_of_work
 from app.core.errors.exceptions import AppError
 from app.core.time import today_kst
@@ -21,6 +23,7 @@ from app.modules.identity.models import RoleCode
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.quotations import service as quotations
 from app.modules.trade_chain import lifecycle
+from app.modules.trade_docs.locking import LOCK_ORDER
 from tests.factories.trade import (
     PAYMENT_TT_ADVANCE_30,
     create_buyer,
@@ -292,3 +295,288 @@ def test_a_held_row_lock_surfaces_as_lock_not_available_not_a_hang() -> None:
     finally:
         tx.rollback()
         holder.close()
+
+
+def _issued(actor: AuthenticatedUser, buyer: int | None = None) -> dict[str, Any]:
+    draft = _draft(actor, buyer or create_buyer(), create_priced_sku())
+    _s, issued = lifecycle.issue_quotation(
+        actor=actor, idempotency_key=unique("iss"), qt_id=draft["id"], version=draft["version"]
+    )
+    return issued
+
+
+def _ready_revision(actor: AuthenticatedUser, original: dict[str, Any], key: str) -> dict[str, Any]:
+    """개정 초안을 만들고 발행 가능하도록 유효기간을 채운다(개정 초안은 유효기간이 비어 시작한다)"""
+    _s, revision = lifecycle.create_revision(
+        actor=actor, idempotency_key=key, qt_id=original["id"], version=original["version"]
+    )
+    edited: dict[str, Any] = quotations.update_quotation(
+        actor=actor,
+        qt_id=revision["id"],
+        payload={"version": revision["version"], "valid_until": today_kst() + timedelta(days=30)},
+    )
+    return edited
+
+
+def _only_conflicts(outcomes: list[Any]) -> None:
+    """실패는 전부 정의된 409(AppError)여야 한다 — 데드락·IntegrityError·500이 새면 실패"""
+    for outcome in outcomes:
+        if not outcome.ok:
+            assert isinstance(outcome.error, AppError), repr(outcome.error)
+            assert outcome.error.status_code == 409, outcome.error
+
+
+@pytest.mark.parametrize("round_no", range(6))
+def test_cancel_versus_revision_publish_cancels_the_original_exactly_once(round_no: int) -> None:
+    """원본 취소 vs 개정 발행(원본을 함께 취소) 동시 — 데드락 없이, 원본 CANCELLED 이력은 정확히 1행·개정본은 발행됨 또는 초안"""
+    actor = _actor()
+    original = _issued(actor)
+    revision = _ready_revision(actor, original, f"mk-rev-{round_no}")
+
+    def worker(i: int) -> Any:
+        if i == 0:
+            return lifecycle.transition_quotation(
+                actor=actor,
+                idempotency_key=f"cx-{round_no}",
+                qt_id=original["id"],
+                to="CANCELLED",
+                version=original["version"],
+                reason="동시 취소",
+            )
+        return lifecycle.issue_quotation(
+            actor=actor,
+            idempotency_key=f"rp-{round_no}",
+            qt_id=revision["id"],
+            version=revision["version"],
+        )
+
+    outcomes = run_concurrently(worker, workers=2)
+    _only_conflicts(outcomes)
+    assert any(o.ok for o in outcomes)
+    assert _scalar("SELECT status FROM quotations WHERE id = :i", i=original["id"]) == "CANCELLED"
+    assert (
+        _scalar(
+            "SELECT count(*) FROM quotation_status_log WHERE quotation_id = :i"
+            " AND from_status = 'ISSUED' AND to_status = 'CANCELLED'",
+            i=original["id"],
+        )
+        == 1
+    )
+    revision_status = _scalar("SELECT status FROM quotations WHERE id = :i", i=revision["id"])
+    assert revision_status == ("ISSUED" if outcomes[1].ok else "DRAFT")
+
+
+@pytest.mark.parametrize("round_no", range(6))
+def test_cancel_versus_issue_of_the_same_draft_admits_only_one(round_no: int) -> None:
+    """같은 초안의 취소 vs 발행 동시(같은 version) — 정확히 1건 성공, 최종 상태와 이력이 승자와 일치"""
+    actor = _actor()
+    qt = _draft(actor, create_buyer(), create_priced_sku())
+
+    def worker(i: int) -> Any:
+        if i == 0:
+            return (
+                "cancel",
+                lifecycle.transition_quotation(
+                    actor=actor,
+                    idempotency_key=f"cv-c-{round_no}",
+                    qt_id=qt["id"],
+                    to="CANCELLED",
+                    version=qt["version"],
+                    reason="동시 취소",
+                ),
+            )
+        return (
+            "issue",
+            lifecycle.issue_quotation(
+                actor=actor,
+                idempotency_key=f"cv-i-{round_no}",
+                qt_id=qt["id"],
+                version=qt["version"],
+            ),
+        )
+
+    outcomes = run_concurrently(worker, workers=2)
+    _only_conflicts(outcomes)
+    winners = [o.value[0] for o in outcomes if o.ok]
+    assert len(winners) == 1, [(o.ok, o.error) for o in outcomes]
+    expected = "CANCELLED" if winners == ["cancel"] else "ISSUED"
+    assert _scalar("SELECT status FROM quotations WHERE id = :i", i=qt["id"]) == expected
+    assert (
+        _scalar(
+            "SELECT count(*) FROM quotation_status_log WHERE quotation_id = :i"
+            " AND from_status = 'DRAFT' AND to_status IN ('CANCELLED', 'ISSUED')",
+            i=qt["id"],
+        )
+        == 1
+    )
+
+
+def test_revision_double_click_with_the_same_key_creates_one_draft() -> None:
+    """개정 더블클릭(같은 멱등 키 동시 2요청) → 둘 다 같은 응답·개정 초안 1건(멱등 claim 직렬화)"""
+    actor = _actor()
+    original = _issued(actor)
+
+    def worker(_i: int) -> Any:
+        return lifecycle.create_revision(
+            actor=actor,
+            idempotency_key="dbl-rev",
+            qt_id=original["id"],
+            version=original["version"],
+        )
+
+    outcomes = run_concurrently(worker, workers=2)
+    assert all(o.ok for o in outcomes), [o.error for o in outcomes]
+    assert outcomes[0].value == outcomes[1].value
+    assert (
+        _scalar("SELECT count(*) FROM quotations WHERE copied_from_id = :s", s=original["id"]) == 1
+    )
+
+
+# ── 잠금 순서 계측 — LOCK_ORDER(idempotency→partners→quotations→lines→채번)를 실제 SQL로 확인 ──────────
+
+_LOCK_TABLES = {
+    "idempotency_keys": "idempotency_keys",
+    "partners": "partners",
+    "quotations": "quotations",
+    "quotation_lines": "lines",
+    "doc_number_seq": "doc_number_seq",
+}
+_LOCK_CLAUSE = re.compile(r"\bFOR (?:NO KEY )?(?:UPDATE|SHARE|KEY SHARE)\b", re.IGNORECASE)
+_WRITE_LOCK = re.compile(r"^\s*(?:INSERT INTO|UPDATE)\s+(\w+)", re.IGNORECASE)
+_FROM = re.compile(r"\bFROM\s+(\w+)", re.IGNORECASE)
+
+
+def _first_lock_sequence(work: Callable[[], object]) -> list[str]:
+    """work가 실행하는 SQL에서 LOCK_ORDER 대상의 **첫 접촉** 순서(행 잠금 절 또는 멱등·채번 쓰기)를 기록한다."""
+    order: list[str] = []
+
+    def listener(*args: object) -> None:
+        statement = str(args[2])
+        table: str | None = None
+        if _LOCK_CLAUSE.search(statement):
+            found = _FROM.search(statement)
+            table = found.group(1) if found else None
+        else:
+            found = _WRITE_LOCK.match(statement)
+            if found and found.group(1) in ("idempotency_keys", "doc_number_seq"):
+                table = found.group(1)
+        name = _LOCK_TABLES.get(table or "")
+        if name and name not in order:
+            order.append(name)
+
+    event.listen(engine, "before_cursor_execute", listener)
+    try:
+        work()
+    finally:
+        event.remove(engine, "before_cursor_execute", listener)
+    return order
+
+
+def _assert_follows_lock_order(sequence: list[str]) -> None:
+    indexes = [LOCK_ORDER.index(name) for name in sequence]
+    assert indexes == sorted(indexes), f"잠금 순서 위반: {sequence} (기준 {LOCK_ORDER})"
+
+
+def test_the_lock_order_probe_sees_locks_and_flags_a_reversed_order() -> None:
+    """공회전 방지 — 계측이 잠금을 실제로 기록하고, 뒤집힌 순서는 위반으로 판정한다"""
+    actor = _actor()
+    seen = _first_lock_sequence(
+        lambda: quotations.create_quotation(
+            actor=actor,
+            idempotency_key=unique("probe"),
+            payload=_payload(create_buyer(), create_priced_sku()),
+        )
+    )
+    assert "partners" in seen and "doc_number_seq" in seen and "idempotency_keys" in seen, seen
+    with pytest.raises(AssertionError):
+        _assert_follows_lock_order(["quotations", "partners"])
+
+
+def test_every_quotation_operation_takes_locks_in_the_documented_order() -> None:
+    """작성·바이어 변경 편집·발행·개정 초안·개정 발행·취소·라인 추가가 partners→quotations→lines→채번 순으로만 잠근다"""
+    actor = _actor()
+    buyer, other_buyer = create_buyer(), create_buyer()
+    sku, extra_sku = create_priced_sku(), create_priced_sku()
+    holder: dict[str, Any] = {}
+
+    def create() -> None:
+        _s, holder["qt"] = quotations.create_quotation(
+            actor=actor, idempotency_key=unique("lo-c"), payload=_payload(buyer, sku)
+        )
+
+    _assert_follows_lock_order(_first_lock_sequence(create))
+    qt = holder["qt"]
+
+    def edit_buyer() -> None:
+        holder["qt"] = quotations.update_quotation(
+            actor=actor,
+            qt_id=qt["id"],
+            payload={"version": qt["version"], "buyer_partner_id": other_buyer},
+        )
+
+    seen = _first_lock_sequence(edit_buyer)
+    assert seen[:2] == ["partners", "quotations"], seen  # 바뀔 바이어를 QT보다 먼저 잠근다
+    _assert_follows_lock_order(seen)
+    qt = holder["qt"]
+
+    def add_line() -> None:
+        quotations.add_line(
+            actor=actor,
+            qt_id=qt["id"],
+            payload={"version": qt["version"], "sku_id": extra_sku, "quantity": 1},
+        )
+
+    _assert_follows_lock_order(_first_lock_sequence(add_line))
+    qt = quotations.get_quotation(qt["id"])
+
+    def issue() -> None:
+        _s, holder["issued"] = lifecycle.issue_quotation(
+            actor=actor, idempotency_key=unique("lo-i"), qt_id=qt["id"], version=qt["version"]
+        )
+
+    _assert_follows_lock_order(_first_lock_sequence(issue))
+    issued = holder["issued"]
+
+    def revise() -> None:
+        _s, holder["rev"] = lifecycle.create_revision(
+            actor=actor,
+            idempotency_key=unique("lo-r"),
+            qt_id=issued["id"],
+            version=issued["version"],
+        )
+
+    _assert_follows_lock_order(_first_lock_sequence(revise))
+    revision = quotations.update_quotation(
+        actor=actor,
+        qt_id=holder["rev"]["id"],
+        payload={
+            "version": holder["rev"]["version"],
+            "valid_until": today_kst() + timedelta(days=30),
+        },
+    )
+
+    def publish() -> None:
+        lifecycle.issue_quotation(
+            actor=actor,
+            idempotency_key=unique("lo-p"),
+            qt_id=revision["id"],
+            version=revision["version"],
+        )
+
+    seen = _first_lock_sequence(publish)  # 개정 발행: 멱등 → 바이어 → 원본 QT → 본 QT
+    assert seen[:3] == ["idempotency_keys", "partners", "quotations"], seen
+    _assert_follows_lock_order(seen)
+
+    draft = _draft(actor, buyer, sku)
+
+    def cancel() -> None:
+        lifecycle.transition_quotation(
+            actor=actor,
+            idempotency_key=unique("lo-x"),
+            qt_id=draft["id"],
+            to="CANCELLED",
+            version=draft["version"],
+            reason="순서 점검",
+        )
+
+    _assert_follows_lock_order(_first_lock_sequence(cancel))

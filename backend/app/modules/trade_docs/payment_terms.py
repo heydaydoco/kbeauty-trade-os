@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.errors.codes import ErrorCode
@@ -141,8 +142,11 @@ def require_lc_enabled(session: Session, terms: PaymentTerms | None) -> None:
     if terms is None or terms.payment_type != PaymentType.LC.value:
         return
     try:
-        enabled = is_feature_enabled(session, "lc")
-    except Exception:
+        with (
+            session.begin_nested()
+        ):  # SAVEPOINT — DB 오류가 나도 바깥 트랜잭션을 aborted로 만들지 않는다
+            enabled = is_feature_enabled(session, "lc")
+    except SQLAlchemyError:
         enabled = False
     if not enabled:
         raise AppError(ErrorCode.TRADE_DOCS_PAYMENT_LC_DISABLED)

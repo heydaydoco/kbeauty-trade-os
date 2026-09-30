@@ -996,3 +996,99 @@ def test_a_line_edit_that_leaves_the_total_unchanged_still_bumps_the_header_vers
     assert response.status_code == 200, response.text
     assert response.json()["total_amount"] == qt["total_amount"]
     assert response.json()["header_version"] == qt["version"] + 1
+
+
+# ── 적대 검토 반영(PR-5a) ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("bad", ["abc", "1e2", "", "１", " ", "NaN", "1,5"])
+def test_krw_quotation_with_a_malformed_rate_is_422_not_500(trade: TestClient, bad: str) -> None:
+    """KRW 견적의 환율 입력이 형식 오류면 500(InvalidOperation)이 아니라 422 검증 오류"""
+    buyer = create_buyer()
+    response = trade.post(
+        QT, json=quotation_payload(buyer, currency="KRW", fx_rate=bad), headers=idem()
+    )
+    assert response.status_code == 422, response.text
+    assert "fx_rate" in response.json()["error"]["detail"]
+    ok = trade.post(QT, json=quotation_payload(buyer, currency="KRW", fx_rate="1"), headers=idem())
+    assert ok.status_code == 201, ok.text
+
+
+def test_changing_the_buyer_rederives_every_live_line_buyer_item_code(trade: TestClient) -> None:
+    """바이어 변경 시 살아 있는 라인 전건의 바이어 품번을 새 바이어 기준으로 다시 정한다 —
+    매핑 1건이면 그 값·0건이면 NULL·2건이면 NULL(추측 금지), 옛 바이어 품번이 남지 않는다. 제외된 라인은 그대로, version +1 1회, 합계 불변"""
+    old, new = create_buyer(), create_buyer()
+    s_only_old, s_both, s_multi, s_gone = (create_priced_sku() for _ in range(4))
+    map_buyer_item_code(old, s_only_old, "OLD-1")
+    map_buyer_item_code(old, s_both, "OLD-2")
+    map_buyer_item_code(new, s_both, "NEW-2")
+    map_buyer_item_code(old, s_multi, "OLD-3")
+    map_buyer_item_code(new, s_multi, "NEW-3A")
+    map_buyer_item_code(new, s_multi, "NEW-3B")
+    map_buyer_item_code(old, s_gone, "OLD-4")
+    qt = create_quotation_via_api(trade, old, [s_only_old, s_both, s_multi, s_gone])
+    by_sku = {line["sku_id"]: line for line in qt["lines"]}
+    assert by_sku[s_only_old]["buyer_item_code"] == "OLD-1"
+    removed = trade.delete(
+        f"{QT}/{qt['id']}/lines/{by_sku[s_gone]['id']}", params={"version": qt["version"]}
+    )
+    assert removed.status_code == 200, removed.text
+    qt = _chain(qt, removed)
+    edited = trade.patch(
+        f"{QT}/{qt['id']}", json={"version": qt["version"], "buyer_partner_id": new}
+    )
+    assert edited.status_code == 200, edited.text
+    body = edited.json()
+    assert body["version"] == qt["version"] + 1
+    assert body["total_amount"] == qt["total_amount"]
+    codes = {line["sku_id"]: line["buyer_item_code"] for line in body["lines"]}
+    assert codes == {s_only_old: None, s_both: "NEW-2", s_multi: None}
+    stale = _rows(
+        "SELECT buyer_item_code FROM quotation_lines WHERE id = :i", i=by_sku[s_gone]["id"]
+    )
+    assert stale == [("OLD-4",)]  # 제외(soft delete)된 라인은 이력 그대로
+    same = trade.patch(
+        f"{QT}/{qt['id']}", json={"version": body["version"], "buyer_partner_id": new}
+    )
+    assert (
+        same.status_code == 200 and same.json()["version"] == body["version"]
+    )  # 같은 바이어 재지정=무변
+
+
+def test_csv_created_date_is_the_kst_date_not_the_utc_date(trade: TestClient) -> None:
+    """CSV 생성일은 KST 날짜 — UTC 15:30(=KST 다음 날 00:30)은 다음 날, UTC 14:59(=KST 23:59)는 같은 날"""
+    from datetime import UTC, datetime
+
+    from app.modules.quotations.service import created_date_kst
+
+    assert created_date_kst(datetime(2026, 9, 29, 15, 30, tzinfo=UTC)) == "2026-09-30"
+    assert created_date_kst(datetime(2026, 9, 29, 14, 59, tzinfo=UTC)) == "2026-09-29"
+    qt = create_quotation_via_api(trade, create_buyer(), [create_priced_sku()])
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE quotations SET created_at = '2026-09-29 15:30:00+00' WHERE id = :i"),
+            {"i": qt["id"]},
+        )
+    lines = trade.get(f"{QT}/export.csv").text.strip().splitlines()
+    row = next(line for line in lines if qt["doc_number"] in line)
+    assert row.rsplit(",", 1)[-1] == "2026-09-30"
+
+
+def test_a_db_error_while_reading_the_lc_flag_fails_closed_without_poisoning_the_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """플래그 조회가 DB 오류를 내도 422 fail-closed — SAVEPOINT 덕에 바깥 트랜잭션은 aborted가 되지 않는다(이후 쿼리 성공)"""
+    from app.core.errors.exceptions import AppError
+    from app.modules.trade_docs import payment_terms
+
+    def broken(session: Any, code: str) -> bool:
+        session.execute(text("SELECT * FROM table_that_does_not_exist"))
+        return True
+
+    monkeypatch.setattr(payment_terms, "is_feature_enabled", broken)
+    terms = payment_terms.build_payment_terms({"payment_type": "LC"})
+    with unit_of_work() as uow:
+        with pytest.raises(AppError) as caught:
+            payment_terms.require_lc_enabled(uow.session, terms)
+        assert caught.value.code == "TRADE_DOCS.PAYMENT.LC_DISABLED"
+        assert uow.session.execute(text("SELECT 1")).scalar_one() == 1  # 트랜잭션이 살아 있다
