@@ -201,6 +201,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.
         "다른 사용자가 먼저 수정했습니다. 화면을 새로 고쳐 최신 내용을 확인한 뒤 다시 저장해 주세요.",
     ),
+    ErrorCode.CONCURRENCY_LOCK_BUSY: ErrorSpec(
+        409,
+        "같은 건을 다른 사용자가 처리 중입니다. 잠시 후 화면을 새로 고쳐 다시 시도해 주세요.",
+    ),
     ErrorCode.IDEMPOTENCY_KEY_CONFLICT: ErrorSpec(
         409,
         "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",

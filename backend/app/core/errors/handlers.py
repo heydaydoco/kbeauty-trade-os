@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -118,6 +119,22 @@ async def handle_stale_data(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+#: 잠금 대기 초과·교착의 SQLSTATE. 57014(문장 시간 초과)는 일부러 뺐다.
+LOCK_BUSY_SQLSTATES = frozenset({"55P03", "40P01"})
+
+
+async def handle_db_error(request: Request, exc: Exception) -> JSONResponse:
+    """DB 오류 — 잠금 경합만 409로 번역하고 나머지는 마지막 그물로 넘긴다."""
+    assert isinstance(exc, DBAPIError)
+    if getattr(exc.orig, "sqlstate", None) in LOCK_BUSY_SQLSTATES:
+        spec = spec_for(ErrorCode.CONCURRENCY_LOCK_BUSY)
+        logger.info("lock_busy", path=request.url.path, sqlstate=exc.orig.sqlstate)  # type: ignore[union-attr]
+        return _envelope(
+            ErrorCode.CONCURRENCY_LOCK_BUSY, spec.message_ko, {}, spec.status_code, request
+        )
+    return await handle_unexpected(request, exc)
+
+
 async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
     """마지막 그물 — 스택트레이스는 로그에만, 응답에는 오류 번호만."""
     spec = spec_for(ErrorCode.INTERNAL_UNEXPECTED)
@@ -130,4 +147,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, handle_validation_error)
     app.add_exception_handler(StarletteHTTPException, handle_http_exception)
     app.add_exception_handler(StaleDataError, handle_stale_data)
+    app.add_exception_handler(DBAPIError, handle_db_error)
     app.add_exception_handler(Exception, handle_unexpected)
