@@ -94,6 +94,8 @@ def export_partners_csv(current: CurrentUser) -> StreamingResponse:
                 view.dg_capable,
                 view.strengths,
                 view.weaknesses,
+                view.name_en,
+                view.address_en,
             )
             for view in views
         ],

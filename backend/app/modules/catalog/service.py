@@ -92,6 +92,7 @@ class SkuView:
     barcode: str | None
     unit_weight_g: Decimal | None
     box_qty: int | None
+    moq: int | None
     shelf_life_months: int | None
     #: 제조사 = 거래처(유형 OEM — ADR-0020 승격). 이름은 표시용 조인 값이다.
     manufacturer_partner_id: int | None
@@ -186,6 +187,7 @@ def _sku_view(
         barcode=sku.barcode,
         unit_weight_g=sku.unit_weight_g,
         box_qty=sku.box_qty,
+        moq=sku.moq,
         shelf_life_months=sku.shelf_life_months,
         manufacturer_partner_id=sku.manufacturer_partner_id,
         manufacturer_name=manufacturer_name_ko,
@@ -228,6 +230,7 @@ def _serialize_sku(view: SkuView) -> dict[str, Any]:
         "barcode": view.barcode,
         "unit_weight_g": _text(view.unit_weight_g),
         "box_qty": view.box_qty,
+        "moq": view.moq,
         "shelf_life_months": view.shelf_life_months,
         "manufacturer_partner_id": view.manufacturer_partner_id,
         "manufacturer_name": view.manufacturer_name,
@@ -676,6 +679,7 @@ def create_sku(
             barcode=payload.get("barcode"),
             unit_weight_g=_decimal(payload, "unit_weight_g", "중량"),
             box_qty=payload.get("box_qty"),
+            moq=payload.get("moq"),
             shelf_life_months=payload.get("shelf_life_months"),
             manufacturer_partner_id=manufacturer.id if manufacturer is not None else None,
             dg_flag=bool(payload.get("dg_flag")),

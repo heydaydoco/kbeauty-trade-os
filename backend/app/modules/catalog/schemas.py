@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.catalog.models import (
     PRICE_TYPES,
@@ -105,6 +105,8 @@ class ProductSummary(BaseModel):
 
 
 class SkuCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     sku_code: str = Field(min_length=1, max_length=40)
     name_ko: str = Field(min_length=1, max_length=200)
     name_en: str | None = Field(default=None, max_length=200)
@@ -122,6 +124,8 @@ class SkuCreateRequest(BaseModel):
     #: 소매포장 포함 판매단위 1개의 중량(g). 선적의 G.W./N.W.와 다르다(ADR-0003 ⑧).
     unit_weight_g: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=3)
     box_qty: int | None = Field(default=None, gt=0)
+    #: 최소주문수량(EA). 비우면 MOQ 미정의 — 게이트가 '판정 불가'로 표시한다.
+    moq: int | None = Field(default=None, gt=0)
     shelf_life_months: int | None = Field(default=None, gt=0)
     #: 제조사 = 거래처(유형 OEM — ADR-0020 승격). 존재·유형 검증은 서비스가 한다.
     manufacturer_partner_id: int | None = None
@@ -157,6 +161,7 @@ class SkuSummary(BaseModel):
     barcode: str | None
     unit_weight_g: Decimal | None
     box_qty: int | None
+    moq: int | None
     shelf_life_months: int | None
     manufacturer_partner_id: int | None
     #: 표시용 파트너명(조인 값) — 편집은 manufacturer_partner_id로 한다.
@@ -188,6 +193,7 @@ class SkuSummary(BaseModel):
             barcode=view.barcode,
             unit_weight_g=view.unit_weight_g,
             box_qty=view.box_qty,
+            moq=view.moq,
             shelf_life_months=view.shelf_life_months,
             manufacturer_partner_id=view.manufacturer_partner_id,
             manufacturer_name=view.manufacturer_name,

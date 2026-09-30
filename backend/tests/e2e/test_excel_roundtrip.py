@@ -168,7 +168,19 @@ def test_blank_id_creates_and_absent_row_is_ignored(trader: TestClient) -> None:
     rows = _rows(trader.get(PARTNERS_EXPORT).text)
     header = rows[0]
     kept = [row for row in rows[1:] if row[1] == "PTN-STAY"]  # PTN-KEEP 행을 파일에서 뺀다
-    new_row = ["", "PTN-NEW", "새 거래처", "BUYER|SUPPLIER", "1000.50", "USD", "True", "", ""]
+    new_row = [
+        "",
+        "PTN-NEW",
+        "새 거래처",
+        "BUYER|SUPPLIER",
+        "1000.50",
+        "USD",
+        "True",
+        "",
+        "",
+        "",
+        "",
+    ]
 
     staged = _upload(trader, STAGE_PARTNERS, _to_file([header, *kept, new_row]), key="n1")
     assert staged.status_code == 201, staged.text
@@ -201,11 +213,11 @@ def test_corrupted_ids_become_error_rows_with_reasons(trader: TestClient) -> Non
     partner_id = create_partner("PTN-OK", name_ko="정상 거래처", types=("SUPPLIER",))
     rows = _rows(trader.get(PARTNERS_EXPORT).text)
     header = rows[0]
-    garbled = ["abc", "PTN-G", "훼손된 행", "SUPPLIER", "", "", "", "", ""]
-    missing = ["999999", "PTN-M", "없는 ID", "SUPPLIER", "", "", "", "", ""]
-    dup_a = [str(partner_id), "PTN-A", "중복 ID a", "SUPPLIER", "", "", "", "", ""]
-    dup_b = [str(partner_id), "PTN-B", "중복 ID b", "SUPPLIER", "", "", "", "", ""]
-    fresh = ["", "PTN-FRESH", "유효한 신규", "SUPPLIER", "", "", "", "", ""]
+    garbled = ["abc", "PTN-G", "훼손된 행", "SUPPLIER", "", "", "", "", "", "", ""]
+    missing = ["999999", "PTN-M", "없는 ID", "SUPPLIER", "", "", "", "", "", "", ""]
+    dup_a = [str(partner_id), "PTN-A", "중복 ID a", "SUPPLIER", "", "", "", "", "", "", ""]
+    dup_b = [str(partner_id), "PTN-B", "중복 ID b", "SUPPLIER", "", "", "", "", "", "", ""]
+    fresh = ["", "PTN-FRESH", "유효한 신규", "SUPPLIER", "", "", "", "", "", "", ""]
 
     staged = _upload(
         trader, STAGE_PARTNERS, _to_file([header, garbled, missing, dup_a, dup_b, fresh]), key="e1"
@@ -238,9 +250,9 @@ def test_value_errors_are_reported_per_row(trader: TestClient) -> None:
     """값 검증 실패도 행번호+사유다 — 등록 API와 같은 규칙·같은 문구(§12.2)"""
     rows = _rows(trader.get(PARTNERS_EXPORT).text)
     header = rows[0]
-    no_type = ["", "PTN-V1", "유형 없음", "", "", "", "", "", ""]
-    bad_pair = ["", "PTN-V2", "통화 없음", "SUPPLIER", "1000", "", "", "", ""]
-    bad_bool = ["", "PTN-V3", "불리언 오류", "SUPPLIER", "", "", "maybe", "", ""]
+    no_type = ["", "PTN-V1", "유형 없음", "", "", "", "", "", "", "", ""]
+    bad_pair = ["", "PTN-V2", "통화 없음", "SUPPLIER", "1000", "", "", "", "", "", ""]
+    bad_bool = ["", "PTN-V3", "불리언 오류", "SUPPLIER", "", "", "maybe", "", "", "", ""]
     short = ["", "PTN-V4", "열 부족"]
 
     staged = _upload(
@@ -458,7 +470,21 @@ def test_non_csv_extension_is_rejected(trader: TestClient) -> None:
 def test_header_only_file_is_rejected(trader: TestClient) -> None:
     """데이터 행 0 = 오류 — "올릴 것이 없었다"를 성공으로 두지 않는다(빈 목록 규율)"""
     header_only = _to_file(
-        [["ID", "거래처코드", "거래처명", "유형", "여신한도", "여신통화", "DG취급", "강점", "약점"]]
+        [
+            [
+                "ID",
+                "거래처코드",
+                "거래처명",
+                "유형",
+                "여신한도",
+                "여신통화",
+                "DG취급",
+                "강점",
+                "약점",
+                "영문명",
+                "영문주소",
+            ]
+        ]
     )
     response = _upload(trader, STAGE_PARTNERS, header_only, key="empty1")
     assert response.status_code == 422, response.text
@@ -607,8 +633,8 @@ def test_supplier_type_loss_before_confirm_is_rejected(trader: TestClient) -> No
 def test_superscript_digit_id_is_an_error_row_not_a_crash(trader: TestClient) -> None:
     """'²' 같은 유사 숫자 ID는 500이 아니라 오류 행이다 (리뷰 검출 — isdecimal 판정)"""
     rows = _rows(trader.get(PARTNERS_EXPORT).text)
-    weird = ["²", "PTN-SUP2", "위첨자 ID", "SUPPLIER", "", "", "", "", ""]
-    underscore = ["1_0", "PTN-UND", "밑줄 ID", "SUPPLIER", "", "", "", "", ""]
+    weird = ["²", "PTN-SUP2", "위첨자 ID", "SUPPLIER", "", "", "", "", "", "", ""]
+    underscore = ["1_0", "PTN-UND", "밑줄 ID", "SUPPLIER", "", "", "", "", "", "", ""]
     staged = _upload(trader, STAGE_PARTNERS, _to_file([rows[0], weird, underscore]), key="sup2")
     assert staged.status_code == 201, staged.text
     assert staged.json()["error_rows"] == 2
@@ -621,7 +647,7 @@ def test_confirm_integrity_race_rolls_back_everything(trader: TestClient) -> Non
     create_partner("PTN-RN", name_ko="개명 대상", types=("SUPPLIER",))
     rows = _rows(trader.get(PARTNERS_EXPORT).text)
     rows[1][2] = "개명 완료"  # CHANGED
-    rows.append(["", "PTN-RACE", "레이스 신규", "SUPPLIER", "", "", "", "", ""])  # NEW
+    rows.append(["", "PTN-RACE", "레이스 신규", "SUPPLIER", "", "", "", "", "", "", ""])  # NEW
     staged = _upload(trader, STAGE_PARTNERS, _to_file(rows), key="race1")
     assert staged.json()["changed_rows"] == 1
     assert staged.json()["new_rows"] == 1

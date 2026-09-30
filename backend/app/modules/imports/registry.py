@@ -162,6 +162,8 @@ class PartnersImportTarget:
         Column("DG취급", "dg_capable", is_string=False),
         Column("강점", "strengths"),
         Column("약점", "weaknesses"),
+        Column("영문명", "name_en"),
+        Column("영문주소", "address_en"),
     )
 
     @property
@@ -208,6 +210,11 @@ class PartnersImportTarget:
         if dg_problem:
             problems.append(dg_problem)
 
+        name_en = _optional_text(cells["영문명"], "영문명", max_length=200, problems=problems)
+        address_en = _optional_text(
+            cells["영문주소"], "영문주소", max_length=500, problems=problems
+        )
+
         if problems:
             return None, " / ".join(problems)
         return {
@@ -219,6 +226,8 @@ class PartnersImportTarget:
             "dg_capable": dg_capable,
             "strengths": _blank_to_none(cells["강점"]),
             "weaknesses": _blank_to_none(cells["약점"]),
+            "name_en": name_en,
+            "address_en": address_en,
         }, None
 
     def display(self, field: str, payload: dict[str, Any]) -> str:
@@ -266,6 +275,8 @@ class PartnersImportTarget:
                     "dg_capable": row.dg_capable,
                     "strengths": _blank_to_none(row.strengths or ""),
                     "weaknesses": _blank_to_none(row.weaknesses or ""),
+                    "name_en": _blank_to_none(row.name_en or ""),
+                    "address_en": _blank_to_none(row.address_en or ""),
                 },
             )
             for row in rows
@@ -305,6 +316,8 @@ class PartnersImportTarget:
             dg_capable=payload["dg_capable"],
             strengths=payload["strengths"],
             weaknesses=payload["weaknesses"],
+            name_en=payload["name_en"],
+            address_en=payload["address_en"],
             created_by_id=actor_id,
         )
         session.add(partner)
@@ -332,6 +345,8 @@ class PartnersImportTarget:
             "dg_capable",
             "strengths",
             "weaknesses",
+            "name_en",
+            "address_en",
         )
         for field in scalar_fields:
             if field in changed_fields:
@@ -668,6 +683,7 @@ class SkusImportTarget:
         Column("알코올함량(%)", "alcohol_content_pct", is_string=False),
         Column("에어로졸", "is_aerosol", is_string=False),
         Column("LQ", "is_limited_quantity", is_string=False),
+        Column("MOQ", "moq", is_string=False),
     )
 
     @property
@@ -750,6 +766,9 @@ class SkusImportTarget:
         box_qty, box_problem = _parse_positive_int(cells["박스입수"], "박스입수")
         if box_problem:
             problems.append(box_problem)
+        moq, moq_problem = _parse_positive_int(cells["MOQ"], "MOQ")
+        if moq_problem:
+            problems.append(moq_problem)
         shelf_life_months, shelf_problem = _parse_positive_int(
             cells["사용기한(개월)"], "사용기한(개월)"
         )
@@ -851,6 +870,7 @@ class SkusImportTarget:
             "barcode": barcode,
             "unit_weight_g": unit_weight_g,
             "box_qty": box_qty,
+            "moq": moq,
             "shelf_life_months": shelf_life_months,
             "manufacturer_code": manufacturer_code,
             "manufacturer_partner_id": manufacturer_id,
@@ -896,6 +916,7 @@ class SkusImportTarget:
                     "barcode": sku.barcode,
                     "unit_weight_g": _decimal_text(sku.unit_weight_g),
                     "box_qty": sku.box_qty,
+                    "moq": sku.moq,
                     "shelf_life_months": sku.shelf_life_months,
                     "manufacturer_code": manufacturer_code,
                     "manufacturer_partner_id": sku.manufacturer_partner_id,
@@ -946,6 +967,7 @@ class SkusImportTarget:
             barcode=payload["barcode"],
             unit_weight_g=_decimal_or_none(payload["unit_weight_g"]),
             box_qty=payload["box_qty"],
+            moq=payload["moq"],
             shelf_life_months=payload["shelf_life_months"],
             manufacturer_partner_id=payload["manufacturer_partner_id"],
             dg_flag=payload["dg_flag"],
@@ -979,7 +1001,7 @@ class SkusImportTarget:
         for field in ("unit_weight_g", "flash_point_c", "alcohol_content_pct"):
             if field in changed_fields:
                 setattr(target, field, _decimal_or_none(payload[field]))
-        for field in ("box_qty", "shelf_life_months"):
+        for field in ("box_qty", "moq", "shelf_life_months"):
             if field in changed_fields:
                 setattr(target, field, payload[field])
         if "manufacturer_code" in changed_fields:

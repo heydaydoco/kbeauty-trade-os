@@ -68,6 +68,7 @@ SKU_CSV_HEADER = (
     "알코올함량(%)",
     "에어로졸",
     "LQ",
+    "MOQ",
     # MSDS링크 칸은 documents 승격(S1-3 PR-2)으로 빠졌다 — MSDS는 문서 목록
     # CSV(§4.7)가 담는다.
 )
@@ -225,6 +226,7 @@ def export_skus_csv(current: CurrentUser) -> StreamingResponse:
                 view.alcohol_content_pct,
                 view.is_aerosol,
                 view.is_limited_quantity,
+                view.moq,
             )
             for view in views
         ],
@@ -269,6 +271,7 @@ def export_skus_roundtrip_csv(current: CurrentUser) -> StreamingResponse:
                 view.alcohol_content_pct,
                 view.is_aerosol,
                 view.is_limited_quantity,
+                view.moq,
             )
             for view in views
         ],

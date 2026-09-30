@@ -46,6 +46,8 @@ class PartnerView:
     id: int
     partner_code: str
     name_ko: str
+    name_en: str | None
+    address_en: str | None
     #: 정렬해 둔다 — 응답·CSV가 요청 순서에 흔들리지 않게.
     type_codes: tuple[str, ...]
     credit_limit_amount: int | None
@@ -80,6 +82,8 @@ def _partner_view(row: Partner, type_codes: list[str]) -> PartnerView:
         id=row.id,
         partner_code=row.partner_code,
         name_ko=row.name_ko,
+        name_en=row.name_en,
+        address_en=row.address_en,
         type_codes=tuple(sorted(type_codes)),
         credit_limit_amount=row.credit_limit_amount,
         credit_limit_currency=row.credit_limit_currency,
@@ -95,6 +99,8 @@ def _serialize_partner(view: PartnerView) -> dict[str, Any]:
         "id": view.id,
         "partner_code": view.partner_code,
         "name_ko": view.name_ko,
+        "name_en": view.name_en,
+        "address_en": view.address_en,
         "type_codes": list(view.type_codes),
         "credit_limit_amount": view.credit_limit_amount,
         "credit_limit_currency": view.credit_limit_currency,
@@ -306,6 +312,8 @@ def create_partner(
         partner = Partner(
             partner_code=str(payload["partner_code"]).strip(),
             name_ko=str(payload["name_ko"]).strip(),
+            name_en=payload.get("name_en"),
+            address_en=payload.get("address_en"),
             credit_limit_amount=credit_amount,
             credit_limit_currency=credit_currency,
             dg_capable=payload.get("dg_capable"),
