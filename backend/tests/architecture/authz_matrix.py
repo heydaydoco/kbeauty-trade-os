@@ -28,6 +28,8 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/quotations",
     "/api/v1/proforma-invoices",
     "/api/v1/bank-accounts",
+    "/api/v1/sales-orders",
+    "/api/v1/document-flow",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -144,5 +146,61 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         L: DENY,
         C: DENY,
         V: DENY,
+    },
+    # S3-1 PR-7a — QT/PI→SO 참조 생성은 무역(관리자 상시 통과) 쓰기. SO 조회는 전 역할(원가·마진 필드 없음).
+    ("POST", "/api/v1/quotations/{qt_id}/sales-orders"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/proforma-invoices/{pi_id}/sales-orders"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("GET", "/api/v1/sales-orders"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/sales-orders/export.csv"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/sales-orders/{so_id}"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/sales-orders/{so_id}/status-log"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("PATCH", "/api/v1/sales-orders/{so_id}"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("PATCH", "/api/v1/sales-orders/{so_id}/meta"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("POST", "/api/v1/sales-orders/{so_id}/lines"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("PATCH", "/api/v1/sales-orders/{so_id}/lines/{line_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("DELETE", "/api/v1/sales-orders/{so_id}/lines/{line_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/sales-orders/{so_id}/transitions"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("GET", "/api/v1/document-flow/{doc_kind}/{doc_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
     },
 }

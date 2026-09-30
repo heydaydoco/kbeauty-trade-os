@@ -28,6 +28,7 @@ IMMUTABLE_TABLES: frozenset[str] = frozenset(
         # 정정은 원본 수정이 아니라 새 전이 기록이다.
         "quotation_status_log",
         "proforma_invoice_status_log",  # PR-6a — PI 상태 이력(같은 이유)
+        "sales_order_status_log",  # PR-7a — SO 상태 이력(같은 이유)
     }
 )
 
@@ -126,6 +127,10 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "proforma_invoices",
         "proforma_invoice_lines",  # 생성 시 INSERT만 하지만 헤더와 같은 분류(soft delete 컬럼 보유)
         "bank_accounts",
+        # S3-1 PR-7a — SO는 편집(RECEIVED)·상태 전이·FREE 열 갱신이 앱 계정의 정상 UPDATE라 권한 회수가 불가능하다
+        # (불변은 서비스 동결 가드+상태이력 IMMUTABLE — ADR-0053). 라인은 제자리 UPDATE·제외(soft delete)한다.
+        "sales_orders",
+        "sales_order_lines",
     }
 )
 

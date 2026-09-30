@@ -48,7 +48,9 @@ def require_sellable_sku(
     return sku
 
 
-def unusable_sku_reasons(session: Session, sku_ids: list[int]) -> dict[int, str]:
+def unusable_sku_reasons(
+    session: Session, sku_ids: list[int], *, allow_discontinued: bool = False
+) -> dict[int, str]:
     """참조 생성(PI·SO)이 원천 라인을 복사하기 전의 SKU 재검사 — 사용할 수 없는 SKU만 {id: 사유}로 돌려준다.
 
     원천 라인은 동결 값이라 복사는 마스터를 다시 읽지 않지만, **새로 만드는 전표에 단종·삭제된 SKU가 실려 나가는 것**은
@@ -67,6 +69,25 @@ def unusable_sku_reasons(session: Session, sku_ids: list[int]) -> dict[int, str]
         sku = found.get(sku_id)
         if sku is None:
             reasons[sku_id] = "삭제된 SKU"
-        elif sku.status == "DISCONTINUED":
+        elif sku.status == "DISCONTINUED" and not allow_discontinued:
             reasons[sku_id] = f"단종된 SKU: {sku.sku_code}"
     return reasons
+
+
+def sku_statuses(session: Session, sku_ids: list[int]) -> dict[int, str]:
+    """라인 표시용 SKU 현재 상태 — 삭제된 SKU는 `DELETED`. SO 접수는 단종 SKU 저장을 허용하고 화면이 이 값을 표시한다(A11).
+
+    마스터를 읽는 두 통로(`snapshot`·`lines`) 중 하나라 L1 전표 서비스가 SKU 모델을 직접 임포트하지 않고 이 함수를 쓴다.
+    """
+    if not sku_ids:
+        return {}
+    found = {
+        int(row[0]): (row[1], row[2])
+        for row in session.execute(
+            select(Sku.id, Sku.status, Sku.deleted_at).where(Sku.id.in_(set(sku_ids)))
+        ).all()
+    }
+    return {
+        sku_id: ("DELETED" if found[sku_id][1] is not None else str(found[sku_id][0]))
+        for sku_id in found
+    }

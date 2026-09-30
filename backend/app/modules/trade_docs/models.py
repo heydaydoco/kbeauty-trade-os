@@ -129,8 +129,30 @@ class ProformaInvoiceStatusLog(StatusLogColumns, PkMixin, Base):
     )
 
 
+class SalesOrderStatusLog(StatusLogColumns, PkMixin, Base):
+    """SO 상태 변경 이력 — 불변. `approval_id`(확정 행이 소비한 승인 참조)는 승인 코어 뒤 확정 배선 마이그레이션(M10)이 더한다."""
+
+    __tablename__ = "sales_order_status_log"
+
+    sales_order_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    __table_args__ = (
+        *status_log_checks(DocKind.SALES_ORDER),
+        Index(
+            "uq_sales_order_status_log_sales_order_id_birth",
+            "sales_order_id",
+            unique=True,
+            postgresql_where=text("from_status IS NULL"),
+        ),
+        Index("ix_sales_order_status_log_sales_order_id_id", "sales_order_id", desc("id")),
+    )
+
+
 #: 전표별 상태이력 모델 — 각 전표 PR이 자기 표를 여기 등록한다(record_birth/record_transition이 소비).
 STATUS_LOG_MODELS: dict[DocKind, type[Any]] = {
     DocKind.QUOTATION: QuotationStatusLog,
     DocKind.PROFORMA_INVOICE: ProformaInvoiceStatusLog,
+    DocKind.SALES_ORDER: SalesOrderStatusLog,
 }

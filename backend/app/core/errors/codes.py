@@ -155,6 +155,13 @@ class ErrorCode(StrEnum):
     TRADE_DOCS_VALIDITY_EXPIRED = "TRADE_DOCS.VALIDITY.EXPIRED"
     #: 취소·만료된 PI에는 입금 수렴을 할 수 없다(새 PI를 발행해야 한다) — fail-closed.
     TRADE_DOCS_PAYMENT_PI_NOT_OPEN = "TRADE_DOCS.PAYMENT.PI_NOT_OPEN"
+    # SO 접수·참조 생성 2단 (S3-1 PR-7a / design-A A4·A13 / design-B B1·B3)
+    #: 같은 바이어의 같은 PO번호(정규화 키)를 이미 비취소 SO가 점유하고 있다 — detail은 점유 문서번호·상태뿐(금액 미기재).
+    TRADE_DOCS_DOCUMENT_DUPLICATE_BUYER_PO = "TRADE_DOCS.DOCUMENT.DUPLICATE_BUYER_PO"
+    #: 이 PI(또는 원천)에서 이미 살아 있는 수주(SO)가 만들어졌다 — PI→SO는 활성 1:1이다(취소 후 재생성만 허용).
+    TRADE_DOCS_REFERENCE_ALREADY_CONVERTED = "TRADE_DOCS.REFERENCE.ALREADY_CONVERTED"
+    #: 보류 재개의 목표 상태가 보류 직전 상태와 다르다(RECEIVED↔CONFIRMED 뒤바꿈 금지) — `confirmed_at`이 원천.
+    TRADE_DOCS_RESUME_TARGET_MISMATCH = "TRADE_DOCS.RESUME.TARGET_MISMATCH"
 
     # 동시성·멱등 (§17.2 / §17.4)
     CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"

@@ -19,6 +19,7 @@ from sqlalchemy.orm import InstrumentedAttribute
 from app.modules.certifications.models import Certification
 from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.quotations.models import Quotation
+from app.modules.sales_orders.models import SalesOrder
 from app.modules.worklist.models import Alert, AlertRule, Task
 
 #: 담당자를 가리키는 컬럼 이름들. 감사 컬럼(created_by_id·updated_by_id)과
@@ -50,9 +51,10 @@ ASSIGNMENT_TARGETS: tuple[AssignmentTarget, ...] = (
     # S2-2 — §2 "담당 건(전표·인증·태스크·알림)"의 인증 명시분.
     AssignmentTarget("certifications", Certification, Certification.assignee_id),
     # S3-1 — 전표 담당자(§2 "담당 건(전표…)"). 동결 후에도 FREE 열이라 이관이 통과한다(ADR-0053).
-    # 나머지 전표(PI·SO·PO)와 order_intakes는 각 PR이 자기 행을 더한다.
+    # 나머지 전표(PO)와 order_intakes는 각 PR이 자기 행을 더한다.
     AssignmentTarget("quotations", Quotation, Quotation.assignee_id),
     AssignmentTarget("proforma_invoices", ProformaInvoice, ProformaInvoice.assignee_id),
+    AssignmentTarget("sales_orders", SalesOrder, SalesOrder.assignee_id),
 )
 
 
@@ -69,6 +71,7 @@ USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
     ("certification_status_log", "actor_user_id"): "ACTOR_LOG",
     ("quotation_status_log", "actor_user_id"): "ACTOR_LOG",
     ("proforma_invoice_status_log", "actor_user_id"): "ACTOR_LOG",
+    ("sales_order_status_log", "actor_user_id"): "ACTOR_LOG",
     ("import_staging", "confirmed_by_id"): "ACTOR_LOG",
     ("user_roles", "user_id"): "IDENTITY_LINK",
     ("user_sessions", "user_id"): "IDENTITY_LINK",

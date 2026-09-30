@@ -29,6 +29,7 @@ from app.modules.policies import models as policies_models
 from app.modules.proforma_invoices import models as proforma_invoices_models
 from app.modules.quotations import models as quotations_models
 from app.modules.requirements import models as requirements_models
+from app.modules.sales_orders import models as sales_orders_models
 from app.modules.trade_docs import models as trade_docs_models
 from app.modules.worklist import models as worklist_models
 
@@ -55,6 +56,7 @@ __all__ = [
     "proforma_invoices_models",
     "quotations_models",
     "requirements_models",
+    "sales_orders_models",
     "trade_docs_models",
     "worklist_models",
 ]

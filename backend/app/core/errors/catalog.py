@@ -256,6 +256,18 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "취소되었거나 만료된 PI에는 입금을 반영할 수 없습니다. 새 PI를 발행한 뒤 다시 시도해 주세요.",
     ),
+    ErrorCode.TRADE_DOCS_DOCUMENT_DUPLICATE_BUYER_PO: ErrorSpec(
+        409,
+        "같은 바이어의 같은 PO번호가 이미 다른 수주에 등록되어 있습니다. 기존 수주를 확인하거나, 정정이라면 기존 수주를 취소한 뒤 다시 등록해 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_REFERENCE_ALREADY_CONVERTED: ErrorSpec(
+        409,
+        "이 문서에서 이미 수주가 만들어졌습니다. 기존 수주를 확인하거나, 정정이라면 기존 수주를 취소한 뒤 다시 만들어 주세요.",
+    ),
+    ErrorCode.TRADE_DOCS_RESUME_TARGET_MISMATCH: ErrorSpec(
+        409,
+        "보류 직전 상태와 다른 상태로는 재개할 수 없습니다. 화면을 새로 고쳐 재개 가능한 상태를 확인한 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_VERSION_CONFLICT: ErrorSpec(
         409,
         # §17.2가 지정한 문구. 임의로 바꾸지 말 것.

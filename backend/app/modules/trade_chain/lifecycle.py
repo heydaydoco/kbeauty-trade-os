@@ -1,6 +1,6 @@
-"""견적 전이 오케스트레이션 — 발행·취소·개정 (S3-1 ADR-0051~0053 / design-B B1~B3·B8 / design-A A10).
+"""전표 전이 오케스트레이션 — QT 발행·취소·개정, PI 취소, SO 보류·재개·취소 (S3-1 ADR-0051~0053 / design-B B1~B3·B8 / design-A A10).
 
-이 파일이 QT 상태를 바꾸는 **유일한 호출자**다(`record_transition` 경유). 세 동작 모두 사람 1클릭이고
+이 파일이 QT·PI·SO 상태를 바꾸는 **사람 전이의 유일한 호출자**다(`record_transition` 경유). 세 동작 모두 사람 1클릭이고
 `Idempotency-Key` 필수(더블클릭=이력 1행), 행 `FOR UPDATE` 후 `version` 대조(409)다. 자동 전이(연쇄·스윕)는
 `chain_ops`·(PR-6) `expiry` 몫이다.
 
@@ -12,6 +12,11 @@
   발행이 실패하면 원본 취소도 함께 롤백된다. 원본에 살아 있는 후속(PI·SO)이 있으면 개정 발행은 409 SUCCESSOR_ALIVE.
 ■ 취소 — `record_transition`이 후속 생존 검사를 엣지 검사보다 먼저 한다(역순 취소만).
 잠금 순서: 멱등 → 바이어(KEY SHARE) → QT(id 오름차순) → 라인 → 채번(마지막).
+■ SO 전이(보류·재개·취소) — `lock_chain`(QT→PI→SO)+version 대조 후 `record_transition`. **재개 목표는 `confirmed_at`이 원천**이다(NULL=직전 RECEIVED,
+  NOT NULL=직전 CONFIRMED — 목표가 어긋나면 409 RESUME_TARGET_MISMATCH, 재개는 게이트를 다시 평가하지 않는다). 취소는 순서를 고정한다:
+  잠금 → 상태 검사(RECEIVED·CONFIRMED·ON_HOLD) → 살아 있는 후속 검사(역순 취소) → [열린 승인 철회 — 승인 코어(PR-9)·소비 훅(PR-12)이 이 자리에
+  들어온다] → `AllocationPort.on_cancelled` → `record_transition(CANCELLED)` → 부모 QT 수렴(`converge_parent`). 어느 단계든 실패하면 전체 롤백이다.
+  **확정(`confirm`)은 이 파일에 없다**(PR-12) — RECEIVED→CONFIRMED는 동결 액션 엣지라 이 통로로 못 넘는다.
 """
 
 from __future__ import annotations
@@ -30,6 +35,8 @@ from app.modules.partners import service as partners
 from app.modules.proforma_invoices import service as proforma_invoices
 from app.modules.quotations import service as quotations
 from app.modules.quotations.models import Quotation, QuotationLine
+from app.modules.sales_orders import service as sales_orders
+from app.modules.sales_orders.ports import get_allocation_port
 from app.modules.trade_chain.chain_ops import converge_parent, lock_chain
 from app.modules.trade_docs.chain import live_children_numbers
 from app.modules.trade_docs.constants import REVISION_CANCEL_REASON, DocKind
@@ -42,6 +49,7 @@ ISSUE_ENDPOINT = "POST /api/v1/quotations/{id}/issue"
 TRANSITION_ENDPOINT = "POST /api/v1/quotations/{id}/transitions"
 REVISION_ENDPOINT = "POST /api/v1/quotations/{id}/revisions"
 PI_TRANSITION_ENDPOINT = "POST /api/v1/proforma-invoices/{id}/transitions"
+SO_TRANSITION_ENDPOINT = "POST /api/v1/sales-orders/{id}/transitions"
 
 
 def _lock_buyer_then_quotation(session: Any, qt_id: int, version: int) -> Quotation:
@@ -321,6 +329,78 @@ def transition_proforma_invoice(
         record_transition(session, row, to, actor_user_id=actor.id, reason=reason, automatic=False)
         converge_parent(session, kind, row, actor_user_id=actor.id)
         body = proforma_invoices.detail_body(session, row)
+        assert claim.record is not None
+        idempotency.complete(session, claim.record, status_code=200, body=body)
+        return 200, body
+
+
+#: SO 취소를 받을 수 있는 상태 — 종결(CANCELLED)·예약 상태는 제외(엣지 검사가 최종이다).
+SO_CANCELLABLE = ("RECEIVED", "CONFIRMED", "ON_HOLD")
+
+
+def _cancel_sales_order(
+    session: Any, actor: AuthenticatedUser, row: Any, reason: str | None
+) -> None:
+    """SO 취소 트랜잭션 순서(design-B B3) — 위 모듈 독스트링. 호출자가 사슬 잠금을 이미 잡았다."""
+    so_kind = DocKind.SALES_ORDER
+    if row.status not in SO_CANCELLABLE:
+        raise AppError(
+            ErrorCode.TRADE_DOCS_TRANSITION_NOT_ALLOWED,
+            detail={"from": row.status, "to": "CANCELLED"},
+        )
+    successors = live_children_numbers(session, so_kind, row.id)
+    if successors:  # S3-1에는 후속이 없다 — S3-2가 선적을 CHILD_LINKS에 등록하면 여기서 막힌다
+        raise AppError(
+            ErrorCode.TRADE_DOCS_CANCEL_SUCCESSOR_ALIVE, detail={"successors": successors}
+        )
+    # (승인 코어 PR-9·소비 훅 PR-12) 열린 승인 요청 철회 — 이미 결정된(소비된) 승인은 건드리지 않는다.
+    get_allocation_port().on_cancelled(session, row)  # P3 기본: NOT_IMPLEMENTED — 예외면 전체 롤백
+    record_transition(
+        session, row, "CANCELLED", actor_user_id=actor.id, reason=reason, automatic=False
+    )
+    converge_parent(session, so_kind, row, actor_user_id=actor.id)
+
+
+def transition_sales_order(
+    *,
+    actor: AuthenticatedUser,
+    idempotency_key: str,
+    so_id: int,
+    to: str,
+    version: int,
+    reason: str | None,
+) -> tuple[int, dict[str, Any]]:
+    """SO 범용 사람 전이 — 보류(사유 필수)·재개(목표는 `confirmed_at`이 원천)·취소(사유 필수, 역순 취소 가드).
+
+    잠금 순서 (0)→(3)→(4)→(5): 멱등 → `lock_chain`(QT→PI→SO, SO version 대조). 확정(RECEIVED→CONFIRMED)은 동결 액션 전용 엣지라
+    같은 `to`로 요청해도 `record_transition`이 거부한다. 취소 뒤에는 부모 QT를 수렴시킨다(같은 트랜잭션).
+    """
+    kind = DocKind.SALES_ORDER
+    with unit_of_work() as uow:
+        session = uow.session
+        claim = idempotency.claim(
+            session,
+            actor_user_id=actor.id,
+            endpoint=SO_TRANSITION_ENDPOINT,
+            key=idempotency_key,
+            request_body={"so_id": so_id, "to": to, "version": version, "reason": reason},
+        )
+        if claim.replay is not None:
+            return claim.replay.status_code, claim.replay.body
+        row = lock_chain(session, kind, so_id, expected_version=version)[kind]
+        if to == "CANCELLED":
+            _cancel_sales_order(session, actor, row, reason)
+        else:
+            if row.status == "ON_HOLD" and to in ("RECEIVED", "CONFIRMED"):
+                expected = "RECEIVED" if row.confirmed_at is None else "CONFIRMED"
+                if to != expected:
+                    raise AppError(
+                        ErrorCode.TRADE_DOCS_RESUME_TARGET_MISMATCH, detail={"expected": expected}
+                    )
+            record_transition(
+                session, row, to, actor_user_id=actor.id, reason=reason, automatic=False
+            )
+        body = sales_orders.detail_body(session, row)
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=200, body=body)
         return 200, body
