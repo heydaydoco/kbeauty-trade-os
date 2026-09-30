@@ -265,21 +265,24 @@ export function SalesOrderCreateDialog({ source, version, onClose, onReload }: P
             </p>
 
             <div className="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-              <label className="flex flex-col gap-1">
-                <span className="text-gray-600">바이어 PO번호 (선택)</span>
-                <input
-                  value={poNo}
-                  maxLength={200}
-                  onChange={(event) => {
-                    touched();
-                    setPoNo(event.target.value);
-                  }}
-                  className="rounded border border-gray-300 px-3 py-2"
-                />
-                <span className="break-keep text-xs text-gray-500">
+              <div className="flex flex-col gap-1">
+                <label className="flex flex-col gap-1">
+                  <span className="text-gray-600">바이어 PO번호 (선택)</span>
+                  <input
+                    value={poNo}
+                    maxLength={200}
+                    aria-describedby="so-po-hint"
+                    onChange={(event) => {
+                      touched();
+                      setPoNo(event.target.value);
+                    }}
+                    className="rounded border border-gray-300 px-3 py-2"
+                  />
+                </label>
+                <span id="so-po-hint" className="break-keep text-xs text-gray-500">
                   같은 바이어의 같은 PO번호는 한 번만 등록됩니다(취소한 수주는 제외).
                 </span>
-              </label>
+              </div>
               <label className="flex flex-col gap-1">
                 <span className="text-gray-600">바이어 PO 일자 (선택)</span>
                 <input
