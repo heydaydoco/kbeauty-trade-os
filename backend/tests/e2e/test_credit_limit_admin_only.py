@@ -183,9 +183,17 @@ def test_import_new_row_with_a_credit_limit_needs_admin_and_is_audited(
     new[header.index("여신한도")], new[header.index("여신통화")] = "700", "USD"
     staged = _stage(trader, [header, *rows[1:], new], "imp3")
     denied = _confirm(trader, staged["id"], "imp3-c")
-    assert denied.status_code == 403 and denied.json()["error"]["code"] == "PARTNERS.CREDIT_LIMIT.ADMIN_ONLY"
+    assert (
+        denied.status_code == 403
+        and denied.json()["error"]["code"] == "PARTNERS.CREDIT_LIMIT.ADMIN_ONLY"
+    )
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT count(*) FROM partners WHERE partner_code='PTN-NEWCL'")).scalar_one() == 0
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM partners WHERE partner_code='PTN-NEWCL'")
+            ).scalar_one()
+            == 0
+        )
     assert _confirm(admin, staged["id"], "imp3-c2").status_code == 200
     sets = [r for r in _credit_rows() if r["detail"] == {"amount": 70000, "currency": "USD"}]
     assert len(sets) == 1
@@ -194,8 +202,18 @@ def test_import_new_row_with_a_credit_limit_needs_admin_and_is_audited(
 @pytest.mark.parametrize(
     ("initial", "new_limit", "new_currency", "expected_audit"),
     [
-        (("1000", "USD"), "1000", "EUR", {"old_currency": "USD", "new_currency": "EUR"}),  # 통화만 변경
-        (("1000", "USD"), "", "", {"old_amount": 100000, "new_amount": None}),  # 값 → NULL('관리 해제')
+        (
+            ("1000", "USD"),
+            "1000",
+            "EUR",
+            {"old_currency": "USD", "new_currency": "EUR"},
+        ),  # 통화만 변경
+        (
+            ("1000", "USD"),
+            "",
+            "",
+            {"old_amount": 100000, "new_amount": None},
+        ),  # 값 → NULL('관리 해제')
     ],
 )
 def test_currency_only_and_clearing_changes_are_admin_only_and_audited(

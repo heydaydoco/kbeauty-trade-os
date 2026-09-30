@@ -141,7 +141,8 @@ def test_only_the_released_type_is_checked(admin: TestClient) -> None:
     sku_id = create_sku("SKU-ONLY")
     with engine.begin() as conn:
         conn.execute(
-            text("UPDATE skus SET manufacturer_partner_id=:p WHERE id=:s"), {"p": partner_id, "s": sku_id}
+            text("UPDATE skus SET manufacturer_partner_id=:p WHERE id=:s"),
+            {"p": partner_id, "s": sku_id},
         )
     staging_id = _stage_type_change(admin, "PTN-ONLY", "OEM", "rel4")
     assert _confirm(admin, staging_id, "rel4-c").status_code == 200
@@ -155,7 +156,8 @@ def test_discontinued_sku_counts_but_deleted_material_does_not(admin: TestClient
     material_id = create_material("MAT-DIS")
     with engine.begin() as conn:
         conn.execute(
-            text("UPDATE skus SET manufacturer_partner_id=:p WHERE id=:s"), {"p": partner_id, "s": sku_id}
+            text("UPDATE skus SET manufacturer_partner_id=:p WHERE id=:s"),
+            {"p": partner_id, "s": sku_id},
         )
         conn.execute(
             text(
