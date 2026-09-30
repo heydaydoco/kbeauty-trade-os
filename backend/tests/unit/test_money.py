@@ -63,3 +63,43 @@ def test_float_amount_rejected() -> None:
     """금액에 float을 넣을 수 없다"""
     with pytest.raises(TypeError):
         Money(12.34, "USD")  # type: ignore[arg-type]
+
+
+# --- S3-1 PR-2: parse_minor_amount (ADR-0056) ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "currency", "expected"),
+    [
+        ("12.34", "USD", 1234),
+        ("12.340", "USD", 1234),  # 끝자리 0은 정확한 값이다
+        ("1,234.5", "USD", 123450),
+        ("1000", "KRW", 1000),
+        ("0", "USD", 0),
+        (12, "JPY", 12),
+    ],
+)
+def test_parse_minor_amount_accepts_exact_values(raw: object, currency: str, expected: int) -> None:
+    from app.core.money import parse_minor_amount
+
+    assert parse_minor_amount(raw, currency, field="단가") == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "currency"),
+    [
+        ("12.345", "USD"),  # 자릿수 초과는 반올림하지 않고 거부
+        ("1000.5", "KRW"),
+        ("-1", "USD"),
+        ("abc", "USD"),
+        ("NaN", "USD"),
+        ("Infinity", "USD"),
+        ("9" * 16, "KRW"),
+        ("", "USD"),
+    ],
+)
+def test_parse_minor_amount_rejects_inexact_or_invalid(raw: object, currency: str) -> None:
+    from app.core.money import parse_minor_amount
+
+    with pytest.raises(ValueError, match="단가"):
+        parse_minor_amount(raw, currency, field="단가")

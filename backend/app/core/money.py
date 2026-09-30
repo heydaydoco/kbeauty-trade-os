@@ -10,7 +10,7 @@ float은 쓰지 않는다. GC-G1의 관세 533.00 / 부가세 873.30 같은 값�
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from sqlalchemy import CHAR, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
@@ -119,6 +119,34 @@ class Money:
 
     def __str__(self) -> str:
         return f"{self.to_decimal()} {self.currency}"
+
+
+def parse_minor_amount(raw: object, currency: str, *, field: str, max_digits: int = 15) -> int:
+    """사람 표기 금액("12.34")을 최소단위 정수로 바꾼다 — 자릿수 초과는 반올림 없이 거부한다.
+
+    전표 입력(인테이크·CSV·라인 단가)의 공용 통로다. 12.345를 조용히 12.35로 바꾸면
+    바이어가 낸 단가와 다른 금액이 확정되므로 거부하고 사용자가 고치게 한다.
+    실패는 ValueError이며 메시지에 field를 싣는다(서비스가 422로 번역).
+    """
+    exponent = minor_units(currency)
+    text = str(raw).strip().replace(",", "")
+    try:
+        value = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError(f"{field}: 숫자가 아닙니다.") from exc
+    if not value.is_finite():
+        raise ValueError(f"{field}: 숫자가 아닙니다.")
+    value = value.normalize()
+    if value < 0:
+        raise ValueError(f"{field}: 음수는 입력할 수 없습니다.")
+    if -value.as_tuple().exponent > exponent:  # type: ignore[operator]
+        raise ValueError(
+            f"{field}: {currency.upper()}는 소수점 {exponent}자리까지만 입력할 수 있습니다."
+        )
+    minor = int(value.scaleb(exponent))
+    if len(str(minor)) > max_digits:
+        raise ValueError(f"{field}: 금액이 너무 큽니다.")
+    return minor
 
 
 def money_columns(prefix: str) -> tuple[Mapped[int], Mapped[str]]:
