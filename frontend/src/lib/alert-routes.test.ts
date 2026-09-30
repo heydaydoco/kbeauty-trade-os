@@ -6,6 +6,11 @@ describe("알림 이동 표", () => {
     expect(alertRoute("quotations", 12)).toBe("/quotations/12");
   });
 
+  it("proforma_invoices 알림은 PI 상세로 이동한다", () => {
+    expect(alertRoute("proforma_invoices", 5)).toBe("/proforma-invoices/5");
+    expect(alertRoute("proforma_invoices", null)).toBeNull();
+  });
+
   it("표에 없는 종류·빈 값은 이동하지 않는다(없는 화면으로 보내지 않는다)", () => {
     expect(alertRoute("certifications", 3)).toBeNull();
     expect(alertRoute(null, null)).toBeNull();
