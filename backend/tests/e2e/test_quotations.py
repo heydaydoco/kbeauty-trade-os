@@ -980,3 +980,19 @@ def test_status_log_is_paged_newest_first_and_records_every_transition(trade: Te
     for _kind, payload in events:
         assert set(payload) <= set(PAYLOAD_KEYS)
         assert "바이어 요청" not in str(payload)  # 사유 원문·금액은 이벤트에 싣지 않는다
+
+
+def test_a_line_edit_that_leaves_the_total_unchanged_still_bumps_the_header_version(
+    trade: TestClient,
+) -> None:
+    """금액이 안 바뀌는 라인 수정(사유 메모)도 헤더 version을 올린다 — 라인만 바뀌어도 부모 낙관 잠금 상승(S1-3 PR-3 결함 방지)"""
+    buyer = create_buyer()
+    qt = create_quotation_via_api(trade, buyer, [create_priced_sku(amount=500)])
+    line = qt["lines"][0]
+    response = trade.patch(
+        f"{QT}/{qt['id']}/lines/{line['id']}",
+        json={"version": qt["version"], "price_reason": "바이어 요청 메모"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["total_amount"] == qt["total_amount"]
+    assert response.json()["header_version"] == qt["version"] + 1
