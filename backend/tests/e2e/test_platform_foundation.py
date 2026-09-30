@@ -39,20 +39,24 @@ def test_lookup_requires_login(client: TestClient) -> None:
     assert client.get(LOOKUP).status_code == 401
 
 
-def test_lookup_is_open_to_every_role_but_shows_names_only(client: TestClient) -> None:
-    """조회 역할도 표시명을 볼 수 있지만 이메일·역할·상태는 응답에 없다(활성 사용자만)"""
+def test_lookup_is_for_trade_and_admin_and_shows_names_only(client: TestClient) -> None:
+    """무역·관리자만 볼 수 있고, 이메일·역할·상태는 응답에 없다(활성 사용자만)"""
+    create_user("trade@x.kbos", roles=(RoleCode.TRADE,), display_name="무역담당")
     create_user("viewer@x.kbos", roles=(RoleCode.VIEWER,), display_name="조회자")
     create_user("gone@x.kbos", roles=(RoleCode.TRADE,), display_name="퇴사자", is_active=False)
-    _login(client, "viewer@x.kbos")
 
+    _login(client, "viewer@x.kbos")
+    assert client.get(LOOKUP).status_code == 403
+    client.post("/api/v1/auth/logout")
+
+    _login(client, "trade@x.kbos")
     response = client.get(LOOKUP)
     assert response.status_code == 200
     body = response.json()
     names = [item["display_name"] for item in body["items"]]
-    assert "조회자" in names and "퇴사자" not in names
+    assert "무역담당" in names and "조회자" in names and "퇴사자" not in names
     for item in body["items"]:
         assert set(item) == {"id", "display_name"}
-    assert body["total"] == 1
 
 
 def test_lookup_is_paginated(client: TestClient) -> None:
