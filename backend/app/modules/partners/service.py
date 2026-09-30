@@ -222,6 +222,12 @@ class TypeReleaseBlocker:
     what: str
 
 
+def _blank_to_none(value: object) -> str | None:
+    """공백뿐인 값은 None — 임포트(`_optional_text`)와 같은 정규화(서류에 공백이 찍히지 않게)."""
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
 def find_type_release_blockers(
     session: Session, partner_id: int, released_type_codes: set[str]
 ) -> list[TypeReleaseBlocker]:
@@ -367,8 +373,8 @@ def create_partner(
         partner = Partner(
             partner_code=str(payload["partner_code"]).strip(),
             name_ko=str(payload["name_ko"]).strip(),
-            name_en=payload.get("name_en"),
-            address_en=payload.get("address_en"),
+            name_en=_blank_to_none(payload.get("name_en")),
+            address_en=_blank_to_none(payload.get("address_en")),
             credit_limit_amount=credit_amount,
             credit_limit_currency=credit_currency,
             dg_capable=payload.get("dg_capable"),

@@ -606,8 +606,11 @@ def _live_manufacturer(session: Session, partner_id: int) -> Any:
     """
     from app.modules.partners.models import Partner, PartnerTypeLink
 
+    # FOR SHARE — 유형 해제 임포트(FOR UPDATE)와 직렬화해 '유형 없는 제조사 참조'를 막는다(F11 ③).
     partner = session.execute(
-        select(Partner).where(Partner.id == partner_id, Partner.deleted_at.is_(None))
+        select(Partner)
+        .where(Partner.id == partner_id, Partner.deleted_at.is_(None))
+        .with_for_update(read=True)
     ).scalar_one_or_none()
     if partner is None:
         raise AppError(

@@ -222,11 +222,40 @@ def test_cells_for_matches_the_matrix_colors_for_a_single_market() -> None:
         gray: "GRAY",
     }
     matrix = readiness.get_matrix(offset=0, limit=50)
+    compared = 0
     for row in matrix.rows:
         if row.sku_id in cells:
             us = next(c for c in row.cells if c.market_code == "US")
             assert us.summary == cells[row.sku_id].summary  # 규칙이 한 곳이다
+            compared += 1
+    assert compared == 3  # 공회전 방지 — 비교가 실제로 일어났다
 
     with pytest.raises(AppError):
         readiness.cells_for(sku_ids=[green], market_code="ZZ")
     assert readiness.cells_for(sku_ids=[], market_code="US") == {}
+
+
+def test_lock_true_takes_a_share_lock_that_conflicts_with_for_update() -> None:
+    """lock=True는 FOR SHARE다 — 유형 해제 임포트가 잡은 FOR UPDATE와 충돌해 대기한다(제거 시 실패)"""
+    from sqlalchemy.exc import DBAPIError
+
+    partner = create_partner("PTN-LK", name_ko="잠금", types=("SUPPLIER",))
+    holder = engine.connect()
+    tx = holder.begin()
+    try:
+        holder.execute(text("SELECT 1 FROM partners WHERE id=:i FOR UPDATE"), {"i": partner})
+        with pytest.raises(DBAPIError) as caught, unit_of_work() as uow:
+            uow.session.execute(text("SET LOCAL lock_timeout = '150ms'"))
+            partners.require_partner_of_any_type(
+                uow.session, partner, ("SUPPLIER",), field="f", type_label="공급사", lock=True
+            )
+        assert getattr(caught.value.orig, "sqlstate", None) == "55P03"
+        # lock=False는 대기하지 않는다(읽기만) — 대조군
+        with unit_of_work() as uow:
+            uow.session.execute(text("SET LOCAL lock_timeout = '150ms'"))
+            partners.require_partner_of_any_type(
+                uow.session, partner, ("SUPPLIER",), field="f", type_label="공급사", lock=False
+            )
+    finally:
+        tx.rollback()
+        holder.close()

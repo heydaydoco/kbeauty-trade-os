@@ -35,6 +35,8 @@ export interface Sku {
   barcode: string | null;
   unit_weight_g: string | null;
   box_qty: number | null;
+  /** 최소주문수량(EA, 양의 정수) — null이면 미정의. */
+  moq?: number | null;
   shelf_life_months: number | null;
   manufacturer_partner_id: number | null;
   manufacturer_name: string | null;
@@ -55,6 +57,7 @@ const BLANK = {
   barcode: "",
   unit_weight_g: "",
   box_qty: "",
+  moq: "",
   shelf_life_months: "",
   un_number: "",
   dg_class: "",
@@ -138,6 +141,7 @@ export function SkuListPage() {
       barcode: optional(extra.barcode),
       unit_weight_g: optional(extra.unit_weight_g),
       box_qty: optionalNumber(extra.box_qty),
+      moq: optionalNumber(extra.moq),
       shelf_life_months: optionalNumber(extra.shelf_life_months),
       manufacturer_partner_id: manufacturerId === "" ? undefined : Number(manufacturerId),
       // 세트에는 위험물 정보를 담지 않는다(ADR-0016 부기 — P4 DG 게이트까지 미결).
@@ -293,6 +297,10 @@ export function SkuListPage() {
                 <input name="box_qty" inputMode="numeric" {...field("box_qty")} />
               </label>
               <label className="flex flex-col gap-1 text-sm">
+                <span className="cell-nowrap text-gray-600">MOQ (EA, 선택)</span>
+                <input name="moq" inputMode="numeric" min={1} {...field("moq")} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
                 <span className="cell-nowrap text-gray-600">사용기한(개월)</span>
                 <input
                   name="shelf_life_months"
@@ -423,6 +431,7 @@ export function SkuListPage() {
                 <th className="cell-nowrap px-4 py-2 num">종류</th>
                 <th className="px-4 py-2">제품(처방)</th>
                 <th className="cell-nowrap px-4 py-2">브랜드</th>
+                <th className="cell-nowrap px-4 py-2 num">MOQ</th>
                 <th className="cell-nowrap px-4 py-2 num">위험물</th>
                 <th className="cell-nowrap px-4 py-2 num">상태</th>
               </tr>
@@ -439,6 +448,7 @@ export function SkuListPage() {
                   <td className="cell-nowrap px-4 py-2 num">{kindLabel(sku.kind)}</td>
                   <td className="px-4 py-2">{orEmpty(sku.product_name_ko)}</td>
                   <td className="cell-nowrap px-4 py-2">{orEmpty(sku.brand_name_ko)}</td>
+                  <td className="cell-nowrap px-4 py-2 num">{orEmpty(sku.moq)}</td>
                   <td className="cell-nowrap px-4 py-2 num">{sku.dg_flag ? "예" : "아니오"}</td>
                   <td className="cell-nowrap px-4 py-2 num">{statusLabel(sku.status)}</td>
                 </tr>

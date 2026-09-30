@@ -168,3 +168,79 @@ def test_credit_limit_registry_flag_is_set() -> None:
         "credit_limit_currency",
     }
     assert not getattr(IMPORT_TARGETS["skus"], "admin_only_fields", frozenset())
+
+
+def test_import_new_row_with_a_credit_limit_needs_admin_and_is_audited(
+    trader: TestClient, admin: TestClient
+) -> None:
+    """신규 행에 한도 값이 실리면 무역 확정은 403(NEW 경로), 관리자 확정은 통과+set audit"""
+    create_partner("PTN-BASE", name_ko="기존", types=("BUYER",))
+    rows = _export_rows(trader)
+    header = rows[0]
+    new = [""] * len(header)
+    new[header.index("거래처코드")], new[header.index("거래처명")] = "PTN-NEWCL", "한도 신규"
+    new[header.index("유형")] = "BUYER"
+    new[header.index("여신한도")], new[header.index("여신통화")] = "700", "USD"
+    staged = _stage(trader, [header, *rows[1:], new], "imp3")
+    denied = _confirm(trader, staged["id"], "imp3-c")
+    assert denied.status_code == 403 and denied.json()["error"]["code"] == "PARTNERS.CREDIT_LIMIT.ADMIN_ONLY"
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM partners WHERE partner_code='PTN-NEWCL'")).scalar_one() == 0
+    assert _confirm(admin, staged["id"], "imp3-c2").status_code == 200
+    sets = [r for r in _credit_rows() if r["detail"] == {"amount": 70000, "currency": "USD"}]
+    assert len(sets) == 1
+
+
+@pytest.mark.parametrize(
+    ("initial", "new_limit", "new_currency", "expected_audit"),
+    [
+        (("1000", "USD"), "1000", "EUR", {"old_currency": "USD", "new_currency": "EUR"}),  # 통화만 변경
+        (("1000", "USD"), "", "", {"old_amount": 100000, "new_amount": None}),  # 값 → NULL('관리 해제')
+    ],
+)
+def test_currency_only_and_clearing_changes_are_admin_only_and_audited(
+    trader: TestClient,
+    admin: TestClient,
+    initial: tuple[str, str],
+    new_limit: str,
+    new_currency: str,
+    expected_audit: dict[str, object],
+) -> None:
+    """통화만 바꾸거나 한도를 지우는 변경도 '변경'이다 — 무역은 403, 관리자는 통과+audit"""
+    created = admin.post(
+        PARTNERS,
+        json={
+            "partner_code": "PTN-CH",
+            "name_ko": "변경",
+            "type_codes": ["BUYER"],
+            "credit_limit": initial[0],
+            "credit_limit_currency": initial[1],
+        },
+        headers={"Idempotency-Key": "chg0"},
+    )
+    assert created.status_code == 201, created.text
+    rows = _export_rows(trader)
+    header = rows[0]
+    rows[1][header.index("여신한도")], rows[1][header.index("여신통화")] = new_limit, new_currency
+    staged = _stage(trader, rows, "chg1")
+    assert _confirm(trader, staged["id"], "chg1-c").status_code == 403
+    assert _confirm(admin, staged["id"], "chg1-c2").status_code == 200
+    changed = [r for r in _credit_rows() if "old_amount" in r["detail"]]  # type: ignore[operator]
+    assert len(changed) == 1
+    for key, value in expected_audit.items():
+        assert changed[0]["detail"][key] == value  # type: ignore[index]
+
+
+def test_unchanged_credit_import_writes_no_credit_audit(admin: TestClient) -> None:
+    """한도가 그대로인 왕복은 변경 audit을 남기지 않는다"""
+    admin.post(
+        PARTNERS,
+        json=_body(partner_code="PTN-SAME", credit_limit="10", credit_limit_currency="USD"),
+        headers={"Idempotency-Key": "same0"},
+    )
+    before = len(_credit_rows())
+    rows = _export_rows(admin)
+    rows[1][rows[0].index("거래처명")] = "이름만"
+    staged = _stage(admin, rows, "same1")
+    assert _confirm(admin, staged["id"], "same1-c").status_code == 200
+    assert len(_credit_rows()) == before

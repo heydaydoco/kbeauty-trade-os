@@ -424,12 +424,22 @@ class PartnersImportTarget:
         `load_targets_for_update`가 이미 FOR UPDATE로 잡고 있다.
         """
         problems: list[str] = []
+        target_ids = [tid for _, _, tid in rows if tid is not None]
+        current_types: dict[int, set[str]] = {}
+        if target_ids:  # 현재 유형을 한 번에 읽는다(행마다 조회하면 N+1)
+            for partner_id, type_code in session.execute(
+                select(PartnerTypeLink.partner_id, PartnerTypeLink.type_code).where(
+                    PartnerTypeLink.partner_id.in_(target_ids),
+                    PartnerTypeLink.deleted_at.is_(None),
+                )
+            ).all():
+                current_types.setdefault(partner_id, set()).add(type_code)
         for row_no, payload, target_id in rows:
             if target_id is None:  # 신규 행 — 해제할 유형이 없다
                 continue
-            released = set(partners_service.partner_type_codes(session, target_id)) - set(
-                payload["type_codes"]
-            )
+            released = current_types.get(target_id, set()) - set(payload["type_codes"])
+            if not released:  # 해제가 없으면 참조를 셀 필요가 없다
+                continue
             for blocker in partners_service.find_type_release_blockers(
                 session, target_id, released
             ):
@@ -671,7 +681,10 @@ class MaterialsImportTarget:
             return []
         live = set(
             session.execute(
-                select(Partner.id).where(Partner.id.in_(wanted), Partner.deleted_at.is_(None))
+                select(Partner.id)
+                .where(Partner.id.in_(wanted), Partner.deleted_at.is_(None))
+                .order_by(Partner.id)
+                .with_for_update(read=True)  # F11 ③ — 유형 해제와 직렬화(id 순 = 교착 회피)
             ).scalars()
         )
         supplier_ids = set(
@@ -1103,9 +1116,10 @@ class SkusImportTarget:
         if manufacturer_ids:
             live_partners = set(
                 session.execute(
-                    select(Partner.id).where(
-                        Partner.id.in_(manufacturer_ids), Partner.deleted_at.is_(None)
-                    )
+                    select(Partner.id)
+                    .where(Partner.id.in_(manufacturer_ids), Partner.deleted_at.is_(None))
+                    .order_by(Partner.id)
+                    .with_for_update(read=True)  # F11 ③ — 유형 해제와 직렬화
                 ).scalars()
             )
             oem_ids = set(

@@ -120,3 +120,54 @@ def test_releasing_a_type_nobody_references_is_allowed(admin: TestClient) -> Non
     staging_id = _stage_type_change(admin, "PTN-FREE", "BUYER", "rel2")
     assert _confirm(admin, staging_id, "rel2-c").status_code == 200
     assert _active_types("PTN-FREE") == {"BUYER"}
+
+
+def test_keeping_the_referenced_type_and_renaming_is_allowed(admin: TestClient) -> None:
+    """참조 중인 유형을 **유지**하면(이름만 변경) 참조가 있어도 통과한다 — released 계산은 (현재 − 페이로드)"""
+    partner_id = create_partner("PTN-KEEP2", name_ko="유지", types=("SUPPLIER", "BUYER"))
+    material_id = create_material("MAT-KEEP2")
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE materials SET default_supplier_partner_id=:p WHERE id=:m"),
+            {"p": partner_id, "m": material_id},
+        )
+    staging_id = _stage_type_change(admin, "PTN-KEEP2", "SUPPLIER|BUYER", "rel3")
+    assert _confirm(admin, staging_id, "rel3-c").status_code == 200
+
+
+def test_only_the_released_type_is_checked(admin: TestClient) -> None:
+    """SUPPLIER만 해제하는데 참조가 OEM(제조사) 쪽뿐이면 통과한다(유형별 참조는 독립이다)"""
+    partner_id = create_partner("PTN-ONLY", name_ko="OEM 참조", types=("SUPPLIER", "OEM"))
+    sku_id = create_sku("SKU-ONLY")
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE skus SET manufacturer_partner_id=:p WHERE id=:s"), {"p": partner_id, "s": sku_id}
+        )
+    staging_id = _stage_type_change(admin, "PTN-ONLY", "OEM", "rel4")
+    assert _confirm(admin, staging_id, "rel4-c").status_code == 200
+    assert _active_types("PTN-ONLY") == {"OEM"}
+
+
+def test_discontinued_sku_counts_but_deleted_material_does_not(admin: TestClient) -> None:
+    """단종 SKU는 참조로 세고(삭제만 제외), 삭제된 자재는 세지 않는다 — 각각 단독으로"""
+    partner_id = create_partner("PTN-DIS", name_ko="단종 참조", types=("SUPPLIER", "OEM", "BUYER"))
+    sku_id = create_sku("SKU-DIS", status="DISCONTINUED")
+    material_id = create_material("MAT-DIS")
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE skus SET manufacturer_partner_id=:p WHERE id=:s"), {"p": partner_id, "s": sku_id}
+        )
+        conn.execute(
+            text(
+                "UPDATE materials SET default_supplier_partner_id=:p, deleted_at=now() WHERE id=:m"
+            ),
+            {"p": partner_id, "m": material_id},
+        )
+    # SUPPLIER 해제 — 참조 자재는 삭제됐으므로 통과
+    staging_id = _stage_type_change(admin, "PTN-DIS", "OEM|BUYER", "rel5")
+    assert _confirm(admin, staging_id, "rel5-c").status_code == 200
+    # OEM 해제 — 단종(삭제 아님) SKU가 참조하므로 409
+    staging_id = _stage_type_change(admin, "PTN-DIS", "BUYER", "rel6")
+    blocked = _confirm(admin, staging_id, "rel6-c")
+    assert blocked.status_code == 409, blocked.text
+    assert "OEM" in blocked.json()["error"]["detail"]["rows"]
