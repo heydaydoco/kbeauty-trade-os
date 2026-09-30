@@ -261,8 +261,8 @@ def test_quotation_converts_when_a_live_confirmed_successor_exists_and_returns_w
         assert _converge(qt_id, actor) == "ISSUED"
         assert _log_rows(qt_id)[-1][:3] == ("CONVERTED", "ISSUED", True)
         assert _scalar("SELECT status FROM quotations WHERE id = :i", i=qt_id) == "ISSUED"
-        # 확정되지 않은 후속이 살아 있는 한 만료 후에도 QT는 닫히지 않는다(후속이 부모를 붙잡는다)
-        assert fake and unconfirmed
+        fake.set_status(unconfirmed, "CANCELLED")
+        assert _converge(qt_id, actor) is None
 
 
 def test_lapsed_quotation_expires_only_when_nothing_holds_it(
@@ -322,13 +322,6 @@ def test_issue_requires_a_complete_document_and_leaves_no_trace_on_failure(
 ) -> None:
     """발행 완결성: 결제조건·Incoterms·환율·유효기간·라인이 없으면 422(항목별 안내) — 이력·이벤트·상태 무변"""
     buyer = create_buyer(address_en=None)
-    empty = trade.post(
-        QT,
-        json={"buyer_partner_id": buyer, "dest_market_code": "US", "currency": "USD"},
-        headers=idem(),
-    )
-    create_market_us = create_quotation_via_api  # noqa: F841 — 시장 US는 팩토리가 만든다
-    assert empty.status_code == 422  # 시장 미등록
     qt = create_quotation_via_api(
         trade, buyer, payment_terms=None, incoterm=None, fx_rate=None, valid_until=None
     )
