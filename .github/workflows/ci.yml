@@ -77,7 +77,8 @@ jobs:
   # ── 백엔드 테스트 + 마이그레이션 드라이런 ────────────────────────────────
   backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 테스트 3,000+건 — 러너가 느린 날 15분을 넘겨 취소된 선례(S3-1 PR-7b, 2026-09-30). 여유를 둔다.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16.14

@@ -27,6 +27,8 @@ import { ProformaDetailPage } from "./routes/proforma-detail";
 import { ProformaListPage } from "./routes/proformas";
 import { QuotationDetailPage } from "./routes/quotation-detail";
 import { QuotationListPage } from "./routes/quotations";
+import { SalesOrderDetailPage } from "./routes/sales-order-detail";
+import { SalesOrderListPage } from "./routes/sales-orders";
 import { ProductDetailPage } from "./routes/product-detail";
 import { ProductsPage } from "./routes/products";
 import { AppShell } from "./routes/shell";
@@ -103,6 +105,8 @@ export function AppRoutes() {
         <Route path="/quotations/:quotationId" element={<QuotationDetailPage />} />
         <Route path="/proforma-invoices" element={<ProformaListPage />} />
         <Route path="/proforma-invoices/:proformaId" element={<ProformaDetailPage />} />
+        <Route path="/sales-orders" element={<SalesOrderListPage />} />
+        <Route path="/sales-orders/:salesOrderId" element={<SalesOrderDetailPage />} />
         <Route path="/bank-accounts" element={<BankAccountsPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/imports" element={<ImportsPage />} />

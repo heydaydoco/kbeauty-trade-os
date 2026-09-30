@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ConfirmDialog } from "../components/confirm-dialog";
+import { DocumentFlowPanel } from "../components/document-flow-panel";
 import { SearchSelect } from "../components/search-select";
 import { StatusTimeline } from "../components/status-timeline";
 import { ApiError, apiFetch } from "../lib/api";
@@ -21,6 +22,7 @@ import {
   PRICE_BASIS_LABEL,
   canCancelQuotation,
   canCreateProformaFrom,
+  canCreateSalesOrderFromQuotation,
   canEditQuotation,
   canIssueQuotation,
   canReviseQuotation,
@@ -35,8 +37,10 @@ import {
   type QuotationDetail,
   type QuotationLine,
 } from "../lib/quotation";
+import { DOCUMENT_FLOW_QUERY_KEY } from "../lib/sales-order";
 import { hasRole, useSession } from "../lib/session";
 import { ProformaCreateDialog } from "./proforma-create";
+import { SalesOrderCreateDialog } from "./sales-order-create";
 import { QuotationStatusBadge } from "./quotations";
 import type { Market } from "./markets";
 import type { Partner } from "./partners";
@@ -88,6 +92,7 @@ function QuotationDetailView() {
   const [baseVersion, setBaseVersion] = useState<number | null>(null);
   const [headerDirty, setHeaderDirty] = useState(false);
   const [creatingPi, setCreatingPi] = useState(false);
+  const [creatingSo, setCreatingSo] = useState(false);
   const submitLock = useRef(false);
   const actionKey = useRef<string>("");
 
@@ -108,6 +113,8 @@ function QuotationDetailView() {
     transition.reset();
     setAction(null);
     setCreatingPi(false);
+    setCreatingSo(false);
+    void client.invalidateQueries({ queryKey: DOCUMENT_FLOW_QUERY_KEY });
     // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다).
     void detail.refetch().then((result) => {
       if (result.data) setBaseVersion(result.data.version);
@@ -119,6 +126,7 @@ function QuotationDetailView() {
     client.setQueryData(detailKey, next);
     setBaseVersion(next.version);
     void client.invalidateQueries({ queryKey: QUOTATIONS_QUERY_KEY });
+    void client.invalidateQueries({ queryKey: DOCUMENT_FLOW_QUERY_KEY });
     setNotice(null);
   }
 
@@ -246,6 +254,23 @@ function QuotationDetailView() {
               PI 만들기
             </button>
           )}
+          {canWrite && canCreateSalesOrderFromQuotation(qt.status) && (
+            <button
+              type="button"
+              onClick={() => setCreatingSo(true)}
+              disabled={stale || qt.is_lapsed}
+              title={
+                qt.is_lapsed
+                  ? "유효기간이 지난 견적으로는 수주를 만들 수 없습니다."
+                  : stale
+                    ? "다른 곳에서 수정되었습니다. 먼저 '최신 내용 불러오기'를 누르세요."
+                    : undefined
+              }
+              className="cell-nowrap rounded border border-gray-900 px-3 py-2 text-sm disabled:opacity-50"
+            >
+              SO 만들기
+            </button>
+          )}
           {canWrite && canReviseQuotation(qt.status) && (
             <button
               type="button"
@@ -333,6 +358,8 @@ function QuotationDetailView() {
           }}
         />
 
+        <DocumentFlowPanel kind="QUOTATION" id={qt.id} />
+
         <StatusTimeline
           basePath={`/v1/quotations/${qt.id}`}
           queryKey={detailKey}
@@ -345,6 +372,26 @@ function QuotationDetailView() {
           qt={qt}
           version={base}
           onClose={() => setCreatingPi(false)}
+          onReload={reload}
+        />
+      )}
+      {creatingSo && canWrite && canCreateSalesOrderFromQuotation(qt.status) && (
+        <SalesOrderCreateDialog
+          source={{
+            kind: "QUOTATION",
+            id: qt.id,
+            doc_number: qt.doc_number,
+            doc_date: qt.doc_date,
+            lines: qt.lines.map((line) => ({
+              id: line.id,
+              line_no: line.line_no,
+              sku_code: line.sku_code,
+              sku_name_ko: line.sku_name_ko,
+              quantity: line.quantity,
+            })),
+          }}
+          version={base}
+          onClose={() => setCreatingSo(false)}
           onReload={reload}
         />
       )}
