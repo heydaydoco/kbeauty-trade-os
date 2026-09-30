@@ -465,6 +465,20 @@ def _check_copy_source(session: Session, source_id: int, buyer_partner_id: int) 
         )
 
 
+def lock_copy_source(session: Session, source_id: int | None) -> None:
+    """복제 원본 SO 행을 `FOR UPDATE`로 **미리** 잠근다 — 참조 생성 오케스트레이터가 원천 라인(8)을 잠그기 *전에* 부른다(잠금 순서 SO(5)→라인(8)).
+
+    자격 검사는 하지 않는다(`create_received_sales_order`의 `_check_copy_source`가 같은 행을 다시 잠그고 검사한다 — 같은 트랜잭션이라 무해).
+    """
+    if source_id is None:
+        return
+    session.execute(
+        select(SalesOrder.id)
+        .where(SalesOrder.id == source_id, SalesOrder.deleted_at.is_(None))
+        .with_for_update()
+    ).first()
+
+
 def has_live_copy(session: Session, source_id: int) -> bool:
     """원본에서 복제된 **살아 있는** SO가 이미 있는가(취소된 복제본은 세지 않는다 — X-08)."""
     return bool(
@@ -913,13 +927,17 @@ def update_sales_order(
         changed = _content_changes(row, cols)
         if changed:
             editing.assert_editable(KIND, row.status, fields=changed)
-        for name, value in cols.items():
-            if getattr(row, name) != value:
-                setattr(row, name, value)
-        row.updated_by_id = actor.id
+        # ★ `begin_nested()`는 진입 시 세션을 먼저 flush한다 — 변경을 **SAVEPOINT 안에서** 대입해야 유니크 경합 위반이 번역 경로로 들어온다
+        #   (밖에서 대입하면 진입 flush의 IntegrityError가 세션을 깨뜨려 PendingRollbackError 500이 된다).
         with guarded_flush(
-            session, buyer_partner_id=row.buyer_partner_id, po_key=row.buyer_po_no_key
+            session,
+            buyer_partner_id=row.buyer_partner_id,
+            po_key=cols.get("buyer_po_no_key", row.buyer_po_no_key),
         ):
+            for name, value in cols.items():
+                if getattr(row, name) != value:
+                    setattr(row, name, value)
+            row.updated_by_id = actor.id
             session.flush()
         return detail_body(session, row)
 

@@ -9,8 +9,9 @@ DoD ① "참조 생성만으로 QT→PI→SO 관통(재입력 화면 없음)"의
   `valid_until` 직접 검사 / PI: 상태 ∈ {ISSUED, PARTIALLY_PAID, PAID} + **미입금 발행 상태일 때만** `valid_until` 직접 검사 — 이미 입금한 바이어의 SO 생성을
   유효기간이 막아 선수금이 갇히는 사고 방지) → 날짜 → (PI만) **활성 SO 1건 제한**(409 ALREADY_CONVERTED — DB 부분 유니크가 최종 보증) → 원천 라인 잠금(id 오름차순)·
   잔량 재계산·요청 수량 ≤ 잔량(409 EXCEEDS_OPEN) → SKU 재검사(단종·삭제 SKU가 실려 나가는 것 차단, 422+목록) → 라인 값 복사 → 착지.
-■ 잠금 순서: 멱등 claim(0) → 바이어 `FOR KEY SHARE`(2) → 원천 헤더 `FOR UPDATE`(3 또는 4) → 원천 라인 `FOR UPDATE` id순(8) → (복제 원본 SO `FOR UPDATE`(5)) → 채번(9, 마지막).
-  PI 경로는 QT 헤더를 따로 잠그지 않는다 — 살아 있는 PI가 QT의 취소·만료를 붙잡고 있고(역순 취소 가드), PI 취소는 QT→PI 순서라 부분수열이 역행하지 않는다.
+■ 잠금 순서: 멱등 claim(0) → 바이어 `FOR KEY SHARE`(2) → 원천 헤더 `FOR UPDATE`(3 또는 3→4) → (복제 원본 SO `FOR UPDATE`(5)) → 원천 라인 `FOR UPDATE` id순(8) → 채번(9, 마지막).
+  PI 경로는 **QT 헤더를 PI보다 먼저**(3→4 — `lock_chain`) 잠근다: SO INSERT의 FK 검사((pi_id, qt_id)→PI·qt_id→QT)가 QT 행에 암묵 `FOR KEY SHARE`를 잡아
+  PI만 잠그고 들어가면 "PI 잠금 → QT 암묵 잠금" 역순이 되어 PI 취소(QT→PI)와 교차 교착한다(J 테스트 `cross_chain`·`pi_cancel_versus_so_creation`이 실제로 잡은 결함).
 ■ 원천은 **수정하지 않는다**(잠금+읽기) — 원천 version 불변. 같은 원천의 동시 생성은 원천 헤더 잠금이 직렬화하므로 잔량 초과·PI→SO 2건이 함께 성공할 수 없다.
 """
 
@@ -33,6 +34,7 @@ from app.modules.proforma_invoices.models import ProformaInvoice, ProformaInvoic
 from app.modules.quotations.models import Quotation, QuotationLine
 from app.modules.sales_orders import service as sos
 from app.modules.sales_orders.models import SalesOrder
+from app.modules.trade_chain.chain_ops import lock_chain
 from app.modules.trade_chain.reference import (
     _require_source_quotation,
     _require_usable_source,
@@ -41,7 +43,6 @@ from app.modules.trade_chain.reference import (
 from app.modules.trade_docs.constants import DocKind
 from app.modules.trade_docs.expiry import is_lapsed
 from app.modules.trade_docs.lines import unusable_sku_reasons
-from app.modules.trade_docs.locking import lock_document
 from app.modules.trade_docs.snapshot import snapshot_line_from_source
 from app.modules.trade_docs.validation import check_doc_date, invalid
 
@@ -53,7 +54,10 @@ PI_SOURCE_STATUSES = ("ISSUED", "PARTIALLY_PAID", "PAID")
 
 
 def _require_source_pi(session: Session, pi_id: int, version: int) -> ProformaInvoice:
-    """원천 PI 확보 — 무잠금으로 바이어를 얻어 KEY SHARE로 잠근 뒤 PI를 잠그고 바이어가 그대로인지 재확인한다."""
+    """원천 PI 확보 — 무잠금으로 바이어를 얻어 KEY SHARE로 잠근 뒤 **사슬을 위에서부터**(QT→PI, `lock_chain`) 잠그고 바이어가 그대로인지 재확인한다.
+
+    QT를 PI보다 먼저 잠그는 이유는 모듈 독스트링(SO INSERT의 FK 검사가 QT 행에 암묵 KEY SHARE를 잡는다 — 역순이면 PI 취소와 교착).
+    """
     peek = session.execute(
         select(ProformaInvoice.buyer_partner_id).where(
             ProformaInvoice.id == pi_id, ProformaInvoice.deleted_at.is_(None)
@@ -64,7 +68,9 @@ def _require_source_pi(session: Session, pi_id: int, version: int) -> ProformaIn
     partners.require_partner_of_any_type(
         session, peek, ("BUYER",), field="buyer_partner_id", type_label="바이어", lock=True
     )
-    pi = lock_document(session, ProformaInvoice, pi_id, expected_version=version)
+    pi: ProformaInvoice = lock_chain(
+        session, DocKind.PROFORMA_INVOICE, pi_id, expected_version=version
+    )[DocKind.PROFORMA_INVOICE]
     if pi.buyer_partner_id != peek:  # 잠금 사이에 바뀌었다 — 재시도 안내(409)
         raise VersionConflictError(log_context={"proforma_invoice_id": pi_id})
     return pi
@@ -185,6 +191,9 @@ def create_sales_order_from_quotation(
         qt: Quotation = _require_source_quotation(session, qt_id, payload["version"], lock=True)
         _require_usable_source(qt, today)
         doc_date = _common_checks(qt.doc_date, payload, today)
+        sos.lock_copy_source(
+            session, payload.get("copied_from_id")
+        )  # 잠금 순서 SO(5) → 원천 라인(8)
         requested = payload.get("lines")
         source_lines, take, _open = select_source_lines(
             session,
@@ -245,6 +254,9 @@ def create_sales_order_from_proforma_invoice(
         _require_usable_pi(pi, today)
         doc_date = _common_checks(pi.doc_date, payload, today)
         _require_no_live_order(session, pi.id)
+        sos.lock_copy_source(
+            session, payload.get("copied_from_id")
+        )  # 잠금 순서 SO(5) → 원천 라인(8)
         requested = payload.get("lines")
         source_lines, take, _open = select_source_lines(
             session,
