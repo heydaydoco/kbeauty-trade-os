@@ -22,6 +22,8 @@ import { MaterialsPage } from "./routes/materials";
 import { NotFoundPage } from "./routes/not-found";
 import { PoliciesPage } from "./routes/policies";
 import { PartnersPage } from "./routes/partners";
+import { QuotationDetailPage } from "./routes/quotation-detail";
+import { QuotationListPage } from "./routes/quotations";
 import { ProductDetailPage } from "./routes/product-detail";
 import { ProductsPage } from "./routes/products";
 import { AppShell } from "./routes/shell";
@@ -94,6 +96,8 @@ export function AppRoutes() {
         <Route path="/market-wizard" element={<MarketWizardPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/partners" element={<PartnersPage />} />
+        <Route path="/quotations" element={<QuotationListPage />} />
+        <Route path="/quotations/:quotationId" element={<QuotationDetailPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/imports" element={<ImportsPage />} />
         <Route path="/brands" element={<BrandsPage />} />

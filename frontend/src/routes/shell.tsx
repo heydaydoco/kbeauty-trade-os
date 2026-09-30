@@ -18,6 +18,7 @@ const NAV = [
   { to: "/certification-board", label: "인증 보드" },
   { to: "/agencies", label: "대행사" },
   { to: "/partners", label: "거래처" },
+  { to: "/quotations", label: "견적" },
   { to: "/documents", label: "문서보관소" },
   { to: "/imports", label: "엑셀 임포트" },
   { to: "/brands", label: "브랜드" },
