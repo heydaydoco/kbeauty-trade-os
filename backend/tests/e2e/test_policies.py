@@ -149,6 +149,50 @@ def test_optimistic_lock_and_idempotent_replay(admin: TestClient) -> None:
     assert _by_key(admin)[TOL]["value"] == 700
 
 
+def test_blank_reason_is_422_and_update_audit_records_the_old_set_value(
+    admin: TestClient,
+) -> None:
+    """공백뿐인 사유는 422(strip 후 검증), 갱신 audit은 old=직전 값·old_source=SET을 남긴다"""
+    assert _put(admin, MODE, "WARN", version=None, reason="   ", idem="b1").status_code == 422
+    assert _put(admin, MODE, "WARN", version=None, idem="b2").status_code == 200
+    assert (
+        _put(admin, MODE, "OFF", version=1, reason="점검 기간 해제", idem="b3").status_code == 200
+    )
+    with engine.connect() as conn:
+        details = (
+            conn.execute(
+                text("SELECT detail FROM audit_log WHERE action='policy.update' ORDER BY id")
+            )
+            .scalars()
+            .all()
+        )
+    assert len(details) == 2
+    assert details[1] == {
+        "key": MODE,
+        "old": "WARN",
+        "new": "OFF",
+        "old_source": "SET",
+        "reason": "점검 기간 해제",
+    }
+
+
+def test_a_rejected_write_leaves_no_trace_and_the_key_can_retry(admin: TestClient) -> None:
+    """409(낙관 잠금)은 audit·outbox를 남기지 않고, 같은 멱등 키로 올바른 version 재시도가 성공한다"""
+    assert _put(admin, TOL, 100, version=None, idem="r0").status_code == 200
+    stale = _put(admin, TOL, 200, version=7, idem="r1")
+    assert stale.status_code == 409
+    with engine.connect() as conn:
+        audits = conn.execute(
+            text("SELECT count(*) FROM audit_log WHERE action='policy.update'")
+        ).scalar_one()
+        events = conn.execute(
+            text("SELECT count(*) FROM events WHERE event_type='policies.policy.changed'")
+        ).scalar_one()
+    assert (audits, events) == (1, 1)
+    retry = _put(admin, TOL, 200, version=1, idem="r1")
+    assert retry.status_code == 200 and retry.json()["value"] == 200
+
+
 def test_first_creation_race_yields_one_success_and_one_409() -> None:
     """동시 최초 생성 두 요청 → 하나 성공, 하나 409(500 아님)"""
     admin_id = create_user("pol-race@example.com", roles=(RoleCode.ADMIN,))

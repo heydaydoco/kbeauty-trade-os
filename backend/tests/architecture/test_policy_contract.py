@@ -25,7 +25,7 @@ def _check_keys() -> set[str]:
                 " WHERE conname = 'ck_policy_settings_policy_key_closed'"
             )
         ).scalar_one()
-    return set(re.findall(r"'([a-z_]+)'", definition))
+    return set(re.findall(r"'([a-z][a-z0-9_]*)'", definition))
 
 
 def test_registry_and_check_constraint_keys_are_identical() -> None:
@@ -51,19 +51,66 @@ def test_registry_defaults_are_strict_values_within_their_own_range() -> None:
     assert POLICY_REGISTRY["price_deviation_tolerance_bp"].unset_value == 0
 
 
+def _literal_policy_keys(source: str) -> set[str]:
+    """소스에서 get_policy(…, "키") 리터럴 키를 모은다(모듈 상수 참조도 해석)"""
+    tree = ast.parse(source)
+    constants = {
+        target.id: node.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    seen: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", getattr(node.func, "attr", "")) == "get_policy"
+            and len(node.args) >= 2
+        ):
+            continue
+        arg = node.args[1]
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            seen.add(arg.value)
+        elif isinstance(arg, ast.Name) and arg.id in constants:
+            seen.add(constants[arg.id])
+    return seen
+
+
+def test_the_literal_key_scan_is_not_idle() -> None:
+    """공회전 방지 — 스캔이 리터럴·상수 참조 호출을 실제로 알아본다(소비 코드는 PR-9+에서 처음 등장)"""
+    sample = 'K = "typo_key"\nget_policy(s, "a_key")\nsvc.get_policy(s, K)\nget_policy(s, var)\n'
+    assert _literal_policy_keys(sample) == {"a_key", "typo_key"}
+
+
 def test_every_get_policy_literal_key_is_registered() -> None:
     """코드가 get_policy(…, "키")로 읽는 리터럴 키는 전부 레지스트리에 있다(오타가 조용히 404 되지 않게)"""
     seen: set[str] = set()
     for path in APP.rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if (
-                isinstance(node, ast.Call)
-                and getattr(node.func, "id", getattr(node.func, "attr", "")) == "get_policy"
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)
-                and isinstance(node.args[1].value, str)
-            ):
-                seen.add(node.args[1].value)
+        seen |= _literal_policy_keys(path.read_text(encoding="utf-8"))
     assert seen <= set(POLICY_REGISTRY), (
         f"등록되지 않은 정책 키: {sorted(seen - set(POLICY_REGISTRY))}"
     )
+
+
+def test_value_shape_check_matches_the_registry() -> None:
+    """policy_value_shape CHECK가 레지스트리의 허용 값·범위와 같다(어긋나면 저장 시 500)"""
+    with owner_engine.connect() as conn:
+        definition = conn.execute(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint"
+                " WHERE conname = 'ck_policy_settings_policy_value_shape'"
+            )
+        ).scalar_one()
+    for key, spec in POLICY_REGISTRY.items():
+        assert f"'{key}'" in definition, key
+        if spec.kind == "MODE":
+            for mode in spec.allowed:
+                assert f"'{mode}'" in definition, (key, mode)
+        else:
+            assert str(spec.minimum) in definition and str(spec.maximum) in definition, key
+    modes = set(re.findall(r"'([A-Z_]+)'", definition))
+    allowed = {m for spec in POLICY_REGISTRY.values() for m in spec.allowed}
+    assert modes == allowed, "CHECK에만 있는 모드 값"
