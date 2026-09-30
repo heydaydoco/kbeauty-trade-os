@@ -1,4 +1,4 @@
-# kbeauty-trade-os — WBS(세션 태스크 분해서) v1.4
+# kbeauty-trade-os — WBS(세션 태스크 분해서) v1.5
 
 > **용도**: `DESIGN.md` §19 로드맵을 Claude Code(Opus) 한 세션 크기의 태스크로 분해한 실행 레일. 구현 모델은 이 문서의 태스크 ID 순서대로 진행한다.
 > **우선순위**: 이 문서 ↔ `DESIGN.md` 충돌 시 **DESIGN.md 우선**, 충돌 발견 시 구현 중단 후 보고(CLAUDE.md 수칙).
@@ -105,25 +105,25 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 
 **S3-1 | 전표 사슬 전반부·인테이크·승인 코어**
 - 범위: §7.1~7.4, §2 승인 워크플로우, §3 채번·스냅샷 규율
-- 산출물: quotations/proforma_invoices/sales_orders/purchase_orders(+lines·잔량·스냅샷), 상태 열거 구현(§7.2 그대로), 오더 인테이크 스테이징+게이트 6종(품번 매핑·단가 편차·여신·준비도·MOQ·중복 PO), 오더 보드, approvals+결재선 매핑+대결, PI 입금 게이트(**선수금 T/T만 활성**)
+- 산출물: quotations/proforma_invoices/sales_orders/purchase_orders(+lines·잔량·스냅샷), 상태 열거 구현(§7.2 그대로), 오더 인테이크 스테이징+게이트 6종(품번 매핑·단가 편차·여신·준비도·MOQ·중복 PO), 오더 보드, approvals+결재선 매핑+대결, PI 입금 게이트(**선수금 T/T만 활성**); **(v1.5 추가 — S3-1 통합 계획 판정 2026-09-30, ADR-0051~0067)** `payments`(선수금 입금 최소형 — 입금·역기록·PI 상태 수렴)·`policy_settings`(정책 저장소)·`bank_accounts`·상태이력 4표·오더 보드 벌크(인테이크 확정·SO 확정·담당자 지정 3종)·`GET /users/lookup`·검색형 선택 컴포넌트·정책 화면(`/settings/policies`)
 - DoD: 참조 생성만으로 QT→PI→SO 관통(재입력 화면 없음) / 중복 바이어 PO 0건 / 여신 초과 → 승인 게이트 / 확정 후 단가·환율 불변
-- 검증: A(중복 PO·불변·PI 게이트), H(승인 우회 차단·승인 후 불변)
+- 검증: A(중복 PO·불변·PI 게이트), H(승인 우회 차단·승인 후 불변·결재선 매핑·대결 기간+이력 — v1.5 정정: 검증란 H 2항→4항, DESIGN §20 헤더 P3 매핑도 A·B·E→A·B·E·G·H·I·K로 보강) + **GC-A6~A13·F2·F3·G2·H3~H6**(v1.5 — GC v1.4)
 
 **S3-2 | 선적·기일 엔진·휴일**
 - 범위: §7.5, holidays, §8.3 산식 선적용(자리만)
-- 산출물: shipments(+lines/parties·환율 고정·구분 4종)/milestones, 자동 계산(대금만기 결제유형 분기·적재의무 수리일+30·L/C 제시기한 MIN(B/L+21, 유효)), 실적 입력 후속 재계산, 롤오버 이력+통보 기록, 국가별 휴일 경고
+- 산출물: shipments(+lines/parties·환율 고정·구분 4종)/milestones, 자동 계산(대금만기 결제유형 분기·적재의무 수리일+30·L/C 제시기한 MIN(B/L+21, 유효)), 실적 입력 후속 재계산, 롤오버 이력+통보 기록, 국가별 휴일 경고; **(v1.5 추가 — 인계 판정)** 수입선적의 PO 참조(`po_line_id`)·`customs_records`(PO 후반 전이와 별개), 이에 따른 `CHILD_LINKS`·`LINE_CONSUMERS`·RESERVED 상태 엣지(SO IN_SHIPMENT·COMPLETED) 추가와 상태 총수 테스트 갱신, `open_order_amount`(여신 노출)의 선적분 차감은 **S3-3 미수 provider `reflected=True` 등록 릴리스와 같은 PR에서만**, SO 부분출하 후 잔량 종결(short-close) 판정, OEM 마일스톤 프로파일(`profile_id`)·PO 라인 ETA 슬롯 판정, QT/PI 만료 임박(D-N) 알림 판정(기일 엔진 착수 시)
 - DoD: T/T와 L/C 만기 계산 분기 테스트 / ETA 현지 연휴 → 경고 / 부분선적 1:N 잔량 정확
 - 검증: A(부분선적 잔량 0·초과 거부), K(L/C 제시기한 MIN·tolerance)
 
 **S3-3 | 서류 생성기·채권/입금**
 - 범위: §7.6·7.10
-- 산출물: QT·PI·CI·PL·S/I 템플릿 렌더링(PDF·엑셀·언어 변형), 저장 전 검증 강제(금액 정합·G.W.≥N.W.·Incoterms 완전성·CI↔PL 교차), receivables(만기 자동·aging 30/60/90)/payments(부분), lc_terms(feature flag·하자 체크리스트 화면)
-- DoD: 교차 불일치 서류 저장 거부 / 무상(금액 0) 생성 가능 / aging 정확
+- 산출물: QT·PI·CI·PL·S/I 템플릿 렌더링(PDF·엑셀·언어 변형), 저장 전 검증 강제(금액 정합·G.W.≥N.W.·Incoterms 완전성·CI↔PL 교차), receivables(만기 자동·aging 30/60/90)/payments(부분), lc_terms(feature flag·하자 체크리스트 화면); **(v1.5 수정·추가)** `payments`는 **S3-1이 신설한 테이블의 확장**(채권 연결[`receivable_id`]·`pi_id` 완화·잔금·선수금 초과분 — 기존 컬럼·CHECK·kind 값 변경 금지), 미수 provider 등록(S3-1 기본 구현 `reflected=False`의 잔존 금지 아키텍처 테스트 포함), L/C feature flag 행 공급·토글 경로(`lc_terms`와 함께 — S3-1 프로덕션에서 L/C 선택은 닫혀 있음), 자사 레터헤드 마스터, EXPIRED/CANCELLED PI에 도착한 입금 처리 재판정, documents 전표 첨부(`owner_type` 확폭 경고), 선수금 미차감 노출·통화 불일치 입금의 재판정
+- DoD: 교차 불일치 서류 저장 거부 / 무상(금액 0) 생성 가능 / aging 정확 / **(v1.5 추가)** 미수 provider 등록 후 "선적 확정~미수 발생 구간의 노출 공백 0·이중 계산 0" 테스트
 - 검증: B(교차 일치·G.W.·무상·한글 CSV), A(일부입금 전환)
 
 **S3-4 | 협정·판정·계산기·비용 코어·백오더**
 - 범위: §6.1~6.3·6.6 자율발급 게이트, §10.1 코어, §11 백오더
-- 산출물: agreements(+countries·신고문안 원형·HS 버전)/origin_determinations(BOM 스냅샷 동결·hs_version)/계산기(CTC 전수 대조·RVC 공제/집적·±5%p 플래그·미소기준)/신고문안 생성(자구 고정·6,000유로+인증수출자 게이트), expense_types/expenses(단계 4종·Incoterms 부담자 기본값), 백오더 보드(가용일 추종은 P4 연결), FTA 시드(발효 협정 전체 [발효 확인 필요] 마킹), DG 임시 수동 체크리스트 태스크
+- 산출물: agreements(+countries·신고문안 원형·HS 버전)/origin_determinations(BOM 스냅샷 동결·hs_version)/계산기(CTC 전수 대조·RVC 공제/집적·±5%p 플래그·미소기준)/신고문안 생성(자구 고정·6,000유로+인증수출자 게이트), expense_types/expenses(단계 4종·Incoterms 부담자 기본값), 백오더 보드(가용일 추종은 P4 연결), FTA 시드(발효 협정 전체 [발효 확인 필요] 마킹), DG 임시 수동 체크리스트 태스크; **(v1.5 추가)** 승인 유형 `EXPENSE_OVER_THRESHOLD` 소비(S3-1 승인 코어의 `TargetSpec` 등록)
 - DoD: **GC-B1**(RVC 62% 충족) / **GC-B2**(미상=역외) / **GC-B3**(hs_version 스냅샷) / **GC-G1**(관세 533.00·부가세 873.30 — Decimal, float 금지) / CTC 1개 미충족=전체 불충족 / 신고문안 자구 일치
 - 검증: C(CTC 전수·RVC 경계·스냅샷 불변), B(신고문안·6,000유로), E(부담자) + **Phase 3 리허설**: 실제 수주 1건(익명화) QT→채권 관통
 
@@ -131,19 +131,19 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 
 **S4-1 | 착수 ADR + 원장·위치·로트·불변 강제**
 - 범위: §19 P4 착수 ADR 5항목(잔량 구조·할당 저장·직렬화·사급 수율·마이너스 정책), §8.1·8.2, §17.5
-- 산출물: **ADR 1건 확정 문서(세션 첫 작업)** → locations(격리 포함)/lots(CoA)/stock_movements 전 이동유형, DB 계정 UPDATE/DELETE GRANT 제거(또는 금지 트리거), CHECK 제약(수량≠0 등), OPENING 이월 실행+검산, BOX 화면 환산(원장 EA 단일)
+- 산출물: **ADR 1건 확정 문서(세션 첫 작업)** → locations(격리 포함)/lots(CoA)/stock_movements 전 이동유형, DB 계정 UPDATE/DELETE GRANT 제거(또는 금지 트리거), CHECK 제약(수량≠0 등), OPENING 이월 실행+검산, BOX 화면 환산(원장 EA 단일); **(v1.5 추가)** ADR에 ① PO 후반(입고 문서·PO 잔량 차감·후반 상태 전이 PARTIALLY_RECEIVED·FULLY_RECEIVED·CLOSED·IN_PO ref 소유) ② `lock_buyer_for_credit`(S3-1 선행 결정) 교체 여부와 §17.2 전역 잠금 순서표 승계 ③ S3-1 잔량 SUM 파생 표현의 최종 확정(시그니처 `open_quantity` 유지 하 대체 가능) ④ 자재 PO(SKU 전용인 S3-1의 가산 확장 — 사급 수율 항목과 함께)를 포함
 - DoD: **GC-A1**(음수 차단) / **GC-A2**(수불 120) / **GC-A4**(불변+역기록) / 앱 계정 원장 UPDATE → DB 거부 / OPENING 합계 검산
 - 검증: J(원장 UPDATE 거부·롤백), A(OPENING), D(BOX 환산)
 
 **S4-2 | 할당·가용재고·피킹·검수**
 - 범위: §8.3·8.4, §7.2 선적 상태 연동
-- 산출물: allocations(SO 확정 시 생성·검수 시 소진·취소 시 해제), 가용재고 산식(현재고−유효할당−격리), 직렬화 잠금(ADR 확정 방식), 피킹 리스트 자동 생성→검수 화면(로트 대조·차이 차단·FEFO 내 교체+사유)→OUT_SHIP 기록, 검수 미완료 CI/PL 차단
+- 산출물: allocations(SO 확정 시 생성·검수 시 소진·취소 시 해제), 가용재고 산식(현재고−유효할당−격리), 직렬화 잠금(ADR 확정 방식), 피킹 리스트 자동 생성→검수 화면(로트 대조·차이 차단·FEFO 내 교체+사유)→OUT_SHIP 기록, 검수 미완료 CI/PL 차단; **(v1.5 추가)** `AllocationPort` 실구현(S3-1은 NOT_IMPLEMENTED를 확정 응답에 노출)·SET 구성 변경 드리프트 가드
 - DoD: **GC-F1**(동시 7+6 → 1건만, 실제 동시 실행 테스트) / 피킹과 다른 로트 검수 입력 차단 / 검수 전 CI 생성 시도 거부
 - 검증: J(동시 출고), D(검수·로트), B(검수 미완료 차단)
 
 **S4-3 | 세트·사급·채널입고 2단·FEFO·실사·리콜**
 - 범위: §8.2 ASSEMBLY 계열·§8.5~8.8
-- 산출물: ASSEMBLY/DISASSEMBLY(단일 트랜잭션·유통기한 MIN)·PROD_CONSUME 백플러시·채널입고 2단(운송중 위치+RECEIPT_DIFF)·FEFO 제안·임박 리포트(D-180/90/30)·폐기 승인 연동·리콜 1클릭 역추적·실사(스냅샷+위치 잠금+ADJ)·ROP 권고(자동 발주 금지)
+- 산출물: ASSEMBLY/DISASSEMBLY(단일 트랜잭션·유통기한 MIN)·PROD_CONSUME 백플러시·채널입고 2단(운송중 위치+RECEIPT_DIFF)·FEFO 제안·임박 리포트(D-180/90/30)·폐기 승인 연동·리콜 1클릭 역추적·실사(스냅샷+위치 잠금+ADJ)·ROP 권고(자동 발주 금지); **(v1.5 추가)** 승인 유형 `DISPOSAL`(폐기)·`STOCKTAKE_DIFF`(실사 차이) 소비
 - DoD: **GC-E1**(본품 −40·미니 −20·세트 +20 단일 트랜잭션) / **GC-D1**(차이 3EA = RECEIPT_DIFF, 자동 손실 금지) / **GC-D2**(채널 가용 분리) / 실사 중 출고 잠금
 - 검증: A(세트·유통기한 MIN), D(FEFO·실사·리콜·2단·사급 대사)
 
@@ -157,7 +157,7 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 
 **S5-1 | 채널·프로파일·리스팅·주문 임포트**
 - 범위: §9 ①~③, channel_shelf_rules
-- 산출물: channels/profiles(FBA·Shopee·Qoo10 3종 시드)/listings(준비도 게이트+override 사유)/channel_orders 멱등 임포트, IOR·Bond·EORI = M2 기업 단위 요건 연결
+- 산출물: channels/profiles(FBA·Shopee·Qoo10 3종 시드)/listings(준비도 게이트+override 사유)/channel_orders 멱등 임포트, IOR·Bond·EORI = M2 기업 단위 요건 연결; **(v1.5 추가)** 게이트 `subject_type`에 `CHANNEL_LISTING` 확장(S3-1 `gates` 공통 모듈·`gate_overrides` 재사용)
 - DoD: **GC-C2**(미등록 시장 리스팅 차단+통제된 override) / 채널 주문 재임포트 변화 0 / 프로파일 교체만으로 3채널 동작
 - 검증: D(멱등·프로파일 교체), C(게이트)
 
@@ -175,7 +175,7 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 
 **S5-4 | 요율·RFQ·소싱·인바운드·자동 확정**
 - 범위: §10.2~10.5, §15·§16 인바운드, §2 ADR-09 예외
-- 산출물: rate_cards(4유형·만료 D-30)/RFQ 컴포저(케이스 폼→국·영문 다건)/소싱 추천(all-in 시뮬·권고 외 사유 필수)/절감 측정(기준선 택1 강제), IMAP 인바운드(화이트리스트·격리·해시 멱등), inbound_rules, auto_confirm_rules(**결정적 파서 한정** — 인테이크 전표까지·원장/지출/분개 불가), outbound_policies(정형 리마인드 화이트리스트), 조사→템플릿 변환(§5.5 스테이징 경로 — 근거 링크 없는 확정 차단)
+- 산출물: rate_cards(4유형·만료 D-30)/RFQ 컴포저(케이스 폼→국·영문 다건)/소싱 추천(all-in 시뮬·권고 외 사유 필수)/절감 측정(기준선 택1 강제), IMAP 인바운드(화이트리스트·격리·해시 멱등), inbound_rules, auto_confirm_rules(**결정적 파서 한정** — 인테이크 전표까지·원장/지출/분개 불가), outbound_policies(정형 리마인드 화이트리스트), 조사→템플릿 변환(§5.5 스테이징 경로 — 근거 링크 없는 확정 차단); **(v1.5 추가)** ADR-09 조건부 자동 확정 도입 시 ADR 신설과 S3-1 "자동 확정 부재" 테스트(`test_no_auto_confirm_code_path_exists`) 엔트리의 명시적 개정
 - DoD: **GC-H1**(AI 추출 자동 확정 불가 — 임계값 옵션 구현 시 반려) / **GC-H2**(발송은 승인 토큰 없이 호출 불가) / 화이트리스트 외 발신자 격리 / 자동 확정 조건 1개 미충족 → 대기
 - 검증: I(격리·자동 확정·자동 발송 차단), E(CBM 경계·최소요금·권고 외 사유·DG 제외) + **Phase 5 리허설**: 실제 정산 리포트 1건 대사 관통
 
@@ -183,7 +183,7 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 
 **S6-1 | AI 레이어**
 - 범위: §13.1, §2 ADR-08, §12.1 파서 고도화
-- 산출물: Messages API 백엔드 경유(키 환경변수)·ai_prompt_templates(데이터)·ai_logs(토큰·비용·채택)·월 한도 차단·엔터티 컨텍스트 자동 조립·상세 화면 AI 패널, 자연어 조회(사전 정의 읽기 전용 함수 tool use — text-to-SQL 금지), 첨부 인젝션 격리
+- 산출물: Messages API 백엔드 경유(키 환경변수)·ai_prompt_templates(데이터)·ai_logs(토큰·비용·채택)·월 한도 차단·엔터티 컨텍스트 자동 조립·상세 화면 AI 패널, 자연어 조회(사전 정의 읽기 전용 함수 tool use — text-to-SQL 금지), 첨부 인젝션 격리; **(v1.5 추가)** 원본 파일 보관(`documents.owner_type='ORDER_INTAKE'`+`order_intakes.document_id` 추가형)·거래처 미등록 상태 인테이크 착지 판정
 - DoD: AI 출력 DB 직행 경로 부재(코드 검사) / 월 한도 도달 → 차단 / 인젝션 문서 → 지시 무시
 - 검증: G(직행 불가·인젝션·한도·마스킹)
 
@@ -195,12 +195,14 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 
 **S6-3 | 통합·KPI·프로젝트 뷰**
 - 범위: §16, §13.2, §14 ①·⑬, §10.5 보고서
-- 산출물: 슬랙 Outbound 웹훅(라우팅)·노션 단방향 발행·데일리 브리핑 완성, KPI 대시보드(야간 사전집계+원장 검산), 보고서 센터 PDF, projects 출시 뷰, knowledge_notes+화면 사이드 노출, feature_requests→작업 지시서 자동 조립
+- 산출물: 슬랙 Outbound 웹훅(라우팅)·노션 단방향 발행·데일리 브리핑 완성, KPI 대시보드(야간 사전집계+원장 검산), 보고서 센터 PDF, projects 출시 뷰, knowledge_notes+화면 사이드 노출, feature_requests→작업 지시서 자동 조립; **(v1.5 추가)** 전표 동결 다이제스트·야간 전건 재해시(탐지형 — S3-1은 미채택)·`trade-docs-totals-verify` 라인합=헤더합 야간 검산 확장 판정
 - DoD: 야간 집계 vs 원장 일치 / 노션 발행 실패 재시도+알림 / 브리핑 1통 통합
 - 검증: H(집계 일치·스케줄 실패 감지), E·F 잔여 + **Phase 6 리허설**: 월마감 패키지 1회 실생성
 
 ## Phase 7~ — 백로그 (착수 금지, §19 원문 유지)
 SMTP 자동 발송, 이카운트 API·UNI-PASS, 슬랙 인터랙티브·조회 커맨드, 노션 양방향, 외부 링크, 효능 라이브러리, REWORK 이동유형, 은행 CSV 매칭, 바이어 선적 추적 링크.
+
+> **(v1.5 등재 — S3-1 통합 계획)** ① **P6 데이터 완성도 헬스체크(§14 ⑭)**: 결측 탐지 항목에 "결재선 미설정"(여신 초과 SO 확정 불가 상태)·"정책 미설정"(PI 게이트 미설정=BLOCK 동작)을 편입한다(소유 세션은 P6 착수 시 판정). ② **P7 슬랙 인터랙티브 승인 도입 시** `DECIDE_CALLERS`(승인 결정 통로 허용 호출처) 갱신과 ADR을 함께 한다.
 
 ---
 
@@ -215,14 +217,26 @@ SMTP 자동 발송, 이카운트 API·UNI-PASS, 슬랙 인터랙티브·조회 �
 | C2 | S5-1 | H1·H2 | S5-4(+S6-1) |
 | C8 | S2-1 | A5 | 반입 재개 시(휴면 — S1.5 이월) |
 | C9·C10 | S2-2 | | |
+| A6·A7·A8·A9 | S3-1 | A10·A11·A12·A13 | S3-1 |
+| F2·F3 | S3-1 | G2 | S3-1 |
+| H3·H4·H5·H6 | S3-1 | | |
 
 > C3~C7=S1-2(v1.1)·C8=S2-1(v1.2)·C9·C10=S2-2(v1.3) — 세션 종결 후 등재분은 GC 문서 변경 이력이 정본.
+> A6~A13·F2·F3·G2·H3~H6=S3-1(v1.5 — GC v1.4, S3-1 배정 0건 해소). PR 단위 배정(PR-5~PR-15)은 GC 문서 v1.4 각 케이스와 S3-1 계획서(`docs/plans/s3-1-plan.md` — PR-1 등재 예정)가 정본.
 
 ## 버전 규칙
 - 태스크 완료 표시는 이 파일이 아니라 PROGRESS.md에 기록(이 파일은 계획의 원본으로 불변에 가깝게).
 - 순서 변경·태스크 분할이 필요하면 사유와 함께 v1.1로 갱신 + ADR 5줄(§21).
 
 ## 변경 이력
+
+**v1.5 (2026-09-30)** — S3-1 통합 계획 판정(6개 묶음 A~F 통합, 오너 지시 2026-09-29에 따른 **자율 확정** — ADR-0011 부기, 사후 번복 가능). → **ADR-0051~0067**(+기존 ADR 부기 10건)
+1. **S3-1 산출물 명시 보강** — `payments`(선수금 입금 최소형)·`policy_settings`·`bank_accounts`·상태이력 4표·오더 보드 벌크·`users/lookup`·검색형 선택·정책 화면을 산출물에 명시했다. **S3-1 검증란 H를 2항→4항으로 정정**(승인 우회 차단·승인 후 불변·결재선 매핑·대결 기간+이력)하고 DESIGN §20 헤더의 P3 매핑을 A·B·E→A·B·E·G·H·I·K로 보강했다. DoD 4항(참조 관통·중복 PO 0건·여신 초과 승인 게이트·확정 후 단가·환율 불변)은 불변.
+2. **S3-2 인계** — 수입선적의 PO 참조(`po_line_id`)·`customs_records`, `open_order_amount` 선적분 차감(S3-3 미수 provider `reflected=True` 등록 릴리스와 같은 PR에서만), `CHILD_LINKS`·`LINE_CONSUMERS`·RESERVED 엣지 추가, SO short-close 판정, OEM 프로파일 `profile_id`, PO 라인 ETA 슬롯 판정, QT/PI 만료 임박 알림 판정.
+3. **S3-3 수정** — `payments`를 "S3-1 신설 테이블 확장(채권 연결·잔금·초과분)"으로 수정, 미수 provider 등록+기본 구현 잔존 금지 테스트, DoD에 "선적 확정~미수 발생 노출 공백·이중 계산 0", L/C 플래그 토글 경로(`lc_terms`와 함께), 자사 레터헤드 마스터, EXPIRED/CANCELLED PI 입금 처리 재판정, documents 전표 첨부(확폭 경고).
+4. **후속 세션 배정** — **S3-4**: 승인 유형 `EXPENSE_OVER_THRESHOLD` 소비. **S4-1**: PO 후반(입고 문서·PO 잔량 차감·후반 전이·IN_PO ref)·`lock_buyer_for_credit` 교체 여부·잠금 순서표 승계·잔량 표현 최종 ADR. **S4-2**: `AllocationPort` 실구현·SET 구성 변경 가드. **P4**: 자재 PO·`DISPOSAL`·`STOCKTAKE_DIFF` 승인 유형(S4-1 ADR·S4-3에 반영).
+5. **배정 공백 등재** — `fx_rates` 소유 세션(재판정 트리거: 환율 자동 수집 §15 L3 / S6-2 착수 / 환율 입력 오류 사고), 승인 유형 `NEW_PARTNER`·`SOURCING_NON_RECOMMENDED`의 소비 세션. **S5-1**: gate `subject_type` 확장. **S5-4**: 조건부 자동 확정 ADR(자동 확정 부재 테스트 개정). **S6-1**: 원본 파일 보관. **S6-3**: 동결 다이제스트·야간 전건 재해시. **P6**: 헬스체크 결측에 "결재선 미설정"·"정책 미설정". **P7**: `DECIDE_CALLERS` 갱신+ADR.
+6. **골든 케이스 매핑** — GC v1.4의 A6~A13·F2·F3·G2·H3~H6(14건)을 S3-1에 배정(매핑표 갱신, S3-1 배정 0건 실측 해소).
 
 **v1.4 (2026-08-11)**
 1. **인증 보드 배정** — DESIGN §14 ④ "인증 보드(칸반+캘린더)"가 v1.3의 어느 세션 산출물에도 없었다(S2-2 계획 보고 실측 — ADR-0001과 같은 미배정 상황). **S2-3**에 배정: 캘린더 축=기일 엔진 UI 자체, 칸반 컬럼=S2-2 상태 11값, 매트릭스·알림센터와 동일 화면 수요. DESIGN 본문은 수정하지 않는다(§14 기존 요구의 배정 — ADR-0015 방식). → **ADR-0036**
