@@ -54,6 +54,7 @@ from app.modules.notifications import dispatcher
 from app.modules.notifications import service as notifications
 from app.modules.platform import backups, storage
 from app.modules.platform.models import ScheduledJob
+from app.modules.trade_chain import expiry_sweep
 from app.modules.trade_docs import verify as trade_docs_verify
 
 #: 동시 기동 방지용 advisory lock 키 (임의 상수 — 이 앱의 실행기 전용).
@@ -168,6 +169,10 @@ def _run_trade_docs_totals_verify() -> dict[str, int]:
     return trade_docs_verify.run_totals_verify()
 
 
+def _run_document_expiry_sweep() -> dict[str, int]:
+    return _fail_if_any_failed(expiry_sweep.sweep_expired_documents(), what="견적·PI 만료 스윕")
+
+
 @dataclass(frozen=True, slots=True)
 class JobSpec:
     code: str
@@ -236,6 +241,14 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         # 만료 스윕(06:10) 사이, 업무 시작 전에 불일치를 알린다.
         schedule="daily@05:30",
         run=_run_trade_docs_totals_verify,
+    ),
+    JobSpec(
+        code="document-expiry-sweep",
+        name_ko="견적·PI 유효기간 만료 수렴(미입금 발행 상태만)",
+        # 만드는 전이는 (QT,ISSUED→EXPIRED)·(PI,ISSUED→EXPIRED) 두 엣지뿐 — 발주·SO 무접촉·대외 발송 없음·후속 보유 문서 제외
+        # (ADR-0056 4금 논증). 인증 스윕(06:00) 뒤·기일 스캔(06:30) 앞.
+        schedule="daily@06:10",
+        run=_run_document_expiry_sweep,
     ),
 )
 

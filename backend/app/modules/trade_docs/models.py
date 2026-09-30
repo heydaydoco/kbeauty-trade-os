@@ -104,7 +104,33 @@ class QuotationStatusLog(StatusLogColumns, PkMixin, Base):
     )
 
 
+class ProformaInvoiceStatusLog(StatusLogColumns, PkMixin, Base):
+    """PI 상태 변경 이력 — 불변. 입금 수렴·만료 스윕은 자동(`automatic=true`)이고 행위자는 유발자거나 NULL(스윕)이다."""
+
+    __tablename__ = "proforma_invoice_status_log"
+
+    proforma_invoice_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("proforma_invoices.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    __table_args__ = (
+        *status_log_checks(DocKind.PROFORMA_INVOICE),
+        Index(
+            "uq_proforma_invoice_status_log_proforma_invoice_id_birth",
+            "proforma_invoice_id",
+            unique=True,
+            postgresql_where=text("from_status IS NULL"),
+        ),
+        Index(
+            "ix_proforma_invoice_status_log_proforma_invoice_id_id",
+            "proforma_invoice_id",
+            desc("id"),
+        ),
+    )
+
+
 #: 전표별 상태이력 모델 — 각 전표 PR이 자기 표를 여기 등록한다(record_birth/record_transition이 소비).
 STATUS_LOG_MODELS: dict[DocKind, type[Any]] = {
     DocKind.QUOTATION: QuotationStatusLog,
+    DocKind.PROFORMA_INVOICE: ProformaInvoiceStatusLog,
 }

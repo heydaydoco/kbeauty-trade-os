@@ -14,8 +14,13 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.modules.identity.models import RoleCode
+from app.modules.proforma_invoices.schemas import (
+    ProformaInvoiceCreateRequest,
+    ProformaInvoiceDetail,
+    ProformaInvoicePreview,
+)
 from app.modules.quotations.schemas import QuotationDetail
-from app.modules.trade_chain import lifecycle
+from app.modules.trade_chain import lifecycle, reference
 from app.modules.trade_docs.constants import DocKind
 from app.modules.trade_docs.machine import public_transition_targets
 
@@ -36,6 +41,20 @@ class QuotationTransitionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     to: QuotationTarget
+    version: StrictInt = Field(ge=1)
+    #: 취소는 사유 필수(1~500자, 공백 불가).
+    reason: StrictStr | None = Field(default=None, max_length=500)
+
+
+#: PI 범용 전이의 `to` — 사람 엣지는 취소뿐이다(입금 수렴·만료는 자동 엣지).
+ProformaInvoiceTarget = Literal["CANCELLED"]
+assert set(ProformaInvoiceTarget.__args__) == public_transition_targets(DocKind.PROFORMA_INVOICE)  # type: ignore[attr-defined]
+
+
+class ProformaInvoiceTransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to: ProformaInvoiceTarget
     version: StrictInt = Field(ge=1)
     #: 취소는 사유 필수(1~500자, 공백 불가).
     reason: StrictStr | None = Field(default=None, max_length=500)
@@ -107,3 +126,72 @@ def create_revision(
     )
     response.status_code = status_code
     return QuotationDetail.model_validate(body)
+
+
+# ── 참조 생성: QT → PI ──────────────────────────────────────────────────────
+
+
+@router.post(
+    "/{qt_id}/proforma-invoices/preview",
+    summary="PI 미리보기 (비저장 — 채번·이벤트·멱등 키 소비 없음, 생성과 같은 검증)",
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def preview_proforma_invoice(
+    qt_id: int, payload: ProformaInvoiceCreateRequest, current: CurrentUser
+) -> ProformaInvoicePreview:
+    body = reference.preview_proforma_invoice(
+        actor=current, qt_id=qt_id, payload=payload.model_dump(exclude_unset=True)
+    )
+    return ProformaInvoicePreview.model_validate(body)
+
+
+@router.post(
+    "/{qt_id}/proforma-invoices",
+    summary="PI 생성 (QT 참조 생성 — 생성=발행=동결, 값은 원천에서 복사·잔량 초과 409)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def create_proforma_invoice(
+    qt_id: int,
+    payload: ProformaInvoiceCreateRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> ProformaInvoiceDetail:
+    status_code, body = reference.create_proforma_invoice(
+        actor=current,
+        idempotency_key=key,
+        qt_id=qt_id,
+        payload=payload.model_dump(exclude_unset=True),
+    )
+    response.status_code = status_code
+    return ProformaInvoiceDetail.model_validate(body)
+
+
+# ── PI 전이(취소) ───────────────────────────────────────────────────────────
+
+pi_router = APIRouter(prefix="/proforma-invoices", tags=["trade-chain"])
+
+
+@pi_router.post(
+    "/{pi_id}/transitions",
+    summary="PI 취소 (사유 필수 — 입금이 붙은 PI·후속 생존 시 409, 입금 수렴·만료는 자동)",
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def transition_proforma_invoice(
+    pi_id: int,
+    payload: ProformaInvoiceTransitionRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> ProformaInvoiceDetail:
+    status_code, body = lifecycle.transition_proforma_invoice(
+        actor=current,
+        idempotency_key=key,
+        pi_id=pi_id,
+        to=payload.to,
+        version=payload.version,
+        reason=payload.reason,
+    )
+    response.status_code = status_code
+    return ProformaInvoiceDetail.model_validate(body)

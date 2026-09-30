@@ -7,7 +7,7 @@
   살아 있다(이행된 체인의 선행 취소 사고 차단). 술어는 `machine.DEAD_STATUSES`에서 만들어 이중 정의하지 않는다.
 ■ 사슬 후속만 등록한다: QT←PI(qt_id)·QT←SO(qt_id, PI 경유 SO도 qt_id가 채워진다)·PI←SO(pi_id).
   `copied_from_id`(복제 계보)·상태이력 FK·라인→헤더 FK는 후속이 아니다(`NON_CHILD_FK_ALLOWLIST`).
-■ 아직 만들어지지 않은 후속 테이블(PR-6·7 이전의 PI·SO)은 **건너뛴다** — 그 테이블이 없으면 후속도 있을 수 없다.
+■ 아직 만들어지지 않은 후속 테이블(PR-7 이전의 SO)은 **건너뛴다** — 그 테이블이 없으면 후속도 있을 수 없다.
   누락 방지: 후속 테이블이 metadata에 생기면 그 등록이 이미 이 표에 있어 바로 판정에 편입되고, 표에 없는
   전표 FK는 `test_every_fk_to_chain_docs_is_registered`가 CI에서 실패시킨다.
 """
@@ -49,6 +49,16 @@ NON_CHILD_FK_ALLOWLIST: dict[tuple[str, str], str] = {
     ("quotation_status_log", "quotation_id"): "상태이력은 전표의 사건 기록이다",
     (
         "quotations",
+        "copied_from_id",
+    ): "복제 계보 표시 — 사슬 후속이 아니다(살아 있음 판정 제외, X-08)",
+    ("proforma_invoice_lines", "pi_id"): "라인은 자기 헤더의 구성 요소다(소비는 LINE_CONSUMERS)",
+    (
+        "proforma_invoice_lines",
+        "qt_id",
+    ): "원천 QT 라인의 소속 보증용 복합 FK((qt_id, qt_line_id) — 소비 관계는 LINE_CONSUMERS가 정본)",
+    ("proforma_invoice_status_log", "proforma_invoice_id"): "상태이력은 전표의 사건 기록이다",
+    (
+        "proforma_invoices",
         "copied_from_id",
     ): "복제 계보 표시 — 사슬 후속이 아니다(살아 있음 판정 제외, X-08)",
 }

@@ -122,6 +122,8 @@ class QuotationLine(SalesLineMixin, PkMixin, TimestampMixin, SoftDeleteMixin, Ac
             ondelete="RESTRICT",
         ),
         *sales_line_checks(),
+        # PI 라인의 복합 FK `(qt_id, qt_line_id)` 대상 — PI 라인이 가리키는 QT 라인이 PI 헤더의 QT 소속임을 DB가 보증한다(M04 ALTER).
+        UniqueConstraint("qt_id", "id", name="uq_quotation_lines_qt_id_id"),
         unique_active("quotation_lines", "qt_id", "line_no"),
         # 같은 SKU는 유상 1줄 + 무상 1줄까지(FOC 병행은 정상 패턴 — A11).
         unique_active("quotation_lines", "qt_id", "sku_id", "is_free"),

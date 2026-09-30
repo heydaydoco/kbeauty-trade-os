@@ -148,6 +148,13 @@ class ErrorCode(StrEnum):
     #: 잔량 초과(참조 생성·선적·입고 공용).
     TRADE_DOCS_QUANTITY_EXCEEDS_OPEN = "TRADE_DOCS.QUANTITY.EXCEEDS_OPEN"
     TRADE_DOCS_QUANTITY_DOCUMENT_NOT_CONSUMABLE = "TRADE_DOCS.QUANTITY.DOCUMENT_NOT_CONSUMABLE"
+    # PI·참조 생성 (S3-1 PR-6a / design-B B3·B7)
+    #: 참조 원천(부모) 전표가 후속 생성에 쓸 수 없는 상태다(초안·취소·만료·삭제) — 원천 자격 검사.
+    TRADE_DOCS_PARENT_NOT_USABLE = "TRADE_DOCS.PARENT.NOT_USABLE"
+    #: 유효기간이 지난 견적·PI로는 후속 전표를 만들 수 없다 — 만료 스윕이 아직 안 돌았어도 `valid_until`을 직접 본다.
+    TRADE_DOCS_VALIDITY_EXPIRED = "TRADE_DOCS.VALIDITY.EXPIRED"
+    #: 취소·만료된 PI에는 입금 수렴을 할 수 없다(새 PI를 발행해야 한다) — fail-closed.
+    TRADE_DOCS_PAYMENT_PI_NOT_OPEN = "TRADE_DOCS.PAYMENT.PI_NOT_OPEN"
 
     # 동시성·멱등 (§17.2 / §17.4)
     CONCURRENCY_VERSION_CONFLICT = "COMMON.CONCURRENCY.VERSION_CONFLICT"

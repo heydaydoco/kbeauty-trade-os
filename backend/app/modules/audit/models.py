@@ -59,6 +59,10 @@ class AuditAction:
     #: 정책 설정 변경(S3-1 ADR-0065) — detail에 key·전/후 값·전 출처·사유.
     POLICY_UPDATED = "policy.update"
     PARTNER_CREDIT_LIMIT_CHANGED = "partners.credit_limit.changed"
+    #: 자사 은행 계좌 마스터 등록·수정·비활성(S3-1 PR-6a) — detail에는 **변경된 필드 이름만**(계좌번호·SWIFT 등 값·전후값 금지).
+    BANK_ACCOUNT_CREATED = "bank_accounts.created"
+    BANK_ACCOUNT_UPDATED = "bank_accounts.updated"
+    BANK_ACCOUNT_DEACTIVATED = "bank_accounts.deactivated"
 
 
 class AuditLog(PkMixin, Base):

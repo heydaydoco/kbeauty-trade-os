@@ -2,6 +2,11 @@
 
 "한 곳만 지키는" 우회 결함을 계획 단계에서 표로 닫는다(B9 차단표 #1·#7 등). 각 규칙은 AST로 앱 소스를 훑고, **자기검사**가
 위반 코퍼스를 실제로 잡는지 확인한다(스캔이 공회전해 조용히 초록이 되는 것을 막는다).
+
+■ PROTECTED(상태·동결 시각·합계·번호)는 **통로가 하나뿐이어야 하는 열**이라 이 파일의 스캔 대상이다. 은행 스냅샷 6열·`valid_until`·
+  `buyer_address` 같은 **CONTENT 동결 열**은 이 스캔이 아니라 ① FIELD_POLICY 완전성(test_doc_field_policy — 모든 컬럼이 정확히 하나로
+  분류돼야 CI 통과) ② 동결 가드(QT는 `assert_editable`, PI는 편집 구간이 없어 CONTENT를 쓰는 서비스 함수 자체가 없음 —
+  아래 `test_pi_frozen_columns_are_never_assigned_after_creation`이 PI·사슬 모듈의 속성 대입 0건을 고정)가 커버한다.
 """
 
 from __future__ import annotations
@@ -17,9 +22,9 @@ from tests.support.astscan import app_sources, module_of, parse_source, referenc
 pytestmark = pytest.mark.group_k
 
 #: 전표 도메인 모듈 — 각 전표 PR이 자기 모듈을 여기 더한다(스캔 대상 확장).
-DOC_MODULES = {"trade_docs", "quotations", "trade_chain"}
-DOC_MODEL_NAMES = {"Quotation", "QuotationLine"}
-STATUS_LOG_NAMES = {"QuotationStatusLog"}
+DOC_MODULES = {"trade_docs", "quotations", "proforma_invoices", "trade_chain"}
+DOC_MODEL_NAMES = {"Quotation", "QuotationLine", "ProformaInvoice", "ProformaInvoiceLine"}
+STATUS_LOG_NAMES = {"QuotationStatusLog", "ProformaInvoiceStatusLog"}
 PREFIX_LITERALS = {"QT", "PI", "SO", "PO"}
 
 TRANSITION = "modules/trade_docs/transition.py"
@@ -27,6 +32,7 @@ CONSTANTS = "modules/trade_docs/constants.py"
 DOC_NUMBER = "modules/trade_docs/doc_number.py"
 NUMBERING = "modules/numbering/service.py"
 QT_SERVICE = "modules/quotations/service.py"
+PI_SERVICE = "modules/proforma_invoices/service.py"
 
 
 def _flatten(target: ast.expr) -> list[ast.expr]:
@@ -115,6 +121,10 @@ ALLOWED_SITES: frozenset[tuple[str, str, str]] = frozenset(
         (QT_SERVICE, "insert_draft", "total_amount"),  # 생성 시점 합계(라인 합을 미리 계산)
         (QT_SERVICE, "insert_draft", "doc_number"),  # 채번은 생성자에서만
         (QT_SERVICE, "insert_draft", UNKNOWN),  # **header — _header_columns의 화이트리스트 결과
+        # PI 생성 착지 — 참조 생성 오케스트레이터(reference._plan)가 만든 헤더 dict(리터럴 키만, 아래 자기검사가 확인)
+        (PI_SERVICE, "insert_issued", "total_amount"),
+        (PI_SERVICE, "insert_issued", "doc_number"),
+        (PI_SERVICE, "insert_issued", UNKNOWN),
         # 헤더 편집: setattr(row, name, value)의 name은 _header_columns가 만든 화이트리스트 cols의 키(아래 자기검사가 확인)
         (QT_SERVICE, "update_quotation", UNKNOWN),
         (QT_SERVICE, "update_meta", UNKNOWN),
@@ -243,16 +253,50 @@ def protected_write_sites(
     return sites
 
 
+#: 문자열 SQL 스캔이 보는 전표 계열 테이블 — 헤더·라인·상태이력·은행 계좌(PI가 스냅샷을 복사하는 마스터).
+_SQL_DOC_TABLES = (
+    "quotations",
+    "quotation_lines",
+    "quotation_status_log",
+    "proforma_invoices",
+    "proforma_invoice_lines",
+    "proforma_invoice_status_log",
+    "bank_accounts",
+)
+#: `UPDATE [ONLY] [public.]["]table` · `INSERT INTO …` · `DELETE FROM …` (대소문자·개행 무시). f-string은 값 자리를 `{}`로 접어 본다.
+_SQL_WRITE = re.compile(
+    r"(?is)\b(update|insert\s+into|delete\s+from)\s+(only\s+)?(public\s*\.\s*)?[\"]?"
+    r"(" + "|".join(_SQL_DOC_TABLES) + r")\b"
+)
+_SQL_DYNAMIC_TABLE = re.compile(
+    r"(?is)\b(update|insert\s+into|delete\s+from)\s+(only\s+)?(public\s*\.\s*)?[\"]?\{\}"
+)
+
+
+def _sql_texts(tree: ast.Module) -> Iterator[tuple[int, str]]:
+    """문자열 상수와 f-string(JoinedStr — 값 자리는 `{}`)의 (줄, 텍스트). f-string 안의 조각 상수는 중복 집계하지 않는다."""
+    skip: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            text_parts = [
+                v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else "{}"
+                for v in node.values
+            ]
+            skip.update(id(v) for v in node.values)
+            yield node.lineno, "".join(text_parts)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
+            yield node.lineno, node.value
+
+
 def raw_sql_doc_writes(tree: ast.Module) -> list[int]:
-    """문자열 SQL로 전표 테이블을 쓰는 지점(`UPDATE quotations …`) — ORM 통로를 우회하는 길."""
-    pattern = re.compile(r"(?is)\b(update|insert\s+into|delete\s+from)\s+quotations?\b")
-    return [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and pattern.search(node.value)
-    ]
+    """문자열 SQL로 전표 계열 테이블을 쓰는 지점(`UPDATE quotations …`·`UPDATE ONLY public.proforma_invoice_lines …`·
+    `INSERT INTO "bank_accounts"`·f-string의 `UPDATE {table}` 동적 표 이름) — ORM 통로를 우회하는 길."""
+    return sorted(
+        line
+        for line, text in _sql_texts(tree)
+        if _SQL_WRITE.search(text) or _SQL_DYNAMIC_TABLE.search(text)
+    )
 
 
 def all_protected_sites() -> dict[tuple[str, str, str], list[int]]:
@@ -342,12 +386,14 @@ def test_the_dynamic_write_allowlist_entries_are_bounded_by_whitelists() -> None
     assert literals and not _dict_keys(literals[0]) & (PROTECTED | {UNKNOWN})
 
 
-def test_totals_and_numbers_have_a_single_creator() -> None:
-    """생성자의 total_amount=·doc_number=는 견적 서비스 insert_draft 한 곳 · 헤더 합계는 recompute_total의 setattr로만 오른다"""
+def test_totals_and_numbers_have_a_single_creator_per_document() -> None:
+    """생성자의 total_amount=·doc_number=는 전표별 생성 착지 한 곳씩(QT insert_draft·PI insert_issued) · 헤더 합계는 recompute_total의 setattr로만 오른다"""
     sites = all_protected_sites()
+    creators = {(QT_SERVICE, "insert_draft"), (PI_SERVICE, "insert_issued")}
     for column in ("total_amount", "doc_number"):
-        assert {k[:2] for k in sites if k[2] == column} == {(QT_SERVICE, "insert_draft")}, column
-        assert len(sites[(QT_SERVICE, "insert_draft", column)]) == 1
+        assert {k[:2] for k in sites if k[2] == column} == creators, column
+        for creator in creators:
+            assert len(sites[(*creator, column)]) == 1
     editing = app_sources()["modules/trade_docs/editing.py"]
     assert any(
         isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "setattr"
@@ -371,7 +417,7 @@ def test_document_headers_are_never_soft_deleted_and_doc_number_is_never_reassig
         for rel, tree in _doc_module_sources().items()
         if keyword_calls(tree, "doc_number", DOC_MODEL_NAMES)
     ]
-    assert users == [QT_SERVICE]
+    assert sorted(users) == sorted([QT_SERVICE, PI_SERVICE])
 
 
 def test_document_numbers_are_issued_only_through_the_kernel_wrapper() -> None:
@@ -449,6 +495,12 @@ def test_no_http_delete_on_the_document_itself() -> None:
         if "delete" in operations and "/quotations" in path
     }
     assert deletes == {"/api/v1/quotations/{qt_id}/lines/{line_id}"}
+    # PI에는 어떤 DELETE도 없다(라인 편집도 없다 — 생성=발행=동결)
+    assert not {
+        path
+        for path, operations in app.openapi()["paths"].items()
+        if "delete" in operations and "/proforma-invoices" in path
+    }
 
 
 # ── 자기검사: 스캐너가 위반 코퍼스를 실제로 잡는다 ────────────────────────────────
@@ -534,9 +586,28 @@ def test_the_protected_write_scan_is_quiet_on_legitimate_code() -> None:
 
 
 def test_raw_sql_scan_catches_a_document_write_string() -> None:
-    """양성 표본 — 문자열 SQL로 전표를 쓰면 잡힌다"""
-    assert raw_sql_doc_writes(parse_source("s = 'UPDATE quotations SET status = 1'")) == [1]
-    assert raw_sql_doc_writes(parse_source("s = 'SELECT 1 FROM quotations'")) == []
+    """양성 표본 — 문자열 SQL로 전표·라인·은행 계좌를 쓰면 잡힌다(public. 접두·따옴표·UPDATE ONLY·f-string·동적 표 이름 포함)"""
+    hits = [
+        "s = 'UPDATE quotations SET status = 1'",
+        "s = 'UPDATE quotation_lines SET quantity = 1'",
+        "s = 'update public.proforma_invoices set status = 1'",
+        "s = 'UPDATE ONLY public.proforma_invoice_lines SET quantity = 1'",
+        "s = 'INSERT INTO \"bank_accounts\" (label) VALUES (1)'",
+        "s = 'DELETE FROM proforma_invoice_status_log'",
+        "s = 'UPDATE\\n  quotations SET status = 1'",
+        "s = f'UPDATE {table} SET status = 1'",
+        "s = f'UPDATE proforma_invoices SET status = {x}'",
+    ]
+    for source in hits:
+        assert raw_sql_doc_writes(parse_source(source)) == [1], source
+    quiet = [
+        "s = 'SELECT 1 FROM quotations'",
+        "s = 'SELECT * FROM bank_accounts WHERE id = 1'",
+        "s = 'UPDATE certifications SET status = 1'",
+        "s = f'SELECT count(*) FROM {table}'",
+    ]
+    for source in quiet:
+        assert raw_sql_doc_writes(parse_source(source)) == [], source
 
 
 def test_the_allowlist_is_narrow_and_scoped_by_function() -> None:
@@ -545,3 +616,20 @@ def test_the_allowlist_is_narrow_and_scoped_by_function() -> None:
     assert ("other", UNKNOWN, "setattr") in sites
     assert (QT_SERVICE, "other", UNKNOWN) not in ALLOWED_SITES
     assert all(len(entry) == 3 and entry[1] != "<module>" for entry in ALLOWED_SITES)
+
+
+def test_pi_frozen_columns_are_never_assigned_after_creation() -> None:
+    """PI의 CONTENT·ORIGIN 열(은행 스냅샷 6열·valid_until·buyer_address 등)을 속성 대입으로 쓰는 코드가 PI·사슬 모듈에 0건 —
+    PI는 생성자(insert_issued의 헤더 dict)로만 값이 들어가고 이후 서비스 통로가 없다(FIELD_POLICY 파생 집합 전수 대조)"""
+    from app.modules.trade_docs.policy import frozen_columns
+
+    frozen = frozen_columns("proforma_invoices") - {"status"}  # status는 위 PROTECTED 스캔 몫
+    assert {"bank_account_no", "bank_swift_code", "valid_until", "buyer_address"} <= frozen
+    checked = 0
+    for rel, tree in app_sources().items():
+        if module_of(rel) not in ("proforma_invoices", "trade_chain"):
+            continue
+        checked += 1
+        for column in sorted(frozen):
+            assert attribute_assignments(tree, column) == [], (rel, column)
+    assert checked >= 6  # 공회전 방지

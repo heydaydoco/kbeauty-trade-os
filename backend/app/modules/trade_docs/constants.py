@@ -105,6 +105,9 @@ MAX_VALIDITY_DAYS = 365
 
 DOC_NUMBER_MAX_LENGTH = 20
 
+#: SWIFT/BIC — 8자 또는 11자(영대문자·숫자). 은행 계좌 마스터·PI 은행 스냅샷 열의 CHECK가 같은 식을 쓴다.
+SWIFT_PATTERN = "^[A-Z0-9]{8}([A-Z0-9]{3})?$"
+
 
 class PaymentType(StrEnum):
     TT_ADVANCE = "TT_ADVANCE"  # 선수금 T/T(100% 선수금 포함)

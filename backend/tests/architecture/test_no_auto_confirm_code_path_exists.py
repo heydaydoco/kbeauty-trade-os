@@ -69,10 +69,21 @@ REGISTRY: tuple[Entry, ...] = (
                 "modules/trade_docs/transition.py",
                 "modules/trade_chain/lifecycle.py",
                 "modules/trade_chain/chain_ops.py",
+                # PR-6a — 자동 전이 2종: 입금 수렴(테스트 호출, PR-10이 배선)·만료 스윕(잡 본체, 두 엣지뿐)
+                "modules/trade_chain/payment_status.py",
+                "modules/trade_chain/expiry_sweep.py",
             }
         ),
         forbidden_modules=frozenset(
-            {"quotations", "platform", "imports", "handover", "notifications"}
+            {
+                "quotations",
+                "proforma_invoices",
+                "bank_accounts",
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+            }
         ),
         requires_actor=False,  # 자동 전이는 행위자가 없을 수 있다(스윕) — 호출처 제한이 통제다
         forbid_module_import=False,  # 같은 모듈의 record_birth를 견적 서비스가 임포트한다 — 언급 검사로 충분
@@ -82,12 +93,63 @@ REGISTRY: tuple[Entry, ...] = (
         name="record_birth",
         defined_in="app.modules.trade_docs.transition",
         allowed_files=frozenset(
-            {"modules/trade_docs/transition.py", "modules/quotations/service.py"}
+            {
+                "modules/trade_docs/transition.py",
+                "modules/quotations/service.py",
+                "modules/proforma_invoices/service.py",  # PI 생성 착지(insert_issued) — 참조 생성 오케스트레이터가 부른다
+            }
         ),
         forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
         requires_actor=False,  # actor_user_id를 받는다(생성 서비스가 actor를 가진다)
         forbid_module_import=False,
         notes="전표 탄생(초기 상태 대입) — 생성 서비스 1곳",
+    ),
+    Entry(
+        name="create_proforma_invoice",
+        defined_in="app.modules.trade_chain.reference",
+        allowed_files=frozenset(
+            {"modules/trade_chain/reference.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "identity",
+                "idempotency",
+            }
+        ),
+        notes="PI 생성(참조 생성 = 발행·동결) — 라우터 1곳+행위자 필수. 스케줄러·임포트·이관·알림 경로에서 import 0",
+    ),
+    Entry(
+        name="transition_proforma_invoice",
+        defined_in="app.modules.trade_chain.lifecycle",
+        allowed_files=frozenset(
+            {"modules/trade_chain/lifecycle.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
+        forbid_module_import=False,  # 같은 모듈의 다른 보호 함수(issue_quotation)와 정의 모듈이 같다 — 언급 검사로 충분
+        notes="PI 취소(사람 전이) — 라우터 1곳+행위자 필수",
+    ),
+    Entry(
+        name="sweep_expired_documents",
+        defined_in="app.modules.trade_chain.expiry_sweep",
+        allowed_files=frozenset(
+            {
+                "modules/trade_chain/expiry_sweep.py",
+                "modules/platform/scheduler.py",  # 잡 레지스트리(자동 실행 — 두 엣지뿐)
+                "cli.py",  # 수동 실행(--base-date)
+            }
+        ),
+        forbidden_modules=frozenset({"imports", "handover", "notifications", "quotations"}),
+        requires_actor=False,  # 자동 스윕 — 행위자 없음(actor NULL·automatic=true)
+        notes="만료 스윕 — (QT,ISSUED→EXPIRED)·(PI,ISSUED→EXPIRED) 두 엣지만(ADR-0056 4금 논증)",
     ),
     Entry(
         name="converge_quotation",
@@ -169,15 +231,71 @@ def test_the_only_router_caller_of_issue_is_the_trade_chain_router() -> None:
     assert "require_roles(*CAN_WRITE)" in text and "IdempotencyKey" in text
 
 
-def test_scheduler_and_cli_cannot_reach_document_transitions() -> None:
-    """스케줄러·CLI가 임포트하는 전표 모듈은 검산(trade_docs.verify)뿐이다 — 상태를 바꾸는 함수는 없다"""
+def _trade_chain_imports(tree: ast.Module) -> set[str]:
+    """이 트리가 임포트하는 `app.modules.trade_chain.<서브모듈>` 이름 집합(from/import 양쪽)."""
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        names: list[str] = []
+        if isinstance(node, ast.ImportFrom) and node.module:
+            names.append(node.module)
+            names.extend(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        for name in names:
+            parts = name.split(".")
+            if parts[:3] == ["app", "modules", "trade_chain"] and len(parts) >= 4:
+                found.add(parts[3])
+    return found
+
+
+def test_scheduler_and_cli_reach_only_the_totals_check_and_the_expiry_sweep() -> None:
+    """스케줄러·CLI가 임포트하는 전표 모듈은 검산(trade_docs.verify)과 **만료 스윕(trade_chain.expiry_sweep) 하나뿐**이다 —
+    발행·전이·확정 함수(lifecycle·reference·payment_status)와 전표 CRUD 모듈은 언급조차 못 한다"""
     from tests.support.astscan import imported_modules
 
     for rel in ("modules/platform/scheduler.py", "cli.py"):
         tree = app_sources()[rel]
+        assert _trade_chain_imports(tree) == {"expiry_sweep"}, rel
         modules = imported_modules(tree)
-        assert "trade_chain" not in modules and "quotations" not in modules, rel
-        assert not _mentions(tree, "record_transition") and not _mentions(tree, "issue_quotation")
+        assert not modules & {"quotations", "proforma_invoices", "bank_accounts"}, rel
+        for forbidden in (
+            "record_transition",
+            "issue_quotation",
+            "create_proforma_invoice",
+            "transition_proforma_invoice",
+            "converge_payment_status",
+            "lock_chain",
+        ):
+            assert not _mentions(tree, forbidden), (rel, forbidden)
+
+
+def test_the_expiry_sweep_creates_exactly_two_edges_and_touches_no_orders_or_numbers() -> None:
+    """만료 스윕이 만드는 (전표, from, to)는 {(QT,ISSUED,EXPIRED),(PI,ISSUED,EXPIRED)}뿐이고, 발주·SO·채번·알림 모듈을 임포트하지 않는다
+    (4금 ①③④ — 발주 확정·대외 발송·장부 확정 무접촉)"""
+    from app.modules.trade_chain.expiry_sweep import SWEEP_EDGES
+    from app.modules.trade_docs.constants import DocKind
+    from tests.support.astscan import imported_modules
+
+    assert {(k, a, b) for k, a, b in SWEEP_EDGES} == {
+        (DocKind.QUOTATION, "ISSUED", "EXPIRED"),
+        (DocKind.PROFORMA_INVOICE, "ISSUED", "EXPIRED"),
+    }
+    tree = app_sources()["modules/trade_chain/expiry_sweep.py"]
+    used = imported_modules(tree)
+    assert not used & {
+        "sales_orders",
+        "purchase_orders",
+        "numbering",
+        "notifications",
+        "outbox",
+        "worklist",
+        "deadlines",
+        "platform",
+        "approvals",
+        "credit",
+        "payments",
+    }, used
+    assert not _mentions(tree, "issue_document_number") and not _mentions(tree, "notify")
 
 
 def test_the_scanner_flags_a_forbidden_mention_and_a_forbidden_import() -> None:

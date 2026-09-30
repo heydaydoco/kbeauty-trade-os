@@ -229,9 +229,13 @@ class FakeSuccessors:
 
 @contextmanager
 def fake_successors(
-    monkeypatch: Any, *, fk_column: str = "qt_id", table_name: str = "scratch_successors"
+    monkeypatch: Any,
+    *,
+    fk_column: str = "qt_id",
+    table_name: str = "scratch_successors",
+    parent: Any = None,
 ) -> Iterator[FakeSuccessors]:
-    """QT의 후속(PI·SO 대역) 테이블을 임시로 만들고 사슬 레지스트리에 끼운다.
+    """부모(기본 QT — PR-6a부터 PI도 가능)의 후속(SO 대역 등) 테이블을 임시로 만들고 사슬 레지스트리에 끼운다.
 
     메타데이터에 잠깐 등록했다가 반드시 빼고(다른 테스트의 alembic drift 검사 보호) 테이블을 지운다.
     """
@@ -269,7 +273,7 @@ def fake_successors(
         "CHILD_LINKS",
         (
             chain.ChildLink(
-                DocKind.QUOTATION, table_name, fk_column, confirmed_column="confirmed_at"
+                parent or DocKind.QUOTATION, table_name, fk_column, confirmed_column="confirmed_at"
             ),
         ),
     )
@@ -350,3 +354,146 @@ def raw_quotation(
                 {"q": qt_id, "a": owner},
             )
     return qt_id
+
+
+# ── PI(PR-6a) — 은행 계좌·발행된 견적·참조 생성 요청 본문·DB 직행 PI ───────────────────────────
+
+
+def create_bank_account(
+    currency: str = "USD", *, label: str | None = None, account_no: str | None = None
+) -> int:
+    """활성 은행 계좌 1건(서비스를 거치지 않고 ORM으로 — 마이그레이션 시드 금지 규칙과 별개로 테스트 데이터일 뿐)."""
+    from app.modules.bank_accounts.models import BankAccount
+
+    with unit_of_work() as uow:
+        row = BankAccount(
+            label=label or unique("BANK"),
+            currency=currency,
+            beneficiary_name="Kbeauty Trading Co., Ltd.",
+            beneficiary_address="1 Gangnam-daero, Seoul, KR",
+            bank_name="Synthetic Bank",
+            bank_address="2 Teheran-ro, Seoul, KR",
+            account_no=account_no or f"110-{next(_counter):06d}-01",
+            swift_code="SYNTKRSE",
+        )
+        uow.session.add(row)
+        uow.session.flush()
+        return int(row.id)
+
+
+def issued_quotation(
+    client: TestClient,
+    buyer_partner_id: int | None = None,
+    sku_ids: list[int] | None = None,
+    *,
+    quantity: int = 10,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """발행 상태 견적(라인 SKU당 수량 `quantity`). 응답 본문(ISSUED)을 돌려준다."""
+    buyer = buyer_partner_id or create_buyer()
+    skus = sku_ids or [create_priced_sku(amount=1000)]
+    lines = [{"sku_id": sku, "quantity": quantity} for sku in skus]
+    qt = create_quotation_via_api(client, buyer, lines=lines, **overrides)
+    return issue_via_api(client, qt)
+
+
+def pi_payload(
+    qt: dict[str, Any],
+    bank_account_id: int,
+    *,
+    valid_days: int = 30,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """PI 참조 생성 요청 본문 — 원천 QT 값을 다시 받는 필드는 **없다**(version·유효기간·계좌만)."""
+    body: dict[str, Any] = {
+        "version": qt["version"],
+        "valid_until": (today_kst() + timedelta(days=valid_days)).isoformat(),
+        "bank_account_id": bank_account_id,
+    }
+    body.update(overrides)
+    return body
+
+
+def create_pi_via_api(
+    client: TestClient,
+    qt: dict[str, Any],
+    bank_account_id: int | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """API로 PI를 만든다(생성=발행). 응답 본문(ISSUED)을 돌려준다. 계좌를 안 주면 QT 통화 계좌를 만든다."""
+    bank = bank_account_id or create_bank_account(qt["currency"])
+    response = client.post(
+        f"/api/v1/quotations/{qt['id']}/proforma-invoices",
+        json=pi_payload(qt, bank, **overrides),
+        headers=idem(),
+    )
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def raw_pi(
+    qt_id: int,
+    status: str = "ISSUED",
+    *,
+    valid_until: date | None = None,
+    doc_date: date = date(2026, 9, 1),
+    assignee_id: int | None = None,
+    with_history: bool = True,
+    total_amount: int = 0,
+) -> int:
+    """지정 상태의 PI를 SQL로 직접 넣는다(라인 없음 — 전이표·스윕·수렴 시험용). 이력에 탄생 행(ISSUED) 1개를 남긴다.
+
+    원천 QT의 통화·바이어를 그대로 쓴다(복합 FK·바이어 일치). 은행 계좌는 새로 만든다.
+    """
+    from sqlalchemy import text
+
+    from app.core.db.session import owner_engine
+
+    with owner_engine.connect() as connection:
+        qt = connection.execute(
+            text(
+                "SELECT currency, buyer_partner_id, buyer_name, dest_market_code FROM quotations"
+                " WHERE id = :i"
+            ),
+            {"i": qt_id},
+        ).one()
+    bank = create_bank_account(qt[0])
+    owner = assignee_id or create_user(f"{unique('rawpi')}@example.com", roles=(RoleCode.TRADE,))
+    values: dict[str, Any] = {
+        "doc_number": f"PI-2026-{next(_counter) + 7000:04d}",
+        "doc_date": doc_date,
+        "status": status,
+        "currency": qt[0],
+        "assignee_id": owner,
+        "buyer_partner_id": qt[1],
+        "buyer_name": qt[2],
+        "dest_market_code": qt[3],
+        "qt_id": qt_id,
+        "valid_until": valid_until or date(2099, 1, 1),
+        "bank_account_id": bank,
+        "bank_beneficiary_name": "Kbeauty Trading Co., Ltd.",
+        "bank_beneficiary_address": "1 Gangnam-daero, Seoul, KR",
+        "bank_name": "Synthetic Bank",
+        "bank_address": "2 Teheran-ro, Seoul, KR",
+        "bank_account_no": "110-000000-01",
+        "bank_swift_code": "SYNTKRSE",
+        "total_amount": total_amount,
+        **_FROZEN_VALUES,
+    }
+    columns = list(values)
+    sql = (
+        f"INSERT INTO proforma_invoices ({', '.join(columns)}) "
+        f"VALUES ({', '.join(':' + c for c in columns)}) RETURNING id"
+    )
+    with owner_engine.begin() as connection:
+        pi_id = int(connection.execute(text(sql), values).scalar_one())
+        if with_history:
+            connection.execute(
+                text(
+                    "INSERT INTO proforma_invoice_status_log (proforma_invoice_id, from_status,"
+                    " to_status, actor_user_id, automatic) VALUES (:p, NULL, 'ISSUED', :a, false)"
+                ),
+                {"p": pi_id, "a": owner},
+            )
+    return pi_id

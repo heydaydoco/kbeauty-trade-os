@@ -7,7 +7,8 @@
 
 ■ 소비자 레지스트리(`LINE_CONSUMERS`): 키는 원천 라인 종류 4개(QT_LINE·PI_LINE·SO_LINE·PO_LINE). S3-1 등록은 PR-6·7이
   하고(QT_LINE←PI_LINE.qt_line_id·QT_LINE←SO_LINE.qt_line_id·PI_LINE←SO_LINE.pi_line_id), 선적·입고 소비는 S3-2·S4-1이 더한다.
-  이 PR에는 등록 0건이다 — 레지스트리·계약만 세운다(소비자 픽스처 테스트로 산식 검증).
+  PR-6a가 3건을 **모두 등록**한다 — 자식 라인 테이블이 아직 없는 등록(SO 라인: PR-7)은 `open_quantity`가 건너뛴다
+  (`PENDING_CONSUMER_TABLES` 핀 테스트가 PR-7의 소거를 강제 — CHILD_LINKS의 PENDING 관용과 같다).
 ■ 소비 절차(소비 세션 의무): ① `lock_lines_for_consumption` ② `open_quantity` 재계산 ③ 요청 ≤ 잔량(초과 409
   EXCEEDS_OPEN, 부분 허용) ④ 자기 행 INSERT — 한 트랜잭션. 부모 헤더 `FOR SHARE`가 취소(헤더 FOR UPDATE)와 직렬화한다.
   (참조 생성은 원천 헤더 `FOR UPDATE`→원천 라인 `FOR UPDATE` id순 — PR-6이 별도 헬퍼로 잠근다.)
@@ -62,13 +63,45 @@ class ConsumerSpec:
     kind: str = "FULFILL"
 
 
-#: 원천 라인 종류별 소비자 — 이 PR에는 등록 0건(소비 세션이 등록한다).
+#: 원천 라인 종류별 소비자. S3-1 등록 3건(X-19) — 선적·입고 소비(S3-2·S4-1)는 각 세션이 더한다.
+#: 소비 = 살아 있는 후속 전표(취소·만료 아님)의 라인 수량 합이다 — 만료·취소 PI의 수량은 QT로 **환원**된다(파생이라 자동).
 LINE_CONSUMERS: dict[str, tuple[ConsumerSpec, ...]] = {
-    "QT_LINE": (),
-    "PI_LINE": (),
+    "QT_LINE": (
+        ConsumerSpec(
+            name="PI_LINE.qt_line_id",
+            child_line_table="proforma_invoice_lines",
+            line_fk_col="qt_line_id",
+            qty_col="quantity",
+            child_header_table="proforma_invoices",
+            child_header_fk="pi_id",
+        ),
+        ConsumerSpec(
+            name="SO_LINE.qt_line_id",  # 직접 경로(PI 없는 후불 거래) — 테이블은 PR-7
+            child_line_table="sales_order_lines",
+            line_fk_col="qt_line_id",
+            qty_col="quantity",
+            child_header_table="sales_orders",
+            child_header_fk="so_id",
+        ),
+    ),
+    "PI_LINE": (
+        ConsumerSpec(
+            name="SO_LINE.pi_line_id",  # PI 경유 경로 — 테이블은 PR-7
+            child_line_table="sales_order_lines",
+            line_fk_col="pi_line_id",
+            qty_col="quantity",
+            child_header_table="sales_orders",
+            child_header_fk="so_id",
+        ),
+    ),
     "SO_LINE": (),
     "PO_LINE": (),
 }
+
+#: 등록은 됐으나 자식 라인 테이블이 아직 없는 소비자의 테이블 — 각 전표 PR이 테이블을 만들며 **지워야** 한다
+#: (test_doc_chain_contract가 metadata와 대사해 안 지우면 실패 — 메타데이터를 런타임에 읽지 않는 이유는 테스트의 임시 소비자 테이블이
+#: 메타데이터 밖이어도 산식을 시험할 수 있게 하기 위해서다). 없는 테이블의 소비량은 0이다(행이 있을 수 없다).
+PENDING_CONSUMER_TABLES: frozenset[str] = frozenset({"sales_order_lines"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +130,8 @@ def open_quantity(
     }
     consumed = dict.fromkeys(ordered, 0)
     for spec in LINE_CONSUMERS[line_kind]:
+        if spec.child_line_table in PENDING_CONSUMER_TABLES:
+            continue  # 아직 만들어지지 않은 후속(PR-7 이전의 SO 라인) — 소비량 0
         child = table(
             spec.child_line_table,
             column(spec.line_fk_col, Integer),
@@ -178,3 +213,26 @@ def lock_lines_for_consumption(
             .with_for_update()
         ).scalars()
     )
+
+
+def lock_source_lines(
+    session: Session, doc_kind: DocKind, doc_id: int, line_ids: list[int] | None = None
+) -> list[int]:
+    """참조 생성용 원천 라인 잠금 — **호출자가 원천 헤더를 이미 `FOR UPDATE`로 잡았다**(잠금 순서 (3)~(5) → (8)).
+
+    살아 있는 라인을 id 오름차순 `FOR UPDATE`로 잠가 돌려준다(교착 방지 — 라인 요청 순서와 무관). `line_ids`가
+    None이면 그 헤더의 살아 있는 라인 전부. `lock_lines_for_consumption`(선적·입고용: 헤더 SHARE+소비 가능 상태 검증)과
+    달리 참조 생성은 헤더 잠금이 취소·후속 생성과의 직렬화를 이미 맡는다.
+    """
+    lines = table(
+        LINE_TABLES[doc_kind],
+        column("id", Integer),
+        column(LINE_HEADER_FK[doc_kind], Integer),
+        column("deleted_at"),
+    )
+    query = select(lines.c.id).where(
+        lines.c[LINE_HEADER_FK[doc_kind]] == doc_id, lines.c.deleted_at.is_(None)
+    )
+    if line_ids is not None:
+        query = query.where(lines.c.id.in_(sorted(set(line_ids))))
+    return [int(v) for v in session.execute(query.order_by(lines.c.id).with_for_update()).scalars()]

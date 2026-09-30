@@ -27,6 +27,7 @@ IMMUTABLE_TABLES: frozenset[str] = frozenset(
         # S3-1 — 전표 상태 변경 이력(ADR-0051·§17.5 확장). 전표별 1표이고 각 전표 PR이 자기 표를 더한다.
         # 정정은 원본 수정이 아니라 새 전이 기록이다.
         "quotation_status_log",
+        "proforma_invoice_status_log",  # PR-6a — PI 상태 이력(같은 이유)
     }
 )
 
@@ -120,6 +121,11 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # 권한 회수가 불가능하다(불변은 서비스 동결 가드+상태이력 IMMUTABLE — ADR-0053, 트리거 미채택).
         "quotations",
         "quotation_lines",  # 초안 라인 편집(제자리 UPDATE)·제외(soft delete)
+        # S3-1 PR-6a — PI는 상태 전이(입금 수렴·만료·취소)·FREE 열(담당자·메모) 갱신이 앱 계정의 정상 UPDATE라
+        # 권한 회수가 불가능하다(불변은 서비스 동결 가드+상태이력 IMMUTABLE — ADR-0053). 은행 계좌는 ADMIN이 화면에서 고치는 마스터.
+        "proforma_invoices",
+        "proforma_invoice_lines",  # 생성 시 INSERT만 하지만 헤더와 같은 분류(soft delete 컬럼 보유)
+        "bank_accounts",
     }
 )
 

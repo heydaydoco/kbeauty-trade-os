@@ -139,5 +139,7 @@ def test_registered_jobs_stay_clear_of_the_four_bans() -> None:
             "backup-freshness",  # S2-4 PR-3 — 백업 신선도 감시(백업 볼륨 읽기 전용+alerts INSERT — 발송 없음)
             # S3-1 PR-5a — 전표 합계 검산(읽기 전용+ADMIN 인앱 알림 — 자동 보정·상태 변경·대외 발송·장부 확정 없음)
             "trade-docs-totals-verify",
+            # S3-1 PR-6a — 견적·PI 만료 스윕(전이 두 엣지 QT/PI ISSUED→EXPIRED뿐 — 발주·SO 무접촉·대외 발송 없음·후속 보유 제외, ADR-0056)
+            "document-expiry-sweep",
         }
     )

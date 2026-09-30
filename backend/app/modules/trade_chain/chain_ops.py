@@ -11,11 +11,13 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.time import today_kst
+from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.quotations.models import Quotation
 from app.modules.trade_docs.chain import has_live_children, has_live_confirmed_children
 from app.modules.trade_docs.constants import DocKind
@@ -23,8 +25,11 @@ from app.modules.trade_docs.expiry import is_lapsed
 from app.modules.trade_docs.locking import lock_document
 from app.modules.trade_docs.transition import record_transition
 
-#: 전표 종류 → 모델. 각 전표 PR이 자기 모델을 등록한다(PI·SO는 PR-6·7).
-DOC_MODELS: dict[DocKind, Any] = {DocKind.QUOTATION: Quotation}
+#: 전표 종류 → 모델. 각 전표 PR이 자기 모델을 등록한다(SO는 PR-7).
+DOC_MODELS: dict[DocKind, Any] = {
+    DocKind.QUOTATION: Quotation,
+    DocKind.PROFORMA_INVOICE: ProformaInvoice,
+}
 
 #: 조상 사슬 — (조상 종류, 자식 행의 FK 열) 위→아래 순서.
 ANCESTORS: dict[DocKind, tuple[tuple[DocKind, str], ...]] = {
@@ -35,8 +40,13 @@ ANCESTORS: dict[DocKind, tuple[tuple[DocKind, str], ...]] = {
 }
 
 
-def lock_chain(session: Session, kind: DocKind, doc_id: int) -> dict[DocKind, Any]:
-    """조상 → 자기 순서로 `FOR UPDATE` 잠금. 돌려주는 값은 종류별 잠근 행(없는 조상은 빠진다)."""
+def lock_chain(
+    session: Session, kind: DocKind, doc_id: int, *, expected_version: int | None = None
+) -> dict[DocKind, Any]:
+    """조상 → 자기 순서로 `FOR UPDATE` 잠금. 돌려주는 값은 종류별 잠근 행(없는 조상은 빠진다).
+
+    `expected_version`은 **자기 행**의 낙관 잠금 대조다(409) — 조상은 대조하지 않는다.
+    """
     model = DOC_MODELS[kind]
     peek = session.get(model, doc_id)
     locked: dict[DocKind, Any] = {}
@@ -47,13 +57,19 @@ def lock_chain(session: Session, kind: DocKind, doc_id: int) -> dict[DocKind, An
                 locked[ancestor_kind] = lock_document(
                     session, DOC_MODELS[ancestor_kind], ancestor_id
                 )
-    locked[kind] = lock_document(session, model, doc_id)
+    locked[kind] = lock_document(session, model, doc_id, expected_version=expected_version)
     return locked
 
 
-def converge_quotation(session: Session, qt_id: int, *, actor_user_id: int | None) -> str | None:
-    """QT 상태 수렴 — 바꿨으면 도달 상태, 아니면 None. 호출자는 사슬 잠금을 이미 잡았다는 전제다."""
+def converge_quotation(
+    session: Session, qt_id: int, *, actor_user_id: int | None, today: date | None = None
+) -> str | None:
+    """QT 상태 수렴 — 바꿨으면 도달 상태, 아니면 None. 호출자는 사슬 잠금을 이미 잡았다는 전제다.
+
+    `today`는 유효기간 경과 판정의 기준일(기본 오늘 KST) — 만료 스윕의 `--base-date`가 같은 기준을 쓰게 한다.
+    """
     qt = lock_document(session, Quotation, qt_id)
+    today = today or today_kst()
     if qt.status not in ("ISSUED", "CONVERTED"):
         return None
     changed: str | None = None
@@ -81,7 +97,7 @@ def converge_quotation(session: Session, qt_id: int, *, actor_user_id: int | Non
     # 복귀 직후 유효기간이 이미 지났고 붙잡는 후속이 없으면 같은 트랜잭션에서 EXPIRED로 수렴(이력 2행).
     if (
         qt.status == "ISSUED"
-        and is_lapsed(DocKind.QUOTATION, qt.status, qt.valid_until, today_kst())
+        and is_lapsed(DocKind.QUOTATION, qt.status, qt.valid_until, today)
         and not has_live_children(session, DocKind.QUOTATION, qt_id)
     ):
         record_transition(
@@ -89,7 +105,7 @@ def converge_quotation(session: Session, qt_id: int, *, actor_user_id: int | Non
             qt,
             "EXPIRED",
             actor_user_id=actor_user_id,
-            reason=f"자동: 유효기간 경과 (valid_until={qt.valid_until}, 기준일={today_kst()})",
+            reason=f"자동: 유효기간 경과 (valid_until={qt.valid_until}, 기준일={today})",
             automatic=True,
         )
         changed = "EXPIRED"
@@ -97,10 +113,15 @@ def converge_quotation(session: Session, qt_id: int, *, actor_user_id: int | Non
 
 
 def converge_parent(
-    session: Session, child_kind: DocKind, child: Any, *, actor_user_id: int | None
+    session: Session,
+    child_kind: DocKind,
+    child: Any,
+    *,
+    actor_user_id: int | None,
+    today: date | None = None,
 ) -> str | None:
-    """후속 전표(PI·SO)의 생성·확정·취소·만료 뒤 부모 QT를 수렴시킨다(PR-6·7·12가 호출)."""
+    """후속 전표(PI·SO)의 생성·확정·취소·만료 뒤 부모 QT를 수렴시킨다(PR-6 PI 취소·PR-7·12가 호출)."""
     qt_id = getattr(child, "qt_id", None)
     if child_kind not in (DocKind.PROFORMA_INVOICE, DocKind.SALES_ORDER) or qt_id is None:
         return None
-    return converge_quotation(session, qt_id, actor_user_id=actor_user_id)
+    return converge_quotation(session, qt_id, actor_user_id=actor_user_id, today=today)
