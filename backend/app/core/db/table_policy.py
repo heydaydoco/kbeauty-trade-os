@@ -24,6 +24,9 @@ IMMUTABLE_TABLES: frozenset[str] = frozenset(
         # §17.5 명시 3종 밖의 확장이다 — DESIGN §17.5 확장 명문+ADR-0040 세트.
         # 정정은 원본 수정이 아니라 새 전이 기록이다.
         "certification_status_log",
+        # S3-1 — 전표 상태 변경 이력(ADR-0051·§17.5 확장). 전표별 1표이고 각 전표 PR이 자기 표를 더한다.
+        # 정정은 원본 수정이 아니라 새 전이 기록이다.
+        "quotation_status_log",
     }
 )
 
@@ -113,6 +116,10 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # S3-1 — 정책 설정(ADR-0065). 관리자가 화면에서 값을 고치는 설정 마스터다(낙관 잠금).
         # 변경 이력의 정본은 audit_log(IMMUTABLE)라 이 표 자체를 불변으로 두지 않는다.
         "policy_settings",
+        # S3-1 — 견적(ADR-0052). 초안 편집·상태 전이·FREE 열(담당자·메모) 갱신이 앱 계정의 정상 UPDATE라
+        # 권한 회수가 불가능하다(불변은 서비스 동결 가드+상태이력 IMMUTABLE — ADR-0053, 트리거 미채택).
+        "quotations",
+        "quotation_lines",  # 초안 라인 편집(제자리 UPDATE)·제외(soft delete)
     }
 )
 
