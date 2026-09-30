@@ -116,7 +116,7 @@ def require_target(registry_code: str) -> ImportTarget:
     return target
 
 
-def _read_limited(stream: BinaryIO) -> bytes:
+def read_limited(stream: BinaryIO) -> bytes:
     """Content-Length를 믿지 않고 읽으면서 센다 — documents._store_stream과 같은 이유."""
     chunks: list[bytes] = []
     size = 0
@@ -131,7 +131,7 @@ def _read_limited(stream: BinaryIO) -> bytes:
     return b"".join(chunks)
 
 
-def _validate_extension(filename: str) -> None:
+def validate_extension(filename: str) -> None:
     if not filename.lower().endswith(".csv"):
         raise AppError(
             ErrorCode.IMPORTS_FILE_TYPE_NOT_ALLOWED,
@@ -326,8 +326,8 @@ def stage_import(
 ) -> tuple[int, dict[str, Any]]:
     target = require_target(registry_code)
     original = sanitize_filename(filename)
-    _validate_extension(original)
-    raw = _read_limited(stream)
+    validate_extension(original)
+    raw = read_limited(stream)
     if not raw:
         raise AppError(ErrorCode.IMPORTS_FILE_EMPTY)
     sha256 = hashlib.sha256(raw).hexdigest()
