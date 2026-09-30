@@ -436,18 +436,32 @@ def test_pi_source_status_and_validity_rules(trade: TestClient) -> None:
         assert ok.status_code == 201, (paid, ok.text)
 
 
-def test_discontinued_source_skus_are_listed_and_can_be_excluded(trade: TestClient) -> None:
-    """참조 생성 시 원천 라인 SKU가 단종되었으면 전체 거부가 아니라 **요청 lines 순서 기준 인덱스로 422 열거**하고, 제외하면 성공한다"""
+def test_deleted_source_skus_are_listed_and_can_be_excluded(trade: TestClient) -> None:
+    """참조 생성 시 원천 라인 SKU가 **삭제**되었으면 전체 거부가 아니라 요청 lines 순서 기준 인덱스로 422 열거하고, 제외하면 성공한다"""
     ok_sku = create_priced_sku(amount=500)
     dead_sku = create_priced_sku(amount=700)
     qt = issued_quotation(trade, create_buyer(), [ok_sku, dead_sku], quantity=5)
-    _exec("UPDATE skus SET status = 'DISCONTINUED' WHERE id = :i", i=dead_sku)
+    _exec("UPDATE skus SET deleted_at = now() WHERE id = :i", i=dead_sku)
     r = _from_qt(trade, qt)
     assert r.status_code == 422 and _code(r) == "TRADE_DOCS.LINE.SKU_DISCONTINUED"
     assert list(r.json()["error"]["detail"]) == ["lines[1].source_line_id"]
     keep = next(ln["id"] for ln in qt["lines"] if ln["sku_id"] == ok_sku)
     ok = create_so_from_qt_via_api(trade, qt, lines=[{"source_line_id": keep, "quantity": 5}])
     assert [ln["sku_id"] for ln in ok["lines"]] == [ok_sku]
+
+
+def test_discontinued_source_skus_are_accepted_and_flagged(trade: TestClient) -> None:
+    """단종(DISCONTINUED) SKU는 SO 접수에서 허용(add_line과 같은 자격 — 바이어가 실제 보낸 PO) — 참조 생성(QT·PI)이 성공하고 `sku_status`로 표시된다(확정 차단은 PR-12)"""
+    sku = create_priced_sku(amount=500)
+    _qt, pi = issued_pi_chain(trade, sku_ids=[sku], quantity=5)
+    qt2 = issued_quotation(
+        trade, create_buyer(), [sku], quantity=5
+    )  # 단종 전에 발행된 견적(발행 자체는 단종을 차단한다)
+    _exec("UPDATE skus SET status = 'DISCONTINUED' WHERE id = :i", i=sku)
+    from_pi = create_so_from_pi_via_api(trade, pi)
+    assert from_pi["lines"][0]["sku_status"] == "DISCONTINUED"
+    direct = create_so_from_qt_via_api(trade, qt2)
+    assert direct["lines"][0]["sku_status"] == "DISCONTINUED"
 
 
 # ── 중복 바이어 PO 0건 ──────────────────────────────────────────────────────
@@ -478,6 +492,8 @@ def test_a_duplicate_buyer_po_is_rejected_with_the_occupying_document(trade: Tes
         "P O - 2 0 2 6 - 0 0 1",
         "PO​-2026‍-001",
         "ＰＯ－２０２６－００１",
+        "PO\u20132026\u2014001",
+        "PO-2026-\u3164001\ufe0f",
     ],
 )
 def test_po_number_normalization_catches_case_space_zero_width_and_fullwidth(

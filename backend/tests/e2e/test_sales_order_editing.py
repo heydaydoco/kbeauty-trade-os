@@ -874,3 +874,105 @@ def test_a_line_change_that_leaves_every_amount_unchanged_still_bumps_the_header
         json={"version": so["version"], "requested_delivery_date": None},
     )
     assert stale.status_code == 409 and _code(stale) == "COMMON.CONCURRENCY.VERSION_CONFLICT"
+
+
+def test_changing_the_doc_date_revalidates_existing_line_delivery_dates(trade: TestClient) -> None:
+    """증빙일을 바꿀 때 살아 있는 라인의 요청납기 ≥ 새 증빙일을 다시 검증한다 — 위반 시 422(조용한 변경 금지)·값 무변, 맞으면 성공"""
+    from app.modules.sales_orders.service import (
+        add_line,  # noqa: F401 — 서비스 경로 존재 확인(공회전 방지)
+    )
+
+    so = create_direct_so(create_buyer(), quantity=2)
+    line = so["lines"][0]["id"]
+    due = today_kst()
+    old = due - timedelta(days=10)
+    _exec("UPDATE sales_orders SET doc_date = :d WHERE id = :i", d=old, i=so["id"])
+    _exec(
+        "UPDATE sales_order_lines SET requested_delivery_date = :d WHERE id = :i",
+        d=due - timedelta(days=3),
+        i=line,
+    )
+    cur = _get(trade, so["id"])
+    bad = trade.patch(
+        f"{SO}/{so['id']}", json={"version": cur["version"], "doc_date": due.isoformat()}
+    )
+    assert bad.status_code == 422 and "doc_date" in bad.json()["error"]["detail"]
+    assert _get(trade, so["id"])["doc_date"] == old.isoformat()  # 값 무변
+    ok = trade.patch(
+        f"{SO}/{so['id']}",
+        json={"version": cur["version"], "doc_date": (due - timedelta(days=4)).isoformat()},
+    )
+    assert ok.status_code == 200, ok.text
+
+
+def test_frozen_so_returns_frozen_before_revealing_a_duplicate_po(trade: TestClient) -> None:
+    """보류·취소·확정 SO의 PO번호를 이미 점유된 값으로 고치려 하면 409 FROZEN(점유 문서 정보 없음)이 먼저다 — 접수 SO는 여전히 DUPLICATE_BUYER_PO(점유 문서 안내)"""
+    buyer = create_buyer()
+    qt = issued_quotation(trade, buyer, [create_priced_sku()], quantity=20)
+    line = qt["lines"][0]["id"]
+    holder = create_so_from_qt_via_api(
+        trade, qt, buyer_po_no="PO-HELD", lines=[{"source_line_id": line, "quantity": 5}]
+    )
+    for status in ("ON_HOLD", "CANCELLED", "CONFIRMED"):
+        other = create_so_from_qt_via_api(
+            trade, qt, lines=[{"source_line_id": line, "quantity": 1}]
+        )
+        if status == "CONFIRMED":
+            _exec(
+                "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now() WHERE id = :i",
+                i=other["id"],
+            )
+        else:
+            _exec("UPDATE sales_orders SET status = :s WHERE id = :i", s=status, i=other["id"])
+        cur = _get(trade, other["id"])
+        r = trade.patch(
+            f"{SO}/{other['id']}", json={"version": cur["version"], "buyer_po_no": "po-held"}
+        )
+        assert r.status_code == 409 and _code(r) == "TRADE_DOCS.DOCUMENT.FROZEN", status
+        assert holder["doc_number"] not in r.text, status
+    live = create_so_from_qt_via_api(trade, qt, lines=[{"source_line_id": line, "quantity": 1}])
+    dup = trade.patch(
+        f"{SO}/{live['id']}", json={"version": live["version"], "buyer_po_no": "po-held"}
+    )
+    assert dup.status_code == 409 and _code(dup) == "TRADE_DOCS.DOCUMENT.DUPLICATE_BUYER_PO"
+
+
+def test_a_meta_edit_that_changes_nothing_is_a_no_op(trade: TestClient) -> None:
+    """변경 없는 메타 편집(같은 메모·같은 담당자·빈 본문)은 version·updated_by를 바꾸지 않는다 · 실제 변경이 있으면 +1 · 취소 SO도 FREE 열은 허용"""
+    so = _reference_so(trade)
+    before = _scalar("SELECT updated_by_id FROM sales_orders WHERE id = :i", i=so["id"])
+    same = trade.patch(
+        f"{SO}/{so['id']}/meta",
+        json={"version": so["version"], "assignee_id": so["assignee_id"], "internal_note": None},
+    )
+    assert same.status_code == 200 and same.json()["version"] == so["version"]
+    assert _scalar("SELECT updated_by_id FROM sales_orders WHERE id = :i", i=so["id"]) == before
+    changed = trade.patch(
+        f"{SO}/{so['id']}/meta", json={"version": so["version"], "internal_note": "새 메모"}
+    )
+    assert changed.json()["version"] == so["version"] + 1
+    repeat = trade.patch(
+        f"{SO}/{so['id']}/meta",
+        json={"version": changed.json()["version"], "internal_note": "새 메모"},
+    )
+    assert repeat.json()["version"] == changed.json()["version"]
+    cancelled = _transition(trade, changed.json(), "CANCELLED", "취소")
+    after = trade.patch(
+        f"{SO}/{so['id']}/meta",
+        json={"version": cancelled.json()["version"], "internal_note": "취소 후 메모"},
+    )
+    assert after.status_code == 200 and after.json()["version"] == cancelled.json()["version"] + 1
+
+
+def test_a_no_op_meta_edit_by_another_user_does_not_take_over_updated_by(trade: TestClient) -> None:
+    """다른 사용자가 같은 값을 다시 보내도(무변경) `updated_by`가 그 사람으로 바뀌지 않는다 — 무변경은 흔적을 남기지 않는다"""
+    so = _reference_so(trade)
+    trade.patch(f"{SO}/{so['id']}/meta", json={"version": so["version"], "internal_note": "메모"})
+    cur = _get(trade, so["id"])
+    before = _scalar("SELECT updated_by_id FROM sales_orders WHERE id = :i", i=so["id"])
+    with logged_in(RoleCode.TRADE) as other:
+        r = other.patch(
+            f"{SO}/{so['id']}/meta", json={"version": cur["version"], "internal_note": "메모"}
+        )
+        assert r.status_code == 200 and r.json()["version"] == cur["version"]
+    assert _scalar("SELECT updated_by_id FROM sales_orders WHERE id = :i", i=so["id"]) == before

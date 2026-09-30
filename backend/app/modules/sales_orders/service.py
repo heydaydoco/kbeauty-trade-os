@@ -114,6 +114,10 @@ _PI_LINES = table(
     column("unit_price_amount"),
 )
 
+#: 생성 착지가 헤더에 전개해도 되는 조건 열 — 결제조건 4열·Incoterms 3열뿐.
+PAYMENT_COLUMN_KEYS: frozenset[str] = frozenset(EMPTY_TERMS_COLUMNS)
+INCOTERM_COLUMN_KEYS: frozenset[str] = frozenset(EMPTY_INCOTERM_COLUMNS)
+
 _NOT_NULLABLE = frozenset({"doc_date", "buyer_name", "assignee_id", "dest_market_code"})
 
 
@@ -503,6 +507,13 @@ def create_received_sales_order(
     수량·요청납기·건수) → **채번(마지막)** → INSERT+탄생 이력+이벤트 → 라인 INSERT. 선검사를 빠져나간 동시 요청은 DB 부분 유니크가
     잡고 `guarded_flush`가 같은 409로 번역한다. 승격 코드는 **RECEIVED로만** 만든다 — `confirm`을 부르지 않는다(B9 우회 차단표 #3).
     """
+    # `**draft.payment_columns`·`**draft.incoterm_columns` 전개는 임의 키(status·confirmed_at·total_amount 등)를 못 싣는다 —
+    # 허용 키 집합 밖이면 프로그래밍 오류로 즉시 거부한다(상태·번호·합계 통로 우회 차단, test_doc_status_channel이 이 허용 항목의 근거로 대사).
+    if (
+        set(draft.payment_columns) - PAYMENT_COLUMN_KEYS
+        or set(draft.incoterm_columns) - INCOTERM_COLUMN_KEYS
+    ):
+        raise ValueError("SalesOrderDraft의 조건 열 dict에 허용되지 않은 키가 있습니다.")
     partner = partners.require_partner_of_any_type(
         session,
         draft.buyer_partner_id,
@@ -847,6 +858,16 @@ def _header_columns(session: Session, values: dict[str, Any], row: SalesOrder) -
         floor = _source_floor_date(session, row)
         if floor is not None and doc_date < floor:
             raise invalid("doc_date", "증빙일은 원천 문서의 증빙일보다 앞설 수 없습니다.")
+        earliest = session.execute(
+            select(func.min(SalesOrderLine.requested_delivery_date)).where(
+                SalesOrderLine.so_id == row.id, SalesOrderLine.deleted_at.is_(None)
+            )
+        ).scalar_one()
+        if earliest is not None and earliest < doc_date:
+            raise invalid(
+                "doc_date",
+                "라인의 요청납기가 새 증빙일보다 앞섭니다. 요청납기를 먼저 고치거나 더 이른 증빙일을 입력해 주세요.",
+            )
         cols["doc_date"] = doc_date
 
     if "buyer_name" in values:
@@ -921,7 +942,16 @@ def update_sales_order(
         try:
             cols = _header_columns(session, values, row)
         except AppError as exc:
-            if not editable and content_keys and exc.code == ErrorCode.VALIDATION_INVALID_FIELD:
+            # 동결·보류·취소 SO에서는 값 검증 오류 **와 중복 PO(점유 문서 정보)** 보다 FROZEN 409가 먼저다(점유 문서 노출 방지)
+            if (
+                not editable
+                and content_keys
+                and exc.code
+                in (
+                    ErrorCode.VALIDATION_INVALID_FIELD,
+                    ErrorCode.TRADE_DOCS_DOCUMENT_DUPLICATE_BUYER_PO,
+                )
+            ):
                 editing.assert_editable(KIND, row.status, fields=content_keys)
             raise
         changed = _content_changes(row, cols)
@@ -943,20 +973,27 @@ def update_sales_order(
 
 
 def update_meta(*, actor: AuthenticatedUser, so_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-    """FREE 열(내부 메모·담당자)만 — 동결 후에도 허용된다(인계·오기 정정)."""
+    """FREE 열(내부 메모·담당자)만 — 동결 후에도 허용된다(인계·오기 정정). **실제 변경이 없으면 version·updated_by를 건드리지 않는다**."""
     values = {k: v for k, v in payload.items() if k in _FREE_FIELDS}
     with unit_of_work() as uow:
         session = uow.session
         row = lock_document(session, SalesOrder, so_id, expected_version=payload["version"])
         if "assignee_id" in values and values["assignee_id"] is None:
             raise invalid("assignee_id", "담당자를 비울 수 없습니다.")
+        changed = False
         if "assignee_id" in values:
             require_active_user(session, values["assignee_id"])
-            row.assignee_id = values["assignee_id"]
+            if row.assignee_id != values["assignee_id"]:
+                row.assignee_id = values["assignee_id"]
+                changed = True
         if "internal_note" in values:
-            row.internal_note = blank_to_none(values["internal_note"])
-        row.updated_by_id = actor.id
-        session.flush()
+            note = blank_to_none(values["internal_note"])
+            if row.internal_note != note:
+                row.internal_note = note
+                changed = True
+        if changed:
+            row.updated_by_id = actor.id
+            session.flush()
         return detail_body(session, row)
 
 

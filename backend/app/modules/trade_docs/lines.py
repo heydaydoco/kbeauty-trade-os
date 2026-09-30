@@ -48,7 +48,9 @@ def require_sellable_sku(
     return sku
 
 
-def unusable_sku_reasons(session: Session, sku_ids: list[int]) -> dict[int, str]:
+def unusable_sku_reasons(
+    session: Session, sku_ids: list[int], *, allow_discontinued: bool = False
+) -> dict[int, str]:
     """참조 생성(PI·SO)이 원천 라인을 복사하기 전의 SKU 재검사 — 사용할 수 없는 SKU만 {id: 사유}로 돌려준다.
 
     원천 라인은 동결 값이라 복사는 마스터를 다시 읽지 않지만, **새로 만드는 전표에 단종·삭제된 SKU가 실려 나가는 것**은
@@ -67,7 +69,7 @@ def unusable_sku_reasons(session: Session, sku_ids: list[int]) -> dict[int, str]
         sku = found.get(sku_id)
         if sku is None:
             reasons[sku_id] = "삭제된 SKU"
-        elif sku.status == "DISCONTINUED":
+        elif sku.status == "DISCONTINUED" and not allow_discontinued:
             reasons[sku_id] = f"단종된 SKU: {sku.sku_code}"
     return reasons
 

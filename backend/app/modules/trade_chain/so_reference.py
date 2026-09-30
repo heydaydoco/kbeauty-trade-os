@@ -8,7 +8,7 @@ DoD ① "참조 생성만으로 QT→PI→SO 관통(재입력 화면 없음)"의
 ■ 검증 순서(QT·PI 공통): 원천 확보(존재 → 바이어 유형[FOR KEY SHARE] → 원천 `FOR UPDATE`+낙관 잠금 409) → **원천 자격**(QT: 상태 ∈ {ISSUED, CONVERTED} +
   `valid_until` 직접 검사 / PI: 상태 ∈ {ISSUED, PARTIALLY_PAID, PAID} + **미입금 발행 상태일 때만** `valid_until` 직접 검사 — 이미 입금한 바이어의 SO 생성을
   유효기간이 막아 선수금이 갇히는 사고 방지) → 날짜 → (PI만) **활성 SO 1건 제한**(409 ALREADY_CONVERTED — DB 부분 유니크가 최종 보증) → 원천 라인 잠금(id 오름차순)·
-  잔량 재계산·요청 수량 ≤ 잔량(409 EXCEEDS_OPEN) → SKU 재검사(단종·삭제 SKU가 실려 나가는 것 차단, 422+목록) → 라인 값 복사 → 착지.
+  잔량 재계산·요청 수량 ≤ 잔량(409 EXCEEDS_OPEN) → SKU 재검사(**삭제·미존재 SKU만** 422+목록 — 단종은 add_line과 같이 저장 허용·확정에서 차단[PR-12]) → 라인 값 복사 → 착지.
 ■ 잠금 순서: 멱등 claim(0) → 바이어 `FOR KEY SHARE`(2) → 원천 헤더 `FOR UPDATE`(3 또는 3→4) → (복제 원본 SO `FOR UPDATE`(5)) → 원천 라인 `FOR UPDATE` id순(8) → 채번(9, 마지막).
   PI 경로는 **QT 헤더를 PI보다 먼저**(3→4 — `lock_chain`) 잠근다: SO INSERT의 FK 검사((pi_id, qt_id)→PI·qt_id→QT)가 QT 행에 암묵 `FOR KEY SHARE`를 잡아
   PI만 잠그고 들어가면 "PI 잠금 → QT 암묵 잠금" 역순이 되어 PI 취소(QT→PI)와 교차 교착한다(J 테스트 `cross_chain`·`pi_cancel_versus_so_creation`이 실제로 잡은 결함).
@@ -139,8 +139,11 @@ def _draft_lines(
     *,
     from_pi: bool,
 ) -> list[sos.NewSoLine]:
-    """SKU 재검사 후 원천 라인 값을 복사한 SO 라인 목록 — 단종·삭제 SKU는 요청 `lines` 순서 기준 인덱스로 422 열거."""
-    unusable = unusable_sku_reasons(session, [line.sku_id for line in source_lines])
+    """SKU 재검사(삭제·미존재만 — 단종은 허용) 후 원천 라인 값을 복사한 SO 라인 목록 — 삭제 SKU는 요청 `lines` 순서 기준 인덱스로 422 열거."""
+    # SO 접수는 add_line과 같은 자격 — 단종(DISCONTINUED)은 저장 허용(확정에서 차단, PR-12), 삭제·미존재 SKU만 거부(A11)
+    unusable = unusable_sku_reasons(
+        session, [line.sku_id for line in source_lines], allow_discontinued=True
+    )
     if unusable:
         position = (
             {int(item["source_line_id"]): i for i, item in enumerate(requested)}

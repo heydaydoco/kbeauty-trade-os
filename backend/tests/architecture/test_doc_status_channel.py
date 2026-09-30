@@ -685,3 +685,73 @@ def test_pi_frozen_columns_are_never_assigned_after_creation() -> None:
         for column in sorted(frozen):
             assert attribute_assignments(tree, column) == [], (rel, column)
     assert checked >= 6  # 공회전 방지
+
+
+def test_so_creation_landing_spreads_only_condition_columns() -> None:
+    """`create_received_sales_order`의 허용 항목(UNKNOWN=`**draft.…_columns` 전개)은 결제조건 4열·Incoterms 3열뿐이다 — 보호 열을 싣는 임의 키 전개 금지:
+    허용 키 집합이 보호 열과 겹치지 않고, 참조 생성 오케스트레이터가 만드는 dict 키가 그 집합과 정확히 같으며, 집합 밖 키는 착지가 거부한다"""
+    from app.modules.sales_orders import service as so_service
+    from app.modules.trade_chain import so_reference
+
+    payment, incoterm = so_reference._terms(
+        type(
+            "S",
+            (),
+            dict.fromkeys(
+                (
+                    "payment_type",
+                    "advance_pct_bp",
+                    "balance_anchor",
+                    "balance_days",
+                    "incoterm_code",
+                    "incoterm_place",
+                    "incoterm_year",
+                )
+            ),
+        )()
+    )
+    assert set(payment) == so_service.PAYMENT_COLUMN_KEYS == {
+        "payment_type", "advance_pct_bp", "balance_anchor", "balance_days",
+    }  # fmt: skip
+    assert set(incoterm) == so_service.INCOTERM_COLUMN_KEYS == {
+        "incoterm_code", "incoterm_place", "incoterm_year",
+    }  # fmt: skip
+    assert not (so_service.PAYMENT_COLUMN_KEYS | so_service.INCOTERM_COLUMN_KEYS) & PROTECTED
+    # 전개 지점은 서비스의 생성 착지 한 곳뿐이다(다른 곳의 `**draft` 전개 0건)
+    spreads = [
+        (rel, node.lineno)
+        for rel, tree in app_sources().items()
+        if module_of(rel) in DOC_MODULES
+        for node in ast.walk(tree)
+        if isinstance(node, ast.keyword)
+        and node.arg is None
+        and "draft." in ast.unparse(node.value)
+    ]
+    assert {rel for rel, _ in spreads} == {SO_SERVICE}, spreads
+
+
+def test_the_landing_rejects_a_condition_dict_with_a_protected_key() -> None:
+    """착지 함수에 status·confirmed_at·total_amount 같은 키를 조건 열 dict로 실으면 ValueError — DB를 건드리기 전에"""
+    from app.core.db.uow import unit_of_work
+    from app.modules.identity.models import RoleCode
+    from app.modules.identity.service import AuthenticatedUser
+    from app.modules.sales_orders import service as so_service
+
+    actor = AuthenticatedUser(
+        id=1,
+        email="a@example.com",
+        display_name="a",
+        roles=frozenset({RoleCode.TRADE}),
+        session_id=0,
+    )
+    for field in ("payment_columns", "incoterm_columns"):
+        for key in ("status", "confirmed_at", "total_amount", "doc_number"):
+            draft = so_service.SalesOrderDraft(
+                buyer_partner_id=1,
+                currency="USD",
+                dest_market_code="US",
+                lines=[],
+                **{field: {key: "X"}},
+            )
+            with unit_of_work() as uow, pytest.raises(ValueError):
+                so_service.create_received_sales_order(uow.session, actor=actor, draft=draft)
