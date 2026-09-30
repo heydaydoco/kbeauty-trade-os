@@ -851,3 +851,26 @@ def test_creating_from_a_reference_chain_needs_a_quotation_chain_in_the_db(
     so = _get(trade, raw_so("RECEIVED", qt_id=raw_quotation("ISSUED")))
     assert so["status"] == "RECEIVED" and so["qt_id"] is not None and so["is_reference"] is True
     assert so_payload(so)["version"] == so["version"]
+
+
+def test_a_line_change_that_leaves_every_amount_unchanged_still_bumps_the_header_version(
+    trade: TestClient,
+) -> None:
+    """라인만 바뀌고 금액·합계는 그대로인 편집(요청납기·바이어 품번)도 헤더 version을 정확히 +1 한다 — 라인 편집이 부모 낙관 잠금을 못 올리면
+    겹친 편집·승인 요청이 409를 우회한다(S1-3 PR-3 결함 유형). 같은 사람이 만든 전표라 감사 열 변경이 우연히 헤더를 dirty로 만드는 경로도 없다"""
+    so = _reference_so(trade, quantity=10, amount=1000)
+    line = so["lines"][0]["id"]
+    future = (today_kst() + timedelta(days=30)).isoformat()
+    r = trade.patch(
+        f"{SO}/{so['id']}/lines/{line}",
+        json={"version": so["version"], "requested_delivery_date": future},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["total_amount"] == so["total_amount"]
+    assert r.json()["header_version"] == so["version"] + 1
+    assert _get(trade, so["id"])["version"] == so["version"] + 1
+    stale = trade.patch(
+        f"{SO}/{so['id']}/lines/{line}",
+        json={"version": so["version"], "requested_delivery_date": None},
+    )
+    assert stale.status_code == 409 and _code(stale) == "COMMON.CONCURRENCY.VERSION_CONFLICT"

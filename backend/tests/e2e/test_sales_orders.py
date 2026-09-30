@@ -695,9 +695,19 @@ def test_a_live_successor_of_an_so_blocks_its_cancellation(
     trade: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """SO 취소 가드 — 살아 있는 후속(S3-2 선적의 대역)이 있으면 409 SUCCESSOR_ALIVE(후속 번호 안내)이고 상태·이력 무변, 후속이 취소되면 성공한다"""
+    from app.modules.sales_orders import ports
+    from app.modules.trade_chain import lifecycle
     from app.modules.trade_docs.constants import DocKind
     from tests.factories.trade import fake_successors
 
+    port_calls: list[str] = []
+
+    class Recording(ports.NoAllocationPort):
+        def on_cancelled(self, session: Any, order: Any) -> ports.AllocationOutcome:
+            port_calls.append(order.doc_number)
+            return super().on_cancelled(session, order)
+
+    monkeypatch.setattr(lifecycle, "get_allocation_port", lambda: Recording())
     so = create_so_from_qt_via_api(trade, issued_quotation(trade))
     with fake_successors(
         monkeypatch, fk_column="so_id", table_name="scratch_shipments", parent=DocKind.SALES_ORDER
@@ -710,6 +720,9 @@ def test_a_live_successor_of_an_so_blocks_its_cancellation(
         )
         assert r.status_code == 409 and _code(r) == "TRADE_DOCS.CANCEL.SUCCESSOR_ALIVE"
         assert r.json()["error"]["detail"]["successors"] == ["SH-2026-0001"]
+        assert (
+            port_calls == []
+        )  # 후속 검사가 할당 포트 호출보다 먼저다(막힐 취소가 할당 해제를 시도하지 않는다)
         assert _scalar("SELECT status FROM sales_orders WHERE id = :i", i=so["id"]) == "RECEIVED"
         assert (
             _scalar(
@@ -719,3 +732,4 @@ def test_a_live_successor_of_an_so_blocks_its_cancellation(
         )
         shipments.set_status(ship, "CANCELLED")
         assert _cancel_so(trade, so)["status"] == "CANCELLED"
+        assert port_calls == [so["doc_number"]]
