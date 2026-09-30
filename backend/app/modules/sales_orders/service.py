@@ -292,7 +292,9 @@ def _line_body(
         "sku_kind": line.sku_kind,
         "sku_status": sku_status,
         "quantity": line.quantity,
-        "requested_delivery_date": line.requested_delivery_date,
+        "requested_delivery_date": (
+            line.requested_delivery_date.isoformat() if line.requested_delivery_date else None
+        ),
         "buyer_item_code": line.buyer_item_code,
         "unit_price_amount": line.unit_price_amount,
         "unit_price_text": money_text(line.unit_price_amount, cur),

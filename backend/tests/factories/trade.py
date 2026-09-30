@@ -497,3 +497,214 @@ def raw_pi(
                 {"p": pi_id, "a": owner},
             )
     return pi_id
+
+
+# ── SO(PR-7a) — 참조 생성 요청 본문·API 생성·직접(인테이크형) 수주·DB 직행 SO ───────────────────
+
+
+def so_payload(source: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """QT/PI → SO 참조 생성 요청 본문 — 원천 값을 다시 받는 필드는 **없다**(원천 version만). 나머지는 선택 필드."""
+    body: dict[str, Any] = {"version": source["version"]}
+    body.update(overrides)
+    return body
+
+
+def create_so_from_qt_via_api(
+    client: TestClient, qt: dict[str, Any], **overrides: Any
+) -> dict[str, Any]:
+    """API로 QT에서 수주를 직접 만든다(접수 상태). 응답 본문을 돌려준다."""
+    response = client.post(
+        f"/api/v1/quotations/{qt['id']}/sales-orders",
+        json=so_payload(qt, **overrides),
+        headers=idem(),
+    )
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def create_so_from_pi_via_api(
+    client: TestClient, pi: dict[str, Any], **overrides: Any
+) -> dict[str, Any]:
+    """API로 PI에서 수주를 만든다(접수 상태)."""
+    response = client.post(
+        f"/api/v1/proforma-invoices/{pi['id']}/sales-orders",
+        json=so_payload(pi, **overrides),
+        headers=idem(),
+    )
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def issued_pi_chain(
+    client: TestClient,
+    *,
+    quantity: int = 10,
+    sku_ids: list[int] | None = None,
+    buyer_partner_id: int | None = None,
+    amount: int = 1000,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(발행된 QT, 그 QT 전량으로 만든 PI) — QT→PI→SO 관통 시험의 출발점."""
+    skus = sku_ids or [create_priced_sku(amount=amount)]
+    qt = issued_quotation(client, buyer_partner_id, skus, quantity=quantity)
+    pi = create_pi_via_api(client, qt)
+    return qt, pi
+
+
+def create_direct_so(
+    buyer_partner_id: int,
+    sku_ids: list[int] | None = None,
+    *,
+    quantity: int = 5,
+    buyer_po_no: str | None = None,
+    currency: str = "USD",
+    assignee_id: int | None = None,
+    price_amount: int = 1000,
+) -> dict[str, Any]:
+    """직접(인테이크형) 수주 — `create_received_sales_order` 단일 착지를 서비스로 직접 부른다(참조 없음 — 결제조건·Incoterms·환율은 비어 있다).
+
+    라인 단가는 바이어 PO 단가(`BUYER_PO`)로 복사한다(인테이크 확정 PR-13이 같은 모양으로 채운다).
+    """
+    from app.modules.identity.service import AuthenticatedUser
+    from app.modules.sales_orders import service as sos
+    from app.modules.trade_docs.snapshot import LineSnapshot
+
+    create_market("US")
+    skus = sku_ids or [create_priced_sku(amount=price_amount, currency=currency)]
+    owner = assignee_id or create_user(f"{unique('dso')}@example.com", roles=(RoleCode.TRADE,))
+    actor = AuthenticatedUser(
+        id=owner,
+        email="direct@example.com",
+        display_name="직접 수주 작성자",
+        roles=frozenset({RoleCode.TRADE}),
+        session_id=0,
+    )
+    from app.modules.catalog.models import Sku
+
+    with unit_of_work() as uow:
+        lines = []
+        for sku_id in skus:
+            sku = uow.session.get(Sku, sku_id)
+            assert sku is not None
+            lines.append(
+                sos.NewSoLine(
+                    LineSnapshot(
+                        sku_id=sku.id,
+                        sku_code=sku.sku_code,
+                        sku_name_ko=sku.name_ko,
+                        sku_name_en=sku.name_en,
+                        sku_kind=sku.kind,
+                        buyer_item_code=None,
+                        unit_price_amount=price_amount,
+                        list_price_amount=price_amount,
+                        price_basis="BUYER_PO",
+                        is_free=False,
+                        price_reason=None,
+                    ),
+                    quantity,
+                )
+            )
+        row = sos.create_received_sales_order(
+            uow.session,
+            actor=actor,
+            draft=sos.SalesOrderDraft(
+                buyer_partner_id=buyer_partner_id,
+                currency=currency,
+                dest_market_code="US",
+                lines=lines,
+                buyer_po_no=buyer_po_no,
+                assignee_id=owner,
+            ),
+        )
+        body = sos.detail_body(uow.session, row)
+    return body
+
+
+def raw_so(
+    status: str = "RECEIVED",
+    *,
+    buyer_partner_id: int | None = None,
+    buyer_po_no: str | None = None,
+    buyer_po_no_key: str | None = None,
+    qt_id: int | None = None,
+    pi_id: int | None = None,
+    doc_date: date = date(2026, 9, 1),
+    assignee_id: int | None = None,
+    with_history: bool = True,
+    confirmed: bool | None = None,
+    complete: bool = True,
+) -> int:
+    """지정 상태의 SO를 SQL로 직접 넣는다(라인 없음 — 전이표·역순 취소·제약 시험용). 이력에 탄생 행(RECEIVED) 1개를 남긴다.
+
+    `confirmed`를 안 주면 확정 시각은 상태가 요구하는 대로(CONFIRMED·후반=채움, RECEIVED=NULL, ON_HOLD·CANCELLED=NULL).
+    `confirmed=True`로 ON_HOLD를 만들면 "확정 뒤 보류"가 된다. 통화·바이어는 원천 QT/PI를 따른다(복합 FK).
+    """
+    from sqlalchemy import text
+
+    from app.core.db.session import owner_engine
+
+    buyer = buyer_partner_id or create_buyer()
+    currency = "USD"
+    market = "US"
+    create_market("US")
+    with owner_engine.connect() as connection:
+        if pi_id is not None:
+            row = connection.execute(
+                text(
+                    "SELECT currency, buyer_partner_id, dest_market_code, qt_id FROM proforma_invoices"
+                    " WHERE id = :i"
+                ),
+                {"i": pi_id},
+            ).one()
+            currency, buyer, market, qt_id = row[0], row[1], row[2], row[3]
+        elif qt_id is not None:
+            row = connection.execute(
+                text(
+                    "SELECT currency, buyer_partner_id, dest_market_code FROM quotations WHERE id = :i"
+                ),
+                {"i": qt_id},
+            ).one()
+            currency, buyer, market = row[0], row[1], row[2]
+    owner = assignee_id or create_user(f"{unique('rawso')}@example.com", roles=(RoleCode.TRADE,))
+    if confirmed is None:
+        confirmed = status in (
+            "CONFIRMED",
+            "PARTIALLY_ALLOCATED",
+            "ALLOCATED",
+            "IN_SHIPMENT",
+            "COMPLETED",
+        )
+    values: dict[str, Any] = {
+        "doc_number": f"SO-2026-{next(_counter) + 9000:04d}",
+        "doc_date": doc_date,
+        "status": status,
+        "currency": currency,
+        "assignee_id": owner,
+        "buyer_partner_id": buyer,
+        "buyer_name": "Raw Buyer",
+        "dest_market_code": market,
+        "qt_id": qt_id,
+        "pi_id": pi_id,
+        "buyer_po_no": buyer_po_no,
+        "buyer_po_no_key": buyer_po_no_key,
+        "confirmed_at": "2026-09-02T00:00:00+00:00" if confirmed else None,
+        **(_FROZEN_VALUES if complete else {}),
+    }
+    values.pop("buyer_address", None)
+    columns = list(values)
+    sql = (
+        f"INSERT INTO sales_orders ({', '.join(columns)}) "
+        f"VALUES ({', '.join(':' + c for c in columns)}) RETURNING id"
+    )
+    with owner_engine.begin() as connection:
+        so_id = int(connection.execute(text(sql), values).scalar_one())
+        if with_history:
+            connection.execute(
+                text(
+                    "INSERT INTO sales_order_status_log (sales_order_id, from_status, to_status,"
+                    " actor_user_id, automatic) VALUES (:s, NULL, 'RECEIVED', :a, false)"
+                ),
+                {"s": so_id, "a": owner},
+            )
+    return so_id
