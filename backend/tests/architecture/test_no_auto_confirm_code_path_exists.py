@@ -98,6 +98,7 @@ REGISTRY: tuple[Entry, ...] = (
                 "modules/quotations/service.py",
                 "modules/proforma_invoices/service.py",  # PI 생성 착지(insert_issued) — 참조 생성 오케스트레이터가 부른다
                 "modules/sales_orders/service.py",  # SO 생성 착지(create_received_sales_order) — 참조 생성·인테이크 확정이 부른다
+                "modules/purchase_orders/service.py",  # PO 생성 착지(insert_issued) — create_purchase_order가 부른다(PR-8a)
             }
         ),
         forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
@@ -186,6 +187,49 @@ REGISTRY: tuple[Entry, ...] = (
         forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
         forbid_module_import=False,
         notes="SO 보류·재개·취소(사람 전이) — 라우터 1곳+행위자 필수. 확정은 이 함수에 없다(PR-12)",
+    ),
+    Entry(
+        name="create_purchase_order",
+        defined_in="app.modules.purchase_orders.service",
+        allowed_files=frozenset(
+            {"modules/purchase_orders/service.py", "modules/purchase_orders/router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "identity",
+                "idempotency",
+                "seeds",
+                "readiness",
+                "policies",
+                # 후속 PR이 만드는 모듈 — 만들어지는 순간 이 금지가 적용된다(PO 자동 생성 경로 부재, design-F F2 (f)).
+                "order_intake",
+                "order_board",
+                "approvals",
+                "gates",
+                "credit",
+                "payments",
+            }
+        ),
+        notes="**PO 생성 = 발행 = 발주 확정**(§15 L3 4금 ①) — 라우터 1곳+행위자 필수. 스케줄러·CLI·임포트·이관·알림·인테이크·보드·승인·게이트 경로에서 import·언급 0",
+    ),
+    Entry(
+        name="transition_purchase_order",
+        defined_in="app.modules.trade_chain.lifecycle",
+        allowed_files=frozenset(
+            {"modules/trade_chain/lifecycle.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
+        forbid_module_import=False,
+        notes="PO 공급사 확인(OC)·취소(사람 전이) — 라우터 1곳+행위자 필수. PO 자동 엣지는 0이다",
     ),
     Entry(
         name="sweep_expired_documents",

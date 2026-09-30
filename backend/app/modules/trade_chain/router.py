@@ -20,6 +20,8 @@ from app.modules.proforma_invoices.schemas import (
     ProformaInvoiceDetail,
     ProformaInvoicePreview,
 )
+from app.modules.purchase_orders.router import detail_response as purchase_order_response
+from app.modules.purchase_orders.schemas import PurchaseOrderCostHiddenDetail, PurchaseOrderDetail
 from app.modules.quotations.schemas import QuotationDetail
 from app.modules.sales_orders.schemas import SalesOrderDetail, SalesOrderReferenceRequest
 from app.modules.trade_chain import document_flow, lifecycle, reference, so_reference
@@ -74,6 +76,23 @@ class SalesOrderTransitionRequest(BaseModel):
     version: StrictInt = Field(ge=1)
     #: 보류·취소는 사유 필수(1~500자, 공백 불가). 재개는 사유 선택.
     reason: StrictStr | None = Field(default=None, max_length=500)
+
+
+#: PO 범용 전이의 `to` — 공급사 확인(OC)·취소. 자동 엣지·RESERVED 후반 상태는 공개 대상이 아니다(machine에서 파생한 값과 같은지 아래 assert가 대사한다).
+PurchaseOrderTarget = Literal["SUPPLIER_CONFIRMED", "CANCELLED"]
+assert set(PurchaseOrderTarget.__args__) == public_transition_targets(DocKind.PURCHASE_ORDER)  # type: ignore[attr-defined]
+
+
+class PurchaseOrderTransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to: PurchaseOrderTarget
+    version: StrictInt = Field(ge=1)
+    #: 취소는 사유 필수(1~500자, 공백 불가). 공급사 확인은 사유 선택.
+    reason: StrictStr | None = Field(default=None, max_length=500)
+    #: 공급사 확인(OC)의 부속 — `oc_received_on` 필수(발행일≤OC≤오늘), `oc_reference`는 선택. 취소에는 싣지 않는다.
+    oc_received_on: date | None = None
+    oc_reference: StrictStr | None = Field(default=None, max_length=100)
 
 
 class RevisionRequest(BaseModel):
@@ -289,6 +308,40 @@ def transition_sales_order(
     )
     response.status_code = status_code
     return SalesOrderDetail.model_validate(body)
+
+
+# ── PO 전이(공급사 확인·취소) ──────────────────────────────────────────────────
+
+po_router = APIRouter(prefix="/purchase-orders", tags=["trade-chain"])
+
+
+@po_router.post(
+    "/{po_id}/transitions",
+    summary="PO 공급사 확인(OC 일자 필수)·취소 (사유 필수는 취소 — 사람 1클릭, 자동 전이 없음)",
+    # ★ 응답 스키마 갈림은 PO 라우터 경계 1곳(detail_response)에서 한다 — 여기도 response_model=None.
+    response_model=None,
+    responses={200: {"model": PurchaseOrderDetail}},
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def transition_purchase_order(
+    po_id: int,
+    payload: PurchaseOrderTransitionRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> PurchaseOrderDetail | PurchaseOrderCostHiddenDetail:
+    status_code, body = lifecycle.transition_purchase_order(
+        actor=current,
+        idempotency_key=key,
+        po_id=po_id,
+        to=payload.to,
+        version=payload.version,
+        reason=payload.reason,
+        oc_received_on=payload.oc_received_on,
+        oc_reference=payload.oc_reference,
+    )
+    response.status_code = status_code
+    return purchase_order_response(current, body)
 
 
 # ── 문서 흐름 ───────────────────────────────────────────────────────────────

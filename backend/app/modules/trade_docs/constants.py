@@ -144,6 +144,13 @@ INCOTERM_YEARS: tuple[int, ...] = (2010, 2020)
 DEFAULT_INCOTERM_YEAR = 2020
 
 
+class PoKind(StrEnum):
+    """구매 발주 구분(design-F F3·ADR-0057) — OEM 생산 발주는 S3-2 마일스톤 프로파일의 키다."""
+
+    PURCHASE = "PURCHASE"
+    OEM_PRODUCTION = "OEM_PRODUCTION"
+
+
 class PriceBasis(StrEnum):
     MASTER = "MASTER"  # 마스터 판가(price_at)
     MANUAL = "MANUAL"  # 사람이 입력
@@ -151,6 +158,8 @@ class PriceBasis(StrEnum):
 
 
 SALES_PRICE_BASES: tuple[str, ...] = tuple(b.value for b in PriceBasis)
+#: 구매 발주 라인의 단가 기준 — 바이어 PO 추출(BUYER_PO)은 판매 체인 전용이다(design-A A12).
+PURCHASE_PRICE_BASES: tuple[str, ...] = (PriceBasis.MASTER.value, PriceBasis.MANUAL.value)
 SKU_KINDS: tuple[str, ...] = ("SINGLE", "SET")
 
 #: QT 개정 발행으로 원본을 취소할 때의 자동 사유 문구(사람 엣지 ISSUED→CANCELLED, 행위자=발행자).

@@ -33,6 +33,7 @@ from app.modules.trade_docs.constants import (
     INCOTERM_YEARS,
     MAX_QUANTITY,
     MAX_SAFE_INTEGER,
+    PURCHASE_PRICE_BASES,
     SALES_PRICE_BASES,
     SKU_KINDS,
     BalanceAnchor,
@@ -142,6 +143,28 @@ class SalesLineMixin:
         Boolean, nullable=False, server_default=text("false"), default=False
     )
     price_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class PurchaseLineMixin:
+    """구매 발주(PO) 라인 공통 열 — 값은 전부 스냅샷이고, **금액 열 이름은 `_cost` 접미**다(로그 마스킹·금액 판정 자동 편입, design-A A12)."""
+
+    currency: Mapped[str] = mapped_column(CHAR(3), nullable=False)
+    line_no: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    @declared_attr
+    def sku_id(cls) -> Mapped[int]:
+        return mapped_column(BigInteger, ForeignKey("skus.id", ondelete="RESTRICT"), nullable=False)
+
+    sku_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    sku_name_ko: Mapped[str] = mapped_column(String(200), nullable=False)
+    sku_name_en: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    sku_kind: Mapped[str] = mapped_column(String(6), nullable=False)
+    #: 수량(EA 정수) — 자재 PO 확장(P4)은 NUMERIC 확폭으로 가산한다(ADR-0057).
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    requested_delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    unit_cost: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    line_cost: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    price_basis: Mapped[str] = mapped_column(String(10), nullable=False)
 
 
 # ── CHECK 생성기 ─────────────────────────────────────────────────────────────
@@ -276,4 +299,20 @@ def sales_line_checks() -> list[CheckConstraint]:
         CheckConstraint(
             "NOT is_free OR price_basis IN ('MANUAL', 'BUYER_PO')", name="free_not_from_master"
         ),
+    ]
+
+
+def purchase_line_checks() -> list[CheckConstraint]:
+    """구매 발주 라인 공통 CHECK — 단가 >0(무상 매입 미지원)·라인원가=수량×단가는 numeric 곱(bigint 오버플로 500 방지)."""
+    return [
+        CheckConstraint("currency = upper(currency)", name="currency_uppercase"),
+        CheckConstraint("line_no >= 1", name="line_no_positive"),
+        CheckConstraint(f"quantity BETWEEN 1 AND {MAX_QUANTITY}", name="quantity_range"),
+        CheckConstraint(f"sku_kind IN ({_in_list(SKU_KINDS)})", name="sku_kind_valid"),
+        CheckConstraint(
+            f"price_basis IN ({_in_list(PURCHASE_PRICE_BASES)})", name="price_basis_valid"
+        ),
+        CheckConstraint(f"unit_cost BETWEEN 1 AND {MAX_SAFE_INTEGER}", name="unit_cost_range"),
+        CheckConstraint(f"line_cost BETWEEN 1 AND {MAX_SAFE_INTEGER}", name="line_cost_range"),
+        CheckConstraint("quantity::numeric * unit_cost = line_cost", name="line_cost_matches"),
     ]

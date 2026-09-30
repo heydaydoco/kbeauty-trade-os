@@ -708,3 +708,149 @@ def raw_so(
                 {"s": so_id, "a": owner},
             )
     return so_id
+
+
+# ── 구매 발주서(PO, PR-8a) ────────────────────────────────────────────────────
+
+#: 원가 마스킹 테스트가 쓰는 센티널 — 다른 값과 겹치지 않는 자릿수의 원가(USD 센트 단위 정수). 어떤 채널에도 **0회**여야 한다.
+SENTINEL_UNIT_COST = 7654321
+SENTINEL_UNIT_COST_TEXT = "76543.21"
+
+
+def create_supplier(
+    *,
+    code: str | None = None,
+    types: tuple[str, ...] = ("SUPPLIER",),
+    name_en: str | None = "Synthetic Supply Co.",
+    name_ko: str = "합성 공급사",
+) -> int:
+    """공급사(SUPPLIER)·OEM 유형 거래처 — 영문명을 채워 PO 공급사 표기 스냅샷 원천을 갖춘다."""
+    partner_id = create_partner(code or unique("SUP"), name_ko=name_ko, types=types)
+    with unit_of_work() as uow:
+        partner = uow.session.get(Partner, partner_id)
+        assert partner is not None
+        partner.name_en = name_en
+    return partner_id
+
+
+def create_purchase_priced_sku(
+    code: str | None = None,
+    *,
+    amount: int = 500,
+    currency: str = "USD",
+    effective_from: date = date(2020, 1, 1),
+    status: str = "ACTIVE",
+) -> int:
+    """SKU와 발효 중인 **매입가**(PURCHASE) 1행(정수 최소단위)."""
+    return create_priced_sku(
+        code,
+        amount=amount,
+        currency=currency,
+        price_type="PURCHASE",
+        effective_from=effective_from,
+        status=status,
+    )
+
+
+PAYMENT_TT_DEFERRED_RECEIPT: dict[str, Any] = {
+    "payment_type": "TT_DEFERRED",
+    "balance_anchor": "RECEIPT_DATE",
+    "balance_days": 30,
+}
+INCOTERM_EXW_SEOUL: dict[str, Any] = {"code": "EXW", "place": "Seoul", "year": 2020}
+
+
+def po_payload(
+    supplier_partner_id: int, sku_ids: list[int] | None = None, **overrides: Any
+) -> dict[str, Any]:
+    """PO 생성·미리보기 요청 본문 — 기본은 발행 가능한 완결 본문(라인은 SKU당 수량 10, 단가 생략=마스터 매입가)."""
+    lines = overrides.pop("lines", [{"sku_id": sku, "quantity": 10} for sku in (sku_ids or [])])
+    body: dict[str, Any] = {
+        "supplier_partner_id": supplier_partner_id,
+        "currency": "USD",
+        "fx_rate": "1350.5",
+        "payment_terms": PAYMENT_TT_DEFERRED_RECEIPT,
+        "incoterm": INCOTERM_EXW_SEOUL,
+        "lines": lines,
+    }
+    body.update(overrides)
+    return body
+
+
+def create_po_via_api(
+    client: TestClient,
+    supplier_partner_id: int | None = None,
+    sku_ids: list[int] | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """API로 PO를 만든다(=발행). 공급사·SKU를 안 주면 합성 1건을 만든다. 응답 본문을 돌려준다."""
+    supplier = supplier_partner_id or create_supplier()
+    skus = sku_ids if sku_ids is not None else [create_purchase_priced_sku()]
+    response = client.post(
+        "/api/v1/purchase-orders", json=po_payload(supplier, skus, **overrides), headers=idem()
+    )
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def raw_po(
+    status: str = "ISSUED",
+    *,
+    supplier_partner_id: int | None = None,
+    doc_date: date = date(2026, 9, 1),
+    assignee_id: int | None = None,
+    with_history: bool = True,
+    oc_received_on: date | None = None,
+    oc_reference: str | None = None,
+    po_kind: str = "PURCHASE",
+    copied_from_id: int | None = None,
+) -> int:
+    """지정 상태의 PO를 SQL로 직접 넣는다(라인 없음 — 전이표·제약 시험용). 이력에 탄생 행(ISSUED) 1개를 남긴다.
+
+    OC 열은 상태가 요구하는 대로(ISSUED=NULL·공급사 확인 이후=OC 일자 채움)다. 호출자가 `oc_received_on`을 주면 그 값이 우선한다.
+    """
+    from sqlalchemy import text
+
+    from app.core.db.session import owner_engine
+
+    supplier = supplier_partner_id or create_supplier()
+    owner = assignee_id or create_user(f"{unique('rawpo')}@example.com", roles=(RoleCode.TRADE,))
+    needs_oc = status in ("SUPPLIER_CONFIRMED", "PARTIALLY_RECEIVED", "FULLY_RECEIVED", "CLOSED")
+    values: dict[str, Any] = {
+        "doc_number": f"PO-2026-{next(_counter) + 9000:04d}",
+        "doc_date": doc_date,
+        "status": status,
+        "currency": "USD",
+        "assignee_id": owner,
+        "supplier_partner_id": supplier,
+        "supplier_name": "Raw Supplier",
+        "po_kind": po_kind,
+        "copied_from_id": copied_from_id,
+        "oc_received_on": oc_received_on or (doc_date if needs_oc else None),
+        "oc_reference": oc_reference,
+        "payment_type": "TT_DEFERRED",
+        "balance_anchor": "RECEIPT_DATE",
+        "balance_days": 30,
+        "incoterm_code": "EXW",
+        "incoterm_place": "Seoul",
+        "incoterm_year": 2020,
+        "fx_rate": 1350,
+        "fx_rate_date": doc_date,
+    }
+    columns = list(values)
+    sql = (
+        f"INSERT INTO purchase_orders ({', '.join(columns)}) "
+        f"VALUES ({', '.join(':' + c for c in columns)}) RETURNING id"
+    )
+    with owner_engine.begin() as connection:
+        po_id = int(connection.execute(text(sql), values).scalar_one())
+        if with_history:
+            connection.execute(
+                text(
+                    "INSERT INTO purchase_order_status_log (purchase_order_id, from_status, to_status,"
+                    " actor_user_id, automatic) VALUES (:p, NULL, 'ISSUED', :a, false)"
+                ),
+                {"p": po_id, "a": owner},
+            )
+    return po_id

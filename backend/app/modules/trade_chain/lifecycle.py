@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func, select
@@ -33,6 +34,7 @@ from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.partners import service as partners
 from app.modules.proforma_invoices import service as proforma_invoices
+from app.modules.purchase_orders import service as purchase_orders
 from app.modules.quotations import service as quotations
 from app.modules.quotations.models import Quotation, QuotationLine
 from app.modules.sales_orders import service as sales_orders
@@ -41,6 +43,7 @@ from app.modules.trade_chain.chain_ops import converge_parent, lock_chain
 from app.modules.trade_docs.chain import live_children_numbers
 from app.modules.trade_docs.constants import REVISION_CANCEL_REASON, DocKind
 from app.modules.trade_docs.locking import lock_document
+from app.modules.trade_docs.machine import HUMAN_TRANSITIONS
 from app.modules.trade_docs.snapshot import snapshot_line_from_source
 from app.modules.trade_docs.transition import record_transition
 
@@ -50,6 +53,7 @@ TRANSITION_ENDPOINT = "POST /api/v1/quotations/{id}/transitions"
 REVISION_ENDPOINT = "POST /api/v1/quotations/{id}/revisions"
 PI_TRANSITION_ENDPOINT = "POST /api/v1/proforma-invoices/{id}/transitions"
 SO_TRANSITION_ENDPOINT = "POST /api/v1/sales-orders/{id}/transitions"
+PO_TRANSITION_ENDPOINT = "POST /api/v1/purchase-orders/{id}/transitions"
 
 
 def _lock_buyer_then_quotation(session: Any, qt_id: int, version: int) -> Quotation:
@@ -401,6 +405,69 @@ def transition_sales_order(
                 session, row, to, actor_user_id=actor.id, reason=reason, automatic=False
             )
         body = sales_orders.detail_body(session, row)
+        assert claim.record is not None
+        idempotency.complete(session, claim.record, status_code=200, body=body)
+        return 200, body
+
+
+def transition_purchase_order(
+    *,
+    actor: AuthenticatedUser,
+    idempotency_key: str,
+    po_id: int,
+    to: str,
+    version: int,
+    reason: str | None,
+    oc_received_on: date | None = None,
+    oc_reference: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """PO 사람 전이 — **공급사 확인(ISSUED→SUPPLIER_CONFIRMED, OC 일자 필수)**·**취소(사유 필수)** 두 가지뿐이다(자동 엣지 0 — 4금 ①).
+
+    잠금 순서 (0)→(6): 멱등 → PO 행(`FOR UPDATE`, version 대조 409). **거래처를 다시 검증하지 않는다** — OC·취소는 신규 약정이 아니라 기존 약정의 기록·해소다(F2).
+    OC 일자는 `doc_date ≤ oc_received_on ≤ today_kst()`, OC 부속 필드는 공급사 확인 전이에서만 받는다(취소에 싣으면 422). 상태와 OC 열은 **같은 flush**로
+    쓰인다(DB CHECK `oc_required_after_confirm` — `no_autoflush`로 중간 flush를 막는다).
+    """
+    kind = DocKind.PURCHASE_ORDER
+    with unit_of_work() as uow:
+        session = uow.session
+        claim = idempotency.claim(
+            session,
+            actor_user_id=actor.id,
+            endpoint=PO_TRANSITION_ENDPOINT,
+            key=idempotency_key,
+            request_body={
+                "po_id": po_id,
+                "to": to,
+                "version": version,
+                "reason": reason,
+                "oc_received_on": oc_received_on.isoformat() if oc_received_on else None,
+                "oc_reference": oc_reference,
+            },
+        )
+        if claim.replay is not None:
+            return claim.replay.status_code, claim.replay.body
+        row = lock_chain(session, kind, po_id, expected_version=version)[kind]
+        if to == "SUPPLIER_CONFIRMED":
+            with session.no_autoflush:
+                if (row.status, to) in HUMAN_TRANSITIONS[kind]:
+                    # 엣지가 있을 때만 OC를 검증·기록한다(엣지가 없으면 OC 검증보다 전이 409가 먼저 — record_transition이 던진다).
+                    row.oc_received_on = purchase_orders.check_oc_received_on(
+                        oc_received_on, row.doc_date
+                    )
+                    row.oc_reference = purchase_orders.clean_oc_reference(oc_reference)
+                record_transition(
+                    session, row, to, actor_user_id=actor.id, reason=reason, automatic=False
+                )
+        else:
+            if oc_received_on is not None or oc_reference is not None:
+                raise AppError(
+                    ErrorCode.VALIDATION_INVALID_FIELD,
+                    detail={"oc_received_on": "OC 일자·참조는 공급사 확인 전이에서만 입력합니다."},
+                )
+            record_transition(
+                session, row, to, actor_user_id=actor.id, reason=reason, automatic=False
+            )
+        body = purchase_orders.detail_body(session, row, include_cost=True)
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=200, body=body)
         return 200, body

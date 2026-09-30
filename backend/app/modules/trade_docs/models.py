@@ -150,9 +150,31 @@ class SalesOrderStatusLog(StatusLogColumns, PkMixin, Base):
     )
 
 
+class PurchaseOrderStatusLog(StatusLogColumns, PkMixin, Base):
+    """PO 상태 변경 이력 — 불변. 자동 전이가 없어 `automatic`은 항상 false다(PO는 사람 1클릭 — 4금 ①)."""
+
+    __tablename__ = "purchase_order_status_log"
+
+    purchase_order_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("purchase_orders.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    __table_args__ = (
+        *status_log_checks(DocKind.PURCHASE_ORDER),
+        Index(
+            "uq_purchase_order_status_log_purchase_order_id_birth",
+            "purchase_order_id",
+            unique=True,
+            postgresql_where=text("from_status IS NULL"),
+        ),
+        Index("ix_purchase_order_status_log_purchase_order_id_id", "purchase_order_id", desc("id")),
+    )
+
+
 #: 전표별 상태이력 모델 — 각 전표 PR이 자기 표를 여기 등록한다(record_birth/record_transition이 소비).
 STATUS_LOG_MODELS: dict[DocKind, type[Any]] = {
     DocKind.QUOTATION: QuotationStatusLog,
     DocKind.PROFORMA_INVOICE: ProformaInvoiceStatusLog,
     DocKind.SALES_ORDER: SalesOrderStatusLog,
+    DocKind.PURCHASE_ORDER: PurchaseOrderStatusLog,
 }
