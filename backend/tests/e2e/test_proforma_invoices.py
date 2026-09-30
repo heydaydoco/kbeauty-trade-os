@@ -305,6 +305,17 @@ def test_preview_persists_nothing_and_matches_the_created_pi(trade: TestClient) 
     assert [ln["quantity"] for ln in body["lines"]] == [ln["quantity"] for ln in created["lines"]]
 
 
+def test_preview_also_checks_the_quotation_version(trade: TestClient) -> None:
+    """미리보기도 낡은 QT version을 409로 거절한다 — 화면이 옛 잔량·조건을 보고 확인하는 일을 막는다(생성과 같은 검증)"""
+    qt = issued_quotation(trade)
+    assert trade.patch(
+        f"{QT}/{qt['id']}/meta", json={"version": qt["version"], "internal_note": "변경"}
+    ).is_success
+    response = _preview(trade, qt, create_bank_account("USD"))
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "COMMON.CONCURRENCY.VERSION_CONFLICT"
+
+
 def test_preview_runs_the_same_validations_as_create(trade: TestClient) -> None:
     """미리보기도 초안 QT(409)·잔량 초과(409)·잘못된 통화 계좌(422)를 같은 코드로 거절한다 — 통과하면 생성도 통과하는 예고"""
     draft = create_quotation_via_api(trade, create_buyer(), [create_priced_sku()])

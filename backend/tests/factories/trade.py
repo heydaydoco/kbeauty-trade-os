@@ -229,9 +229,13 @@ class FakeSuccessors:
 
 @contextmanager
 def fake_successors(
-    monkeypatch: Any, *, fk_column: str = "qt_id", table_name: str = "scratch_successors"
+    monkeypatch: Any,
+    *,
+    fk_column: str = "qt_id",
+    table_name: str = "scratch_successors",
+    parent: Any = None,
 ) -> Iterator[FakeSuccessors]:
-    """QT의 후속(PI·SO 대역) 테이블을 임시로 만들고 사슬 레지스트리에 끼운다.
+    """부모(기본 QT — PR-6a부터 PI도 가능)의 후속(SO 대역 등) 테이블을 임시로 만들고 사슬 레지스트리에 끼운다.
 
     메타데이터에 잠깐 등록했다가 반드시 빼고(다른 테스트의 alembic drift 검사 보호) 테이블을 지운다.
     """
@@ -269,7 +273,7 @@ def fake_successors(
         "CHILD_LINKS",
         (
             chain.ChildLink(
-                DocKind.QUOTATION, table_name, fk_column, confirmed_column="confirmed_at"
+                parent or DocKind.QUOTATION, table_name, fk_column, confirmed_column="confirmed_at"
             ),
         ),
     )
