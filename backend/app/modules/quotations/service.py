@@ -39,7 +39,7 @@ from app.modules.trade_docs.fx import require_known_currency, resolve_fx
 from app.modules.trade_docs.incoterms import EMPTY_INCOTERM_COLUMNS, build_incoterm
 from app.modules.trade_docs.lines import require_sellable_sku
 from app.modules.trade_docs.locking import lock_document
-from app.modules.trade_docs.machine import DEAD_STATUSES
+from app.modules.trade_docs.machine import DEAD_STATUSES, EDITABLE_STATES
 from app.modules.trade_docs.models import QuotationStatusLog
 from app.modules.trade_docs.payment_terms import (
     EMPTY_TERMS_COLUMNS,
@@ -687,21 +687,52 @@ def list_status_log(*, qt_id: int, offset: int, limit: int) -> tuple[list[dict[s
 _FREE_FIELDS = ("internal_note", "assignee_id")
 
 
+#: PATCH가 받는 CONTENT 요청 필드(FREE 제외) — 스키마 필드 집합과 같은지 테스트가 대사한다.
+CONTENT_REQUEST_FIELDS: frozenset[str] = frozenset(
+    {
+        "buyer_partner_id",
+        "dest_market_code",
+        "currency",
+        "doc_date",
+        "valid_until",
+        "fx_rate",
+        "fx_rate_date",
+        "payment_terms",
+        "incoterm",
+        "buyer_name",
+        "buyer_address",
+    }
+)
+
+
 def update_quotation(
     *, actor: AuthenticatedUser, qt_id: int, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """헤더 편집 — 초안(DRAFT)에서만 CONTENT를 고칠 수 있다. 동결 후 CONTENT가 달라지면 409 FROZEN(필드명만)."""
+    """헤더 편집 — 초안(DRAFT)에서만 CONTENT를 고칠 수 있다. 동결 후 CONTENT가 달라지면 409 FROZEN(필드명만).
+
+    동결된 전표에서는 CONTENT 필드를 **어떤 값으로든** 바꿀 수 없으므로, 그 값의 형식 검증이 먼저 실패하더라도
+    응답은 검증 오류가 아니라 FROZEN이다(바꿀 수 없는 것을 검증해 주지 않는다).
+    """
     values = {k: v for k, v in payload.items() if k != "version"}
+    content_keys = sorted(CONTENT_REQUEST_FIELDS & values.keys())
     with unit_of_work() as uow:
         session = uow.session
         row = lock_document(session, Quotation, qt_id, expected_version=payload["version"])
-        cols = _header_columns(session, values, current=row)
+        editable = row.status in EDITABLE_STATES[KIND]
+        try:
+            cols = _header_columns(session, values, current=row)
+        except AppError as exc:
+            if not editable and content_keys and exc.code == ErrorCode.VALIDATION_INVALID_FIELD:
+                editing.assert_editable(KIND, row.status, fields=content_keys)
+            raise
         changed = _content_changes(row, cols)
         if changed:
             editing.assert_editable(KIND, row.status, fields=changed)
-        if "currency" in changed and _has_live_lines(session, row.id):
+        if "currency" in changed and row.last_line_no > 0:
+            # 라인이 한 번이라도 있었으면(제외된 라인 포함) 복합 FK (qt_id, currency)가 통화 변경을 막는다.
             raise _invalid(
-                "currency", "통화를 바꾸려면 라인을 먼저 모두 삭제해 주세요(가격은 통화별입니다)."
+                "currency",
+                "이미 라인을 입력한 견적은 통화를 바꿀 수 없습니다(가격은 통화별입니다). 새 견적을 작성해 주세요.",
             )
         for name, value in cols.items():
             if getattr(row, name) != value:
@@ -725,10 +756,6 @@ def update_meta(*, actor: AuthenticatedUser, qt_id: int, payload: dict[str, Any]
         row.updated_by_id = actor.id
         session.flush()
         return detail_body(session, row)
-
-
-def _has_live_lines(session: Session, qt_id: int) -> bool:
-    return editing.count_live_lines(session, KIND, qt_id, QuotationLine) > 0
 
 
 # ── 라인 3함수 — assert_editable → 헤더 FOR UPDATE → version 대조 → 헤더 version 상승 → 합계 재계산 ──
@@ -767,11 +794,24 @@ def _duplicate_exists(
 
 
 def _finish_line_change(
-    session: Session, actor: AuthenticatedUser, header: Quotation, line: QuotationLine | None
+    session: Session,
+    actor: AuthenticatedUser,
+    header: Quotation,
+    line: QuotationLine | None,
+    *,
+    last_line_no: int | None = None,
 ) -> dict[str, Any]:
-    """라인 변경 마무리 — 합계 재계산 → 헤더 version 상승(단일 UPDATE) → 갱신된 version·합계를 응답에."""
-    session.flush()  # 라인 변경만 먼저 내보낸다(헤더는 아직 clean — 헤더 UPDATE는 한 번만 나가 version +1)
+    """라인 변경 마무리 — 합계 재계산 → 헤더 version 상승(단일 UPDATE) → 갱신된 version·합계를 응답에.
+
+    ★ 헤더를 dirty로 만드는 대입은 **라인 flush 뒤**에 몰아서 한다 — 합계 SUM 쿼리의 autoflush가 헤더 UPDATE를
+      먼저 내보내면 version이 두 번 오른다(라인 변경 1건 = 헤더 version +1이 응답 계약이다).
+    """
+    session.flush()  # 라인 변경만 먼저 내보낸다(헤더는 아직 clean)
     editing.recompute_total(session, KIND, header, QuotationLine)
+    if last_line_no is not None:
+        header.last_line_no = (
+            last_line_no  # 결번 허용·재사용 금지 — 카운터는 헤더 잠금 하에서만 오른다
+        )
     editing.bump_header_version(header)
     header.updated_by_id = actor.id
     session.flush()
@@ -809,13 +849,10 @@ def add_line(*, actor: AuthenticatedUser, qt_id: int, payload: dict[str, Any]) -
         )
         quantity = validate_quantity(raw["quantity"])
         amount = line_amount(quantity, snap.unit_price_amount)
-        line_no = (
-            header.last_line_no + 1
-        )  # 결번 허용·재사용 금지 — 카운터는 헤더 잠금 하에서만 오른다
+        line_no = header.last_line_no + 1  # 결번 허용·재사용 금지(카운터 대입은 finish에서)
         line = _new_line(header, snap, quantity, amount, line_no, actor.id)
         session.add(line)
-        header.last_line_no = line_no
-        return _finish_line_change(session, actor, header, line)
+        return _finish_line_change(session, actor, header, line, last_line_no=line_no)
 
 
 def update_line(

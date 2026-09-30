@@ -169,3 +169,113 @@ def issue_via_api(client: TestClient, qt: dict[str, Any]) -> dict[str, Any]:
     assert response.status_code == 200, response.text
     body: dict[str, Any] = response.json()
     return body
+
+
+# ── 후속 전표 대역(PI·SO가 아직 없는 PR-5a 시점의 사슬 시험용) ─────────────────────────────
+
+
+class FakeSuccessors:
+    """`CHILD_LINKS`에 등록되는 임시 후속 테이블 — 후속 생존·수주전환(QT) 시나리오를 만든다."""
+
+    def __init__(self, table_name: str, fk_column: str) -> None:
+        self.table_name = table_name
+        self.fk_column = fk_column
+
+    def add(
+        self,
+        parent_id: int,
+        *,
+        status: str = "ISSUED",
+        confirmed: bool = False,
+        number: str | None = None,
+    ) -> int:
+        from sqlalchemy import text
+
+        from app.core.db.session import owner_engine
+
+        with owner_engine.begin() as connection:
+            return int(
+                connection.execute(
+                    text(
+                        f'INSERT INTO public."{self.table_name}" (doc_number, {self.fk_column}, status,'
+                        " confirmed_at) VALUES (:n, :p, :s, CASE WHEN :c THEN now() END) RETURNING id"
+                    ),
+                    {"n": number or unique("SC"), "p": parent_id, "s": status, "c": confirmed},
+                ).scalar_one()
+            )
+
+    def set_status(self, row_id: int, status: str) -> None:
+        from sqlalchemy import text
+
+        from app.core.db.session import owner_engine
+
+        with owner_engine.begin() as connection:
+            connection.execute(
+                text(f'UPDATE public."{self.table_name}" SET status = :s WHERE id = :i'),
+                {"s": status, "i": row_id},
+            )
+
+    def confirm(self, row_id: int) -> None:
+        from sqlalchemy import text
+
+        from app.core.db.session import owner_engine
+
+        with owner_engine.begin() as connection:
+            connection.execute(
+                text(f'UPDATE public."{self.table_name}" SET confirmed_at = now() WHERE id = :i'),
+                {"i": row_id},
+            )
+
+
+@contextmanager
+def fake_successors(
+    monkeypatch: Any, *, fk_column: str = "qt_id", table_name: str = "scratch_successors"
+) -> Iterator[FakeSuccessors]:
+    """QT의 후속(PI·SO 대역) 테이블을 임시로 만들고 사슬 레지스트리에 끼운다.
+
+    메타데이터에 잠깐 등록했다가 반드시 빼고(다른 테스트의 alembic drift 검사 보호) 테이블을 지운다.
+    """
+    import sqlalchemy as sa
+
+    from app.core.db.base import Base
+    from app.core.db.session import owner_engine
+    from app.modules.trade_docs import chain
+    from app.modules.trade_docs.constants import DocKind
+
+    with owner_engine.begin() as connection:
+        connection.execute(sa.text(f'DROP TABLE IF EXISTS public."{table_name}"'))
+        connection.execute(
+            sa.text(
+                f'CREATE TABLE public."{table_name}" (id BIGSERIAL PRIMARY KEY, doc_number TEXT NOT NULL,'
+                f" {fk_column} BIGINT, status TEXT NOT NULL DEFAULT 'ISSUED',"
+                " deleted_at TIMESTAMPTZ, confirmed_at TIMESTAMPTZ)"
+            )
+        )
+        connection.execute(
+            sa.text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON public."{table_name}" TO kbos_app')
+        )
+    table = sa.Table(
+        table_name,
+        Base.metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True),
+        sa.Column("doc_number", sa.Text),
+        sa.Column(fk_column, sa.BigInteger),
+        sa.Column("status", sa.Text),
+        sa.Column("deleted_at", sa.DateTime(timezone=True)),
+        sa.Column("confirmed_at", sa.DateTime(timezone=True)),
+    )
+    monkeypatch.setattr(
+        chain,
+        "CHILD_LINKS",
+        (
+            chain.ChildLink(
+                DocKind.QUOTATION, table_name, fk_column, confirmed_column="confirmed_at"
+            ),
+        ),
+    )
+    try:
+        yield FakeSuccessors(table_name, fk_column)
+    finally:
+        Base.metadata.remove(table)
+        with owner_engine.begin() as connection:
+            connection.execute(sa.text(f'DROP TABLE IF EXISTS public."{table_name}"'))
