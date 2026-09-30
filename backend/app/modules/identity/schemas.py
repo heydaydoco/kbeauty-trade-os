@@ -59,3 +59,10 @@ class MeResponse(BaseModel):
             display_name=principal.display_name,
             roles=sorted(role.value for role in principal.roles),
         )
+
+
+class UserLookupItem(BaseModel):
+    """수임자·담당자 선택용 — 이메일·역할·상태를 싣지 않는다(표시명만)."""
+
+    id: int
+    display_name: str
