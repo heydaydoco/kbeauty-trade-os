@@ -22,9 +22,12 @@ ALLOW = "allow"
 DENY = "deny"
 
 #: 이 접두어 아래의 모든 (메서드, 경로)는 표에 있어야 한다. 소비 PR이 자기 접두어를 추가한다.
-GOVERNED_PREFIXES: tuple[str, ...] = ("/api/v1/users/lookup",)
+GOVERNED_PREFIXES: tuple[str, ...] = ("/api/v1/users/lookup", "/api/v1/policies")
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
     # F9 — 담당자·수임자 선택기(표시명만)
     ("GET", "/api/v1/users/lookup"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    # E8 — 정책 설정은 관리자 전용(조회·저장 모두). 게이트 응답이 실효값·출처를 전 역할에 읽기로 싣는다.
+    ("GET", "/api/v1/policies"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
+    ("PUT", "/api/v1/policies/{policy_key}"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
 }

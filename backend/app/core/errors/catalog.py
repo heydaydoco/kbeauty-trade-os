@@ -205,6 +205,14 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         403,
         "여신한도는 관리자만 등록·변경할 수 있습니다. 관리자에게 설정을 요청해 주세요.",
     ),
+    ErrorCode.POLICIES_POLICY_UNKNOWN_KEY: ErrorSpec(
+        404,
+        "알 수 없는 정책 항목입니다. 정책 목록을 새로 고쳐 확인해 주세요.",
+    ),
+    ErrorCode.POLICIES_POLICY_INVALID_VALUE: ErrorSpec(
+        422,
+        "정책 값이 허용 범위를 벗어났습니다. 입력 가능한 값을 확인해 다시 입력해 주세요.",
+    ),
     ErrorCode.CONCURRENCY_LOCK_BUSY: ErrorSpec(
         409,
         "같은 건을 다른 사용자가 처리 중입니다. 잠시 후 화면을 새로 고쳐 다시 시도해 주세요.",

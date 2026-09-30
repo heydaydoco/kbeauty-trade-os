@@ -110,6 +110,9 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # 낙관 잠금(version)·감사 컬럼이 맡고, 통신 요지는 오기 정정이 정상 업무다.
         "agency_contracts",
         "comm_logs",
+        # S3-1 — 정책 설정(ADR-0065). 관리자가 화면에서 값을 고치는 설정 마스터다(낙관 잠금).
+        # 변경 이력의 정본은 audit_log(IMMUTABLE)라 이 표 자체를 불변으로 두지 않는다.
+        "policy_settings",
     }
 )
 
