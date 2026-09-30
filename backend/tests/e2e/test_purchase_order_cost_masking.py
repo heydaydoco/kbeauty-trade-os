@@ -175,6 +175,35 @@ def test_a_user_without_any_role_also_gets_the_cost_hidden_shape(seeded: dict[st
         _assert_clean(body.text, where="역할 없음 상세")
 
 
+def test_the_service_layer_omits_cost_keys_before_the_schema_even_applies(
+    seeded: dict[str, Any],
+) -> None:
+    """방어 1층 — 서비스가 `include_cost=False`로 만든 dict(상세·목록·CSV 행)에는 원가 키·값이 **처음부터 없다**(만든 뒤 지우지 않는다 — ADR-0024). 라우터의 스키마 분기(2층)가 뚫려도 값이 없다"""
+    from app.modules.purchase_orders import service
+
+    po_id = seeded["pos"][1]["id"]
+    detail = service.get_purchase_order(po_id, include_cost=False)
+    items, total = service.list_purchase_orders(offset=0, limit=50, include_cost=False)
+    rows = service.export_rows(include_cost=False)
+    assert total == 2 and len(items) == 2 and len(rows) == 2
+    for label, payload in (("상세", detail), ("목록", items)):
+        assert not {k for k in _scan_keys(payload) if COST_KEY.search(k)}, label
+        assert not _scan_keys(payload) & {
+            "total_text",
+            "unit_cost_text",
+            "line_cost_text",
+            "minor_units",
+            "fx_rate",
+        }, label
+        _assert_clean(json.dumps(payload, default=str), where=f"서비스 {label}")
+    _assert_clean(json.dumps(rows, default=str), where="서비스 CSV 행")
+    assert len(rows[0]) == len(service.EXPORT_HEADER_NO_COST)
+    full = service.get_purchase_order(
+        po_id, include_cost=True
+    )  # 공회전 방지 — 같은 함수가 True면 원가가 있다
+    assert full["total_cost"] == UNIT * 9 and full["lines"][0]["unit_cost"] == UNIT
+
+
 # ── 채널 1: 정렬·필터·검색 ──────────────────────────────────────────────────────
 
 
