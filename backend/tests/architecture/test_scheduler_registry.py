@@ -52,7 +52,12 @@ _SEEDS = re.compile(r"INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 
 #: 앱 경로로만 채워야 하는 테이블 — users FK(ActorMixin)를 달아 시드하면
 #: 테스트 정리의 TRUNCATE CASCADE가 PRESERVED_TABLES를 무력화한다(함정 ⑩).
-_NEVER_SEEDED = ("scheduled_jobs", "notification_channels", "webhook_subscriptions")
+_NEVER_SEEDED = (
+    "scheduled_jobs",
+    "notification_channels",
+    "webhook_subscriptions",
+    "policy_settings",  # S3-1 — 행이 없는 것이 정상 초기 상태(미설정=fail-closed)
+)
 
 
 def test_no_migration_seeds_the_app_owned_tables() -> None:

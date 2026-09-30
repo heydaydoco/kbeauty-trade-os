@@ -56,6 +56,8 @@ class AuditAction:
     PARTNER_CREDIT_LIMIT_SET = "partners.credit_limit.set"
     #: 바이어 품번 매핑 삭제(S3-1 F12 — soft delete, 정정=삭제 후 재등록).
     ITEM_CODE_DELETED = "partners.item_code.deleted"
+    #: 정책 설정 변경(S3-1 ADR-0065) — detail에 key·전/후 값·전 출처·사유.
+    POLICY_UPDATED = "policy.update"
     PARTNER_CREDIT_LIMIT_CHANGED = "partners.credit_limit.changed"
 
 
