@@ -405,8 +405,8 @@ def test_the_dynamic_write_allowlist_entries_are_bounded_by_whitelists() -> None
     ]
     assert literals and not _dict_keys(literals[0]) & (PROTECTED | {UNKNOWN})
     # SO 편집 — `_header_columns`의 cols 키도 전부 리터럴이고 보호 열이 아니며, 요청 필드 집합도 보호 열을 싣지 않는다
-    from app.modules.sales_orders.service import CONTENT_REQUEST_FIELDS as SO_CONTENT_FIELDS
     from app.modules.sales_orders.service import _FREE_FIELDS as SO_FREE_FIELDS
+    from app.modules.sales_orders.service import CONTENT_REQUEST_FIELDS as SO_CONTENT_FIELDS
 
     assert not (set(SO_FREE_FIELDS) | SO_CONTENT_FIELDS) & PROTECTED
     so_function = next(
