@@ -196,6 +196,82 @@ describe("SO 상세 — 헤더 편집", () => {
   });
 });
 
+describe("SO 상세 — 결제조건 입력 검증", () => {
+  it.each([
+    ["잔금 일수", "abc", /잔금 일수는 정수로/],
+    ["잔금 일수", "30.5", /잔금 일수는 정수로/],
+    ["잔금 일수", "-5", /음수 잔금 일수는/],
+    ["잔금 일수", "400", /-90~365/],
+    ["선수금 비율(%)", "abc", /선수금 비율은 0.01~100/],
+    ["선수금 비율(%)", "30.123", /선수금 비율은 0.01~100/],
+    ["선수금 비율(%)", "0", /선수금 비율은 0.01~100/],
+    ["선수금 비율(%)", "101", /선수금 비율은 0.01~100/],
+  ])("%s=%s 이면 저장을 막고 안내한다", async (label, value, message) => {
+    const { calls } = open(soDetail());
+    await heading();
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("button", { name: "헤더 저장" })).toBeDisabled();
+    fireEvent.submit(screen.getByRole("form", { name: "수주 헤더 편집" }));
+    expect(sent(calls, "/v1/sales-orders/9", "PATCH")).toHaveLength(0);
+  });
+
+  it("빈 값은 의도적 null로 보내고, 정상 값(30.5%·-5일+선적예정일)은 통과한다", async () => {
+    const { calls } = open(soDetail(), [
+      ["/v1/sales-orders/9", "PATCH", () => jsonResponse((server.so = soDetail({ version: 4 })))],
+    ]);
+    await heading();
+    fireEvent.change(screen.getByLabelText("잔금 일수"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("선수금 비율(%)"), { target: { value: "30.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "헤더 저장" }));
+    await waitFor(() => expect(sent(calls, "/v1/sales-orders/9", "PATCH")).toHaveLength(1));
+    expect(sent(calls, "/v1/sales-orders/9", "PATCH")[0]?.body).toEqual({
+      version: 3,
+      payment_terms: { payment_type: "TT_ADVANCE", advance_pct: "30.5", balance_anchor: "BL_DATE", balance_days: null },
+    });
+  });
+
+  it("음수 일수는 선적예정일 기준이면 허용한다", async () => {
+    open(soDetail());
+    await heading();
+    fireEvent.change(screen.getByLabelText("잔금 기준"), { target: { value: "ETD_DATE" } });
+    fireEvent.change(screen.getByLabelText("잔금 일수"), { target: { value: "-5" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "헤더 저장" })).toBeEnabled();
+  });
+});
+
+describe("SO 상세 — 오류 표시는 한 곳", () => {
+  it("라인 수정 실패(비충돌)는 폼 안 경고 한 곳에만 뜨고 페이지 배너는 없다", async () => {
+    open(soDetail(), [
+      ["/v1/sales-orders/9/lines/41", "PATCH", () => jsonResponse({ error: { code: "X", message: "라인을 저장하지 못했습니다." } }, 422)],
+    ]);
+    await heading();
+    fireEvent.click(screen.getByRole("button", { name: "수정" }));
+    const form = screen.getByRole("form", { name: "라인 1 수정" });
+    fireEvent.change(within(form).getByLabelText("수량"), { target: { value: "2" } });
+    fireEvent.click(within(form).getByRole("button", { name: "저장" }));
+    await screen.findByText("라인을 저장하지 못했습니다.");
+    expect(screen.getAllByText("라인을 저장하지 못했습니다.")).toHaveLength(1);
+  });
+
+  it("재개 목표 불일치(409)는 영문 코드 없이 한국어 안내와 최신 불러오기를 보인다", async () => {
+    open(soDetail({ status: "ON_HOLD" }), [
+      [
+        "/v1/sales-orders/9/transitions",
+        "POST",
+        () => jsonResponse({ error: { code: "TRADE_DOCS.RESUME.TARGET_MISMATCH", message: "서버 문구", detail: { expected: "CONFIRMED" } } }, 409),
+      ],
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: "재개" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "재개" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent("보류 직전 상태가 바뀌었습니다");
+    expect(alert).not.toHaveTextContent("CONFIRMED");
+  });
+});
+
 describe("SO 상세 — 낙관 잠금", () => {
   it("저장이 409면 '다른 곳에서 수정됨' 안내와 최신 불러오기를 보이고, 불러오면 새 version으로 보낸다", async () => {
     let conflict = true;

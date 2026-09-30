@@ -114,6 +114,7 @@ function QuotationDetailView() {
     setAction(null);
     setCreatingPi(false);
     setCreatingSo(false);
+    void client.invalidateQueries({ queryKey: DOCUMENT_FLOW_QUERY_KEY });
     // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다).
     void detail.refetch().then((result) => {
       if (result.data) setBaseVersion(result.data.version);

@@ -150,6 +150,11 @@ describe("'SO 만들기' 진입 조건", () => {
     expect(await screen.findByRole("button", { name: "SO 만들기" })).toBeDisabled();
   });
 
+  it("미입금 발행 PI가 유효기간을 넘기면 비활성", async () => {
+    openPi(piDetail({ status: "ISSUED", is_lapsed: true }));
+    expect(await screen.findByRole("button", { name: "SO 만들기" })).toBeDisabled();
+  });
+
   it("입금한 PI는 유효기간이 지났어도 활성(선수금이 갇히지 않게 — 서버 규칙과 같다)", async () => {
     openPi(piDetail({ status: "PAID", is_lapsed: true }));
     expect(await screen.findByRole("button", { name: "SO 만들기" })).toBeEnabled();
@@ -158,6 +163,21 @@ describe("'SO 만들기' 진입 조건", () => {
   it("QT·PI 상세에 문서 흐름 패널이 있다", async () => {
     openQt(issuedQt());
     expect(await screen.findByRole("heading", { name: "문서 흐름" })).toBeInTheDocument();
+  });
+});
+
+describe("최신 불러오기 — 문서 흐름 재조회", () => {
+  it.each([
+    ["QT", "/v1/document-flow/QUOTATION/7"],
+    ["PI", "/v1/document-flow/PROFORMA_INVOICE/5"],
+  ])("%s 상세의 '최신 내용 불러오기'는 문서 흐름도 다시 가져온다", async (kind, path) => {
+    const { calls } = kind === "QT" ? openQt(issuedQt()) : openPi(piDetail());
+    await screen.findByRole("heading", { name: "문서 흐름" });
+    const count = () => calls.filter((c) => c.method === "GET" && c.url.endsWith(path)).length;
+    await waitFor(() => expect(count()).toBeGreaterThan(0));
+    const before = count();
+    fireEvent.click(screen.getAllByRole("button", { name: "최신 내용 불러오기" })[0]!);
+    await waitFor(() => expect(count()).toBeGreaterThan(before));
   });
 });
 
@@ -275,12 +295,14 @@ describe("QT → SO 만들기", () => {
     await waitFor(() => expect(calls.filter((c) => c.method === "GET" && c.url.endsWith("/v1/quotations/7")).length).toBeGreaterThan(before));
   });
 
-  it("창 재조회로 서버 version이 앞서가면 버튼이 잠기고, 그 전에 열린 다이얼로그는 화면 기준 version으로 보낸다", async () => {
+  it("창 재조회로 서버 version이 앞서가면 SO 만들기 버튼이 잠기고, 그 전에 열린 다이얼로그는 화면 기준 version으로 보낸다", async () => {
     const { calls } = openQt(issuedQt(), [[QT_CREATE, "POST", conflict]]);
     const dialog = await openDialog();
     server.qt = issuedQt({ version: 5 });
     window.dispatchEvent(new Event("visibilitychange"));
     await screen.findByText(/다른 곳에서 이 견적이 수정되었습니다/);
+    // 열려 있던 버튼은 잠긴다(새 다이얼로그를 옛 기준으로 열 수 없다).
+    expect(screen.getByRole("button", { name: "SO 만들기", hidden: true })).toBeDisabled();
     next(dialog);
     confirm(dialog);
     await waitFor(() => expect(callsTo(calls, QT_CREATE)).toHaveLength(1));

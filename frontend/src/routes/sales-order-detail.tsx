@@ -16,7 +16,7 @@ import { DocField, EMPTY, incotermText, paymentTermsText, show } from "../compon
 import { SearchSelect } from "../components/search-select";
 import { StatusTimeline } from "../components/status-timeline";
 import { ApiError, apiFetch } from "../lib/api";
-import { errorMessage, isVersionConflict } from "../lib/api-errors";
+import { isVersionConflict } from "../lib/api-errors";
 import { todayKst } from "../lib/datetime";
 import {
   BALANCE_ANCHOR_LABEL,
@@ -40,7 +40,7 @@ import {
   type SalesOrderLine,
   type SoLineMutation,
 } from "../lib/sales-order";
-import { occupantNotice } from "../lib/sales-order-errors";
+import { occupantNotice, soErrorMessage } from "../lib/sales-order-errors";
 import { QUANTITY_EXCEEDS_OPEN_CODE } from "../lib/proforma";
 import { hasRole, useSession } from "../lib/session";
 import type { Market } from "./markets";
@@ -167,7 +167,7 @@ function SalesOrderDetailView() {
     return (
       <section>
         <p role="alert" className="break-keep text-signal-red">
-          {notFound ? "수주를 찾을 수 없습니다." : errorMessage(detail.error, "수주를 불러오지 못했습니다.", NOUN)}
+          {notFound ? "수주를 찾을 수 없습니다." : soErrorMessage(detail.error, "수주를 불러오지 못했습니다.", NOUN)}
         </p>
         <Link to="/sales-orders" className="mt-3 inline-block text-sm underline">
           수주 목록으로
@@ -254,7 +254,7 @@ function SalesOrderDetailView() {
 
       {notice !== null && (
         <div role="alert" className="mt-4 rounded border border-signal-red p-3 text-sm text-signal-red">
-          <p className="break-keep">{errorMessage(notice, undefined, NOUN)}</p>
+          <p className="break-keep">{soErrorMessage(notice, undefined, NOUN)}</p>
           {isVersionConflict(notice) && (
             <button
               type="button"
@@ -329,7 +329,7 @@ function SalesOrderDetailView() {
             </p>
           }
           pending={transition.isPending}
-          error={transition.error ? errorMessage(transition.error, undefined, NOUN) : null}
+          error={transition.error ? soErrorMessage(transition.error, undefined, NOUN) : null}
           onReload={isVersionConflict(transition.error) ? reload : undefined}
           onCancel={() => {
             transition.reset();
@@ -348,7 +348,7 @@ function SalesOrderDetailView() {
             </p>
           }
           pending={transition.isPending}
-          error={transition.error ? errorMessage(transition.error, undefined, NOUN) : null}
+          error={transition.error ? soErrorMessage(transition.error, undefined, NOUN) : null}
           onReload={isVersionConflict(transition.error) ? reload : undefined}
           onCancel={() => {
             transition.reset();
@@ -370,7 +370,7 @@ function SalesOrderDetailView() {
             </p>
           }
           pending={transition.isPending}
-          error={transition.error ? errorMessage(transition.error, undefined, NOUN) : null}
+          error={transition.error ? soErrorMessage(transition.error, undefined, NOUN) : null}
           onReload={isVersionConflict(transition.error) ? reload : undefined}
           onCancel={() => {
             transition.reset();
@@ -458,6 +458,25 @@ const termsOf = (f: HeaderForm) =>
         balance_days: f.balance_days === "" ? null : Number(f.balance_days),
       };
 
+/** 결제조건 입력 검증 — 서버 규칙(선수금 0.01~100 소수 2자리, 잔금 일수 정수 -90~365·음수는 선적예정일 기준만)과 같은 범위. 비운 칸은 의도적 null이다. */
+export function termsError(f: Pick<HeaderForm, "payment_type" | "advance_pct" | "balance_anchor" | "balance_days">): string | null {
+  if (f.payment_type === "") return null;
+  const pct = f.advance_pct.trim();
+  if (pct !== "") {
+    if (!/^[0-9]{1,3}(\.[0-9]{1,2})?$/.test(pct) || Number(pct) < 0.01 || Number(pct) > 100) {
+      return "선수금 비율은 0.01~100 사이 숫자(소수 2자리까지)로 입력해 주세요.";
+    }
+  }
+  const days = f.balance_days.trim();
+  if (days !== "") {
+    if (!/^-?[0-9]+$/.test(days)) return "잔금 일수는 정수로 입력해 주세요(예: 30).";
+    const n = Number(days);
+    if (n < -90 || n > 365) return "잔금 일수는 -90~365 사이로 입력해 주세요.";
+    if (n < 0 && f.balance_anchor !== "ETD_DATE") return "음수 잔금 일수는 잔금 기준이 선적예정일일 때만 쓸 수 있습니다.";
+  }
+  return null;
+}
+
 const incotermOf = (f: HeaderForm) =>
   f.incoterm_code === "" ? null : { code: f.incoterm_code, place: f.incoterm_place.trim(), year: Number(f.incoterm_year) };
 
@@ -494,6 +513,7 @@ function HeaderEditor({ so, onSaved }: { so: SalesOrderDetail; onSaved: (next: S
   const changed = Object.keys(body).length > 0;
   const docDateMissing = f.doc_date === "";
   const nameMissing = f.buyer_name.trim() === "";
+  const termsProblem = termsError(f);
 
   const save = useMutation({
     mutationFn: () =>
@@ -510,7 +530,7 @@ function HeaderEditor({ so, onSaved }: { so: SalesOrderDetail; onSaved: (next: S
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (lock.current || !changed || docDateMissing || nameMissing) return;
+    if (lock.current || !changed || docDateMissing || nameMissing || termsProblem !== null) return;
     if (f.buyer_po_no.trim().length > 60) {
       setLocalError("바이어 PO번호는 60자 이하로 입력해 주세요.");
       return;
@@ -713,7 +733,7 @@ function HeaderEditor({ so, onSaved }: { so: SalesOrderDetail; onSaved: (next: S
             {localError ??
               (occupant !== null && save.error instanceof ApiError
                 ? save.error.message
-                : errorMessage(save.error, "수주를 저장하지 못했습니다.", NOUN))}
+                : soErrorMessage(save.error, "수주를 저장하지 못했습니다.", NOUN))}
           </p>
           {occupant !== null && !localError && <p className="mt-1 break-keep font-medium">{occupant.text}</p>}
           {conflict && <p className="mt-1 break-keep">위의 '최신 내용 불러오기'로 화면을 새로 고쳐 주세요.</p>}
@@ -722,7 +742,7 @@ function HeaderEditor({ so, onSaved }: { so: SalesOrderDetail; onSaved: (next: S
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <button
           type="submit"
-          disabled={save.isPending || !changed || docDateMissing || nameMissing}
+          disabled={save.isPending || !changed || docDateMissing || nameMissing || termsProblem !== null}
           className="cell-nowrap rounded bg-gray-900 px-4 py-2 text-sm text-white disabled:opacity-50"
         >
           {save.isPending ? "저장 중…" : "헤더 저장"}
@@ -731,6 +751,11 @@ function HeaderEditor({ so, onSaved }: { so: SalesOrderDetail; onSaved: (next: S
         {docDateMissing && (
           <span role="alert" className="text-sm text-signal-red">
             증빙일은 필수입니다.
+          </span>
+        )}
+        {termsProblem !== null && (
+          <span role="alert" className="text-sm text-signal-red">
+            {termsProblem}
           </span>
         )}
         {nameMissing && (
@@ -1082,9 +1107,10 @@ function LineAddForm({
       setLocalError(null);
       onDone(result);
     },
+    // 오류는 한 곳에만 — 낙관 잠금 충돌은 페이지 배너(최신 불러오기), 그 밖은 폼 안 경고.
     onError: (error) => {
-      setLocalError(error);
-      onError(error);
+      if (isVersionConflict(error)) onError(error);
+      else setLocalError(error);
     },
   });
 
@@ -1164,7 +1190,7 @@ function LineAddForm({
       </fieldset>
       {localError !== null && !isVersionConflict(localError) && (
         <p role="alert" className="mt-3 break-keep text-sm text-signal-red">
-          {errorMessage(localError, undefined, NOUN)}
+          {soErrorMessage(localError, undefined, NOUN)}
         </p>
       )}
       {quantity.trim() !== "" && !isPositiveInt(quantity) && (
@@ -1237,9 +1263,10 @@ function LineEditRow({
         body: { version: so.version, ...diff },
       }),
     onSuccess: onDone,
+    // 오류는 한 곳에만 — 낙관 잠금 충돌은 페이지 배너(최신 불러오기), 그 밖은 폼 안 경고.
     onError: (error) => {
-      setLocalError(error);
-      onError(error);
+      if (isVersionConflict(error)) onError(error);
+      else setLocalError(error);
     },
   });
 
@@ -1320,7 +1347,7 @@ function LineEditRow({
         {!changed && quantityOk && <p className="mt-2 text-xs text-gray-500">바뀐 내용이 없습니다.</p>}
         {localError !== null && !isVersionConflict(localError) && (
           <p role="alert" className="mt-2 break-keep text-sm text-signal-red">
-            {errorMessage(localError, undefined, NOUN)}
+            {soErrorMessage(localError, undefined, NOUN)}
             {openHint !== null && ` — 원천 남은 수량 ${openHint}`}
           </p>
         )}

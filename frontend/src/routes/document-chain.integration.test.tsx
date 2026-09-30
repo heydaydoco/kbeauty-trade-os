@@ -124,6 +124,10 @@ describe("DoD ① — QT → PI → SO 관통(재입력 없음)", () => {
       for (const key of ORIGIN_KEYS) expect(request?.body).not.toHaveProperty(key);
     }
     expect(createSo?.body).toEqual({ version: 2, buyer_po_no: "PO-2026-001" });
+    // 생성 요청마다 멱등 키가 있고 서로 다르다(미리보기는 키를 소비하지 않는 비저장 호출이라 제외).
+    const keys = [createPi, createSo].map((c) => c?.headers["Idempotency-Key"]);
+    for (const key of keys) expect(key).toBeTruthy();
+    expect(new Set(keys).size).toBe(2);
     // 사슬 전체에서 사용자가 넣은 값은 은행·유효기간·바이어 PO뿐이다.
     expect(Object.keys(createPi?.body ?? {}).sort()).toEqual(["bank_account_id", "doc_date", "valid_until", "version"]);
   });
