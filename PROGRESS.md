@@ -1,5 +1,9 @@
 # PROGRESS
 
+## S3-1 PR-2 (플랫폼 기반) — 구현 기록 (2026-09-30)
+- **구현**: ① `COMMON.CONCURRENCY.LOCK_BUSY`(409) — 55P03·40P01만 번역, 57014는 500 유지(ADR-0059; 실 55P03 접촉 테스트) ② 채번 연도 KST 기준(ADR-0054; 경계 테스트) ③ `core/money.parse_minor_amount`(자릿수 초과 거부) ④ `restrict_update_columns`+`COLUMN_UPDATE_ALLOWLIST`(표는 PR-9가 채움; 앱 계정 실측 테스트로 REVOKE 후 컬럼 GRANT 유효·DELETE 거부 확인) ⑤ redaction `_account_no`·`_account_number` 접미 ⑥ `identity.holders_of_role`·`list_active_user_names`·`GET /users/lookup`(무역·관리자, 표시명만) ⑦ `platform.is_feature_enabled`(행 없음=꺼짐) ⑧ 테스트: users FK 전수 분류(`USER_FK_CLASSIFICATION`)·쓰기 스키마 forbid 래칫(기존 32개 `LEGACY_FORBID_EXEMPT` 고정·단조 감소)·역할 권한 매트릭스 골격(완비성+5역할 프로브, 변이 점검 1건).
+- **계획 대비 편차(자율 확정)**: 계획 PR-2의 `no_auto_confirm` 등록 프레임·임포트 방향 스캔 골격·`tests/factories/trade.py`는 **소비 대상이 아직 없어 만들지 않았다**(빈 등록소·빈 스캔은 공회전 초록이라 조용한 누락을 만든다 — 함정 D11). 각각 첫 소비 PR(PR-5 커널·QT, PR-8 PO)에서 만든다. `users/lookup`은 통합 설계 F8/F9대로 무역·관리자 한정.
+
 ## S3-1 계획 자율 확정 (2026-09-30) — 요약과 부채·관찰 등재
 - **S3-1 계획 자율 확정(2026-09-30) — 계획 세션 산출물 반영 완료(워킹트리 — 아직 커밋·PR 안 됨).** 오너 지시(2026-09-29: 클라우드 세션 자율 진행, 결정·개입 없이 — ADR-0011 부기)에 따라 6개 묶음 설계서(A 전표 구조·B 상태/불변/채번/잔량/만료·C 승인·D 인테이크/게이트/보드·E 여신/입금/정책·F PO/역할/마스터 정합)를 통합 검토했고 **전 항목을 자율 확정**했다(사후 번복 가능 — 번복 가능성이 높은 12건은 `docs/plans/s3-1/design-integrated.md` §4.8에 되돌리기 비용과 함께 있다: ① 1인 관리자는 자기 기안을 승인할 수 없다 ② 전표=회사 공유 자산 해석 ③ 정책 미설정=BLOCK ④ L/C 닫힘 ⑤ 환율 수동 입력·`fx_rates` 미신설 ⑥ 이월 미수 미반영 ⑦ 여신한도 변경=관리자 ⑧ 수주전환=SO 확정 ⑨ PO 초안 없음 ⑩ CSV 파일 전체 원자 ⑪ override 역할 ⑫ 정정 전표 미채택).
   - **통합 결과**: 묶음 간 모순·중복 52건+누락 14건 해소(진짜 설계 충돌 4덩어리 — 승인 결속 토큰[digest 단일]·PI 게이트 의미·확정 오케스트레이션 이중 정의·QT 수주전환 시점[SO 확정]) / 신규 테이블 **24개**·기존 테이블 변경 2건(partners +2열·skus +1열) / 에러코드 신규 **56종** / 스케줄 레지스트리 **7→12행** / 마이그레이션 12건 / ADR **0051~0067**(17건)+기존 ADR 부기 10건 / **PR 분할 추천 = 수직 슬라이스 16 PR**(PR-1 문서 전용 계획 등재 → PR-2 플랫폼 기반 → … → PR-16 마감·워크스루, 직렬 병합 — 통합 설계서 §3).

@@ -114,6 +114,14 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
 )
 
 
+#: 컬럼 단위 UPDATE만 허용하는 MUTABLE 테이블 (S3-1 ADR-0060).
+#: 승인 결정은 상태·결정 컬럼만 바뀌어야 하고 금액·대상 같은 결속 컬럼은 앱 계정이
+#: UPDATE 못 하게 DB가 막는다("승인 후 불변"의 마지막 층). 값은 UPDATE를 허용할 컬럼이며
+#: `updated_at`·`version`처럼 낙관 잠금이 갱신하는 컬럼도 여기 적어야 한다.
+#: 표는 그 테이블을 만드는 세션(S3-1 PR-9)이 채운다 — 등재 없는 선점은 하지 않는다.
+COLUMN_UPDATE_ALLOWLIST: dict[str, frozenset[str]] = {}
+
+
 def classified_tables() -> frozenset[str]:
     return IMMUTABLE_TABLES | MUTABLE_TABLES
 
@@ -135,3 +143,27 @@ def revoke_mutations(op: Any, table: str) -> None:
             "분류와 실제 권한이 어긋나면 §17.5의 강제가 무의미해집니다."
         )
     op.execute(f'REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public."{table}" FROM kbos_app')
+
+
+def restrict_update_columns(op: Any, table: str, allowed_columns: frozenset[str]) -> None:
+    """마이그레이션에서 호출 — 앱 계정의 UPDATE를 **지정 컬럼만**으로 좁힌다.
+
+        restrict_update_columns(op, "approvals", COLUMN_UPDATE_ALLOWLIST["approvals"])
+
+    DELETE·TRUNCATE는 통째로 회수한다(승인·결재선 행은 지우지 않는다 — 정정은 새 행).
+    ★ 순서가 중요하다: 테이블 단위 UPDATE를 먼저 회수해야 컬럼 GRANT가 의미를 갖는다
+      (테이블 단위 권한이 남아 있으면 컬럼 제한은 조용히 무효다). GRANT/REVOKE는
+      autogenerate가 못 보므로 손으로 부르고, 실측 테스트가 권한 상태를 고정한다.
+    """
+    if not allowed_columns:
+        raise ValueError("허용 컬럼이 비어 있습니다 — 불변이면 revoke_mutations를 쓰세요.")
+    if table in IMMUTABLE_TABLES:
+        raise ValueError(f"{table!r}은 IMMUTABLE입니다. 컬럼 허용 대상이 아닙니다.")
+    if COLUMN_UPDATE_ALLOWLIST.get(table) != allowed_columns:
+        raise ValueError(
+            f"{table!r}의 허용 컬럼이 COLUMN_UPDATE_ALLOWLIST와 다릅니다. "
+            "app/core/db/table_policy.py에 먼저 등록하세요."
+        )
+    columns = ", ".join(f'"{name}"' for name in sorted(allowed_columns))
+    op.execute(f'REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public."{table}" FROM kbos_app')
+    op.execute(f'GRANT UPDATE ({columns}) ON TABLE public."{table}" TO kbos_app')

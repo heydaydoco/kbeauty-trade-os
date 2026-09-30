@@ -11,11 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
 from app.core.errors.exceptions import NotFoundError
 from app.modules.identity.service import AuthenticatedUser
-from app.modules.platform.models import ScheduledJob
+from app.modules.platform.models import FeatureFlag, ScheduledJob
 from app.modules.platform.scheduler import JOBS_BY_CODE
 
 
@@ -87,3 +88,18 @@ def set_enabled(*, actor: AuthenticatedUser, job_id: int, is_enabled: bool) -> S
         row.updated_by_id = actor.id
         session.flush()
         return _view(row)
+
+
+def is_feature_enabled(session: Session, code: str) -> bool:
+    """기능 플래그가 켜져 있는가 — **행이 없으면 꺼짐**이다(fail-closed).
+
+    플래그 행을 마이그레이션으로 시드하지 않으므로(함정 ⑩) 행 부재가 정상 초기 상태이고,
+    그때 기능이 조용히 열려 있으면 안 된다(§20 H "기능 플래그 오프 완전 비활성").
+    삭제된 행도 없는 것으로 본다.
+    """
+    enabled = session.execute(
+        select(FeatureFlag.is_enabled).where(
+            FeatureFlag.code == code, FeatureFlag.deleted_at.is_(None)
+        )
+    ).scalar_one_or_none()
+    return bool(enabled)

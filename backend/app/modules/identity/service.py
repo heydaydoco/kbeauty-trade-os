@@ -324,6 +324,49 @@ def _roles_by_user(session: Session, user_ids: list[int]) -> dict[int, set[RoleC
     return grouped
 
 
+def holders_of_role(session: Session, role: RoleCode) -> list[int]:
+    """그 역할을 가진 **활성·미삭제** 사용자 id (id 오름차순).
+
+    승인 요청의 수신자 결정처럼 "지금 실제로 일할 수 있는 사람"이 필요한 곳이 쓴다.
+    비활성 계정에 알림을 보내면 아무도 못 보는 조용한 정체가 된다(ADR-0045).
+    """
+    return list(
+        session.execute(
+            select(User.id)
+            .join(UserRole, UserRole.user_id == User.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(
+                Role.code == role.value,
+                Role.deleted_at.is_(None),
+                UserRole.deleted_at.is_(None),
+                User.deleted_at.is_(None),
+                User.is_active.is_(True),
+            )
+            .order_by(User.id)
+        ).scalars()
+    )
+
+
+def list_active_user_names(*, offset: int, limit: int) -> tuple[list[tuple[int, str]], int]:
+    """활성 사용자의 (id, 표시명) — 이메일·역할은 싣지 않는다.
+
+    비관리자가 수임자·담당자를 고를 때 쓴다. 사용자 목록 API는 관리자 전용이라
+    표시명만 따로 여는 좁은 통로다(표시명 전 역할 노출 선례: 인증 담당자명).
+    """
+    with unit_of_work() as uow:
+        session = uow.session
+        base = (User.deleted_at.is_(None), User.is_active.is_(True))
+        total = session.execute(select(func.count()).select_from(User).where(*base)).scalar_one()
+        rows = session.execute(
+            select(User.id, User.display_name)
+            .where(*base)
+            .order_by(User.display_name, User.id)
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [(row[0], row[1]) for row in rows], total
+
+
 def list_users(*, offset: int, limit: int) -> tuple[list[UserView], int]:
     """살아 있는 사용자 목록과 전체 건수. 페이지네이션은 호출부가 강제한다(§18.4)."""
     with unit_of_work() as uow:

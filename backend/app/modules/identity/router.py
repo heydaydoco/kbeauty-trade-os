@@ -21,6 +21,7 @@ from app.modules.identity.schemas import (
     LoginRequest,
     MeResponse,
     RoleAssignmentRequest,
+    UserLookupItem,
     UserSummary,
 )
 from app.modules.identity.service import SESSION_COOKIE_NAME, SESSION_LIFETIME, UserView
@@ -94,6 +95,17 @@ def _summary(view: UserView) -> UserSummary:
 def list_users(params: Annotated[PageParams, Depends()]) -> Page[UserSummary]:
     views, total = service.list_users(offset=params.offset, limit=params.limit)
     return Page.of([_summary(view) for view in views], total, params)
+
+
+@users_router.get(
+    "/lookup",
+    summary="사용자 선택 목록 — 표시명만 (무역·관리자)",
+    dependencies=[require_roles(RoleCode.TRADE)],
+)
+def lookup_users(params: Annotated[PageParams, Depends()]) -> Page[UserLookupItem]:
+    # ★ 경로 순서: "/{user_id}"보다 앞에 있어야 "lookup"이 id로 해석되지 않는다.
+    rows, total = service.list_active_user_names(offset=params.offset, limit=params.limit)
+    return Page.of([UserLookupItem(id=i, display_name=n) for i, n in rows], total, params)
 
 
 @users_router.get("/{user_id}", summary="사용자 상세 (관리자 또는 본인)")

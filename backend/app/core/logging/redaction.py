@@ -89,6 +89,10 @@ SENSITIVE_SUFFIXES: tuple[str, ...] = (
     "_dsn",
     "_cost",
     "_margin",
+    # 은행 계좌번호 — 전표 은행정보 스냅샷의 컬럼(예: beneficiary_account_no)이 이름 그대로
+    # 정확 일치하지 않아도 가려진다(S3-1 ADR-0056).
+    "_account_no",
+    "_account_number",
 )
 
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")

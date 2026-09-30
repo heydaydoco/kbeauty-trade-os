@@ -82,3 +82,17 @@ def test_one_hundred_concurrent_requests_produce_no_duplicate() -> None:
             text("SELECT last_number FROM doc_number_seq WHERE prefix = 'SO'")
         ).scalar_one()
     assert last == CONCURRENT_REQUESTS
+
+
+def test_year_follows_kst_not_utc() -> None:
+    """KST 1월 1일 00:00~09:00에 발급한 번호는 새해 번호다 (ADR-0054)"""
+    from datetime import UTC, datetime
+
+    from app.modules.numbering.service import next_document_number as issue
+
+    boundary = datetime(2026, 12, 31, 15, 30, tzinfo=UTC)  # = KST 2027-01-01 00:30
+    with unit_of_work() as uow:
+        assert issue(uow.session, "KY", at=boundary) == "KY-2027-0001"
+    just_before = datetime(2026, 12, 31, 14, 59, tzinfo=UTC)  # = KST 2026-12-31 23:59
+    with unit_of_work() as uow:
+        assert issue(uow.session, "KY", at=just_before) == "KY-2026-0001"
