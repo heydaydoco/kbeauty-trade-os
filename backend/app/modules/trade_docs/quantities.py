@@ -126,7 +126,7 @@ def open_quantity(
 def require_within_open(quantities: dict[int, OpenQuantity], requested: dict[int, int]) -> None:
     """요청 수량 ≤ 잔량 — 초과는 409(detail: 라인별 잔량, 금액 없음)."""
     exceeded = {
-        line_id: quantities[line_id].open
+        line_id: (quantities[line_id].open if line_id in quantities else 0)
         for line_id, want in requested.items()
         if line_id not in quantities or want > quantities[line_id].open
     }

@@ -871,6 +871,31 @@ def test_the_database_refuses_to_send_a_frozen_quotation_back_to_draft(trade: Te
     assert "frozen_matches_status" in str(caught.value)
 
 
+def test_handover_moves_frozen_quotations_too_without_touching_their_content(
+    trade: TestClient,
+) -> None:
+    """담당 일괄 이관은 동결(발행) 전표의 담당자도 넘긴다 — assignee_id는 FREE라 통과하고 나머지 값·상태는 불변(ADR-0015·0053)"""
+    from app.modules.handover.service import reassign_all
+    from tests.factories.trade import user_id_of
+
+    buyer = create_buyer()
+    sku = create_priced_sku(amount=700)
+    draft = create_quotation_via_api(trade, buyer, [sku])
+    frozen = issue_via_api(trade, create_quotation_via_api(trade, buyer, [sku]))
+    old_owner = frozen["assignee_id"]
+    admin_email = f"{unique('handover')}@example.com"
+    admin_id = create_user(admin_email, roles=(RoleCode.ADMIN,))
+    new_owner = create_user(f"{unique('new-owner')}@example.com", roles=(RoleCode.TRADE,))
+    result = reassign_all(from_user_id=old_owner, to_user_id=new_owner, actor_user_id=admin_id)
+    assert result.moved["quotations"] == 2
+    for qt in (draft, frozen):
+        after = trade.get(f"{QT}/{qt['id']}").json()
+        assert after["assignee_id"] == new_owner
+        assert after["status"] == qt["status"] and after["total_amount"] == qt["total_amount"]
+        assert after["lines"] == qt["lines"] and after["fx_rate"] == qt["fx_rate"]
+    assert user_id_of(admin_email) == admin_id
+
+
 # ── 조회·CSV·이력 ───────────────────────────────────────────────────────────
 
 
