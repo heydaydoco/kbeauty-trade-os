@@ -236,6 +236,7 @@ def test_blank_id_creates_a_new_sku(trader: TestClient) -> None:
         "",
         "False",
         "False",
+        "",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="snew1")
     assert staged.status_code == 201, staged.text
@@ -294,6 +295,7 @@ def test_formula_prefixed_name_survives_the_roundtrip(trader: TestClient) -> Non
         "",
         "False",
         "False",
+        "",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="sesc1")
     assert staged.status_code == 201, staged.text
@@ -383,6 +385,7 @@ def test_single_without_product_is_an_error(trader: TestClient) -> None:
         "",
         "False",
         "False",
+        "",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="snp1")
     row = _staging_rows(trader, staged.json()["id"])[0]
@@ -412,6 +415,7 @@ def test_set_with_dg_values_is_an_error(trader: TestClient) -> None:
         "",
         "False",
         "False",
+        "",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="ssd1")
     row = _staging_rows(trader, staged.json()["id"])[0]
@@ -443,6 +447,7 @@ def test_dg_classification_without_flag_is_an_error(trader: TestClient) -> None:
         "",
         "False",
         "False",
+        "",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="sdg1")
     row = _staging_rows(trader, staged.json()["id"])[0]
@@ -475,6 +480,7 @@ def test_unknown_and_non_oem_manufacturer_codes_are_errors(trader: TestClient) -
         "",
         "False",
         "False",
+        "",
     ]
     non_oem = [
         "",
@@ -497,6 +503,7 @@ def test_unknown_and_non_oem_manufacturer_codes_are_errors(trader: TestClient) -
         "",
         "False",
         "False",
+        "",
     ]
     staged = _upload(trader, _to_file([header, unknown, non_oem]), key="smf1")
     rows = _staging_rows(trader, staged.json()["id"])
@@ -567,6 +574,7 @@ def test_oem_type_removal_between_staging_and_confirm_is_rejected(
         "",
         "False",
         "False",
+        "",
     ]
     staged = _upload(trader, _to_file([header, new_row]), key="svr1")
     assert staged.json()["error_rows"] == 0

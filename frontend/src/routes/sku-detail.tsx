@@ -287,6 +287,7 @@ export function SkuDetailPage() {
           <Row label="바코드">{orEmpty(item.barcode)}</Row>
           <Row label="중량(g)">{orEmpty(item.unit_weight_g)}</Row>
           <Row label="박스입수">{orEmpty(item.box_qty)}</Row>
+          <Row label="MOQ (EA)">{orEmpty(item.moq)}</Row>
           <Row label="사용기한(개월)">{orEmpty(item.shelf_life_months)}</Row>
           <Row label="제조사">{orEmpty(item.manufacturer_name)}</Row>
         </div>

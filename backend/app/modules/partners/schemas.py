@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.partners.models import PARTNER_TYPES
 from app.modules.partners.service import ItemCodeView, PartnerView, SignatoryView
@@ -20,8 +20,13 @@ _PARTNER_TYPE_PATTERN = f"^({'|'.join(PARTNER_TYPES)})$"
 
 
 class PartnerCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     partner_code: str = Field(min_length=1, max_length=40)
     name_ko: str = Field(min_length=1, max_length=200)
+    #: 영문 상호·주소(QT·PI 서류용, 비우면 서류에서 국문명을 쓴다).
+    name_en: str | None = Field(default=None, max_length=200)
+    address_en: str | None = Field(default=None, max_length=500)
     #: 유형 1개 이상(§4.6 "다중 유형") — 빈 목록은 서비스가 422로 거른다.
     type_codes: list[str] = Field(min_length=1, max_length=len(PARTNER_TYPES))
     #: 여신한도 — 사람이 쓰는 표기(12.34). 통화와 한 쌍이며 둘 다 비우면 "관리 안 함".
@@ -39,6 +44,8 @@ class PartnerSummary(BaseModel):
     id: int
     partner_code: str
     name_ko: str
+    name_en: str | None
+    address_en: str | None
     type_codes: list[str]
     #: 정수 최소단위. 표시 변환은 통화별 자릿수(서버 제공)로만 한다.
     credit_limit_amount: int | None
@@ -54,6 +61,8 @@ class PartnerSummary(BaseModel):
             id=view.id,
             partner_code=view.partner_code,
             name_ko=view.name_ko,
+            name_en=view.name_en,
+            address_en=view.address_en,
             type_codes=list(view.type_codes),
             credit_limit_amount=view.credit_limit_amount,
             credit_limit_currency=view.credit_limit_currency,

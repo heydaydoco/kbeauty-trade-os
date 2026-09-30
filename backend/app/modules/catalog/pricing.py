@@ -279,3 +279,35 @@ def price_at(*, sku_id: int, price_type: str, currency: str, on: date | None = N
             },
         )
     return Money(row.amount, row.currency)
+
+
+def prices_at(
+    session: Session, *, sku_ids: list[int], price_type: str, currency: str, on: date | None = None
+) -> dict[int, Money]:
+    """여러 SKU의 기준일 단가를 **한 번의 쿼리**로 조회한다(N+1 금지 §18.4).
+
+    `price_at`과 같은 규칙(발효일 ≤ 기준일 중 최댓값 1행)이지만 **없는 SKU를 오류로 던지지
+    않고 결과에서 뺀다** — 호출자가 부재를 '평가 불능'(게이트)·`CATALOG.PRICE.NOT_EFFECTIVE`
+    (전표 라인 생성) 중 맥락에 맞게 다뤄야 하기 때문이다. **부재를 0으로 채우지 마라**(ADR-0017).
+    권한 검사는 하지 않는다(서버 내부 계산 — 마스킹은 응답 경계의 일).
+    """
+    reference = on or today_kst()
+    code = currency.upper()
+    minor_units(code)
+    if not sku_ids:
+        return {}
+    rows = session.execute(
+        select(SkuPrice)
+        .where(
+            SkuPrice.sku_id.in_(set(sku_ids)),
+            SkuPrice.price_type == price_type,
+            SkuPrice.currency == code,
+            SkuPrice.effective_from <= reference,
+            SkuPrice.deleted_at.is_(None),
+        )
+        .order_by(SkuPrice.sku_id, SkuPrice.effective_from.desc())
+    ).scalars()
+    found: dict[int, Money] = {}
+    for row in rows:  # sku별 첫 행 = 발효일 최댓값
+        found.setdefault(row.sku_id, Money(row.amount, row.currency))
+    return found

@@ -239,4 +239,30 @@ describe("SKU 화면", () => {
     expect(alert).toHaveTextContent("req-1");
     expect(screen.queryByText(/등록된 SKU가 없습니다/)).not.toBeInTheDocument();
   });
+
+  it("MOQ가 정수로 전송되고, 비우면 보내지 않는다", async () => {
+    const fetchMock = stubApi();
+    renderWithProviders(<SkuListPage />);
+
+    await screen.findByRole("option", { name: /수분 세럼 처방/ });
+    fireEvent.change(screen.getByLabelText("제품(처방)"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("품번"), { target: { value: "SER-002" } });
+    fireEvent.change(screen.getByLabelText("품명(국문)"), { target: { value: "세럼" } });
+    fireEvent.change(screen.getByLabelText("MOQ (EA, 선택)"), { target: { value: "500" } });
+    fireEvent.click(screen.getByRole("button", { name: "등록" }));
+
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+      const body = JSON.parse(String(post?.[1]?.body)) as Record<string, unknown>;
+      expect(body.moq).toBe(500);
+    });
+  });
+
+  it("목록에 MOQ를 보여 준다 (미정의는 빈 표시)", async () => {
+    stubApi({ skus: [{ ...SKU, moq: 300 }, { ...SKU, id: 2, sku_code: "SER-002", moq: null }] });
+    renderWithProviders(<SkuListPage />);
+
+    await screen.findByText("SER-002");
+    expect(within(screen.getByRole("table")).getByText("300")).toBeInTheDocument();
+  });
 });

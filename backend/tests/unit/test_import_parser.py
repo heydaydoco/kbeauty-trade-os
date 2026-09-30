@@ -9,7 +9,7 @@ import pytest
 from app.core.csv_export import escape_formula_cell, unescape_formula_cell
 from app.core.errors.exceptions import AppError
 from app.modules.imports import parser
-from app.modules.imports.service import MAX_UPLOAD_BYTES, _read_limited
+from app.modules.imports.service import MAX_UPLOAD_BYTES, read_limited
 
 pytestmark = pytest.mark.group_f
 
@@ -126,6 +126,6 @@ def test_the_size_limit_is_pinned_and_enforced() -> None:
     assert MAX_UPLOAD_BYTES == 20 * 1024 * 1024
     assert MAX_UPLOAD_BYTES == DOCUMENTS_LIMIT
     with pytest.raises(AppError) as caught:
-        _read_limited(io.BytesIO(b"0" * (MAX_UPLOAD_BYTES + 1)))
+        read_limited(io.BytesIO(b"0" * (MAX_UPLOAD_BYTES + 1)))
     assert caught.value.code == "IMPORTS.FILE.TOO_LARGE"
     assert caught.value.status_code == 413

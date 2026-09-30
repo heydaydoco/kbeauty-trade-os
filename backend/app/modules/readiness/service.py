@@ -51,6 +51,8 @@ from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
+from app.core.errors.codes import ErrorCode
+from app.core.errors.exceptions import AppError
 from app.core.time import today_kst
 from app.modules.catalog.models import Product, SetComponent, Sku
 from app.modules.certifications.machine import TERMINAL_STATUSES
@@ -586,3 +588,40 @@ def get_matrix(
         cache: dict[int, dict[int, list[RequirementResult]]] = {}
         rows = [_build_row(sku, facts, markets, as_of, cache) for sku in page_skus]
     return MatrixView(rows=rows, total=total, markets=markets, as_of=as_of)
+
+
+def cells_for(
+    *, sku_ids: Sequence[int], market_code: str, base_date: date | None = None
+) -> dict[int, MatrixCellView]:
+    """특정 SKU 목록 × **시장 하나**의 준비도 셀 — 주문 게이트가 쓰는 단건 진입점(S3-1).
+
+    매트릭스와 **같은 규칙·같은 함수**(`_load_facts`·`_build_row`)를 재사용한다 — 게이트가 규칙을
+    재구현하면 "목록은 도과·매트릭스는 🟡" 같은 두 정의가 생긴다. 시장 열은 그 시장 하나만 계산한다.
+
+    삭제됐거나 없는 SKU는 결과에 **없다**(호출자가 '평가 불능'으로 다룬다 — 통과로 읽지 않는다).
+    시장 코드가 없으면 422다. 읽기 전용이며 아무것도 저장하지 않는다(계산값 미저장 계약).
+    """
+    as_of = base_date or today_kst()
+    with unit_of_work() as uow:
+        session = uow.session
+        market = next((m for m in _load_markets(session) if m.code == market_code), None)
+        if market is None:
+            raise AppError(
+                ErrorCode.VALIDATION_INVALID_FIELD,
+                detail={"market_code": f"등록되지 않은 시장 코드입니다({market_code})."},
+            )
+        wanted = sorted(set(sku_ids))
+        if not wanted:
+            return {}
+        skus = list(
+            session.execute(
+                select(Sku).where(Sku.id.in_(wanted), Sku.deleted_at.is_(None)).order_by(Sku.id)
+            ).scalars()
+        )
+        facts = _load_facts(session, skus)
+        cache: dict[int, dict[int, list[RequirementResult]]] = {}
+        result: dict[int, MatrixCellView] = {}
+        for sku in skus:
+            row = _build_row(sku, facts, [market], as_of, cache)
+            result[sku.id] = row.cells[0]
+        return result

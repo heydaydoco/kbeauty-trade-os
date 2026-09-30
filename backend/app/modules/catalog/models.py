@@ -136,6 +136,8 @@ class Sku(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Ba
     unit_weight_g: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
     #: 박스입수. 원장은 EA 단일이고 BOX는 화면 환산이다(§8.2) — 그 환산 계수가 이 값이다.
     box_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: 최소주문수량(EA — 세트는 세트 단위). NULL = MOQ 미정의(§7.4 MOQ 게이트가 소비 — ADR-0056).
+    moq: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: 제조일로부터의 사용기한(개월). 화장품 표기 관행이 개월이고,
     #: P4의 로트 유통기한 계산이 이 값을 입력으로 쓴다.
     shelf_life_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -199,6 +201,7 @@ class Sku(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Ba
         # 상식 범위. NULL은 통과한다(값이 있으면 지켜야 한다는 뜻).
         positive("unit_weight_g"),
         positive("box_qty"),
+        positive("moq"),
         positive("shelf_life_months"),
         in_range("alcohol_content_pct", 0, 100),
         unique_active("skus", "sku_code"),

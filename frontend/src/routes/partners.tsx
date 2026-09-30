@@ -5,13 +5,13 @@
 //   가드는 children 평가를 못 막는다(주의 인계 ⑦, product-detail과 같은 패턴).
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
-import { apiFetch } from "../lib/api";
+import { apiDelete, apiFetch } from "../lib/api";
 import { orEmpty, partnerTypeLabel } from "../lib/labels";
 import { formatMoney, useCurrencies } from "../lib/money";
-import { usePagedList } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { hasRole, useSession } from "../lib/session";
 import { fieldMessage } from "./brands";
 
@@ -19,6 +19,8 @@ export interface Partner {
   id: number;
   partner_code: string;
   name_ko: string;
+  name_en?: string | null;
+  address_en?: string | null;
   type_codes: string[];
   credit_limit_amount: number | null;
   credit_limit_currency: string | null;
@@ -47,15 +49,32 @@ const PARTNER_TYPE_OPTIONS = [
   "CERT_AGENCY",
 ] as const;
 
+/** 바이어 품번 매핑 행 (GET /v1/partners/{id}/item-codes). */
+interface ItemCode {
+  id: number;
+  partner_id: number;
+  sku_id: number;
+  sku_code: string;
+  buyer_item_code: string;
+  note: string | null;
+}
+
+/** 여신 한도는 ADMIN만 값을 넣을 수 있다(E9) — 서버가 정본, 화면은 편의. */
+export const CREDIT_LIMIT_ADMIN_NOTICE = "여신 한도는 관리자만 설정할 수 있습니다";
+
 /** 여신 통화 선택지 — 자릿수 출처(서버 통화표)와 같은 목록을 쓴다. */
 export function PartnersPage() {
   const { me } = useSession();
   const client = useQueryClient();
   const canRegister = hasRole(me, "TRADE");
+  const isAdmin = me?.roles.includes("ADMIN") ?? false;
+  const [openId, setOpenId] = useState<number | null>(null);
 
   const [form, setForm] = useState({
     partner_code: "",
     name_ko: "",
+    name_en: "",
+    address_en: "",
     credit_limit: "",
     credit_limit_currency: "",
     dg_capable: "",
@@ -75,9 +94,14 @@ export function PartnersPage() {
           partner_code: form.partner_code,
           name_ko: form.name_ko,
           type_codes: types,
-          credit_limit: form.credit_limit === "" ? undefined : form.credit_limit,
+          name_en: form.name_en.trim() === "" ? undefined : form.name_en.trim(),
+          address_en: form.address_en.trim() === "" ? undefined : form.address_en.trim(),
+          // 비관리자는 여신 값을 아예 보내지 않는다(서버는 403 ADMIN_ONLY로 다시 막는다).
+          credit_limit: !isAdmin || form.credit_limit === "" ? undefined : form.credit_limit,
           credit_limit_currency:
-            form.credit_limit_currency === "" ? undefined : form.credit_limit_currency,
+            !isAdmin || form.credit_limit_currency === ""
+              ? undefined
+              : form.credit_limit_currency,
           // "미확인"은 보내지 않는다 — false(불가 확인)와 구분돼야 §7.7의
           // 소싱 제외가 보수적으로 선다.
           dg_capable: form.dg_capable === "" ? undefined : form.dg_capable === "true",
@@ -89,6 +113,8 @@ export function PartnersPage() {
       setForm({
         partner_code: "",
         name_ko: "",
+        name_en: "",
+        address_en: "",
         credit_limit: "",
         credit_limit_currency: "",
         dg_capable: "",
@@ -102,7 +128,16 @@ export function PartnersPage() {
 
   const message = fieldMessage(register.error);
 
-  const input = (key: "partner_code" | "name_ko" | "credit_limit" | "strengths" | "weaknesses") => ({
+  const input = (
+    key:
+      | "partner_code"
+      | "name_ko"
+      | "name_en"
+      | "address_en"
+      | "credit_limit"
+      | "strengths"
+      | "weaknesses",
+  ) => ({
     value: form[key],
     onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
       setForm((previous) => ({ ...previous, [key]: event.target.value })),
@@ -149,13 +184,27 @@ export function PartnersPage() {
               <input name="name_ko" required maxLength={200} {...input("name_ko")} />
             </label>
             <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">거래처명(영문, 선택)</span>
+              <input name="name_en" maxLength={200} {...input("name_en")} />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="cell-nowrap text-gray-600">영문주소 (선택)</span>
+              <input name="address_en" {...input("address_en")} />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
               <span className="cell-nowrap text-gray-600">여신한도 (선택)</span>
-              <input name="credit_limit" inputMode="decimal" {...input("credit_limit")} />
+              <input
+                name="credit_limit"
+                inputMode="decimal"
+                disabled={!isAdmin}
+                {...input("credit_limit")}
+              />
             </label>
             <label className="flex flex-col gap-1 text-sm">
               <span className="cell-nowrap text-gray-600">여신통화</span>
               <select
                 name="credit_limit_currency"
+                disabled={!isAdmin}
                 value={form.credit_limit_currency}
                 onChange={(event) =>
                   setForm((previous) => ({
@@ -225,6 +274,7 @@ export function PartnersPage() {
             </label>
           </div>
 
+          {!isAdmin && <p className="mt-3 text-sm text-gray-500">{CREDIT_LIMIT_ADMIN_NOTICE}</p>}
           {message && (
             <p role="alert" className="mt-3 text-sm text-signal-red">
               {message}
@@ -251,16 +301,20 @@ export function PartnersPage() {
               <tr>
                 <th className="cell-nowrap px-4 py-2">거래처코드</th>
                 <th className="px-4 py-2">거래처명</th>
+                <th className="px-4 py-2">영문명</th>
                 <th className="px-4 py-2">유형</th>
                 <th className="cell-nowrap px-4 py-2 num">여신한도</th>
                 <th className="cell-nowrap px-4 py-2 num">DG 취급</th>
+                <th className="cell-nowrap px-4 py-2">상세</th>
               </tr>
             </thead>
             <tbody>
               {list.data?.items.map((partner) => (
-                <tr key={partner.id} className="border-t border-gray-100">
+                <Fragment key={partner.id}>
+                <tr className="border-t border-gray-100">
                   <td className="cell-nowrap px-4 py-2">{partner.partner_code}</td>
                   <td className="px-4 py-2">{partner.name_ko}</td>
+                  <td className="px-4 py-2">{orEmpty(partner.name_en ?? null)}</td>
                   <td className="px-4 py-2">
                     {partner.type_codes.map((code) => partnerTypeLabel(code)).join(" · ")}
                   </td>
@@ -281,12 +335,114 @@ export function PartnersPage() {
                   <td className="cell-nowrap px-4 py-2 num">
                     {partner.dg_capable === null ? "미확인" : partner.dg_capable ? "가능" : "불가"}
                   </td>
+                  <td className="cell-nowrap px-4 py-2">
+                    <button
+                      type="button"
+                      aria-expanded={openId === partner.id}
+                      onClick={() => setOpenId(openId === partner.id ? null : partner.id)}
+                      className="text-gray-700 underline"
+                    >
+                      {openId === partner.id ? "닫기" : "상세·품번"}
+                    </button>
+                  </td>
                 </tr>
+                {openId === partner.id && (
+                  <tr className="border-t border-gray-100 bg-gray-50">
+                    <td colSpan={7} className="px-4 py-3">
+                      <PartnerDetail partner={partner} canEdit={canRegister} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
         </ListState>
       </div>
     </section>
+  );
+}
+
+/** 목록 행 아래에 펼치는 상세 — 영문명·영문주소와 바이어 품번 매핑(삭제 포함). */
+function PartnerDetail({ partner, canEdit }: { partner: Partner; canEdit: boolean }) {
+  const client = useQueryClient();
+  const key = [...PARTNERS_QUERY_KEY, partner.id, "item-codes"] as const;
+  const codes = usePagedQuery<ItemCode>(key, `/v1/partners/${partner.id}/item-codes`);
+
+  const remove = useMutation({
+    mutationFn: (itemCodeId: number) =>
+      apiDelete(`/v1/partners/${partner.id}/item-codes/${itemCodeId}`),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: key });
+    },
+  });
+  const message = fieldMessage(remove.error);
+
+  return (
+    <div className="text-sm">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
+        <dt className="cell-nowrap text-gray-600">영문명</dt>
+        <dd>{orEmpty(partner.name_en ?? null)}</dd>
+        <dt className="cell-nowrap text-gray-600">영문주소</dt>
+        <dd>{orEmpty(partner.address_en ?? null)}</dd>
+      </dl>
+
+      <h2 className="mt-3 font-semibold">품번 매핑</h2>
+      {codes.isPending ? (
+        <p className="mt-1 text-gray-500">불러오는 중…</p>
+      ) : codes.error ? (
+        <p role="alert" className="mt-1 text-signal-red">
+          {fieldMessage(codes.error) ?? "품번 매핑을 불러오지 못했습니다."}
+        </p>
+      ) : codes.data?.items.length === 0 ? (
+        <p className="mt-1 text-gray-500">등록된 품번 매핑이 없습니다.</p>
+      ) : (
+        <table className="mt-1 w-full">
+          <thead className="text-left">
+            <tr>
+              <th className="cell-nowrap py-1 pr-4">바이어 품번</th>
+              <th className="cell-nowrap py-1 pr-4">SKU 품번</th>
+              <th className="py-1 pr-4">비고</th>
+              {canEdit && <th className="cell-nowrap py-1">삭제</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {codes.data?.items.map((code) => (
+              <tr key={code.id} className="border-t border-gray-200">
+                <td className="cell-nowrap py-1 pr-4">{code.buyer_item_code}</td>
+                <td className="cell-nowrap py-1 pr-4">{code.sku_code}</td>
+                <td className="py-1 pr-4">{orEmpty(code.note)}</td>
+                {canEdit && (
+                  <td className="cell-nowrap py-1">
+                    <button
+                      type="button"
+                      disabled={remove.isPending}
+                      aria-label={`품번 ${code.buyer_item_code} 삭제`}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `바이어 품번 ${code.buyer_item_code} 매핑을 삭제할까요? 잘못 등록했다면 삭제 후 다시 등록하세요.`,
+                          )
+                        ) {
+                          remove.mutate(code.id);
+                        }
+                      }}
+                      className="text-signal-red underline disabled:opacity-50"
+                    >
+                      삭제
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {message && (
+        <p role="alert" className="mt-2 text-signal-red">
+          {message}
+        </p>
+      )}
+    </div>
   );
 }

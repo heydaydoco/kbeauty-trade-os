@@ -12,7 +12,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -92,6 +92,7 @@ class SkuView:
     barcode: str | None
     unit_weight_g: Decimal | None
     box_qty: int | None
+    moq: int | None
     shelf_life_months: int | None
     #: 제조사 = 거래처(유형 OEM — ADR-0020 승격). 이름은 표시용 조인 값이다.
     manufacturer_partner_id: int | None
@@ -186,6 +187,7 @@ def _sku_view(
         barcode=sku.barcode,
         unit_weight_g=sku.unit_weight_g,
         box_qty=sku.box_qty,
+        moq=sku.moq,
         shelf_life_months=sku.shelf_life_months,
         manufacturer_partner_id=sku.manufacturer_partner_id,
         manufacturer_name=manufacturer_name_ko,
@@ -228,6 +230,7 @@ def _serialize_sku(view: SkuView) -> dict[str, Any]:
         "barcode": view.barcode,
         "unit_weight_g": _text(view.unit_weight_g),
         "box_qty": view.box_qty,
+        "moq": view.moq,
         "shelf_life_months": view.shelf_life_months,
         "manufacturer_partner_id": view.manufacturer_partner_id,
         "manufacturer_name": view.manufacturer_name,
@@ -603,8 +606,11 @@ def _live_manufacturer(session: Session, partner_id: int) -> Any:
     """
     from app.modules.partners.models import Partner, PartnerTypeLink
 
+    # FOR SHARE — 유형 해제 임포트(FOR UPDATE)와 직렬화해 '유형 없는 제조사 참조'를 막는다(F11 ③).
     partner = session.execute(
-        select(Partner).where(Partner.id == partner_id, Partner.deleted_at.is_(None))
+        select(Partner)
+        .where(Partner.id == partner_id, Partner.deleted_at.is_(None))
+        .with_for_update(read=True)
     ).scalar_one_or_none()
     if partner is None:
         raise AppError(
@@ -676,6 +682,7 @@ def create_sku(
             barcode=payload.get("barcode"),
             unit_weight_g=_decimal(payload, "unit_weight_g", "중량"),
             box_qty=payload.get("box_qty"),
+            moq=payload.get("moq"),
             shelf_life_months=payload.get("shelf_life_months"),
             manufacturer_partner_id=manufacturer.id if manufacturer is not None else None,
             dg_flag=bool(payload.get("dg_flag")),
@@ -752,14 +759,25 @@ def _sku_select() -> Any:
     )
 
 
-def list_skus(*, offset: int, limit: int) -> tuple[list[SkuView], int]:
+def list_skus(*, offset: int, limit: int, q: str | None = None) -> tuple[list[SkuView], int]:
+    """SKU 목록. `q`는 품번·국문명·영문명 부분 검색이다(검색형 선택 — 수백 건 규모에서
+    앞 N건만 보이는 드롭다운 대신 SearchSelect가 쓴다, S3-1 F16). 와일드카드는 이스케이프한다."""
+    conditions: list[ColumnElement[bool]] = [Sku.deleted_at.is_(None)]
+    if q:
+        conditions.append(
+            or_(
+                Sku.sku_code.icontains(q, autoescape=True),
+                Sku.name_ko.icontains(q, autoescape=True),
+                Sku.name_en.icontains(q, autoescape=True),
+            )
+        )
     with unit_of_work() as uow:
         session = uow.session
         total = session.execute(
-            select(func.count()).select_from(Sku).where(Sku.deleted_at.is_(None))
+            select(func.count()).select_from(Sku).where(*conditions)
         ).scalar_one()
         rows = session.execute(
-            _sku_select().order_by(Sku.sku_code).offset(offset).limit(limit)
+            _sku_select().where(*conditions).order_by(Sku.sku_code).offset(offset).limit(limit)
         ).all()
         return [_sku_view(*row) for row in rows], total
 

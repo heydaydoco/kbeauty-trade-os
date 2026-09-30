@@ -61,6 +61,10 @@ class Partner(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin
     #: 사내 거래처 코드. 사람이 정한다(brands·materials와 같은 관례).
     partner_code: Mapped[str] = mapped_column(String(40), nullable=False)
     name_ko: Mapped[str] = mapped_column(String(200), nullable=False)
+    #: 영문 상호·주소 — QT·PI 서류의 바이어 표기 원천(§7.3·ADR-0056). 전표는 발행 시점에
+    #: 값 복사로 스냅샷하고 이 컬럼을 다시 읽지 않는다. 국가 컬럼은 두지 않는다(주소 문자열에 포함).
+    name_en: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    address_en: Mapped[str | None] = mapped_column(String(500), nullable=True)
     #: 여신한도(§4.6). 정수 최소단위+통화 쌍(ADR-0003). NULL = 여신 관리 안 함.
     credit_limit_amount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     credit_limit_currency: Mapped[str | None] = mapped_column(CHAR(3), nullable=True)

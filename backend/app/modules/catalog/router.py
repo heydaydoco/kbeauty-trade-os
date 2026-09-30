@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
@@ -68,6 +68,7 @@ SKU_CSV_HEADER = (
     "알코올함량(%)",
     "에어로졸",
     "LQ",
+    "MOQ",
     # MSDS링크 칸은 documents 승격(S1-3 PR-2)으로 빠졌다 — MSDS는 문서 목록
     # CSV(§4.7)가 담는다.
 )
@@ -191,8 +192,12 @@ def create_sku(
 
 
 @router.get("", summary="SKU 목록")
-def list_skus(current: CurrentUser, params: Annotated[PageParams, Depends()]) -> Page[SkuSummary]:
-    views, total = service.list_skus(offset=params.offset, limit=params.limit)
+def list_skus(
+    current: CurrentUser,
+    params: Annotated[PageParams, Depends()],
+    q: Annotated[str | None, Query(max_length=100)] = None,
+) -> Page[SkuSummary]:
+    views, total = service.list_skus(offset=params.offset, limit=params.limit, q=q)
     return Page.of([SkuSummary.of(view) for view in views], total, params)
 
 
@@ -225,6 +230,7 @@ def export_skus_csv(current: CurrentUser) -> StreamingResponse:
                 view.alcohol_content_pct,
                 view.is_aerosol,
                 view.is_limited_quantity,
+                view.moq,
             )
             for view in views
         ],
@@ -269,6 +275,7 @@ def export_skus_roundtrip_csv(current: CurrentUser) -> StreamingResponse:
                 view.alcohol_content_pct,
                 view.is_aerosol,
                 view.is_limited_quantity,
+                view.moq,
             )
             for view in views
         ],

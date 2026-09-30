@@ -42,6 +42,11 @@ def trader() -> Iterator[TestClient]:
 
 
 @pytest.fixture
+def admin() -> Iterator[TestClient]:
+    yield from _client("admin@example.com", RoleCode.ADMIN)
+
+
+@pytest.fixture
 def viewer() -> Iterator[TestClient]:
     yield from _client("viewer@example.com", RoleCode.VIEWER)
 
@@ -75,13 +80,18 @@ def test_partner_is_created_with_multiple_types(create: Create) -> None:
     assert body["credit_limit_currency"] is None
 
 
-def test_credit_limit_is_stored_in_minor_units(create: Create) -> None:
+def test_credit_limit_is_stored_in_minor_units(admin: TestClient) -> None:
     """USD 10,000.50 → 1000050 — 금액은 정수 최소단위다 (§2 ADR-02 / GC-G1)"""
-    response = create(
-        key="credit",
-        type_codes=["BUYER"],
-        credit_limit="10000.50",
-        credit_limit_currency="usd",
+    response = admin.post(
+        PARTNERS,
+        headers={"Idempotency-Key": "credit1"},
+        json={
+            "partner_code": "PTN-credit1",
+            "name_ko": "한국콜마",
+            "type_codes": ["BUYER"],
+            "credit_limit": "10000.50",
+            "credit_limit_currency": "usd",
+        },
     )
     assert response.status_code == 201, response.text
     body = response.json()
