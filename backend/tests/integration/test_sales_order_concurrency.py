@@ -785,11 +785,7 @@ def test_every_so_operation_takes_locks_in_the_documented_order() -> None:
     assert seen[-1] == "doc_number_seq", seen
     _assert_follows_lock_order(seen)
 
-    first = holder["pi_so"]
-    _cancel_so(
-        actor, first, unique("lo-cx")
-    )  # 취소 SO를 복제 원본으로 — 원본 SO(5)는 원천 라인(8)보다 먼저 잠긴다
-    qt_c = _issued_qt(actor)
+    qt_c = _issued_qt(actor)  # 취소 SO를 복제 원본으로 — 원본 SO(5)는 원천 라인(8)보다 먼저 잠긴다
     src = _so_from_qt(actor, qt_c, unique("lo-src"))[1]
     _cancel_so(actor, src, unique("lo-srcx"))
     qt_c = quotations.get_quotation(qt_c["id"])
