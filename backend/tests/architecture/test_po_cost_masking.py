@@ -269,6 +269,37 @@ def _log_context_leaks(tree: ast.AST) -> list[tuple[int, str]]:
     return found
 
 
+def _compose_leaks(tree: ast.AST) -> list[tuple[int, str]]:
+    """f-string 밖의 문자열 합성(`"…" % x`·`"…" + x`·`"…".format(x)`·`str(x)`/`repr(x)`)이 원가 이름이 든 식을 끼우는 지점 — (줄, 식)."""
+    found: list[tuple[int, str]] = []
+
+    def hit(node: ast.AST) -> bool:
+        return any(fragment in ast.unparse(node).lower() for fragment in COST_FRAGMENTS)
+
+    def is_text(node: ast.AST) -> bool:
+        return isinstance(node, ast.JoinedStr) or (
+            isinstance(node, ast.Constant) and isinstance(node.value, str)
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod | ast.Add):
+            if (is_text(node.left) and hit(node.right)) or (is_text(node.right) and hit(node.left)):
+                found.append((node.lineno, ast.unparse(node).lower()))
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "format" and is_text(func.value):
+                if any(hit(arg) for arg in [*node.args, *(kw.value for kw in node.keywords)]):
+                    found.append((node.lineno, ast.unparse(node).lower()))
+            elif (
+                isinstance(func, ast.Name)
+                and func.id in {"str", "repr"}
+                and node.args
+                and hit(node.args[0])
+            ):
+                found.append((node.lineno, ast.unparse(node).lower()))
+    return found
+
+
 PO_FILES = tuple(rel for rel in app_sources() if module_of(rel) == "purchase_orders")
 
 
@@ -279,6 +310,7 @@ def test_no_exception_message_or_log_carries_a_cost_expression() -> None:
         tree = app_sources()[rel]
         assert _fstring_leaks(tree) == [], (rel, _fstring_leaks(tree))
         assert _log_context_leaks(tree) == [], (rel, _log_context_leaks(tree))
+        assert _compose_leaks(tree) == [], (rel, _compose_leaks(tree))
     lifecycle = app_sources()["modules/trade_chain/lifecycle.py"]
     function = next(
         n
@@ -286,6 +318,7 @@ def test_no_exception_message_or_log_carries_a_cost_expression() -> None:
         if isinstance(n, ast.FunctionDef) and n.name == "transition_purchase_order"
     )
     assert _fstring_leaks(function) == [] and _log_context_leaks(function) == []
+    assert _compose_leaks(function) == []
 
 
 def test_the_leak_scanners_catch_a_synthetic_leak() -> None:
@@ -418,3 +451,42 @@ def test_the_hidden_scan_would_catch_a_leaky_hidden_schema() -> None:
 
     offenders = {n for n in _property_names(Leaky) if COST_NAME.search(n)}
     assert offenders == {"total_cost", "currency", "price_basis"}
+
+
+def test_the_compose_scanner_catches_non_fstring_leaks_and_is_quiet_on_clean_code() -> None:
+    """양성 표본 — `%`·`+`·`.format`·`str()`/`repr()`로 원가 이름을 문자열에 합성하는 코드를 잡고, 정상 문구(날짜·통화·SKU 코드)에는 조용하다"""
+    bad = parse_source(
+        "def f(unit_cost, line):\n"
+        "    a = '단가 %s' % unit_cost\n"
+        "    b = '단가 ' + str(line.unit_cost)\n"
+        "    c = '단가 {}'.format(line.total_cost)\n"
+        "    d = repr(unit_cost)\n"
+    )
+    assert len(_compose_leaks(bad)) >= 4
+    good = parse_source(
+        "def f(doc_date, currency, sku):\n"
+        "    a = '기준일 %s' % doc_date\n    b = '통화 ' + currency\n    c = '{} {}'.format(sku.sku_code, currency)\n    d = str(doc_date)\n"
+    )
+    assert _compose_leaks(good) == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "7654321.987",
+        "-7654321",
+        "7,65,4321",
+        "7654321e9",
+        "76543210000000000000000",
+    ],
+)
+def test_money_parse_errors_never_carry_the_input_value(raw: str) -> None:
+    """`parse_minor_amount`의 오류 메시지는 입력 값을 싣지 않는다 — PO가 `str(exc)`로 그 메시지를 422 detail에 쓰므로(원가 입력 센티널이 되돌아오지 않는다)"""
+    from app.core.money import parse_minor_amount
+
+    with pytest.raises(ValueError) as caught:
+        parse_minor_amount(raw, "USD", field="unit_cost", max_digits=16)
+    assert "7654321" not in str(caught.value)
+    assert (
+        parse_minor_amount("76543.21", "USD", field="unit_cost") == 7654321
+    )  # 양성 대조 — 정상 입력은 통과

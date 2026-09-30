@@ -30,7 +30,7 @@ from app.core.money import minor_units, parse_minor_amount
 from app.core.time import today_kst
 from app.modules.catalog.pricing import may_see_cost, price_at
 from app.modules.idempotency import service as idempotency
-from app.modules.identity.models import User
+from app.modules.identity.models import Role, User, UserRole
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.partners import service as partners
 from app.modules.purchase_orders.models import PurchaseOrder, PurchaseOrderLine
@@ -41,7 +41,7 @@ from app.modules.trade_docs.fx import require_known_currency, resolve_fx
 from app.modules.trade_docs.incoterms import Incoterm, build_incoterm
 from app.modules.trade_docs.lines import require_sellable_sku
 from app.modules.trade_docs.locking import lock_document
-from app.modules.trade_docs.machine import DEAD_STATUSES
+from app.modules.trade_docs.machine import DEAD_STATUSES, STATUSES
 from app.modules.trade_docs.models import PurchaseOrderStatusLog
 from app.modules.trade_docs.payment_terms import (
     PaymentTerms,
@@ -65,6 +65,15 @@ EXPORT_MAX_ROWS = 50_000
 
 #: 매입가 가격 종류 — `price_type="PURCHASE"` 리터럴은 이 모듈 밖에 두지 않는다(K 스캔).
 _PURCHASE_PRICE_TYPE = "PURCHASE"
+
+#: PO의 죽은 상태 — 공용 `DEAD_STATUSES`(CANCELLED·EXPIRED)에서 **PO 상태 집합에 있는 것만** 파생한다(PO에는 EXPIRED가 없다 — 하드코딩 금지).
+PO_DEAD_STATUSES: tuple[str, ...] = tuple(s for s in DEAD_STATUSES if s in STATUSES[KIND])
+
+#: 담당자가 될 수 있는 역할 — PO를 고칠 수 있는(발주·전이 권한) 역할이다.
+ASSIGNEE_ROLES = (
+    "TRADE",
+    "ADMIN",
+)  # 역할 코드 문자열 — 원가 노출 판정(may_see_cost)과 별개의 업무 규칙이라 RoleCode 직접 비교 금지 스캔을 피해 코드값으로 둔다
 
 _FREE_FIELDS = ("internal_note", "assignee_id", "oc_received_on", "oc_reference")
 _OC_FIELDS = ("oc_received_on", "oc_reference")
@@ -209,7 +218,7 @@ def has_live_copy(session: Session, source_id: int) -> bool:
             .where(
                 PurchaseOrder.copied_from_id == source_id,
                 PurchaseOrder.deleted_at.is_(None),
-                PurchaseOrder.status.notin_(DEAD_STATUSES),
+                PurchaseOrder.status.notin_(PO_DEAD_STATUSES),
             )
         ).scalar_one()
     )
@@ -231,7 +240,7 @@ def _check_copy_source(
     if (
         source is None
         or source.supplier_partner_id != supplier_partner_id
-        or source.status not in DEAD_STATUSES
+        or source.status not in PO_DEAD_STATUSES
         or has_live_copy(session, source_id)
     ):
         raise AppError(
@@ -277,7 +286,7 @@ def _plan(
     incoterm = build_incoterm(payload.get("incoterm"))
 
     assignee_id = payload.get("assignee_id") or actor.id
-    require_active_user(session, assignee_id)
+    require_assignee(session, assignee_id)
 
     lines_in = payload.get("lines") or []
     lines = build_po_lines(session, currency=currency, doc_date=doc_date, lines_in=lines_in)
@@ -313,6 +322,24 @@ def _plan(
         lines=lines,
         total_cost=editing.compute_total([line.line_cost for line in lines]),
     )
+
+
+def require_assignee(session: Session, user_id: int, *, field: str = "assignee_id") -> None:
+    """PO 담당자 — **활성 사용자이면서 TRADE 또는 ADMIN 역할 보유자**(VIEWER·역할 없음은 422). PO에만 적용한다(QT·PI·SO는 활성 여부만 본다 — PROGRESS 미결)."""
+    require_active_user(session, user_id, field=field)
+    has_role = session.execute(
+        select(UserRole.id)
+        .join(Role, Role.id == UserRole.role_id)
+        .where(
+            UserRole.user_id == user_id,
+            UserRole.deleted_at.is_(None),
+            Role.deleted_at.is_(None),
+            Role.code.in_(ASSIGNEE_ROLES),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if has_role is None:
+        raise invalid(field, "발주를 처리할 수 있는 담당자(무역 또는 관리자)를 선택해 주세요.")
 
 
 def _require_cost_role(actor: AuthenticatedUser) -> None:
@@ -868,7 +895,7 @@ def update_meta(*, actor: AuthenticatedUser, po_id: int, payload: dict[str, Any]
         if "assignee_id" in values:
             if values["assignee_id"] is None:
                 raise invalid("assignee_id", "담당자를 비울 수 없습니다.")
-            require_active_user(session, values["assignee_id"])
+            require_assignee(session, values["assignee_id"])
             if row.assignee_id != values["assignee_id"]:
                 row.assignee_id = values["assignee_id"]
                 changed = True

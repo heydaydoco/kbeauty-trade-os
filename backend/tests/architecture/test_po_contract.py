@@ -313,3 +313,14 @@ def test_the_scan_helpers_are_not_vacuous() -> None:
         )
         == []
     )
+
+
+def test_the_po_dead_status_set_is_derived_from_the_po_states() -> None:
+    """PO의 죽은 상태 집합은 공용 DEAD_STATUSES(CANCELLED·EXPIRED)에서 **PO 상태 집합에 있는 것만** 파생한다 — PO에는 EXPIRED가 없으므로 {CANCELLED}이고 PO 상태 집합의 부분집합이다(하드코딩·타 전표 값 혼입 방지)"""
+    from app.modules.purchase_orders.service import PO_DEAD_STATUSES
+    from app.modules.trade_docs.machine import DEAD_STATUSES, STATUSES
+
+    assert set(PO_DEAD_STATUSES) == {"CANCELLED"} and set(PO_DEAD_STATUSES) <= set(STATUSES[KIND])
+    assert "EXPIRED" in DEAD_STATUSES and "EXPIRED" not in STATUSES[KIND]
+    source = ast.unparse(app_sources()[PO_SERVICE])
+    assert "notin_(DEAD_STATUSES)" not in source and "status not in DEAD_STATUSES" not in source

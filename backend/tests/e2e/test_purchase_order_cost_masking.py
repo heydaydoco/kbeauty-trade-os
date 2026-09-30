@@ -204,6 +204,37 @@ def test_the_service_layer_omits_cost_keys_before_the_schema_even_applies(
     assert full["total_cost"] == UNIT * 9 and full["lines"][0]["unit_cost"] == UNIT
 
 
+def test_a_user_without_any_role_sees_no_cost_on_list_csv_and_status_log(
+    seeded: dict[str, Any],
+) -> None:
+    """역할 없는 계정도 목록·CSV·상태이력·정렬 오류에서 VIEWER와 같은 센티널 스캔을 통과한다(원가 없는 형태 — 기본값은 안전한 쪽)"""
+    from app.main import app
+    from app.modules.purchase_orders.service import EXPORT_HEADER_NO_COST
+
+    email = f"{unique('norole2')}@example.com"
+    create_user(email, roles=())
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/v1/auth/login", json={"email": email, "password": DEFAULT_PASSWORD}
+        ).is_success
+        po_id = seeded["pos"][1]["id"]
+        surfaces = [
+            client.get(PO),
+            client.get(f"{PO}/export.csv"),
+            client.get(f"{PO}/{po_id}/status-log"),
+            client.get(PO, params={"sort": "total_cost"}),
+            client.get(PO, params={"q": SENTINELS[0]}),
+        ]
+        assert [r.status_code for r in surfaces] == [200, 200, 200, 422, 200]
+        for response in surfaces:
+            _assert_clean(response.text, where=str(response.request.url))
+        assert not {k for k in _scan_keys(surfaces[0].json()) if COST_KEY.search(k)}
+        assert surfaces[1].content.decode("utf-8-sig").splitlines()[0] == ",".join(
+            EXPORT_HEADER_NO_COST
+        )
+        assert surfaces[4].json()["total"] == 0
+
+
 # ── 채널 1: 정렬·필터·검색 ──────────────────────────────────────────────────────
 
 

@@ -17,3 +17,5 @@
 **영향 세션** — S3-1 PR-8(PO)·PR-3(`require_partner_of_any_type`) / S3-2(수입선적 PO 참조·`customs_records`·OEM 마일스톤 프로파일·`po_kind` 소비) / S3-4(PO 매입가=원가 원천·마진) / S4-1(입고 문서·후반 엣지·사급 ADR에서 자재 PO 가산) / S6-2(원가 조회)·후속 PO 첨부 세션(원가 가시성 검증).
 
 **부기 (S3-1 PR-8a 구현, 자율 확정 2026-09-30 — 설계보다 좁은 쪽으로 구체화)** — ① 원가 없는 응답(`…CostHidden…`)은 설계 목록(`total_cost`·`currency`·`unit_cost`·`line_cost`·`price_basis`)에 더해 통화를 역추론할 수 있는 `minor_units`·`fx_rate`·`fx_rate_date`·`*_text` 금액 표기도 **필드 부재**로 했다(환율 값으로 통화가 드러나므로). ② 채널 5(audit)는 X-24(전표 생성·전이·편집은 audit 미기록)를 따라 **PO audit 행 자체가 0건**이다(화이트리스트 audit 문구는 "audit를 쓰는 경로가 생기면"의 제약으로 격하). ③ 채널 7의 청소 잡(`idempotency-purge`)은 PR-16이 이행한다 — 그 전까지 생성 응답(Full)의 24시간 at-rest는 수용 사실로 테스트가 스코프(생성자 행만)를 고정한다. ④ OC 열은 공급사 확인 전이에서 기록하고 메타(FREE)로는 SUPPLIER_CONFIRMED 상태에서만 고친다(DB CHECK와 같은 규칙을 422로 안내). 근거: design-integrated §1 해소 원칙 ②(더 좁고 fail-closed) / `tests/e2e/test_purchase_order_cost_masking.py`.
+
+**수용된 사실 (S3-1 PR-8a 적대 검토, 2026-09-30)** — 자유 텍스트(`internal_note`·상태이력 `reason`·`supplier_name` 오버라이드)는 원가 없는 응답(CostHidden)에도 나가므로 **원가 금액을 적지 않는다**(운영 규칙 — 서버는 자유 텍스트의 내용을 판별하지 못한다). 화면 입력란 안내 문구는 PR-8b에서 넣는다.

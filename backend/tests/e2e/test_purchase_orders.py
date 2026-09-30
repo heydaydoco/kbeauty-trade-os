@@ -650,6 +650,38 @@ def test_meta_edits_free_columns_bumps_version_and_noop_leaves_no_trace(trade: T
     )
 
 
+def test_the_assignee_must_be_an_active_trade_or_admin_user(trade: TestClient) -> None:
+    """PO 담당자는 활성이면서 TRADE 또는 ADMIN 보유자 — VIEWER·LOGISTICS·CERT·역할 없음은 생성·메타 모두 422, TRADE·ADMIN(겸직 포함)은 통과한다"""
+    supplier, sku = create_supplier(), create_purchase_priced_sku()
+    bad = [
+        create_user(f"{unique('as')}@example.com", roles=roles)
+        for roles in ((RoleCode.VIEWER,), (RoleCode.LOGISTICS,), (RoleCode.CERT,), ())
+    ]
+    for user in bad:
+        response = _create(trade, po_payload(supplier, [sku], assignee_id=user))
+        assert response.status_code == 422, response.text
+        assert "assignee_id" in response.json()["error"]["detail"]
+    assert _scalar("SELECT count(*) FROM purchase_orders") == 0
+    po = create_po_via_api(trade, supplier, [sku])
+    for user in bad:
+        denied = trade.patch(
+            f"{PO}/{po['id']}/meta", json={"version": po["version"], "assignee_id": user}
+        )
+        assert denied.status_code == 422
+    good = [
+        create_user(f"{unique('ok')}@example.com", roles=roles)
+        for roles in ((RoleCode.TRADE,), (RoleCode.ADMIN,), (RoleCode.CERT, RoleCode.TRADE))
+    ]
+    for user in good:
+        assert _create(trade, po_payload(supplier, [sku], assignee_id=user)).status_code == 201
+    assert (
+        trade.patch(
+            f"{PO}/{po['id']}/meta", json={"version": po["version"], "assignee_id": good[0]}
+        ).status_code
+        == 200
+    )
+
+
 def test_a_noop_meta_by_another_user_leaves_no_trace(trade: TestClient) -> None:
     """무변경 메타 요청은 **다른 사용자**가 보내도 version·updated_by를 건드리지 않는다(같은 사용자면 값이 같아 구분되지 않는다 — 7a 교훈)"""
     po = create_po_via_api(trade)
