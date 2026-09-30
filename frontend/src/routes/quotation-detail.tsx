@@ -7,7 +7,7 @@
 // - 발행·취소·개정은 확인 다이얼로그(위험 동작 명시) + 멱등 키(다이얼로그를 여는 순간 1개 — 더블클릭·재시도 흡수).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { SearchSelect } from "../components/search-select";
@@ -54,7 +54,13 @@ const show = (value: string | number | null | undefined) =>
 /** 빈 문자열 → null (서버는 null을 "값 지우기"로 읽는다). */
 const orNull = (value: string): string | null => (value.trim() === "" ? null : value.trim());
 
+/** 견적이 바뀌면(개정본 이동 등) 화면 상태 전체를 새로 시작한다 — 이전 견적의 기준 version·폼이 남지 않게. */
 export function QuotationDetailPage() {
+  const params = useParams();
+  return <QuotationDetailView key={params.quotationId} />;
+}
+
+function QuotationDetailView() {
   const params = useParams();
   const id = Number(params.quotationId);
   const { me } = useSession();
@@ -74,7 +80,20 @@ export function QuotationDetailPage() {
   const [action, setAction] = useState<Action | null>(null);
   const [notice, setNotice] = useState<unknown>(null);
   const [resetToken, setResetToken] = useState(0);
+  // ★ 화면이 "마지막으로 본/내가 쓴" version. 창 포커스 재조회로 서버 version이 앞서가도 쓰기는 이 값으로 보낸다 —
+  //   폼은 옛 값인데 새 version으로 저장돼 다른 사람의 수정을 덮어쓰는 일을 서버 409가 막게 한다.
+  //   null=아직 기준 없음(첫 조회 값 사용). 내 쓰기·'최신 내용 불러오기'에서만 갱신한다.
+  const [baseVersion, setBaseVersion] = useState<number | null>(null);
+  const [headerDirty, setHeaderDirty] = useState(false);
+  const submitLock = useRef(false);
   const actionKey = useRef<string>("");
+
+  /** 동기 잠금 — mutation의 isPending은 한 틱 늦게 켜져 같은 틱의 두 번째 클릭이 새어 나간다. */
+  function submit(input: { kind: Action; version: number; reason: string }) {
+    if (submitLock.current) return;
+    submitLock.current = true;
+    transition.mutate(input, { onSettled: () => (submitLock.current = false) });
+  }
 
   function openAction(next: Action) {
     actionKey.current = crypto.randomUUID();
@@ -83,12 +102,18 @@ export function QuotationDetailPage() {
 
   function reload() {
     setNotice(null);
-    setResetToken((value) => value + 1);
-    void client.invalidateQueries({ queryKey: detailKey });
+    transition.reset();
+    setAction(null);
+    // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다).
+    void detail.refetch().then((result) => {
+      if (result.data) setBaseVersion(result.data.version);
+      setResetToken((value) => value + 1);
+    });
   }
 
   function afterWrite(next: QuotationDetail) {
     client.setQueryData(detailKey, next);
+    setBaseVersion(next.version);
     void client.invalidateQueries({ queryKey: QUOTATIONS_QUERY_KEY });
     setNotice(null);
   }
@@ -126,6 +151,12 @@ export function QuotationDetailPage() {
     },
   });
 
+  const loadedVersion = detail.data?.version;
+  useEffect(() => {
+    // 첫 조회 값이 기준이다. 이후 서버 version이 앞서가도(창 포커스 재조회) 기준은 내 쓰기·불러오기로만 바뀐다.
+    if (baseVersion === null && loadedVersion !== undefined) setBaseVersion(loadedVersion);
+  }, [baseVersion, loadedVersion]);
+
   if (detail.isPending) return <p className="p-5 text-gray-500">불러오는 중…</p>;
   if (detail.error || !detail.data) {
     const notFound = detail.error instanceof ApiError && detail.error.status === 404;
@@ -144,6 +175,9 @@ export function QuotationDetailPage() {
   }
 
   const qt = detail.data;
+  const base = baseVersion ?? qt.version;
+  const stale = qt.version !== base;
+  const writeQt = { ...qt, version: base }; // 쓰기용 — 폼이 시드된 기준 version
   const frozen = qt.frozen_at !== null;
   const editable = canWrite && canEditQuotation(qt.status) && !frozen;
 
@@ -184,7 +218,9 @@ export function QuotationDetailPage() {
             <button
               type="button"
               onClick={() => openAction("issue")}
-              className="cell-nowrap rounded bg-gray-900 px-3 py-2 text-sm text-white"
+              disabled={headerDirty}
+              title={headerDirty ? "저장하지 않은 헤더 변경이 있습니다. 먼저 '헤더 저장'을 누르세요." : undefined}
+              className="cell-nowrap rounded bg-gray-900 px-3 py-2 text-sm text-white disabled:opacity-50"
             >
               발행
             </button>
@@ -210,6 +246,12 @@ export function QuotationDetailPage() {
         </div>
       </header>
 
+      {headerDirty && canIssueQuotation(qt.status) && (
+        <p role="status" className="mt-3 break-keep text-sm text-gray-600">
+          저장하지 않은 헤더 변경이 있습니다. 발행하려면 먼저 '헤더 저장'을 누르세요.
+        </p>
+      )}
+
       {notice !== null && (
         <div role="alert" className="mt-4 rounded border border-signal-red p-3 text-sm text-signal-red">
           <p className="break-keep">{errorMessage(notice)}</p>
@@ -225,28 +267,46 @@ export function QuotationDetailPage() {
         </div>
       )}
 
+      {stale && (
+        <div role="status" className="mt-4 rounded border border-gray-400 p-3 text-sm">
+          <p className="break-keep">
+            다른 곳에서 이 견적이 수정되었습니다. 아래 라인·합계는 최신이지만 편집 폼은 이전 내용입니다. 저장하면 충돌(409)로
+            거절됩니다.
+          </p>
+          <button
+            type="button"
+            onClick={reload}
+            className="cell-nowrap mt-2 rounded border border-gray-400 px-3 py-1"
+          >
+            최신 내용 불러오기
+          </button>
+        </div>
+      )}
+
       <div className="mt-6 grid gap-6">
         {editable ? (
           <HeaderEditor
             key={`${qt.id}-${resetToken}`}
-            qt={qt}
+            qt={writeQt}
             onSaved={afterWrite}
             onError={setNotice}
+            onDirty={setHeaderDirty}
           />
         ) : (
           <HeaderReadOnly qt={qt} />
         )}
 
         {canWrite && (
-          <MetaPanel key={`meta-${qt.id}-${resetToken}`} qt={qt} onSaved={afterWrite} onError={setNotice} />
+          <MetaPanel key={`meta-${qt.id}-${resetToken}`} qt={writeQt} onSaved={afterWrite} onError={setNotice} />
         )}
 
         <LinesSection
-          qt={qt}
+          qt={writeQt}
           editable={editable}
           detailKey={detailKey}
           onError={setNotice}
-          onChanged={() => {
+          onChanged={(version) => {
+            setBaseVersion(version);
             setNotice(null);
             void client.invalidateQueries({ queryKey: QUOTATIONS_QUERY_KEY });
           }}
@@ -277,11 +337,12 @@ export function QuotationDetailPage() {
           }
           pending={transition.isPending}
           error={transition.error ? errorMessage(transition.error) : null}
+          onReload={isVersionConflict(transition.error) ? reload : undefined}
           onCancel={() => {
             transition.reset();
             setAction(null);
           }}
-          onConfirm={() => transition.mutate({ kind: "issue", version: qt.version, reason: "" })}
+          onConfirm={() => submit({ kind: "issue", version: base, reason: "" })}
         />
       )}
       {action === "cancel" && (
@@ -300,11 +361,12 @@ export function QuotationDetailPage() {
           }
           pending={transition.isPending}
           error={transition.error ? errorMessage(transition.error) : null}
+          onReload={isVersionConflict(transition.error) ? reload : undefined}
           onCancel={() => {
             transition.reset();
             setAction(null);
           }}
-          onConfirm={(reason) => transition.mutate({ kind: "cancel", version: qt.version, reason })}
+          onConfirm={(reason) => submit({ kind: "cancel", version: base, reason })}
         />
       )}
       {action === "revise" && (
@@ -319,11 +381,12 @@ export function QuotationDetailPage() {
           }
           pending={transition.isPending}
           error={transition.error ? errorMessage(transition.error) : null}
+          onReload={isVersionConflict(transition.error) ? reload : undefined}
           onCancel={() => {
             transition.reset();
             setAction(null);
           }}
-          onConfirm={() => transition.mutate({ kind: "revise", version: qt.version, reason: "" })}
+          onConfirm={() => submit({ kind: "revise", version: base, reason: "" })}
         />
       )}
     </section>
@@ -390,10 +453,12 @@ function HeaderEditor({
   qt,
   onSaved,
   onError,
+  onDirty,
 }: {
   qt: QuotationDetail;
   onSaved: (next: QuotationDetail) => void;
   onError: (error: unknown) => void;
+  onDirty: (dirty: boolean) => void;
 }) {
   const currencies = useCurrencies();
   const markets = usePagedQuery<Market>(["markets", "select"], "/v1/markets?size=200");
@@ -417,6 +482,12 @@ function HeaderEditor({
     buyer_name: qt.buyer_name,
     buyer_address: qt.buyer_address ?? "",
   });
+  const initial = useRef(JSON.stringify(f));
+  const dirty = changeBuyer || JSON.stringify(f) !== initial.current;
+  useEffect(() => {
+    onDirty(dirty);
+    return () => onDirty(false);
+  }, [dirty, onDirty]);
   const set = (key: keyof typeof f) => (value: string) => setF((prev) => ({ ...prev, [key]: value }));
 
   const save = useMutation({
@@ -451,7 +522,13 @@ function HeaderEditor({
       if (changeBuyer && buyer !== null) body.buyer_partner_id = buyer.id;
       return apiFetch<QuotationDetail>(`/v1/quotations/${qt.id}`, { method: "PATCH", body });
     },
-    onSuccess: onSaved,
+    onSuccess: (next) => {
+      // 저장한 값이 새 기준이다 — 미저장(dirty) 표시를 끈다.
+      initial.current = JSON.stringify(f);
+      setChangeBuyer(false);
+      setBuyer(null);
+      onSaved(next);
+    },
     onError,
   });
 
@@ -659,11 +736,16 @@ function HeaderEditor({
       <div className="mt-4 flex items-center gap-3">
         <button
           type="submit"
-          disabled={save.isPending}
+          disabled={save.isPending || f.doc_date === ""}
           className="cell-nowrap rounded bg-gray-900 px-4 py-2 text-sm text-white disabled:opacity-50"
         >
           {save.isPending ? "저장 중…" : "헤더 저장"}
         </button>
+        {f.doc_date === "" && (
+          <span role="alert" className="text-sm text-signal-red">
+            증빙일은 필수입니다.
+          </span>
+        )}
         {save.isSuccess && <span role="status" className="text-sm text-gray-500">저장했습니다.</span>}
       </div>
     </form>
@@ -763,11 +845,20 @@ function LinesSection({
   editable: boolean;
   detailKey: readonly unknown[];
   onError: (error: unknown) => void;
-  onChanged: () => void;
+  onChanged: (version: number) => void;
 }) {
   const client = useQueryClient();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [removeTarget, setRemoveTarget] = useState<QuotationLine | null>(null);
+
+  // 편집 불가(발행·취소 등)로 바뀌면 열려 있던 라인 수정 폼·제외 다이얼로그를 닫는다 —
+  // 동결된 견적에 옛 폼으로 쓰기를 보내는 일을 화면에서 먼저 없앤다(서버는 어차피 409로 막는다).
+  useEffect(() => {
+    if (!editable) {
+      setEditingId(null);
+      setRemoveTarget(null);
+    }
+  }, [editable]);
 
   /** 라인 변경 응답의 헤더 version·합계를 즉시 반영한다 — 연속 편집이 자기 자신에게 409를 내지 않게. */
   function applyMutation(result: LineMutation) {
@@ -782,7 +873,7 @@ function LinesSection({
         : previous,
     );
     void client.invalidateQueries({ queryKey: detailKey, exact: true });
-    onChanged();
+    onChanged(result.header_version);
   }
 
   const remove = useMutation({
@@ -816,7 +907,7 @@ function LinesSection({
               <tr>
                 <th className="cell-nowrap px-3 py-2 text-center">번호</th>
                 <th className="cell-nowrap px-3 py-2">SKU</th>
-                <th className="px-3 py-2">품명</th>
+                <th className="cell-nowrap px-3 py-2">품명</th>
                 <th className="cell-nowrap px-3 py-2 text-center">수량</th>
                 <th className="cell-nowrap px-3 py-2 text-center">단가</th>
                 <th className="cell-nowrap px-3 py-2 text-center">기준</th>
@@ -826,7 +917,7 @@ function LinesSection({
             </thead>
             <tbody>
               {qt.lines.map((line) =>
-                editingId === line.id ? (
+                editable && editingId === line.id ? (
                   <LineEditRow
                     key={line.id}
                     qt={qt}
@@ -895,7 +986,7 @@ function LinesSection({
 
       {editable && <LineAddForm qt={qt} onDone={applyMutation} onError={onError} />}
 
-      {removeTarget && (
+      {editable && removeTarget && (
         <ConfirmDialog
           title="라인을 제외할까요?"
           danger

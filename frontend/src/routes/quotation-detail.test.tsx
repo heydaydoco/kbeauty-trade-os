@@ -6,7 +6,12 @@ import { AppRoutes } from "../App";
 import { LINE, LOG, detail, stubFetch } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
 
-beforeEach(() => vi.stubGlobal("crypto", { randomUUID: () => "key-1" }));
+let keySeq = 0;
+// 호출마다 다른 값 — "다이얼로그 열 때 1개·재시도는 같은 키"를 실제로 검증한다.
+beforeEach(() => {
+  keySeq = 0;
+  vi.stubGlobal("crypto", { randomUUID: () => `key-${++keySeq}` });
+});
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -175,6 +180,7 @@ describe("견적 상세 — 발행·취소·개정 다이얼로그", () => {
   it("개정본 작성은 새 초안 화면으로 이동한다", async () => {
     const { calls } = open(detail({ status: "ISSUED", frozen_at: FROZEN_AT }), [
       ["/v1/quotations/7/revisions", "POST", () => jsonResponse(detail({ id: 8, doc_number: "QT-2026-0002", copied_from_id: 7 }), 201)],
+      ["/v1/quotations/8/status-log", "GET", () => jsonResponse(page([]))],
       ["/v1/quotations/8", "GET", () => jsonResponse(detail({ id: 8, doc_number: "QT-2026-0002", copied_from_id: 7 }))],
     ]);
     fireEvent.click(await screen.findByRole("button", { name: "개정본 작성" }));
@@ -301,5 +307,117 @@ describe("견적 상세 — 낙관 잠금·편집", () => {
       const patch = calls.find((c) => c.url.endsWith("/v1/quotations/7/meta"));
       expect(patch?.body).toEqual({ version: 4, internal_note: "메모", assignee_id: 1 });
     });
+  });
+});
+
+const failIssue = () =>
+  jsonResponse({ error: { code: "TRADE_DOCS.DOCUMENT.INCOMPLETE", message: "발행에 필요한 값이 비어 있습니다." } }, 422);
+const CONFLICT_RESPONSE = () =>
+  jsonResponse({ error: { code: "COMMON.CONCURRENCY.VERSION_CONFLICT", message: "충돌" } }, 409);
+
+describe("견적 상세 — 멱등 키·더블클릭", () => {
+  it("발행 재시도는 같은 멱등 키를 쓰고, 다이얼로그를 다시 열면 새 키를 쓴다", async () => {
+    const { calls } = open(detail(), [["/v1/quotations/7/issue", "POST", failIssue]]);
+    fireEvent.click(await screen.findByRole("button", { name: "발행" }));
+    let dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "발행" }));
+    await within(dialog).findByRole("alert");
+    fireEvent.click(within(dialog).getByRole("button", { name: "발행" }));
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/issue"))).toHaveLength(2));
+    const keys = calls.filter((c) => c.url.endsWith("/issue")).map((c) => c.headers["Idempotency-Key"]);
+    expect(keys[0]).toBe(keys[1]);
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "발행" }));
+    dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "발행" }));
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/issue"))).toHaveLength(3));
+    expect(calls.filter((c) => c.url.endsWith("/issue"))[2]?.headers["Idempotency-Key"]).not.toBe(keys[0]);
+  });
+
+  it("처리 중 재클릭(더블클릭)은 요청을 한 번만 보낸다", async () => {
+    let release: (r: Response) => void = () => undefined;
+    const pending = new Promise<Response>((resolve) => (release = resolve));
+    const { calls } = open(detail(), []);
+    // 응답을 늦추는 스텁으로 교체(발행 POST만 보류).
+    const base = globalThis.fetch as unknown as (u: string, i?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", vi.fn((u: string, i?: RequestInit) => (u.endsWith("/issue") ? (calls.push({ url: u, method: "POST", body: null, headers: {} }), pending) : base(u, i))));
+    fireEvent.click(await screen.findByRole("button", { name: "발행" }));
+    const dialog = await screen.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "발행" });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/issue"))).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls.filter((c) => c.url.endsWith("/issue"))).toHaveLength(1);
+    expect(within(dialog).getByRole("button", { name: "처리 중…" })).toBeDisabled();
+    release(jsonResponse(detail({ status: "ISSUED", frozen_at: FROZEN_AT, version: 5 })));
+  });
+});
+
+describe("견적 상세 — 다이얼로그 409", () => {
+  it.each([
+    ["발행", "발행", "/v1/quotations/7/issue", "발행"],
+    ["취소", "취소 확정", "/v1/quotations/7/transitions", "취소"],
+    ["개정본 작성", "개정본 작성", "/v1/quotations/7/revisions", "개정본 작성"],
+  ])("%s 409는 다이얼로그 안에 '최신 내용 불러오기'를 두고, 누르면 재조회 후 닫힌다", async (open_, confirmName, path) => {
+    const status = open_ === "개정본 작성" ? "ISSUED" : "DRAFT";
+    const { calls } = open(detail({ status, frozen_at: status === "ISSUED" ? FROZEN_AT : null }), [
+      [path, "POST", CONFLICT_RESPONSE],
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: open_ }));
+    const dialog = await screen.findByRole("dialog");
+    if (open_ === "취소") fireEvent.change(within(dialog).getByLabelText("취소 사유 (필수)"), { target: { value: "사유" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: confirmName }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("다른 곳에서 이 견적이 먼저 수정되었습니다");
+    const before = calls.filter((c) => c.method === "GET" && c.url.endsWith("/v1/quotations/7")).length;
+    fireEvent.click(within(dialog).getByRole("button", { name: "최신 내용 불러오기" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === "GET" && c.url.endsWith("/v1/quotations/7")).length).toBeGreaterThan(before),
+    );
+  });
+});
+
+describe("견적 상세 — 창 포커스 재조회·동결 전환·미저장", () => {
+  it("창 포커스 재조회로 서버 version이 앞서가도 저장은 폼이 본 version으로 나가 409로 막힌다", async () => {
+    const { calls } = open(detail(), [["/v1/quotations/7", "PATCH", CONFLICT_RESPONSE]]);
+    await screen.findByRole("form", { name: "견적 헤더 편집" });
+    server.qt = detail({ version: 5, internal_note: "남이 고침" });
+    window.dispatchEvent(new Event("visibilitychange"));
+    expect(await screen.findByText(/다른 곳에서 이 견적이 수정되었습니다/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "헤더 저장" }));
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === "PATCH" && c.url.endsWith("/v1/quotations/7"));
+      expect(patch?.body).toMatchObject({ version: 4 }); // 5가 아니다
+    });
+  });
+
+  it("편집 중 견적이 동결되면(최신 불러오기) 라인 수정 폼이 사라진다", async () => {
+    open(detail());
+    fireEvent.click(await screen.findByRole("button", { name: "수정" }));
+    expect(screen.getByRole("form", { name: "라인 1 수정" })).toBeInTheDocument();
+    server.qt = detail({ status: "ISSUED", frozen_at: FROZEN_AT, version: 5 });
+    fireEvent.click(screen.getByRole("button", { name: "최신 내용 불러오기" }));
+    await waitFor(() => expect(screen.queryByRole("form", { name: "라인 1 수정" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "수정" })).not.toBeInTheDocument();
+  });
+
+  it("미저장 헤더 변경이 있으면 발행 버튼이 잠기고 안내가 뜬다", async () => {
+    open(detail());
+    const form = await screen.findByRole("form", { name: "견적 헤더 편집" });
+    expect(screen.getByRole("button", { name: "발행" })).toBeEnabled();
+    fireEvent.change(within(form).getByLabelText("서류상 바이어명"), { target: { value: "다른 이름" } });
+    expect(screen.getByRole("button", { name: "발행" })).toBeDisabled();
+    expect(screen.getByText(/저장하지 않은 헤더 변경이 있습니다/)).toBeInTheDocument();
+  });
+
+  it("증빙일을 비우면 저장이 막히고 필수 안내가 뜬다", async () => {
+    const { calls } = open(detail());
+    const form = await screen.findByRole("form", { name: "견적 헤더 편집" });
+    fireEvent.change(within(form).getByLabelText("증빙일"), { target: { value: "" } });
+    expect(within(form).getByRole("button", { name: "헤더 저장" })).toBeDisabled();
+    expect(within(form).getByRole("alert")).toHaveTextContent("증빙일은 필수입니다.");
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
   });
 });

@@ -4,8 +4,9 @@
 // 화면이 쓰기 버튼을 감추는 것은 편의다 — 역할·소유권은 서버가 다시 막는다(§18.1).
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
+import { useDialogBehavior } from "../components/confirm-dialog";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { SearchSelect } from "../components/search-select";
@@ -228,11 +229,20 @@ function CreateQuotationDialog({ onClose }: { onClose: () => void }) {
   const [buyer, setBuyer] = useState<Partner | null>(null);
   const [market, setMarket] = useState("");
   const [currency, setCurrency] = useState("");
+  const boxRef = useRef<HTMLFormElement | null>(null);
+  useDialogBehavior(boxRef, onClose);
+  // 멱등 키는 다이얼로그를 여는 순간 1개 — 실패 뒤 재시도(더블클릭 포함)는 같은 키, 입력이 바뀌면(=요청 본문이 달라지면) 새 키.
+  const lock = useRef(false);
+  const keyRef = useRef(crypto.randomUUID());
+  const rekey = () => {
+    keyRef.current = crypto.randomUUID();
+  };
 
   const create = useMutation({
     mutationFn: () =>
       apiFetch<QuotationDetail>("/v1/quotations", {
         method: "POST",
+        idempotencyKey: keyRef.current,
         body: {
           buyer_partner_id: buyer?.id,
           dest_market_code: market,
@@ -250,15 +260,15 @@ function CreateQuotationDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40 p-4">
       <form
+        ref={boxRef}
         role="dialog"
         aria-modal="true"
         aria-label="견적 작성"
-        onKeyDown={(event) => {
-          if (event.key === "Escape") onClose();
-        }}
         onSubmit={(event) => {
           event.preventDefault();
-          if (ready) create.mutate();
+          if (!ready || lock.current) return;
+          lock.current = true; // 동기 잠금 — isPending은 한 틱 늦게 켜진다
+          create.mutate(undefined, { onSettled: () => (lock.current = false) });
         }}
         className="w-full max-w-md rounded-lg bg-white p-5 shadow-lg"
       >
@@ -275,7 +285,10 @@ function CreateQuotationDialog({ onClose }: { onClose: () => void }) {
               params={{ type: "BUYER" }}
               queryKey={["partners"]}
               value={buyer}
-              onChange={setBuyer}
+              onChange={(next) => {
+                rekey();
+                setBuyer(next);
+              }}
               getKey={(item) => item.id}
               getLabel={(item) => `${item.name_ko} (${item.partner_code})`}
             />
@@ -284,7 +297,10 @@ function CreateQuotationDialog({ onClose }: { onClose: () => void }) {
             <span className="text-gray-600">목적지 시장</span>
             <select
               value={market}
-              onChange={(event) => setMarket(event.target.value)}
+              onChange={(event) => {
+                rekey();
+                setMarket(event.target.value);
+              }}
               className="rounded border border-gray-300 px-3 py-2"
             >
               <option value="">선택하세요</option>
@@ -299,7 +315,10 @@ function CreateQuotationDialog({ onClose }: { onClose: () => void }) {
             <span className="text-gray-600">통화</span>
             <select
               value={currency}
-              onChange={(event) => setCurrency(event.target.value)}
+              onChange={(event) => {
+                rekey();
+                setCurrency(event.target.value);
+              }}
               className="rounded border border-gray-300 px-3 py-2"
             >
               <option value="">선택하세요</option>

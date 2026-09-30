@@ -1,6 +1,6 @@
 // 견적 목록 — 렌더·필터·페이지·CSV·쓰기 버튼 노출·알림 이동 (S3-1 PR-5b).
 
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
 import { summary, stubFetch } from "../test/qt-fixtures";
@@ -28,7 +28,10 @@ describe("견적 목록", () => {
     expect(link).toHaveAttribute("href", "/quotations/7");
     expect(screen.getAllByText("125.00 USD").length).toBeGreaterThan(0);
     expect(screen.getByText("유효기간 경과")).toBeInTheDocument();
-    expect(screen.getAllByText("취소").length).toBeGreaterThan(1); // 배지+필터 옵션
+    // 취소 배지는 해당 행 안에 있다(필터 옵션의 '취소'와 구분).
+    const row = screen.getByRole("link", { name: "QT-2026-0003" }).closest("tr") as HTMLElement;
+    expect(within(row).getByText("취소")).toBeInTheDocument();
+    expect(within(screen.getByRole("link", { name: "QT-2026-0001" }).closest("tr") as HTMLElement).queryByText("취소")).toBeNull();
     expect(screen.getByText("전체 3건")).toBeInTheDocument();
   });
 
@@ -127,6 +130,40 @@ describe("견적 목록", () => {
       expect(post?.body).toEqual({ buyer_partner_id: 3, dest_market_code: "US", currency: "USD" });
       expect(post?.headers["Idempotency-Key"]).toBe("test-key");
     });
+  });
+});
+
+describe("견적 작성 멱등 키", () => {
+  it("실패 뒤 재시도는 같은 키, 입력이 바뀌면 새 키", async () => {
+    let seq = 0;
+    vi.stubGlobal("crypto", { randomUUID: () => `k-${++seq}` });
+    const { calls } = stubFetch(TRADER, [
+      ["/v1/quotations", "POST", () => jsonResponse({ error: { code: "X", message: "잠시 실패" } }, 500)],
+      ["/v1/quotations", "GET", () => jsonResponse(page(ROWS))],
+      ["/v1/markets", "GET", () => jsonResponse(page([{ id: 1, code: "US", name_ko: "미국" }]))],
+      ["/v1/system/currencies", "GET", () => jsonResponse(page([{ code: "USD", minor_units: 2 }, { code: "KRW", minor_units: 0 }]))],
+      ["/v1/partners", "GET", () => jsonResponse(page([{ id: 3, partner_code: "P-3", name_ko: "ABC 무역" }]))],
+    ]);
+    renderWithProviders(<AppRoutes />, { route: "/quotations" });
+    await screen.findByText("QT-2026-0001");
+    fireEvent.click(screen.getByRole("button", { name: "견적 작성" }));
+    await screen.findByRole("dialog", { name: "견적 작성" });
+    fireEvent.focus(screen.getByRole("combobox", { name: "바이어" }));
+    fireEvent.click(await screen.findByRole("option", { name: "ABC 무역 (P-3)" }));
+    fireEvent.change(await screen.findByLabelText("목적지 시장"), { target: { value: "US" } });
+    await screen.findByRole("option", { name: "USD" });
+    fireEvent.change(screen.getByLabelText("통화"), { target: { value: "USD" } });
+    const submit = screen.getByRole("button", { name: "초안 만들기" });
+    const posts = () => calls.filter((c) => c.method === "POST");
+    fireEvent.click(submit);
+    await screen.findByText("잠시 실패");
+    fireEvent.click(submit);
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    expect(posts()[1]?.headers["Idempotency-Key"]).toBe(posts()[0]?.headers["Idempotency-Key"]);
+    fireEvent.change(screen.getByLabelText("통화"), { target: { value: "KRW" } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(posts()).toHaveLength(3));
+    expect(posts()[2]?.headers["Idempotency-Key"]).not.toBe(posts()[0]?.headers["Idempotency-Key"]);
   });
 });
 
