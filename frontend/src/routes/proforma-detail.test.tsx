@@ -171,6 +171,29 @@ describe("PI 상세 — 취소 다이얼로그", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("재시도 사이에 사유가 바뀌면 새 키, 같은 사유면 같은 키", async () => {
+    const { calls } = open(piDetail(), [
+      ["/v1/proforma-invoices/5/transitions", "POST", () => jsonResponse({ error: { code: "X", message: "실패" } }, 500)],
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: "취소" }));
+    const dialog = await screen.findByRole("dialog");
+    const reason = within(dialog).getByLabelText("취소 사유 (필수)");
+    const send = async (n: number) => {
+      fireEvent.click(within(dialog).getByRole("button", { name: "취소 확정" }));
+      await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/transitions"))).toHaveLength(n));
+      await within(dialog).findByRole("alert");
+      await waitFor(() => expect(within(dialog).getByRole("button", { name: "취소 확정" })).toBeEnabled());
+    };
+    fireEvent.change(reason, { target: { value: "사유 A" } });
+    await send(1);
+    await send(2); // 같은 사유 재시도
+    fireEvent.change(reason, { target: { value: "사유 B" } });
+    await send(3);
+    const keys = calls.filter((c) => c.url.endsWith("/transitions")).map((c) => c.headers["Idempotency-Key"]);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
   it("다이얼로그를 닫았다 다시 열면 새 멱등 키를 쓴다", async () => {
     const { calls } = open(piDetail(), [
       ["/v1/proforma-invoices/5/transitions", "POST", () => jsonResponse({ error: { code: "X", message: "실패" } }, 500)],
@@ -242,6 +265,7 @@ describe("PI 상세 — meta(FREE 열)·낙관 잠금", () => {
   it("meta 저장 409는 안내와 '최신 내용 불러오기'를 보인다", async () => {
     open(piDetail(), [["/v1/proforma-invoices/5/meta", "PATCH", CONFLICT]]);
     const form = await screen.findByRole("form", { name: "내부 메모·담당자" });
+    fireEvent.change(within(form).getByLabelText("내부 메모"), { target: { value: "변경" } });
     fireEvent.click(within(form).getByRole("button", { name: "메모·담당자 저장" }));
     const banner = await screen.findByRole("alert");
     expect(banner).toHaveTextContent("다른 곳에서 이 PI 정보가 먼저 수정되었습니다");
@@ -254,10 +278,40 @@ describe("PI 상세 — meta(FREE 열)·낙관 잠금", () => {
     server.pi = piDetail({ version: 3, internal_note: "남이 고침" });
     window.dispatchEvent(new Event("visibilitychange"));
     expect(await screen.findByText(/다른 곳에서 이 PI가 수정되었습니다/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("내부 메모"), { target: { value: "내 메모" } });
     fireEvent.click(screen.getByRole("button", { name: "메모·담당자 저장" }));
     await waitFor(() => {
       const patch = calls.find((c) => c.method === "PATCH");
       expect(patch?.body).toMatchObject({ version: 2 }); // 3이 아니다
+    });
+  });
+
+  it("바뀐 게 없으면 저장 버튼이 비활성이고 전송하지 않는다", async () => {
+    const { calls } = open(piDetail());
+    const form = await screen.findByRole("form", { name: "내부 메모·담당자" });
+    const save = within(form).getByRole("button", { name: "메모·담당자 저장" });
+    expect(save).toBeDisabled();
+    fireEvent.submit(form);
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    fireEvent.change(within(form).getByLabelText("내부 메모"), { target: { value: "x" } });
+    expect(save).toBeEnabled();
+    fireEvent.change(within(form).getByLabelText("내부 메모"), { target: { value: "" } });
+    expect(save).toBeDisabled();
+  });
+
+  it("창 포커스 재조회로 서버 version이 앞서면 취소도 화면 기준 version을 싣는다", async () => {
+    const { calls } = open(piDetail(), [["/v1/proforma-invoices/5/transitions", "POST", CONFLICT]]);
+    await screen.findByRole("button", { name: "취소" });
+    server.pi = piDetail({ version: 3 });
+    window.dispatchEvent(new Event("visibilitychange"));
+    await screen.findByText(/다른 곳에서 이 PI가 수정되었습니다/);
+    fireEvent.click(screen.getByRole("button", { name: "취소" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("취소 사유 (필수)"), { target: { value: "사유" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "취소 확정" }));
+    await waitFor(() => {
+      const post = calls.find((c) => c.url.endsWith("/transitions"));
+      expect(post?.body).toEqual({ to: "CANCELLED", version: 2, reason: "사유" });
     });
   });
 
@@ -269,6 +323,7 @@ describe("PI 상세 — meta(FREE 열)·낙관 잠금", () => {
     server.pi = piDetail({ version: 3, internal_note: "남이 고침" });
     fireEvent.click(screen.getAllByRole("button", { name: "최신 내용 불러오기" })[0] as HTMLElement);
     await waitFor(() => expect(screen.getByLabelText("내부 메모")).toHaveValue("남이 고침"));
+    fireEvent.change(screen.getByLabelText("내부 메모"), { target: { value: "내가 고침" } });
     fireEvent.click(screen.getByRole("button", { name: "메모·담당자 저장" }));
     await waitFor(() => {
       const patch = calls.find((c) => c.method === "PATCH");

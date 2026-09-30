@@ -70,6 +70,7 @@ function ProformaDetailView() {
   const [baseVersion, setBaseVersion] = useState<number | null>(null);
   const submitLock = useRef(false);
   const actionKey = useRef("");
+  const lastSent = useRef<string | null>(null);
 
   function invalidateAll() {
     void client.invalidateQueries({ queryKey: PROFORMAS_QUERY_KEY });
@@ -113,11 +114,18 @@ function ProformaDetailView() {
   function submitCancel(input: { version: number; reason: string }) {
     if (submitLock.current) return;
     submitLock.current = true;
+    // 사유·version이 바뀌면 본문이 달라진다(멱등 request_body에 포함) — 그때만 새 키. 같은 본문 재시도는 같은 키.
+    const serialized = JSON.stringify(input);
+    if (lastSent.current !== null && lastSent.current !== serialized) {
+      actionKey.current = crypto.randomUUID();
+    }
+    lastSent.current = serialized;
     cancel.mutate(input, { onSettled: () => (submitLock.current = false) });
   }
 
   function openCancel() {
     actionKey.current = crypto.randomUUID();
+    lastSent.current = null;
     setCancelling(true);
   }
 
@@ -387,6 +395,8 @@ function MetaPanel({
 
   const items = users.data?.items ?? [];
   const known = items.some((user) => String(user.id) === assignee);
+  // 바뀐 게 없으면 저장하지 않는다 — 불필요한 version 증가가 다른 화면의 409를 부른다.
+  const changed = note.trim() !== (pi.internal_note ?? "") || assignee !== String(pi.assignee_id);
 
   return (
     <form
@@ -394,7 +404,7 @@ function MetaPanel({
       className="rounded-lg border border-gray-200 p-4"
       onSubmit={(event) => {
         event.preventDefault();
-        if (lock.current) return;
+        if (lock.current || !changed) return;
         lock.current = true;
         save.mutate(undefined, { onSettled: () => (lock.current = false) });
       }}
@@ -433,7 +443,7 @@ function MetaPanel({
       </div>
       <button
         type="submit"
-        disabled={save.isPending}
+        disabled={save.isPending || !changed}
         className="cell-nowrap mt-3 rounded border border-gray-300 px-4 py-2 text-sm disabled:opacity-50"
       >
         {save.isPending ? "저장 중…" : "메모·담당자 저장"}

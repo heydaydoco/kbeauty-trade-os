@@ -89,11 +89,11 @@ export function ProformaCreateDialog({ qt, version, onClose, onReload }: Props) 
   const boxRef = useRef<HTMLDivElement | null>(null);
   const previewLock = useRef(false);
   const createLock = useRef(false);
-  // 멱등 키는 다이얼로그를 여는 순간 1개 — 입력이 바뀌면 새 키(본문이 달라졌으므로).
-  const keyRef = useRef(crypto.randomUUID());
-  const rekey = () => {
-    keyRef.current = crypto.randomUUID();
-  };
+  // 멱등 키는 다이얼로그를 여는 순간 1개. 새 키는 "마지막으로 서버에 보낸 본문과 실제로 다른 본문"을 보낼 때만 —
+  // 결과를 모르는 실패(네트워크 오류) 뒤 입력을 바꿨다 되돌려 재확정하면 같은 키여야 중복 PI가 안 생긴다.
+  const [initialKey] = useState(() => crypto.randomUUID());
+  const keyRef = useRef(initialKey);
+  const lastSent = useRef<string | null>(null);
 
   const previewMutation = useMutation({
     mutationFn: (body: ProformaCreateBody) =>
@@ -101,7 +101,8 @@ export function ProformaCreateDialog({ qt, version, onClose, onReload }: Props) 
         method: "POST",
         body,
       }),
-    onSuccess: (data, body) => setPreview({ data, body }),
+    // 증빙일을 비웠어도 미리보기가 준 날짜를 확정 본문에 고정한다 — 화면에서 본 날짜와 발행 날짜가 같도록.
+    onSuccess: (data, body) => setPreview({ data, body: { ...body, doc_date: body.doc_date ?? data.doc_date } }),
   });
 
   const createMutation = useMutation({
@@ -123,9 +124,8 @@ export function ProformaCreateDialog({ qt, version, onClose, onReload }: Props) 
     if (!busy) onClose();
   });
 
-  /** 입력이 바뀌면 이전 시도의 오류·미리보기를 버리고 새 키를 쓴다. */
+  /** 입력이 바뀌면 이전 시도의 오류를 버린다(키는 확정 시 본문 비교로 정한다). */
   function touched() {
-    rekey();
     setFormError(null);
     previewMutation.reset();
     createMutation.reset();
@@ -184,6 +184,9 @@ export function ProformaCreateDialog({ qt, version, onClose, onReload }: Props) 
   function confirmCreate() {
     if (preview === null || createLock.current) return;
     createLock.current = true;
+    const serialized = JSON.stringify(preview.body);
+    if (lastSent.current !== null && lastSent.current !== serialized) keyRef.current = crypto.randomUUID();
+    lastSent.current = serialized;
     // ★ 미리보기 때의 본문 그대로 — 화면 입력이 그사이 바뀌었어도(뒤로 갔다면 미리보기가 버려진다) 다른 것을 만들지 않는다.
     createMutation.mutate(preview.body, { onSettled: () => (createLock.current = false) });
   }
@@ -192,6 +195,7 @@ export function ProformaCreateDialog({ qt, version, onClose, onReload }: Props) 
   const conflict = isVersionConflict(activeError);
   const hints = openQuantityHints(activeError, qt);
   const bankItems = banks.data?.items ?? [];
+  const bankTruncated = banks.data !== undefined && banks.data.total > bankItems.length;
 
   const errorBlock = (activeError || formError) && (
     <div role="alert" className="mt-3 text-sm text-signal-red">
@@ -239,6 +243,7 @@ export function ProformaCreateDialog({ qt, version, onClose, onReload }: Props) 
               결과를 확인하고, 확정해야 PI번호가 붙습니다.
             </p>
 
+            <fieldset disabled={previewMutation.isPending} className="contents">
             <div className="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
               <label className="flex flex-col gap-1">
                 <span className="text-gray-600">입금 은행 계좌 ({qt.currency}) *</span>
@@ -257,6 +262,11 @@ export function ProformaCreateDialog({ qt, version, onClose, onReload }: Props) 
                     </option>
                   ))}
                 </select>
+                {bankTruncated && (
+                  <span role="status" className="text-xs text-gray-500">
+                    {banks.data?.total}개 중 {bankItems.length}개만 표시합니다.
+                  </span>
+                )}
                 {banks.isPending && <span className="text-xs text-gray-500">계좌를 불러오는 중…</span>}
                 {banks.error && (
                   <span role="alert" className="text-xs text-signal-red">
@@ -392,6 +402,7 @@ export function ProformaCreateDialog({ qt, version, onClose, onReload }: Props) 
                 수량은 이 견적에서 다른 PI가 이미 가져가고 남은 수량 이내여야 합니다. 남은 수량은 서버가 계산해 미리보기에
                 보여 줍니다.
               </p>
+            </fieldset>
             </fieldset>
 
             {errorBlock}

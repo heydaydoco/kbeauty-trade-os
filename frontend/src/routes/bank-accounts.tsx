@@ -249,7 +249,8 @@ function BankAccountFormDialog({
   const boxRef = useRef<HTMLFormElement | null>(null);
   const lock = useRef(false);
   // 멱등 키(등록 전용): 다이얼로그를 여는 순간 1개 — 입력이 바뀌면(본문이 달라지면) 새 키.
-  const keyRef = useRef(crypto.randomUUID());
+  const [initialKey] = useState(() => crypto.randomUUID());
+  const keyRef = useRef(initialKey);
   // 수정의 기준 version — 이 다이얼로그를 열 때 화면이 본 값. 목록이 재조회돼도 바뀌지 않는다.
   const baseVersion = useRef(account?.version ?? 0);
   useDialogBehavior(boxRef, onClose);

@@ -8,9 +8,17 @@ import { LOG, detail, stubFetch, type Call } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
 
 let keySeq = 0;
+const issued: string[] = []; // 호출마다 다른 값 — 실제로 발급된 키 목록
 beforeEach(() => {
   keySeq = 0;
-  vi.stubGlobal("crypto", { randomUUID: () => `key-${++keySeq}` });
+  issued.length = 0;
+  vi.stubGlobal("crypto", {
+    randomUUID: () => {
+      const key = `key-${++keySeq}`;
+      issued.push(key);
+      return key;
+    },
+  });
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -127,8 +135,10 @@ describe("PI 만들기 — 미리보기 먼저, 확정은 그다음", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "생성 확정" }));
     expect(await screen.findByRole("heading", { name: /PI-2026-0001/ })).toBeInTheDocument();
     const create = callsTo(calls, CREATE_PATH)[0];
-    expect(create?.body).toEqual(preview?.body); // 미리보기 때의 본문 그대로
-    expect(create?.headers["Idempotency-Key"]).toMatch(/^key-\d+$/); // 다이얼로그가 들고 있는 키(멱등 키 헤더 필수)
+    // 미리보기 때의 본문 그대로 — 단, 비워 둔 증빙일은 미리보기가 준 날짜로 고정된다.
+    expect(create?.body).toEqual({ ...preview?.body, doc_date: "2026-09-30" });
+    // 다이얼로그를 열 때 발급한 키(첫 발급)가 그대로 나간다.
+    expect(issued).toContain(create?.headers["Idempotency-Key"]);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -302,5 +312,103 @@ describe("PI 만들기 — 미리보기 먼저, 확정은 그다음", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(opener).toHaveFocus();
+  });
+});
+
+describe("PI 만들기 — 멱등 키는 본문이 실제로 달라질 때만 새로 발급", () => {
+  async function toPreview(dialog: HTMLElement) {
+    await fillRequired(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "미리보기" }));
+    return within(dialog).findByRole("button", { name: "생성 확정" });
+  }
+
+  it("결과를 모르는 실패(네트워크 오류) 뒤 입력을 바꿨다 원복해 재확정하면 같은 키·같은 본문", async () => {
+    let calls_ = 0;
+    const { calls } = open(issuedQt(), [
+      [PREVIEW_PATH, "POST", () => jsonResponse(piPreview())],
+      [CREATE_PATH, "POST", () => (++calls_ === 1 ? jsonResponse({ error: { code: "X", message: "네트워크 오류" } }, 500) : jsonResponse(piDetail(), 201))],
+    ]);
+    const dialog = await openDialog();
+    fireEvent.click(await toPreview(dialog));
+    await within(dialog).findByRole("alert");
+    // 입력 수정 → 유효기간을 바꿨다가 원래대로 → 다시 미리보기·확정
+    fireEvent.click(within(dialog).getByRole("button", { name: "입력 수정" }));
+    const until = await within(dialog).findByLabelText("유효기간 *");
+    fireEvent.change(until, { target: { value: "2026-12-01" } });
+    fireEvent.change(until, { target: { value: "2026-10-30" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "미리보기" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "생성 확정" }));
+    await screen.findByRole("heading", { name: /PI-2026-0001/ });
+    const [first, second] = callsTo(calls, CREATE_PATH);
+    expect(second?.headers["Idempotency-Key"]).toBe(first?.headers["Idempotency-Key"]);
+    expect(second?.body).toEqual(first?.body);
+  });
+
+  it("실제로 다른 본문이면 새 키", async () => {
+    let n = 0;
+    const { calls } = open(issuedQt(), [
+      [PREVIEW_PATH, "POST", () => jsonResponse(piPreview())],
+      [CREATE_PATH, "POST", () => (++n === 1 ? jsonResponse({ error: { code: "X", message: "오류" } }, 500) : jsonResponse(piDetail(), 201))],
+    ]);
+    const dialog = await openDialog();
+    fireEvent.click(await toPreview(dialog));
+    await within(dialog).findByRole("alert");
+    fireEvent.click(within(dialog).getByRole("button", { name: "입력 수정" }));
+    fireEvent.change(await within(dialog).findByLabelText("유효기간 *"), { target: { value: "2026-12-01" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "미리보기" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "생성 확정" }));
+    await screen.findByRole("heading", { name: /PI-2026-0001/ });
+    const [first, second] = callsTo(calls, CREATE_PATH);
+    expect(second?.headers["Idempotency-Key"]).not.toBe(first?.headers["Idempotency-Key"]);
+    expect(second?.body).toMatchObject({ valid_until: "2026-12-01" });
+  });
+
+  it("증빙일을 비웠으면 확정 본문에 미리보기가 준 doc_date를 고정해 보낸다(미리보기 요청에는 없음)", async () => {
+    const { calls } = open(issuedQt(), [
+      [PREVIEW_PATH, "POST", () => jsonResponse(piPreview({ doc_date: "2026-10-01" }))],
+      [CREATE_PATH, "POST", () => jsonResponse(piDetail(), 201)],
+    ]);
+    const dialog = await openDialog();
+    fireEvent.click(await toPreview(dialog));
+    await screen.findByRole("heading", { name: /PI-2026-0001/ }).catch(() => undefined);
+    fireEvent.click(within(dialog).getByRole("button", { name: "생성 확정" }));
+    await waitFor(() => expect(callsTo(calls, CREATE_PATH)).toHaveLength(1));
+    expect(callsTo(calls, PREVIEW_PATH)[0]?.body).not.toHaveProperty("doc_date");
+    expect(callsTo(calls, CREATE_PATH)[0]?.body).toMatchObject({ doc_date: "2026-10-01" });
+  });
+
+  it("미리보기 요청이 진행 중이면 입력이 잠긴다", async () => {
+    let release!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => (release = resolve));
+    open(issuedQt());
+    const base = globalThis.fetch as unknown as (u: string, i?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", vi.fn((u: string, i?: RequestInit) => (u.endsWith(PREVIEW_PATH) ? pending : base(u, i))));
+    const dialog = await openDialog();
+    await fillRequired(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "미리보기" }));
+    await waitFor(() => expect(within(dialog).getByLabelText("유효기간 *")).toBeDisabled());
+    expect(within(dialog).getByLabelText(/입금 은행 계좌/)).toBeDisabled();
+    release(jsonResponse(piPreview()));
+  });
+
+  it("은행 계좌가 표시 한도를 넘으면 'N개 중 M개만 표시' 안내가 뜬다", async () => {
+    server.qt = issuedQt();
+    stubFetch(TRADER, [
+      ["/v1/bank-accounts", "GET", () => jsonResponse({ items: [bankAccount()], total: 250, page: 1, size: 200 })],
+      ["/v1/quotations/7/status-log", "GET", () => jsonResponse(LOG)],
+      ["/v1/quotations/7", "GET", () => jsonResponse(server.qt)],
+    ]);
+    renderWithProviders(<AppRoutes />, { route: "/quotations/7" });
+    const dialog = await openDialog();
+    expect(await within(dialog).findByText("250개 중 1개만 표시합니다.")).toBeInTheDocument();
+  });
+
+  it("서버 version이 화면 기준을 앞서면(stale) 'PI 만들기'가 비활성", async () => {
+    open(issuedQt());
+    await screen.findByRole("button", { name: "PI 만들기" });
+    expect(screen.getByRole("button", { name: "PI 만들기" })).toBeEnabled();
+    server.qt = issuedQt({ version: 5 });
+    window.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "PI 만들기" })).toBeDisabled());
   });
 });
