@@ -9,8 +9,8 @@ float은 쓰지 않는다. GC-G1의 관세 533.00 / 부가세 873.30 같은 값�
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import CHAR, BigInteger
