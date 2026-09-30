@@ -219,7 +219,7 @@ def test_handover_reports_every_target_table(client: TestClient) -> None:
     body = client.post(f"{USERS}/{leaver_id}/handover", json={"to_user_id": successor_id}).json()
 
     # S2-2 — certifications.assignee_id 등재로 대상 4종(§2 "인증" 명시분·ADR-0037 계보).
-    # S3-1 PR-5a·6a·7a — quotations·proforma_invoices·sales_orders.assignee_id 등재(전표 담당자, PO·인테이크는 각 PR이 더한다).
+    # S3-1 PR-5a·6a·7a — quotations·proforma_invoices·sales_orders.assignee_id 등재(전표 담당자, 인테이크는 PR-13이 더한다).
     assert set(body["moved"]) == {
         "tasks",
         "alert_rules",
@@ -228,6 +228,7 @@ def test_handover_reports_every_target_table(client: TestClient) -> None:
         "quotations",
         "proforma_invoices",  # PR-6a
         "sales_orders",  # PR-7a
+        "purchase_orders",  # PR-8a
     }
     assert body["total"] == 0
 

@@ -15,3 +15,5 @@
 **되돌리기 비용** — 낮음~중간. SKU 전용→폴리모픽은 가산 ALTER지만 반대(폴리모픽→전용)는 자재 라인이 쌓인 뒤 비싸다. `_cost` 컬럼 rename은 신규 테이블이라 지금 무료이고 데이터 이후엔 마이그레이션+전 코드 변경이다. 필드 부재→행 단위 전환은 API 계약(200→404)이 프런트·테스트 전반에 퍼져 중간, 노출 확대는 스키마 통합만으로 되나 원가 유출은 회수 불가라 안전한 쪽을 채택했다. WBS 배정은 문서 한 줄(매우 낮음).
 
 **영향 세션** — S3-1 PR-8(PO)·PR-3(`require_partner_of_any_type`) / S3-2(수입선적 PO 참조·`customs_records`·OEM 마일스톤 프로파일·`po_kind` 소비) / S3-4(PO 매입가=원가 원천·마진) / S4-1(입고 문서·후반 엣지·사급 ADR에서 자재 PO 가산) / S6-2(원가 조회)·후속 PO 첨부 세션(원가 가시성 검증).
+
+**부기 (S3-1 PR-8a 구현, 자율 확정 2026-09-30 — 설계보다 좁은 쪽으로 구체화)** — ① 원가 없는 응답(`…CostHidden…`)은 설계 목록(`total_cost`·`currency`·`unit_cost`·`line_cost`·`price_basis`)에 더해 통화를 역추론할 수 있는 `minor_units`·`fx_rate`·`fx_rate_date`·`*_text` 금액 표기도 **필드 부재**로 했다(환율 값으로 통화가 드러나므로). ② 채널 5(audit)는 X-24(전표 생성·전이·편집은 audit 미기록)를 따라 **PO audit 행 자체가 0건**이다(화이트리스트 audit 문구는 "audit를 쓰는 경로가 생기면"의 제약으로 격하). ③ 채널 7의 청소 잡(`idempotency-purge`)은 PR-16이 이행한다 — 그 전까지 생성 응답(Full)의 24시간 at-rest는 수용 사실로 테스트가 스코프(생성자 행만)를 고정한다. ④ OC 열은 공급사 확인 전이에서 기록하고 메타(FREE)로는 SUPPLIER_CONFIRMED 상태에서만 고친다(DB CHECK와 같은 규칙을 422로 안내). 근거: design-integrated §1 해소 원칙 ②(더 좁고 fail-closed) / `tests/e2e/test_purchase_order_cost_masking.py`.

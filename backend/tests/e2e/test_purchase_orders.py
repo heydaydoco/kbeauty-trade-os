@@ -650,6 +650,21 @@ def test_meta_edits_free_columns_bumps_version_and_noop_leaves_no_trace(trade: T
     )
 
 
+def test_a_noop_meta_by_another_user_leaves_no_trace(trade: TestClient) -> None:
+    """무변경 메타 요청은 **다른 사용자**가 보내도 version·updated_by를 건드리지 않는다(같은 사용자면 값이 같아 구분되지 않는다 — 7a 교훈)"""
+    po = create_po_via_api(trade)
+    before = _rows("SELECT version, updated_by_id FROM purchase_orders WHERE id = :i", i=po["id"])[
+        0
+    ]
+    with logged_in(RoleCode.ADMIN) as admin:
+        response = admin.patch(f"{PO}/{po['id']}/meta", json={"version": po["version"]})
+        assert response.status_code == 200
+    assert (
+        _rows("SELECT version, updated_by_id FROM purchase_orders WHERE id = :i", i=po["id"])[0]
+        == before
+    )
+
+
 def test_frozen_content_cannot_be_reached_from_any_write_path(trade: TestClient) -> None:
     """동결 열(품목·수량·원가·통화·공급사·po_kind)을 바꾸는 API 경로가 없다 — 메타 본문에 넣으면 422, 행은 그대로"""
     po = create_po_via_api(trade)
