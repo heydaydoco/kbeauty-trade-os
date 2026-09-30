@@ -268,3 +268,22 @@ def test_every_fk_from_so_tables_is_either_a_chain_link_or_explained() -> None:
         | set(chain.NON_CHILD_FK_ALLOWLIST)
     )
     assert scanned <= registered, sorted(scanned - registered)
+
+
+def test_the_patch_schema_fields_are_exactly_the_content_whitelist_plus_free_columns() -> None:
+    """PATCH 스키마 필드 집합 == CONTENT 요청 화이트리스트 + FREE 2열 + version — 스키마와 서비스 화이트리스트가 따로 놀지 않는다(FIELD_POLICY 핀과 3자 대사)"""
+    from app.modules.sales_orders.schemas import (
+        SalesOrderMetaUpdateRequest,
+        SalesOrderUpdateRequest,
+    )
+    from app.modules.sales_orders.service import _FREE_FIELDS, CONTENT_REQUEST_FIELDS
+
+    assert set(SalesOrderUpdateRequest.model_fields) == (
+        {"version"} | CONTENT_REQUEST_FIELDS | set(_FREE_FIELDS)
+    )
+    assert set(SalesOrderMetaUpdateRequest.model_fields) == {"version"} | set(_FREE_FIELDS)
+    content = columns_of("sales_orders", ColumnClass.CONTENT)
+    # 요청 필드 중 컬럼으로 바로 대응하는 것은 전부 CONTENT 분류다(결제조건·Incoterms는 묶음 필드라 제외)
+    direct = CONTENT_REQUEST_FIELDS - {"payment_terms", "incoterm"}
+    assert direct <= content, sorted(direct - content)
+    assert set(_FREE_FIELDS) == columns_of("sales_orders", ColumnClass.FREE)

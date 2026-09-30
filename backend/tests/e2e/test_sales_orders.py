@@ -34,6 +34,9 @@ from tests.factories.trade import (
     set_price,
     so_payload,
 )
+from tests.factories.trade import (
+    unique as unique_code,
+)
 
 pytestmark = pytest.mark.group_a
 
@@ -648,3 +651,71 @@ def test_missing_documents_are_404_and_all_roles_can_read(trade: TestClient) -> 
         assert body["doc_number"] == so["doc_number"]
         assert not any("cost" in key or "margin" in key for key in body)
         assert viewer.post(f"{SO}/{so['id']}/lines", json={}).status_code == 403
+
+
+def test_doc_date_rules_on_create(trade: TestClient) -> None:
+    """증빙일 — 미래(KST)는 422 · 원천 문서의 증빙일보다 앞서면 422 · 원천과 같은 날·오늘은 허용(소급 입력은 원천 이후에 한해 자유)"""
+    qt = issued_quotation(trade, create_buyer(), [create_priced_sku()], quantity=40)
+    line = qt["lines"][0]["id"]
+    lines = [{"source_line_id": line, "quantity": 1}]
+    tomorrow = (today_kst() + timedelta(days=1)).isoformat()
+    assert _from_qt(trade, qt, doc_date=tomorrow, lines=lines).status_code == 422
+    earlier = (today_kst() - timedelta(days=1)).isoformat()
+    _exec(
+        "UPDATE quotations SET doc_date = :d, fx_rate_date = :d WHERE id = :i",
+        d=today_kst(),
+        i=qt["id"],
+    )
+    qt = trade.get(f"{QT}/{qt['id']}").json()
+    before = _from_qt(trade, qt, doc_date=earlier, lines=lines)
+    assert before.status_code == 422 and "doc_date" in before.json()["error"]["detail"]
+    same = _from_qt(trade, qt, doc_date=today_kst().isoformat(), lines=lines)
+    assert same.status_code == 201 and same.json()["doc_date"] == today_kst().isoformat()
+
+
+def test_direct_landing_rejects_the_same_sku_twice_and_unknown_buyers() -> None:
+    """직접 착지 — 같은 (SKU, 유무상) 두 줄은 409 LINE.SKU_DUPLICATE(라인 인덱스 안내) · 바이어 유형이 아닌 거래처는 422 — 경로 무관 규칙"""
+    from app.core.errors.exceptions import AppError
+    from tests.support.factories import create_partner
+
+    buyer = create_buyer()
+    sku = create_priced_sku(amount=500)
+    with pytest.raises(AppError) as caught:
+        create_direct_so(buyer, [sku, sku])
+    assert caught.value.code == "TRADE_DOCS.LINE.SKU_DUPLICATE"
+    assert "lines[1].sku_id" in (caught.value.detail or {})
+    supplier = create_partner(unique_code("SUP"), types=("SUPPLIER",))
+    with pytest.raises(AppError) as wrong:
+        create_direct_so(supplier, [create_priced_sku()])
+    assert wrong.value.code == "COMMON.VALIDATION.INVALID_FIELD"
+    assert _scalar("SELECT count(*) FROM sales_orders") == 0
+
+
+def test_a_live_successor_of_an_so_blocks_its_cancellation(
+    trade: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SO 취소 가드 — 살아 있는 후속(S3-2 선적의 대역)이 있으면 409 SUCCESSOR_ALIVE(후속 번호 안내)이고 상태·이력 무변, 후속이 취소되면 성공한다"""
+    from app.modules.trade_docs.constants import DocKind
+    from tests.factories.trade import fake_successors
+
+    so = create_so_from_qt_via_api(trade, issued_quotation(trade))
+    with fake_successors(
+        monkeypatch, fk_column="so_id", table_name="scratch_shipments", parent=DocKind.SALES_ORDER
+    ) as shipments:
+        ship = shipments.add(so["id"], status="ISSUED", number="SH-2026-0001")
+        r = trade.post(
+            f"{SO}/{so['id']}/transitions",
+            json={"to": "CANCELLED", "version": so["version"], "reason": "선적 있음"},
+            headers=idem(),
+        )
+        assert r.status_code == 409 and _code(r) == "TRADE_DOCS.CANCEL.SUCCESSOR_ALIVE"
+        assert r.json()["error"]["detail"]["successors"] == ["SH-2026-0001"]
+        assert _scalar("SELECT status FROM sales_orders WHERE id = :i", i=so["id"]) == "RECEIVED"
+        assert (
+            _scalar(
+                "SELECT count(*) FROM sales_order_status_log WHERE sales_order_id = :i", i=so["id"]
+            )
+            == 1
+        )
+        shipments.set_status(ship, "CANCELLED")
+        assert _cancel_so(trade, so)["status"] == "CANCELLED"
