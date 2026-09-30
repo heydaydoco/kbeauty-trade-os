@@ -74,3 +74,30 @@ def test_only_lock_contention_becomes_409(sqlstate: str, status: int) -> None:
     exc = DBAPIError("stmt", {}, _Orig(sqlstate))
     response = asyncio.run(handle_db_error(_FakeRequest(), exc))  # type: ignore[arg-type]
     assert response.status_code == status
+
+
+def test_handler_is_registered_on_the_real_app() -> None:
+    """앱에 실제로 등록돼 있다 — 라우트가 55P03을 던지면 봉투 409가 나간다(등록 줄 삭제 시 실패)"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.core.errors.handlers import register_exception_handlers
+
+    probe = FastAPI()
+    register_exception_handlers(probe)
+
+    @probe.get("/lock")
+    def _lock() -> None:
+        raise DBAPIError("stmt", {}, _Orig("55P03"))
+
+    @probe.get("/other")
+    def _other() -> None:
+        raise DBAPIError("stmt", {}, _Orig("23505"))
+
+    client = TestClient(probe, raise_server_exceptions=False)
+    busy = client.get("/lock")
+    assert busy.status_code == 409
+    assert busy.json()["error"]["code"] == str(ErrorCode.CONCURRENCY_LOCK_BUSY)
+    other = client.get("/other")
+    assert other.status_code == 500
+    assert other.json()["error"]["code"] == str(ErrorCode.INTERNAL_UNEXPECTED)

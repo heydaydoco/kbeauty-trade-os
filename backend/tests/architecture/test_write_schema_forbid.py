@@ -60,31 +60,32 @@ LEGACY_FORBID_EXEMPT: frozenset[str] = frozenset(
 )
 
 
-def _is_forbid(node: ast.ClassDef, forbid_names: set[str]) -> bool:
-    for base in node.bases:
-        if isinstance(base, ast.Name) and base.id in forbid_names:
-            return True
+def _explicit_extra(node: ast.ClassDef) -> str | None:
+    """클래스 본문의 model_config가 지정한 extra 값(없으면 None)."""
     for stmt in node.body:
+        target = None
         value = None
-        if (
-            isinstance(stmt, ast.Assign)
-            and any(isinstance(t, ast.Name) and t.id == "model_config" for t in stmt.targets)
-        ) or (
-            isinstance(stmt, ast.AnnAssign)
-            and isinstance(stmt.target, ast.Name)
-            and stmt.target.id == "model_config"
-        ):
-            value = stmt.value
-        if value is not None and any(
-            isinstance(kw, ast.keyword)
-            and kw.arg == "extra"
-            and isinstance(kw.value, ast.Constant)
-            and kw.value.value == "forbid"
-            for kw in ast.walk(value)
-            if isinstance(kw, ast.keyword)
-        ):
-            return True
-    return False
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign):
+            target, value = stmt.target, stmt.value
+        if isinstance(target, ast.Name) and target.id == "model_config" and value is not None:
+            for kw in ast.walk(value):
+                if (
+                    isinstance(kw, ast.keyword)
+                    and kw.arg == "extra"
+                    and isinstance(kw.value, ast.Constant)
+                ):
+                    return str(kw.value.value)
+    return None
+
+
+def _is_forbid(node: ast.ClassDef, forbid_names: set[str]) -> bool:
+    # 본문의 명시가 상속보다 앞선다 — 자식이 extra="allow"로 덮어쓰면 forbid가 아니다.
+    explicit = _explicit_extra(node)
+    if explicit is not None:
+        return explicit == "forbid"
+    return any(isinstance(b, ast.Name) and b.id in forbid_names for b in node.bases)
 
 
 def _scan() -> tuple[set[str], set[str]]:
@@ -128,3 +129,16 @@ def test_legacy_list_only_shrinks() -> None:
     everything, forbidden = _scan()
     assert everything >= LEGACY_FORBID_EXEMPT, "목록에 더는 없는 클래스가 있다"
     assert not (LEGACY_FORBID_EXEMPT & forbidden), "이미 forbid인 클래스는 목록에서 지운다"
+
+
+def test_child_that_overrides_extra_is_not_forbid() -> None:
+    """부모가 forbid여도 자식이 extra='allow'로 덮어쓰면 forbid로 세지 않는다"""
+    tree = ast.parse(
+        "class Base(BaseModel):\n    model_config = ConfigDict(extra='forbid')\n"
+        "class Child(Base):\n    model_config = ConfigDict(extra='allow')\n"
+        "class Plain(Base):\n    x: int\n"
+    )
+    base, child, plain = (n for n in tree.body if isinstance(n, ast.ClassDef))
+    assert _is_forbid(base, set())
+    assert not _is_forbid(child, {"Base"})
+    assert _is_forbid(plain, {"Base"})

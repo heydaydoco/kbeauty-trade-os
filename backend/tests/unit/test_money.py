@@ -96,6 +96,12 @@ def test_parse_minor_amount_accepts_exact_values(raw: object, currency: str, exp
         ("Infinity", "USD"),
         ("9" * 16, "KRW"),
         ("", "USD"),
+        ("1e3", "KRW"),  # 지수 표기
+        ("1E+999999999", "KRW"),  # 거대 지수 — 정수를 만들기 전에 거부
+        ("1_000", "KRW"),
+        ("12,34", "USD"),  # 유럽식 소수점 콤마 — 100배가 되어 조용히 통과하면 안 된다
+        ("1,23,456", "KRW"),
+        ("1.00000000000000000000000000000000001", "USD"),  # 정밀도 반올림으로 1이 되면 안 된다
     ],
 )
 def test_parse_minor_amount_rejects_inexact_or_invalid(raw: object, currency: str) -> None:

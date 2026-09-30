@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.core.time import KST, utcnow
+from app.core.time import KST, ensure_aware_utc, utcnow
 from app.modules.numbering.models import DocNumberSeq
 
 #: 일련번호 자릿수. 넘치면 자릿수가 늘어날 뿐 번호가 겹치지는 않는다.
@@ -35,7 +35,7 @@ def next_document_number(session: Session, prefix: str, *, at: datetime | None =
     """
     # 연도는 KST 기준이다 — UTC로 자르면 1월 1일 00:00~09:00(KST)에 발급한 번호가
     # 전 해 번호가 된다(ADR-0054).
-    year = (at or utcnow()).astimezone(KST).year
+    year = ensure_aware_utc(at or utcnow()).astimezone(KST).year
     counter = _lock_counter(session, prefix, year)
     if counter is None:
         session.execute(

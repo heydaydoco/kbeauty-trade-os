@@ -10,7 +10,8 @@ float은 쓰지 않는다. GC-G1의 관세 533.00 / 부가세 873.30 같은 값�
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+import re
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import CHAR, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
@@ -121,29 +122,34 @@ class Money:
         return f"{self.to_decimal()} {self.currency}"
 
 
+_PLAIN_AMOUNT = re.compile(r"^(?P<int>\d+)(?:\.(?P<frac>\d+))?$")
+_GROUPED_AMOUNT = re.compile(r"^(?P<int>\d{1,3}(?:,\d{3})+)(?:\.(?P<frac>\d+))?$")
+
+
 def parse_minor_amount(raw: object, currency: str, *, field: str, max_digits: int = 15) -> int:
     """사람 표기 금액("12.34")을 최소단위 정수로 바꾼다 — 자릿수 초과는 반올림 없이 거부한다.
 
     전표 입력(인테이크·CSV·라인 단가)의 공용 통로다. 12.345를 조용히 12.35로 바꾸면
     바이어가 낸 단가와 다른 금액이 확정되므로 거부하고 사용자가 고치게 한다.
+    허용 형식은 `1234`·`1234.5`·`1,234.5`(3자리 그룹 콤마)뿐이다 — 지수 표기·밑줄·
+    유럽식 소수점 콤마("12,34")는 값이 조용히 바뀌므로 거부한다(Decimal 연산을 거치지 않고
+    문자열에서 바로 정수를 만든다: 컨텍스트 정밀도 반올림·거대 지수 폭주 없음).
     실패는 ValueError이며 메시지에 field를 싣는다(서비스가 422로 번역).
     """
     exponent = minor_units(currency)
-    text = str(raw).strip().replace(",", "")
-    try:
-        value = Decimal(text)
-    except InvalidOperation as exc:
-        raise ValueError(f"{field}: 숫자가 아닙니다.") from exc
-    if not value.is_finite():
-        raise ValueError(f"{field}: 숫자가 아닙니다.")
-    value = value.normalize()
-    if value < 0:
+    text = str(raw).strip()
+    if text.startswith("-"):
         raise ValueError(f"{field}: 음수는 입력할 수 없습니다.")
-    if -value.as_tuple().exponent > exponent:  # type: ignore[operator]
+    match = _GROUPED_AMOUNT.match(text) or _PLAIN_AMOUNT.match(text)
+    if match is None:
+        raise ValueError(f"{field}: 숫자 형식이 아닙니다(예: 1234.50, 1,234.50).")
+    whole = match.group("int").replace(",", "")
+    fraction = (match.group("frac") or "").rstrip("0")
+    if len(fraction) > exponent:
         raise ValueError(
             f"{field}: {currency.upper()}는 소수점 {exponent}자리까지만 입력할 수 있습니다."
         )
-    minor = int(value.scaleb(exponent))
+    minor = int(whole + fraction.ljust(exponent, "0"))
     if len(str(minor)) > max_digits:
         raise ValueError(f"{field}: 금액이 너무 큽니다.")
     return minor
