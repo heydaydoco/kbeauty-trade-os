@@ -48,3 +48,23 @@ ASSIGNMENT_TARGETS: tuple[AssignmentTarget, ...] = (
     # S2-2 — §2 "담당 건(전표·인증·태스크·알림)"의 인증 명시분.
     AssignmentTarget("certifications", Certification, Certification.assignee_id),
 )
+
+
+#: 담당 이관 대상이 **아닌** users FK의 분류 (S3-1 ADR-0067).
+#: 새 테이블이 users를 가리키는 컬럼을 만들면 이관 대상(위 ASSIGNMENT_TARGETS)인지, 아래 둘 중
+#: 하나(이력·신원 연결)인지 반드시 정하게 한다 — `approver_id`·`delegate_id`처럼 이름이 담당
+#: 탐지 집합 밖인 컬럼이 조용히 이관에서 빠지는 것을 막는다(tests/architecture/
+#: test_user_fk_classification.py).
+#:   ACTOR_LOG     — 누가 했는가의 이력. 이관으로 바뀌지 않는다(예: audit_log.actor_user_id).
+#:   IDENTITY_LINK — 그 사용자 자신에 속한 행(예: user_roles.user_id). 이관 대상이 아니다.
+USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
+    ("audit_log", "actor_user_id"): "ACTOR_LOG",
+    ("idempotency_keys", "actor_user_id"): "ACTOR_LOG",
+    ("certification_status_log", "actor_user_id"): "ACTOR_LOG",
+    ("import_staging", "confirmed_by_id"): "ACTOR_LOG",
+    ("user_roles", "user_id"): "IDENTITY_LINK",
+    ("user_sessions", "user_id"): "IDENTITY_LINK",
+}
+
+#: 모든 테이블에 붙는 감사 컬럼 — 분류 대상이 아니다.
+AUDIT_USER_FK_COLUMNS: frozenset[str] = frozenset({"created_by_id", "updated_by_id"})

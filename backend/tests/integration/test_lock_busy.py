@@ -21,10 +21,10 @@ pytestmark = [pytest.mark.group_j]
 
 
 class _FakeRequest:
-    class state:  # noqa: N801
+    class state:
         request_id = "req-test"
 
-    class url:  # noqa: N801
+    class url:
         path = "/x"
 
 

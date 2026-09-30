@@ -29,7 +29,9 @@ def client() -> Iterator[TestClient]:
 
 
 def _login(client: TestClient, email: str) -> None:
-    assert client.post("/api/v1/auth/login", json={"email": email, "password": DEFAULT_PASSWORD}).is_success
+    assert client.post(
+        "/api/v1/auth/login", json={"email": email, "password": DEFAULT_PASSWORD}
+    ).is_success
 
 
 def test_lookup_requires_login(client: TestClient) -> None:

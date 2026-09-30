@@ -97,12 +97,16 @@ def test_restrict_update_columns_is_enforced_by_the_database(monkeypatch) -> Non
                 " version int, amount_frozen bigint)"
             )
         )
-        owner.execute(text("GRANT SELECT, INSERT, UPDATE, DELETE ON public.zz_col_grant TO kbos_app"))
+        owner.execute(
+            text("GRANT SELECT, INSERT, UPDATE, DELETE ON public.zz_col_grant TO kbos_app")
+        )
         table_policy.restrict_update_columns(_OwnerOp(owner), "zz_col_grant", allowed)
         owner.execute(text("INSERT INTO public.zz_col_grant VALUES (1, 'A', 1, 100)"))
     try:
         with engine.begin() as app:
-            app.execute(text("UPDATE public.zz_col_grant SET status = 'B', version = 2 WHERE id = 1"))
+            app.execute(
+                text("UPDATE public.zz_col_grant SET status = 'B', version = 2 WHERE id = 1")
+            )
         for bad in (
             "UPDATE public.zz_col_grant SET amount_frozen = 1 WHERE id = 1",
             "DELETE FROM public.zz_col_grant WHERE id = 1",
