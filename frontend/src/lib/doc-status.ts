@@ -22,10 +22,13 @@ export function statusBadgeClass(code: string): string {
     case "CONVERTED":
     case "PARTIALLY_PAID":
     case "PAID":
+    case "CONFIRMED":
       return "border-gray-900 bg-gray-900 text-white";
     case "CANCELLED":
     case "EXPIRED":
       return "border-gray-300 bg-gray-100 text-gray-500 line-through";
+    case "ON_HOLD":
+      return "border-gray-500 bg-gray-200 text-gray-800";
     default:
       return "border-gray-300 bg-white text-gray-700";
   }
@@ -90,3 +93,42 @@ export const PRICE_BASIS_LABEL: Record<string, string> = {
   MANUAL: "수동",
   BUYER_PO: "바이어 PO",
 };
+
+// ── SO(수주) — 서버 machine: 사람 엣지는 보류·재개·취소(확정은 PR-12 동결 액션 전용) ──
+
+const SALES_ORDER_STATUS: Record<string, string> = {
+  RECEIVED: "접수",
+  CONFIRMED: "확정",
+  ON_HOLD: "보류",
+  CANCELLED: "취소",
+  PARTIALLY_ALLOCATED: "부분할당",
+  ALLOCATED: "할당완료",
+  IN_SHIPMENT: "선적중",
+  COMPLETED: "완료",
+};
+
+export const salesOrderStatusLabel = (code: string): string => SALES_ORDER_STATUS[code] ?? code;
+
+/** 접수(RECEIVED)만 CONTENT(헤더 조건·라인) 편집 — 보류·확정 이후·취소는 읽기 전용(보류 중 편집은 재개 뒤). */
+export const canEditSalesOrder = (status: string): boolean => status === "RECEIVED";
+/** 보류는 접수·확정에서만 들어간다. */
+export const canHoldSalesOrder = (status: string): boolean =>
+  status === "RECEIVED" || status === "CONFIRMED";
+export const canResumeSalesOrder = (status: string): boolean => status === "ON_HOLD";
+export const canCancelSalesOrder = (status: string): boolean =>
+  status === "RECEIVED" || status === "CONFIRMED" || status === "ON_HOLD";
+
+/** SO를 만들 수 있는 원천 QT 상태(서버 원천 자격: ISSUED·CONVERTED — 유효기간은 서버가 직접 검사). */
+export const canCreateSalesOrderFromQuotation = (qtStatus: string): boolean =>
+  qtStatus === "ISSUED" || qtStatus === "CONVERTED";
+/** SO를 만들 수 있는 원천 PI 상태(미입금 발행·일부입금·입금완료 — 취소·만료는 불가). */
+export const canCreateSalesOrderFromProforma = (piStatus: string): boolean =>
+  piStatus === "ISSUED" || piStatus === "PARTIALLY_PAID" || piStatus === "PAID";
+
+/** 문서 흐름 노드의 종류별 상태 라벨. */
+export function docStatusLabel(kind: string, status: string): string {
+  if (kind === "QUOTATION") return quotationStatusLabel(status);
+  if (kind === "PROFORMA_INVOICE") return proformaStatusLabel(status);
+  if (kind === "SALES_ORDER") return salesOrderStatusLabel(status);
+  return status;
+}

@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { ConfirmDialog } from "../components/confirm-dialog";
+import { DocumentFlowPanel } from "../components/document-flow-panel";
 import {
   AdvanceView,
   BankSnapshotView,
@@ -22,7 +23,12 @@ import {
 import { StatusTimeline } from "../components/status-timeline";
 import { ApiError, apiFetch } from "../lib/api";
 import { errorMessage, isVersionConflict } from "../lib/api-errors";
-import { PRICE_BASIS_LABEL, canCancelProforma, proformaStatusLabel } from "../lib/doc-status";
+import {
+  PRICE_BASIS_LABEL,
+  canCancelProforma,
+  canCreateSalesOrderFromProforma,
+  proformaStatusLabel,
+} from "../lib/doc-status";
 import { usePagedQuery } from "../lib/paging";
 import {
   PROFORMAS_QUERY_KEY,
@@ -30,8 +36,10 @@ import {
   type ProformaDetail,
 } from "../lib/proforma";
 import { QUOTATIONS_QUERY_KEY } from "../lib/quotation";
+import { DOCUMENT_FLOW_QUERY_KEY, SALES_ORDERS_QUERY_KEY } from "../lib/sales-order";
 import { hasRole, useSession } from "../lib/session";
 import { ProformaStatusBadge } from "./proformas";
+import { SalesOrderCreateDialog } from "./sales-order-create";
 
 interface UserLookup {
   id: number;
@@ -63,6 +71,7 @@ function ProformaDetailView() {
   });
 
   const [cancelling, setCancelling] = useState(false);
+  const [creatingSo, setCreatingSo] = useState(false);
   const [notice, setNotice] = useState<unknown>(null);
   const [resetToken, setResetToken] = useState(0);
   // ★ 화면이 "마지막으로 본/내가 쓴" version — 창 포커스 재조회로 서버 version이 앞서가도 쓰기는 이 값으로 보낸다
@@ -76,6 +85,8 @@ function ProformaDetailView() {
     void client.invalidateQueries({ queryKey: PROFORMAS_QUERY_KEY });
     // 취소는 부모 견적 상태를 수렴시킨다(견적 화면도 최신으로).
     void client.invalidateQueries({ queryKey: QUOTATIONS_QUERY_KEY });
+    void client.invalidateQueries({ queryKey: DOCUMENT_FLOW_QUERY_KEY });
+    void client.invalidateQueries({ queryKey: SALES_ORDERS_QUERY_KEY });
   }
 
   function afterWrite(next: ProformaDetail) {
@@ -89,6 +100,7 @@ function ProformaDetailView() {
     setNotice(null);
     cancel.reset();
     setCancelling(false);
+    setCreatingSo(false);
     // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다).
     void detail.refetch().then((result) => {
       if (result.data) setBaseVersion(result.data.version);
@@ -191,6 +203,23 @@ function ProformaDetailView() {
           >
             최신 내용 불러오기
           </button>
+          {canWrite && canCreateSalesOrderFromProforma(pi.status) && (
+            <button
+              type="button"
+              onClick={() => setCreatingSo(true)}
+              disabled={stale || (pi.is_lapsed && pi.status === "ISSUED")}
+              title={
+                pi.is_lapsed && pi.status === "ISSUED"
+                  ? "유효기간이 지난 PI로는 수주를 만들 수 없습니다."
+                  : stale
+                    ? "다른 곳에서 수정되었습니다. 먼저 '최신 내용 불러오기'를 누르세요."
+                    : undefined
+              }
+              className="cell-nowrap rounded border border-gray-900 px-3 py-2 text-sm disabled:opacity-50"
+            >
+              SO 만들기
+            </button>
+          )}
           {canWrite && canCancelProforma(pi.status) && (
             <button
               type="button"
@@ -328,6 +357,8 @@ function ProformaDetailView() {
           </div>
         </section>
 
+        <DocumentFlowPanel kind="PROFORMA_INVOICE" id={pi.id} />
+
         <StatusTimeline
           basePath={`/v1/proforma-invoices/${pi.id}`}
           queryKey={detailKey}
@@ -335,6 +366,26 @@ function ProformaDetailView() {
         />
       </div>
 
+      {creatingSo && canWrite && canCreateSalesOrderFromProforma(pi.status) && (
+        <SalesOrderCreateDialog
+          source={{
+            kind: "PROFORMA_INVOICE",
+            id: pi.id,
+            doc_number: pi.doc_number,
+            doc_date: pi.doc_date,
+            lines: pi.lines.map((line) => ({
+              id: line.id,
+              line_no: line.line_no,
+              sku_code: line.sku_code,
+              sku_name_ko: line.sku_name_ko,
+              quantity: line.quantity,
+            })),
+          }}
+          version={base}
+          onClose={() => setCreatingSo(false)}
+          onReload={reload}
+        />
+      )}
       {cancelling && (
         <ConfirmDialog
           title="PI를 취소할까요?"

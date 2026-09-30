@@ -6,6 +6,7 @@
 const ALERT_ROUTES: Record<string, (id: number) => string> = {
   quotations: (id) => `/quotations/${id}`,
   proforma_invoices: (id) => `/proforma-invoices/${id}`,
+  sales_orders: (id) => `/sales-orders/${id}`,
 };
 
 export function alertRoute(entityType: string | null, entityId: number | null): string | null {
