@@ -1,4 +1,4 @@
-"""견적 전이 엔드포인트 — 발행·취소·개정 (S3-1 design-B B8).
+"""전표 전이·참조 생성 엔드포인트 — QT 발행·취소·개정·PI/SO 참조 생성·PI 취소·SO 보류·재개·취소·문서 흐름 (S3-1 design-B B8).
 
 전부 **사람 1클릭 + `Idempotency-Key` 필수**이고 무역(관리자 상시 통과)이 한다. 동결 액션(`issue`)은 범용
 `/transitions`로 못 넘는다(스키마 `to` Literal에서 동결 엣지·자동 엣지·RESERVED를 구조적으로 제외 — 우회 표면 제거).
@@ -7,9 +7,10 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from datetime import date
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Path, Response, status
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
@@ -20,7 +21,8 @@ from app.modules.proforma_invoices.schemas import (
     ProformaInvoicePreview,
 )
 from app.modules.quotations.schemas import QuotationDetail
-from app.modules.trade_chain import lifecycle, reference
+from app.modules.sales_orders.schemas import SalesOrderDetail, SalesOrderReferenceRequest
+from app.modules.trade_chain import document_flow, lifecycle, reference, so_reference
 from app.modules.trade_docs.constants import DocKind
 from app.modules.trade_docs.machine import public_transition_targets
 
@@ -57,6 +59,20 @@ class ProformaInvoiceTransitionRequest(BaseModel):
     to: ProformaInvoiceTarget
     version: StrictInt = Field(ge=1)
     #: 취소는 사유 필수(1~500자, 공백 불가).
+    reason: StrictStr | None = Field(default=None, max_length=500)
+
+
+#: SO 범용 전이의 `to` — 보류·재개(RECEIVED·CONFIRMED)·취소. 확정(RECEIVED→CONFIRMED)은 동결 액션 엣지라 값이 같아도 record_transition이 거부한다.
+SalesOrderTarget = Literal["ON_HOLD", "RECEIVED", "CONFIRMED", "CANCELLED"]
+assert set(SalesOrderTarget.__args__) == public_transition_targets(DocKind.SALES_ORDER)  # type: ignore[attr-defined]
+
+
+class SalesOrderTransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to: SalesOrderTarget
+    version: StrictInt = Field(ge=1)
+    #: 보류·취소는 사유 필수(1~500자, 공백 불가). 재개는 사유 선택.
     reason: StrictStr | None = Field(default=None, max_length=500)
 
 
@@ -195,3 +211,119 @@ def transition_proforma_invoice(
     )
     response.status_code = status_code
     return ProformaInvoiceDetail.model_validate(body)
+
+
+# ── 참조 생성: QT → SO (직접 경로), PI → SO (활성 1:1) ─────────────────────────────
+
+
+@router.post(
+    "/{qt_id}/sales-orders",
+    summary="수주 생성 (QT 참조 생성 — 접수 상태로 시작, 값은 원천에서 복사·잔량 초과 409)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def create_sales_order_from_quotation(
+    qt_id: int,
+    payload: SalesOrderReferenceRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> SalesOrderDetail:
+    status_code, body = so_reference.create_sales_order_from_quotation(
+        actor=current,
+        idempotency_key=key,
+        qt_id=qt_id,
+        payload=payload.model_dump(exclude_unset=True),
+    )
+    response.status_code = status_code
+    return SalesOrderDetail.model_validate(body)
+
+
+@pi_router.post(
+    "/{pi_id}/sales-orders",
+    summary="수주 생성 (PI 참조 생성 — PI당 활성 수주 1건, 접수 상태로 시작)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def create_sales_order_from_proforma_invoice(
+    pi_id: int,
+    payload: SalesOrderReferenceRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> SalesOrderDetail:
+    status_code, body = so_reference.create_sales_order_from_proforma_invoice(
+        actor=current,
+        idempotency_key=key,
+        pi_id=pi_id,
+        payload=payload.model_dump(exclude_unset=True),
+    )
+    response.status_code = status_code
+    return SalesOrderDetail.model_validate(body)
+
+
+# ── SO 전이(보류·재개·취소) ─────────────────────────────────────────────────
+
+so_router = APIRouter(prefix="/sales-orders", tags=["trade-chain"])
+
+
+@so_router.post(
+    "/{so_id}/transitions",
+    summary="수주 보류·재개·취소 (사유 필수는 보류·취소 — 확정은 별도 액션, 후속 생존 시 취소 409)",
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def transition_sales_order(
+    so_id: int,
+    payload: SalesOrderTransitionRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> SalesOrderDetail:
+    status_code, body = lifecycle.transition_sales_order(
+        actor=current,
+        idempotency_key=key,
+        so_id=so_id,
+        to=payload.to,
+        version=payload.version,
+        reason=payload.reason,
+    )
+    response.status_code = status_code
+    return SalesOrderDetail.model_validate(body)
+
+
+# ── 문서 흐름 ───────────────────────────────────────────────────────────────
+
+flow_router = APIRouter(prefix="/document-flow", tags=["trade-chain"])
+
+FlowKind = Literal["QUOTATION", "PROFORMA_INVOICE", "SALES_ORDER"]
+
+
+class FlowNode(BaseModel):
+    kind: str
+    id: int
+    doc_number: str
+    status: str
+    doc_date: date
+    currency: str
+    total_amount: int
+    total_text: str | None
+    parent_kind: str | None
+    parent_id: int | None
+    is_current: bool
+
+
+class DocumentFlowOut(BaseModel):
+    """`nodes`는 위→아래(QT, PI…, PI의 SO…, QT 직접 SO…) 순서다. 직접(인테이크) 수주는 노드 1개다."""
+
+    root_kind: str
+    root_id: int
+    nodes: list[FlowNode]
+
+
+@flow_router.get(
+    "/{doc_kind}/{doc_id}", summary="문서 흐름 (QT→PI→SO 사슬 전체 — 취소·만료 전표 포함)"
+)
+def get_document_flow(
+    doc_kind: FlowKind, doc_id: Annotated[int, Path(ge=1)], current: CurrentUser
+) -> DocumentFlowOut:
+    return DocumentFlowOut.model_validate(document_flow.document_flow(DocKind(doc_kind), doc_id))

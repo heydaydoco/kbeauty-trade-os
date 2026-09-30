@@ -170,29 +170,38 @@ def _check_copy_source(session: Session, source_id: int, qt: Quotation, *, lock:
         )
 
 
-def _select_lines(
-    session: Session, qt: Quotation, requested: list[dict[str, Any]] | None, *, lock: bool
-) -> tuple[list[QuotationLine], dict[int, int], dict[int, int]]:
-    """원천 라인 확정 → (라인 행들, 라인별 가져올 수량, 라인별 잔량[잠금 후 재계산]).
+def select_source_lines(
+    session: Session,
+    *,
+    source_kind: DocKind,
+    line_kind: str,
+    source_id: int,
+    line_model: Any,
+    header_fk: Any,
+    requested: list[dict[str, Any]] | None,
+    lock: bool,
+    noun: str,
+) -> tuple[list[Any], dict[int, int], dict[int, int]]:
+    """원천 라인 확정 → (라인 행들, 라인별 가져올 수량, 라인별 잔량[잠금 후 재계산]) — QT→PI·QT→SO·PI→SO 공용.
 
     `requested`가 None이면 잔량이 남은 라인 전부를 잔량 전부로. 라인을 id 오름차순으로 잠근 뒤 잔량을 **다시** 계산한다
-    (확인→기록 창 방어). 다른 QT의 라인 id를 섞으면 422(존재 여부를 알려 주지 않는다 — IDOR 방지).
+    (확인→기록 창 방어). 다른 원천의 라인 id를 섞으면 422(존재 여부를 알려 주지 않는다 — IDOR 방지). `noun`은 안내문에 쓰는 원천 이름.
     """
     wanted_ids = None if requested is None else [int(item["source_line_id"]) for item in requested]
     if wanted_ids is not None and len(set(wanted_ids)) != len(wanted_ids):
         raise invalid("lines", "같은 원천 라인을 두 번 지정할 수 없습니다.")
     if lock:
-        line_ids = lock_source_lines(session, DocKind.QUOTATION, qt.id, wanted_ids)
+        line_ids = lock_source_lines(session, source_kind, source_id, wanted_ids)
     else:
         line_ids = list(
             session.execute(
-                select(QuotationLine.id)
+                select(line_model.id)
                 .where(
-                    QuotationLine.qt_id == qt.id,
-                    QuotationLine.deleted_at.is_(None),
-                    *([QuotationLine.id.in_(wanted_ids)] if wanted_ids is not None else []),
+                    header_fk == source_id,
+                    line_model.deleted_at.is_(None),
+                    *([line_model.id.in_(wanted_ids)] if wanted_ids is not None else []),
                 )
-                .order_by(QuotationLine.id)
+                .order_by(line_model.id)
             ).scalars()
         )
     if wanted_ids is not None:
@@ -201,9 +210,9 @@ def _select_lines(
             index = wanted_ids.index(missing[0])
             raise invalid(
                 f"lines[{index}].source_line_id",
-                "이 견적의 라인이 아닙니다. 라인을 다시 선택해 주세요.",
+                f"이 {noun}의 라인이 아닙니다. 라인을 다시 선택해 주세요.",
             )
-    quantities = open_quantity(session, "QT_LINE", line_ids)
+    quantities = open_quantity(session, line_kind, line_ids)  # type: ignore[arg-type]
     if requested is None:
         take = {i: quantities[i].open for i in line_ids if quantities[i].open > 0}
         if not take:
@@ -220,11 +229,27 @@ def _select_lines(
     rows = {
         row.id: row
         for row in session.execute(
-            select(QuotationLine).where(QuotationLine.id.in_(sorted(take)))
+            select(line_model).where(line_model.id.in_(sorted(take)))
         ).scalars()
     }
     ordered = [rows[i] for i in sorted(take, key=lambda i: rows[i].line_no)]
     return ordered, take, {i: quantities[i].open for i in take}
+
+
+def _select_lines(
+    session: Session, qt: Quotation, requested: list[dict[str, Any]] | None, *, lock: bool
+) -> tuple[list[QuotationLine], dict[int, int], dict[int, int]]:
+    return select_source_lines(
+        session,
+        source_kind=DocKind.QUOTATION,
+        line_kind="QT_LINE",
+        source_id=qt.id,
+        line_model=QuotationLine,
+        header_fk=QuotationLine.qt_id,
+        requested=requested,
+        lock=lock,
+        noun="견적",
+    )
 
 
 def _plan(

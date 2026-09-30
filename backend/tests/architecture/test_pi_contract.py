@@ -49,16 +49,16 @@ def test_line_consumers_register_exactly_the_three_s31_relations() -> None:
 
 
 def test_pending_consumer_tables_are_exactly_the_registered_tables_missing_from_metadata() -> None:
-    """PENDING_CONSUMER_TABLES는 등록된 소비자 중 metadata에 아직 없는 테이블과 정확히 같다 — PR-7이 SO 라인을 만들면 이 핀이 소거를 강제한다"""
+    """PENDING_CONSUMER_TABLES는 등록된 소비자 중 metadata에 아직 없는 테이블과 정확히 같다 — PR-7a가 SO 라인을 만들며 소거했다(지금은 공집합)"""
     absent = {
         spec.child_line_table
         for specs in LINE_CONSUMERS.values()
         for spec in specs
         if spec.child_line_table not in Base.metadata.tables
     }
-    assert absent == set(PENDING_CONSUMER_TABLES) == {"sales_order_lines"}, (
+    assert absent == set(PENDING_CONSUMER_TABLES) == set(), (
         f"metadata에 없는 소비자 테이블 {sorted(absent)} ≠ PENDING {sorted(PENDING_CONSUMER_TABLES)} — "
-        "SO 라인 테이블을 만든 PR은 quantities.PENDING_CONSUMER_TABLES에서 지우세요."
+        "소비자 테이블을 만든 PR은 quantities.PENDING_CONSUMER_TABLES에서 지우세요(테이블이 없는 등록을 더했다면 거기 적으세요)."
     )
 
 
@@ -81,11 +81,12 @@ def test_registered_consumer_columns_exist_when_the_table_exists() -> None:
     assert checked >= 1  # 공회전 방지 — PI 라인 소비자가 실제로 검사됐다
 
 
-def test_chain_pending_is_exactly_the_sales_orders_table_now() -> None:
-    """PENDING_CHILD_TABLES에서 proforma_invoices가 소거됐다(PR-6a) — 남은 것은 sales_orders뿐이고 CHILD_LINKS는 PI를 실테이블로 판정한다"""
+def test_chain_pending_is_empty_now() -> None:
+    """PENDING_CHILD_TABLES에서 proforma_invoices(PR-6a)·sales_orders(PR-7a)가 모두 소거됐다 — CHILD_LINKS는 PI·SO를 실테이블로 판정한다"""
     from tests.architecture.test_doc_chain_contract import PENDING_CHILD_TABLES
 
-    assert {"sales_orders"} == PENDING_CHILD_TABLES
+    assert set() == PENDING_CHILD_TABLES
+    assert "sales_orders" in Base.metadata.tables
     assert "proforma_invoices" in Base.metadata.tables
     assert any(link.child_table == "proforma_invoices" for link in chain.CHILD_LINKS)
     assert chain.links_for(DocKind.QUOTATION)[0].child_table == "proforma_invoices"
@@ -119,7 +120,7 @@ def test_pi_field_policy_pins() -> None:
 
 
 def test_the_pi_state_check_is_now_enabled_and_agrees_with_the_machine() -> None:
-    """지연 프레임 켜짐 — PI 상태 CHECK 3자 대사(StrEnum·machine·DB)가 skip이 아니라 실제로 도는 테이블이 존재한다(SO·PO는 각 PR)"""
+    """지연 프레임 켜짐 — PI(PR-6a)·SO(PR-7a) 상태 CHECK 3자 대사(StrEnum·machine·DB)가 skip이 아니라 실제로 도는 테이블이 존재한다(PO는 PR-8)"""
     with owner_engine.connect() as connection:
         exists = {
             table: connection.execute(
@@ -128,8 +129,8 @@ def test_the_pi_state_check_is_now_enabled_and_agrees_with_the_machine() -> None
             is not None
             for table in DOC_TABLES.values()
         }
-    assert exists["quotations"] and exists["proforma_invoices"]
-    assert not exists["sales_orders"] and not exists["purchase_orders"]  # 이 둘은 PR-7·8이 켠다
+    assert exists["quotations"] and exists["proforma_invoices"] and exists["sales_orders"]
+    assert not exists["purchase_orders"]  # PR-8이 켠다
 
 
 def test_bank_account_number_is_in_no_unique_key() -> None:

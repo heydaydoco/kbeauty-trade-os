@@ -23,7 +23,7 @@ CHAIN_TABLES = set(DOC_TABLES.values()) | set(LINE_TABLES.values())
 
 #: 아직 만들어지지 않은 후속 테이블 — 각 전표 PR(PR-7: sales_orders)이 테이블을 만들면서
 #: 이 집합에서 **지워야** 한다(안 지우면 아래 테스트가 실패해 CHILD_LINKS 편입을 상기시킨다). PR-6a가 proforma_invoices를 지웠다.
-PENDING_CHILD_TABLES = {"sales_orders"}
+PENDING_CHILD_TABLES: set[str] = set()
 
 
 def _fks_to_chain_tables() -> set[tuple[str, str, str]]:

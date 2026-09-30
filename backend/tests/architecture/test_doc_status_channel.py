@@ -22,9 +22,16 @@ from tests.support.astscan import app_sources, module_of, parse_source, referenc
 pytestmark = pytest.mark.group_k
 
 #: 전표 도메인 모듈 — 각 전표 PR이 자기 모듈을 여기 더한다(스캔 대상 확장).
-DOC_MODULES = {"trade_docs", "quotations", "proforma_invoices", "trade_chain"}
-DOC_MODEL_NAMES = {"Quotation", "QuotationLine", "ProformaInvoice", "ProformaInvoiceLine"}
-STATUS_LOG_NAMES = {"QuotationStatusLog", "ProformaInvoiceStatusLog"}
+DOC_MODULES = {"trade_docs", "quotations", "proforma_invoices", "sales_orders", "trade_chain"}
+DOC_MODEL_NAMES = {
+    "Quotation",
+    "QuotationLine",
+    "ProformaInvoice",
+    "ProformaInvoiceLine",
+    "SalesOrder",
+    "SalesOrderLine",
+}
+STATUS_LOG_NAMES = {"QuotationStatusLog", "ProformaInvoiceStatusLog", "SalesOrderStatusLog"}
 PREFIX_LITERALS = {"QT", "PI", "SO", "PO"}
 
 TRANSITION = "modules/trade_docs/transition.py"
@@ -33,6 +40,7 @@ DOC_NUMBER = "modules/trade_docs/doc_number.py"
 NUMBERING = "modules/numbering/service.py"
 QT_SERVICE = "modules/quotations/service.py"
 PI_SERVICE = "modules/proforma_invoices/service.py"
+SO_SERVICE = "modules/sales_orders/service.py"
 
 
 def _flatten(target: ast.expr) -> list[ast.expr]:
@@ -125,9 +133,18 @@ ALLOWED_SITES: frozenset[tuple[str, str, str]] = frozenset(
         (PI_SERVICE, "insert_issued", "total_amount"),
         (PI_SERVICE, "insert_issued", "doc_number"),
         (PI_SERVICE, "insert_issued", UNKNOWN),
+        # SO 생성 착지 — 참조 생성 오케스트레이터(so_reference)가 만든 draft의 결제조건·Incoterms 열 dict(`**draft.payment_columns`)
+        (SO_SERVICE, "create_received_sales_order", "total_amount"),
+        (SO_SERVICE, "create_received_sales_order", "doc_number"),
+        (SO_SERVICE, "create_received_sales_order", UNKNOWN),
         # 헤더 편집: setattr(row, name, value)의 name은 _header_columns가 만든 화이트리스트 cols의 키(아래 자기검사가 확인)
         (QT_SERVICE, "update_quotation", UNKNOWN),
         (QT_SERVICE, "update_meta", UNKNOWN),
+        (
+            SO_SERVICE,
+            "update_sales_order",
+            UNKNOWN,
+        ),  # setattr(row, name, value) — name은 `_header_columns` 화이트리스트 결과
         # 담당 이관: update(target.model).values({target.column.key: …}) — 열은 ASSIGNMENT_TARGETS(아래 테스트가 확인)
         ("modules/handover/service.py", "reassign_all", UNKNOWN),
     }
@@ -261,6 +278,9 @@ _SQL_DOC_TABLES = (
     "proforma_invoices",
     "proforma_invoice_lines",
     "proforma_invoice_status_log",
+    "sales_orders",
+    "sales_order_lines",
+    "sales_order_status_log",
     "bank_accounts",
 )
 #: `UPDATE [ONLY] [public.]["]table` · `INSERT INTO …` · `DELETE FROM …` (대소문자·개행 무시). f-string은 값 자리를 `{}`로 접어 본다.
@@ -384,12 +404,35 @@ def test_the_dynamic_write_allowlist_entries_are_bounded_by_whitelists() -> None
         and isinstance(n.value, ast.Dict)
     ]
     assert literals and not _dict_keys(literals[0]) & (PROTECTED | {UNKNOWN})
+    # SO 편집 — `_header_columns`의 cols 키도 전부 리터럴이고 보호 열이 아니며, 요청 필드 집합도 보호 열을 싣지 않는다
+    from app.modules.sales_orders.service import CONTENT_REQUEST_FIELDS as SO_CONTENT_FIELDS
+    from app.modules.sales_orders.service import _FREE_FIELDS as SO_FREE_FIELDS
+
+    assert not (set(SO_FREE_FIELDS) | SO_CONTENT_FIELDS) & PROTECTED
+    so_function = next(
+        n
+        for n in app_sources()[SO_SERVICE].body
+        if isinstance(n, ast.FunctionDef) and n.name == "_header_columns"
+    )
+    so_keys: list[ast.expr] = [
+        node.slice
+        for node in ast.walk(so_function)
+        if isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "cols"
+    ]
+    assert so_keys and all(isinstance(k, ast.Constant) for k in so_keys)
+    assert not {k.value for k in so_keys if isinstance(k, ast.Constant)} & PROTECTED
 
 
 def test_totals_and_numbers_have_a_single_creator_per_document() -> None:
-    """생성자의 total_amount=·doc_number=는 전표별 생성 착지 한 곳씩(QT insert_draft·PI insert_issued) · 헤더 합계는 recompute_total의 setattr로만 오른다"""
+    """생성자의 total_amount=·doc_number=는 전표별 생성 착지 한 곳씩(QT insert_draft·PI insert_issued·SO create_received_sales_order) · 헤더 합계는 recompute_total의 setattr로만 오른다"""
     sites = all_protected_sites()
-    creators = {(QT_SERVICE, "insert_draft"), (PI_SERVICE, "insert_issued")}
+    creators = {
+        (QT_SERVICE, "insert_draft"),
+        (PI_SERVICE, "insert_issued"),
+        (SO_SERVICE, "create_received_sales_order"),
+    }
     for column in ("total_amount", "doc_number"):
         assert {k[:2] for k in sites if k[2] == column} == creators, column
         for creator in creators:
@@ -417,7 +460,7 @@ def test_document_headers_are_never_soft_deleted_and_doc_number_is_never_reassig
         for rel, tree in _doc_module_sources().items()
         if keyword_calls(tree, "doc_number", DOC_MODEL_NAMES)
     ]
-    assert sorted(users) == sorted([QT_SERVICE, PI_SERVICE])
+    assert sorted(users) == sorted([QT_SERVICE, PI_SERVICE, SO_SERVICE])
 
 
 def test_document_numbers_are_issued_only_through_the_kernel_wrapper() -> None:
@@ -464,12 +507,15 @@ def _calls_in_source_order(function: ast.FunctionDef) -> list[str]:
 
 def test_line_writes_go_through_the_editable_guard() -> None:
     """라인 쓰기 3함수(add·update·remove)는 assert_editable을 호출하고 헤더를 lock_document로 먼저 잠근다 (B9 #7)"""
-    tree = app_sources()[QT_SERVICE]
-    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-    for name in ("add_line", "update_line", "remove_line"):
-        calls = _calls_in_source_order(functions[name])
-        assert "assert_editable" in calls and "lock_document" in calls, name
-        assert calls.index("lock_document") < calls.index("assert_editable"), f"{name}: 잠금이 먼저"
+    for service in (QT_SERVICE, SO_SERVICE):
+        tree = app_sources()[service]
+        functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        for name in ("add_line", "update_line", "remove_line"):
+            calls = _calls_in_source_order(functions[name])
+            assert "assert_editable" in calls and "lock_document" in calls, (service, name)
+            assert calls.index("lock_document") < calls.index("assert_editable"), (
+                f"{service}:{name}: 잠금이 먼저"
+            )
 
 
 def test_the_lock_order_of_a_line_write_is_checked_in_source_order() -> None:
@@ -501,6 +547,12 @@ def test_no_http_delete_on_the_document_itself() -> None:
         for path, operations in app.openapi()["paths"].items()
         if "delete" in operations and "/proforma-invoices" in path
     }
+    # SO는 라인 제외 DELETE만 있다(폐기=취소 전이, 번호는 남는다)
+    assert {
+        path
+        for path, operations in app.openapi()["paths"].items()
+        if "delete" in operations and "/sales-orders" in path
+    } == {"/api/v1/sales-orders/{so_id}/lines/{line_id}"}
 
 
 # ── 자기검사: 스캐너가 위반 코퍼스를 실제로 잡는다 ────────────────────────────────

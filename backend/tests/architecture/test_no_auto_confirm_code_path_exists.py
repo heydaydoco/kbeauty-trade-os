@@ -97,6 +97,7 @@ REGISTRY: tuple[Entry, ...] = (
                 "modules/trade_docs/transition.py",
                 "modules/quotations/service.py",
                 "modules/proforma_invoices/service.py",  # PI 생성 착지(insert_issued) — 참조 생성 오케스트레이터가 부른다
+                "modules/sales_orders/service.py",  # SO 생성 착지(create_received_sales_order) — 참조 생성·인테이크 확정이 부른다
             }
         ),
         forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
@@ -136,6 +137,55 @@ REGISTRY: tuple[Entry, ...] = (
         forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
         forbid_module_import=False,  # 같은 모듈의 다른 보호 함수(issue_quotation)와 정의 모듈이 같다 — 언급 검사로 충분
         notes="PI 취소(사람 전이) — 라우터 1곳+행위자 필수",
+    ),
+    Entry(
+        name="create_sales_order_from_quotation",
+        defined_in="app.modules.trade_chain.so_reference",
+        allowed_files=frozenset(
+            {"modules/trade_chain/so_reference.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {"platform", "imports", "handover", "notifications", "outbox", "worklist"}
+        ),
+        forbid_module_import=False,  # 같은 모듈의 `create_sales_order_from_proforma_invoice`와 정의 모듈이 같다 — 언급 검사로 충분
+        notes="QT→SO 참조 생성(접수 RECEIVED로만 태어난다 — 확정을 부르지 않는다) — 라우터 1곳+행위자 필수",
+    ),
+    Entry(
+        name="create_sales_order_from_proforma_invoice",
+        defined_in="app.modules.trade_chain.so_reference",
+        allowed_files=frozenset(
+            {"modules/trade_chain/so_reference.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {"platform", "imports", "handover", "notifications", "outbox", "worklist"}
+        ),
+        forbid_module_import=False,
+        notes="PI→SO 참조 생성(활성 1:1, 접수로만) — 라우터 1곳+행위자 필수",
+    ),
+    Entry(
+        name="create_received_sales_order",
+        defined_in="app.modules.sales_orders.service",
+        allowed_files=frozenset(
+            {
+                "modules/sales_orders/service.py",
+                "modules/trade_chain/so_reference.py",  # 참조 생성(QT/PI→SO) — PR-13 인테이크 확정이 여기 한 줄을 더한다
+            }
+        ),
+        forbidden_modules=frozenset(
+            {"platform", "imports", "handover", "notifications", "outbox", "worklist"}
+        ),
+        forbid_module_import=False,  # 정의 모듈이 조회·편집 함수도 품는다 — 언급 검사로 충분
+        notes="SO 생성의 단일 착지 — RECEIVED로만 만든다(확정·승격 자동화 금지, B9 #3). 스케줄러·임포트·이관·알림 경로에서 언급 0",
+    ),
+    Entry(
+        name="transition_sales_order",
+        defined_in="app.modules.trade_chain.lifecycle",
+        allowed_files=frozenset(
+            {"modules/trade_chain/lifecycle.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
+        forbid_module_import=False,
+        notes="SO 보류·재개·취소(사람 전이) — 라우터 1곳+행위자 필수. 확정은 이 함수에 없다(PR-12)",
     ),
     Entry(
         name="sweep_expired_documents",

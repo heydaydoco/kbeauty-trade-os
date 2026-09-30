@@ -7,8 +7,9 @@
 
 ■ 소비자 레지스트리(`LINE_CONSUMERS`): 키는 원천 라인 종류 4개(QT_LINE·PI_LINE·SO_LINE·PO_LINE). S3-1 등록은 PR-6·7이
   하고(QT_LINE←PI_LINE.qt_line_id·QT_LINE←SO_LINE.qt_line_id·PI_LINE←SO_LINE.pi_line_id), 선적·입고 소비는 S3-2·S4-1이 더한다.
-  PR-6a가 3건을 **모두 등록**한다 — 자식 라인 테이블이 아직 없는 등록(SO 라인: PR-7)은 `open_quantity`가 건너뛴다
-  (`PENDING_CONSUMER_TABLES` 핀 테스트가 PR-7의 소거를 강제 — CHILD_LINKS의 PENDING 관용과 같다).
+  PR-6a가 3건을 **모두 등록**했고 자식 라인 테이블이 아직 없는 등록(SO 라인)은 `open_quantity`가 건너뛰었다 —
+  PR-7a가 `sales_order_lines`를 만들며 `PENDING_CONSUMER_TABLES`를 비웠다(핀 테스트가 소거를 강제한 것 — CHILD_LINKS의 PENDING 관용과 같다).
+  이후 소비자 등록은 자식 테이블이 이미 있을 때만 하고, 테이블이 아직 없는 등록을 더하면 그 테이블을 이 집합에 적는다.
 ■ 소비 절차(소비 세션 의무): ① `lock_lines_for_consumption` ② `open_quantity` 재계산 ③ 요청 ≤ 잔량(초과 409
   EXCEEDS_OPEN, 부분 허용) ④ 자기 행 INSERT — 한 트랜잭션. 부모 헤더 `FOR SHARE`가 취소(헤더 FOR UPDATE)와 직렬화한다.
   (참조 생성은 원천 헤더 `FOR UPDATE`→원천 라인 `FOR UPDATE` id순 — PR-6이 별도 헬퍼로 잠근다.)
@@ -101,7 +102,7 @@ LINE_CONSUMERS: dict[str, tuple[ConsumerSpec, ...]] = {
 #: 등록은 됐으나 자식 라인 테이블이 아직 없는 소비자의 테이블 — 각 전표 PR이 테이블을 만들며 **지워야** 한다
 #: (test_doc_chain_contract가 metadata와 대사해 안 지우면 실패 — 메타데이터를 런타임에 읽지 않는 이유는 테스트의 임시 소비자 테이블이
 #: 메타데이터 밖이어도 산식을 시험할 수 있게 하기 위해서다). 없는 테이블의 소비량은 0이다(행이 있을 수 없다).
-PENDING_CONSUMER_TABLES: frozenset[str] = frozenset({"sales_order_lines"})
+PENDING_CONSUMER_TABLES: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
