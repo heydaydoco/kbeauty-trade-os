@@ -20,6 +20,7 @@ import { ReadinessPage } from "./routes/readiness";
 import { RequirementTemplatesPage } from "./routes/requirement-templates";
 import { MaterialsPage } from "./routes/materials";
 import { NotFoundPage } from "./routes/not-found";
+import { PoliciesPage } from "./routes/policies";
 import { PartnersPage } from "./routes/partners";
 import { ProductDetailPage } from "./routes/product-detail";
 import { ProductsPage } from "./routes/products";
@@ -97,6 +98,7 @@ export function AppRoutes() {
         <Route path="/imports" element={<ImportsPage />} />
         <Route path="/brands" element={<BrandsPage />} />
         <Route path="/item-profiles" element={<ItemProfilesPage />} />
+        <Route path="/settings/policies" element={<PoliciesPage />} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />
