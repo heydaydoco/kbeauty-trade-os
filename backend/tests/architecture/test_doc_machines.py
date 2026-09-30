@@ -158,12 +158,12 @@ def test_reason_required_states_and_dead_statuses(kind: DocKind) -> None:
 
 def test_editable_states_are_only_qt_draft_and_so_received() -> None:
     """편집 가능 상태는 QT:DRAFT·SO:RECEIVED 두 곳뿐이다(PI·PO는 편집 구간이 없다)"""
-    assert EDITABLE_STATES == {
+    assert {
         DocKind.QUOTATION: {"DRAFT"},
         DocKind.PROFORMA_INVOICE: set(),
         DocKind.SALES_ORDER: {"RECEIVED"},
         DocKind.PURCHASE_ORDER: set(),
-    }
+    } == EDITABLE_STATES
 
 
 def test_prefixes_are_unique_and_two_letters() -> None:

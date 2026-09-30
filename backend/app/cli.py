@@ -33,6 +33,7 @@ from app.modules.identity.passwords import hash_password
 from app.modules.identity.service import normalize_email
 from app.modules.platform import scheduler, storage
 from app.modules.seeds import service as seeds
+from app.modules.trade_docs import verify as trade_docs_verify
 
 MIN_PASSWORD_LENGTH = 12
 
@@ -228,6 +229,12 @@ def main(argv: list[str] | None = None) -> int:
         "--actor-email", required=True, help="투입자(등록된 계정) 이메일 — 감사 컬럼에 남는다"
     )
 
+    # 전표 합계 검산 수동 실행 (S3-1 PR-5a — 소급 입력 후 검산 §21·운영 검산 버튼과 같은 함수).
+    commands.add_parser(
+        "trade-docs-totals-verify",
+        help="전표 헤더 합계=라인 합계 검산을 1회 실행한다(불일치 시 관리자 알림 — 자동 보정 없음)",
+    )
+
     # 실행기 진입점 — compose의 worker 서비스가 이 명령으로 뜬다.
     commands.add_parser("run-scheduler", help="배치 실행기를 기동한다(무한 루프)")
 
@@ -294,6 +301,17 @@ def main(argv: list[str] | None = None) -> int:
             "실제로 지우려면 --apply를 붙이세요(되돌릴 수 없음)."
         )
         return 0
+    if args.command == "trade-docs-totals-verify":
+        counts = trade_docs_verify.run_totals_verify()
+        print(
+            f"전표 합계 검산 완료: 불일치 {counts['mismatches']}건 — 신규 알림 {counts['notified']}건"
+            + (
+                ""
+                if counts["mismatches"] == 0
+                else " (자동 보정하지 않았습니다 — 원인을 확인하세요)"
+            )
+        )
+        return 1 if counts["mismatches"] else 0
     if args.command == "register-jobs":
         created = scheduler.register_jobs()
         if created:

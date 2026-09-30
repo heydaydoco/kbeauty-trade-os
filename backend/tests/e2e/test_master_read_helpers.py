@@ -235,8 +235,8 @@ def test_cells_for_matches_the_matrix_colors_for_a_single_market() -> None:
     assert readiness.cells_for(sku_ids=[], market_code="US") == {}
 
 
-def test_lock_true_takes_a_share_lock_that_conflicts_with_for_update() -> None:
-    """lock=True는 FOR SHARE다 — 유형 해제 임포트가 잡은 FOR UPDATE와 충돌해 대기한다(제거 시 실패)"""
+def test_lock_true_takes_a_key_share_lock_that_conflicts_with_for_update() -> None:
+    """lock=True는 FOR KEY SHARE다 — 유형 해제 임포트가 잡은 FOR UPDATE와 충돌해 대기한다(제거 시 실패)"""
     from sqlalchemy.exc import DBAPIError
 
     partner = create_partner("PTN-LK", name_ko="잠금", types=("SUPPLIER",))
@@ -255,6 +255,23 @@ def test_lock_true_takes_a_share_lock_that_conflicts_with_for_update() -> None:
             uow.session.execute(text("SET LOCAL lock_timeout = '150ms'"))
             partners.require_partner_of_any_type(
                 uow.session, partner, ("SUPPLIER",), field="f", type_label="공급사", lock=False
+            )
+    finally:
+        tx.rollback()
+        holder.close()
+
+
+def test_lock_true_does_not_block_the_credit_serialization_lock() -> None:
+    """KEY SHARE는 FOR NO KEY UPDATE(여신 직렬화 경로)와 충돌하지 않는다 — 전표 생성이 확정을 막지 않는다(X-37)"""
+    partner = create_partner("PTN-NK", name_ko="비블록", types=("BUYER",))
+    holder = engine.connect()
+    tx = holder.begin()
+    try:
+        holder.execute(text("SELECT 1 FROM partners WHERE id=:i FOR NO KEY UPDATE"), {"i": partner})
+        with unit_of_work() as uow:
+            uow.session.execute(text("SET LOCAL lock_timeout = '150ms'"))
+            partners.require_partner_of_any_type(
+                uow.session, partner, ("BUYER",), field="f", type_label="바이어", lock=True
             )
     finally:
         tx.rollback()

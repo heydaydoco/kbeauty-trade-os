@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -101,3 +102,9 @@ class QuotationStatusLog(StatusLogColumns, PkMixin, Base):
         ),
         Index("ix_quotation_status_log_quotation_id_id", "quotation_id", desc("id")),
     )
+
+
+#: 전표별 상태이력 모델 — 각 전표 PR이 자기 표를 여기 등록한다(record_birth/record_transition이 소비).
+STATUS_LOG_MODELS: dict[DocKind, type[Any]] = {
+    DocKind.QUOTATION: QuotationStatusLog,
+}

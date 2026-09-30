@@ -54,6 +54,7 @@ from app.modules.notifications import dispatcher
 from app.modules.notifications import service as notifications
 from app.modules.platform import backups, storage
 from app.modules.platform.models import ScheduledJob
+from app.modules.trade_docs import verify as trade_docs_verify
 
 #: 동시 기동 방지용 advisory lock 키 (임의 상수 — 이 앱의 실행기 전용).
 SCHEDULER_LOCK_KEY = 8_231_057
@@ -163,6 +164,10 @@ def _run_backup_freshness() -> dict[str, int]:
     return backups.run_backup_freshness()
 
 
+def _run_trade_docs_totals_verify() -> dict[str, int]:
+    return trade_docs_verify.run_totals_verify()
+
+
 @dataclass(frozen=True, slots=True)
 class JobSpec:
     code: str
@@ -223,6 +228,14 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         # 백업 볼륨이 구성되지 않은 환경(KBOS_BACKUP_DIR 없음)에서는 건너뛴다(OK).
         schedule="daily@08:00",
         run=_run_backup_freshness,
+    ),
+    JobSpec(
+        code="trade-docs-totals-verify",
+        name_ko="전표 합계 야간 검산(헤더 합계=라인 합계)",
+        # 읽기 전용 검산 + 관리자 인앱 알림 — 자동 보정 없음(ADR-0056·design-A A14). 저장소 점검(05:00)과
+        # 만료 스윕(06:10) 사이, 업무 시작 전에 불일치를 알린다.
+        schedule="daily@05:30",
+        run=_run_trade_docs_totals_verify,
     ),
 )
 

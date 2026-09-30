@@ -307,9 +307,8 @@ def test_check_constraints_reject_violations(
         _insert(
             connection, **{**base, "doc_number": "QT-2026-0009"}
         )  # 양성 대조 — 같은 base는 통과
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            _insert(connection, **{**base, **override})
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _insert(connection, **{**base, **override})
     state, violated = _sqlstate_and_constraint(caught.value)
     # 한 값이 여러 CHECK를 동시에 깰 수 있다(예: 알 수 없는 상태는 status_valid와 frozen_matches_status) —
     # PG는 이름순으로 첫 위반을 보고하므로 `|`로 허용 집합을 적는다.
@@ -329,9 +328,8 @@ def test_doc_number_is_globally_unique_even_after_soft_delete(base: dict[str, An
         connection.execute(
             text("UPDATE quotations SET deleted_at = now() WHERE id = :i"), {"i": first}
         )
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            _insert(connection, **base)
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _insert(connection, **base)
     assert _sqlstate_and_constraint(caught.value) == (UNIQUE_VIOLATION, "uq_quotations_doc_number")
 
 
@@ -340,9 +338,8 @@ def test_only_one_live_copy_per_source(base: dict[str, Any]) -> None:
     with engine.begin() as connection:
         source = _insert(connection, **{**base, "status": "CANCELLED"})
         _insert(connection, **{**base, "doc_number": "QT-2026-0002", "copied_from_id": source})
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            _insert(connection, **{**base, "doc_number": "QT-2026-0003", "copied_from_id": source})
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _insert(connection, **{**base, "doc_number": "QT-2026-0003", "copied_from_id": source})
     assert _sqlstate_and_constraint(caught.value) == (
         UNIQUE_VIOLATION,
         "uq_quotations_copied_from_id_live",
@@ -359,11 +356,10 @@ def test_a_quotation_cannot_be_its_own_copy_source(base: dict[str, Any]) -> None
     """자기 자신을 복제 원본으로 가리킬 수 없다"""
     with engine.begin() as connection:
         qid = _insert(connection, **base)
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            connection.execute(
-                text("UPDATE quotations SET copied_from_id = id WHERE id = :i"), {"i": qid}
-            )
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        connection.execute(
+            text("UPDATE quotations SET copied_from_id = id WHERE id = :i"), {"i": qid}
+        )
     assert _sqlstate_and_constraint(caught.value) == (
         CHECK_VIOLATION,
         "ck_quotations_copied_from_not_self",
@@ -372,13 +368,11 @@ def test_a_quotation_cannot_be_its_own_copy_source(base: dict[str, Any]) -> None
 
 def test_unknown_market_and_buyer_are_rejected_by_fk(base: dict[str, Any]) -> None:
     """FK — 등록되지 않은 시장·존재하지 않는 거래처는 DB가 막는다"""
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            _insert(connection, **{**base, "dest_market_code": "ZZ"})
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _insert(connection, **{**base, "dest_market_code": "ZZ"})
     assert _sqlstate_and_constraint(caught.value)[0] == FK_VIOLATION
-    with pytest.raises(IntegrityError) as caught2:
-        with engine.begin() as connection:
-            _insert(connection, **{**base, "buyer_partner_id": 999_999})
+    with pytest.raises(IntegrityError) as caught2, engine.begin() as connection:
+        _insert(connection, **{**base, "buyer_partner_id": 999_999})
     assert _sqlstate_and_constraint(caught2.value)[0] == FK_VIOLATION
 
 
@@ -490,34 +484,31 @@ def test_line_checks_reject_violations(
     line_base: dict[str, Any], name: str, override: dict[str, Any], constraint: str
 ) -> None:
     """라인 CHECK — 금액=수량×단가(numeric 곱)·무상 양방향·상한·열거가 DB에서 거부된다"""
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            _insert_line(connection, **{**line_base, **override})
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _insert_line(connection, **{**line_base, **override})
     state, violated = _sqlstate_and_constraint(caught.value)
     assert state == CHECK_VIOLATION and violated in constraint.split("|"), (name, violated)
 
 
 def test_line_amount_check_does_not_overflow_bigint(line_base: dict[str, Any]) -> None:
     """quantity×단가가 bigint를 넘어도 500(오버플로)이 아니라 CHECK 위반으로 거부된다(numeric 곱)"""
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            _insert_line(
-                connection,
-                **{
-                    **line_base,
-                    "quantity": 99_999_999,
-                    "unit_price_amount": 2**53 - 1,
-                    "line_amount": 2**53 - 1,
-                },
-            )
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _insert_line(
+            connection,
+            **{
+                **line_base,
+                "quantity": 99_999_999,
+                "unit_price_amount": 2**53 - 1,
+                "line_amount": 2**53 - 1,
+            },
+        )
     assert _sqlstate_and_constraint(caught.value)[0] == CHECK_VIOLATION
 
 
 def test_line_currency_must_match_the_header_currency(line_base: dict[str, Any]) -> None:
     """복합 FK (qt_id, currency) — 헤더와 다른 통화 라인은 DB가 거부한다(혼합 통화 불가능)"""
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            _insert_line(connection, **{**line_base, "currency": "EUR"})
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _insert_line(connection, **{**line_base, "currency": "EUR"})
     assert _sqlstate_and_constraint(caught.value) == (
         FK_VIOLATION,
         "fk_quotation_lines_qt_id_currency_quotations",
@@ -528,12 +519,11 @@ def test_header_currency_cannot_change_while_lines_exist(line_base: dict[str, An
     """라인이 있는 헤더의 통화 변경은 복합 FK가 막는다"""
     with engine.begin() as connection:
         _insert_line(connection, **line_base)
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            connection.execute(
-                text("UPDATE quotations SET currency = 'EUR' WHERE id = :i"),
-                {"i": line_base["qt_id"]},
-            )
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        connection.execute(
+            text("UPDATE quotations SET currency = 'EUR' WHERE id = :i"),
+            {"i": line_base["qt_id"]},
+        )
     assert _sqlstate_and_constraint(caught.value)[0] == FK_VIOLATION
 
 
@@ -543,16 +533,14 @@ def test_line_uniqueness_is_active_only_and_allows_one_paid_and_one_free_per_sku
     """(qt, line_no)·(qt, sku, is_free) 활성 유니크 — soft delete 뒤 재추가는 허용된다"""
     with engine.begin() as connection:
         first = _insert_line(connection, **line_base)
-    with pytest.raises(IntegrityError) as dup_line_no:
-        with engine.begin() as connection:
-            _insert_line(connection, **{**line_base, "sku_id": create_sku("SKU-QC2")})
+    with pytest.raises(IntegrityError) as dup_line_no, engine.begin() as connection:
+        _insert_line(connection, **{**line_base, "sku_id": create_sku("SKU-QC2")})
     assert _sqlstate_and_constraint(dup_line_no.value) == (
         UNIQUE_VIOLATION,
         "uq_quotation_lines_qt_id_line_no_active",
     )
-    with pytest.raises(IntegrityError) as dup_sku:
-        with engine.begin() as connection:
-            _insert_line(connection, **{**line_base, "line_no": 2})
+    with pytest.raises(IntegrityError) as dup_sku, engine.begin() as connection:
+        _insert_line(connection, **{**line_base, "line_no": 2})
     assert _sqlstate_and_constraint(dup_sku.value) == (
         UNIQUE_VIOLATION,
         "uq_quotation_lines_qt_id_sku_id_is_free_active",
@@ -666,9 +654,8 @@ def test_status_log_checks_reject_violations(
     values = {"actor_user_id": base["assignee_id"], "automatic": False, **override}
     if override.get("actor_user_id", 0) is None:
         values["actor_user_id"] = None
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            _log(connection, qt_id, **values)
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _log(connection, qt_id, **values)
     assert _sqlstate_and_constraint(caught.value) == (CHECK_VIOLATION, constraint), name
 
 
@@ -676,9 +663,8 @@ def test_a_document_has_exactly_one_birth_row(qt_id: int) -> None:
     """문서당 탄생 행(from NULL)은 하나 — 두 번째는 부분 유니크가 거부한다"""
     with engine.begin() as connection:
         _log(connection, qt_id)
-    with pytest.raises(IntegrityError) as caught:
-        with engine.begin() as connection:
-            _log(connection, qt_id)
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _log(connection, qt_id)
     assert _sqlstate_and_constraint(caught.value) == (
         UNIQUE_VIOLATION,
         "uq_quotation_status_log_quotation_id_birth",
@@ -697,9 +683,8 @@ def test_status_log_is_immutable_for_the_app_role(qt_id: int, statement: str) ->
     """이력은 INSERT/SELECT만 — 앱 계정의 UPDATE/DELETE/TRUNCATE는 42501로 거부된다(§17.5)"""
     with engine.begin() as connection:
         _log(connection, qt_id)
-    with pytest.raises(ProgrammingError) as caught:
-        with engine.begin() as connection:
-            connection.execute(text(statement))
+    with pytest.raises(ProgrammingError) as caught, engine.begin() as connection:
+        connection.execute(text(statement))
     assert _sqlstate_and_constraint(caught.value)[0] == PERMISSION_DENIED
     with owner_engine.connect() as connection:  # 실제로 행이 남아 있다
         assert (
