@@ -12,7 +12,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -756,14 +756,25 @@ def _sku_select() -> Any:
     )
 
 
-def list_skus(*, offset: int, limit: int) -> tuple[list[SkuView], int]:
+def list_skus(*, offset: int, limit: int, q: str | None = None) -> tuple[list[SkuView], int]:
+    """SKU 목록. `q`는 품번·국문명·영문명 부분 검색이다(검색형 선택 — 수백 건 규모에서
+    앞 N건만 보이는 드롭다운 대신 SearchSelect가 쓴다, S3-1 F16). 와일드카드는 이스케이프한다."""
+    conditions: list[ColumnElement[bool]] = [Sku.deleted_at.is_(None)]
+    if q:
+        conditions.append(
+            or_(
+                Sku.sku_code.icontains(q, autoescape=True),
+                Sku.name_ko.icontains(q, autoescape=True),
+                Sku.name_en.icontains(q, autoescape=True),
+            )
+        )
     with unit_of_work() as uow:
         session = uow.session
         total = session.execute(
-            select(func.count()).select_from(Sku).where(Sku.deleted_at.is_(None))
+            select(func.count()).select_from(Sku).where(*conditions)
         ).scalar_one()
         rows = session.execute(
-            _sku_select().order_by(Sku.sku_code).offset(offset).limit(limit)
+            _sku_select().where(*conditions).order_by(Sku.sku_code).offset(offset).limit(limit)
         ).all()
         return [_sku_view(*row) for row in rows], total
 

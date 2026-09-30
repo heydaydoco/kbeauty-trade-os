@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
@@ -192,8 +192,12 @@ def create_sku(
 
 
 @router.get("", summary="SKU 목록")
-def list_skus(current: CurrentUser, params: Annotated[PageParams, Depends()]) -> Page[SkuSummary]:
-    views, total = service.list_skus(offset=params.offset, limit=params.limit)
+def list_skus(
+    current: CurrentUser,
+    params: Annotated[PageParams, Depends()],
+    q: Annotated[str | None, Query(max_length=100)] = None,
+) -> Page[SkuSummary]:
+    views, total = service.list_skus(offset=params.offset, limit=params.limit, q=q)
     return Page.of([SkuSummary.of(view) for view in views], total, params)
 
 

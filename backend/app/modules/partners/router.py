@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
@@ -70,9 +70,14 @@ def create_partner(
 
 @router.get("", summary="거래처 목록")
 def list_partners(
-    current: CurrentUser, params: Annotated[PageParams, Depends()]
+    current: CurrentUser,
+    params: Annotated[PageParams, Depends()],
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    type: Annotated[str | None, Query(max_length=20)] = None,
 ) -> Page[PartnerSummary]:
-    views, total = service.list_partners(offset=params.offset, limit=params.limit)
+    views, total = service.list_partners(
+        offset=params.offset, limit=params.limit, q=q, type_code=type
+    )
     return Page.of([PartnerSummary.of(view) for view in views], total, params)
 
 
@@ -132,6 +137,16 @@ def add_item_code(
     )
     response.status_code = status_code
     return ItemCodeSummary.model_validate(body)
+
+
+@router.delete(
+    "/{partner_id}/item-codes/{item_code_id}",
+    summary="바이어 품번 매핑 삭제 (soft delete — 정정은 삭제 후 재등록)",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[require_roles(*CAN_REGISTER)],
+)
+def delete_item_code(partner_id: int, item_code_id: int, current: CurrentUser) -> None:
+    service.delete_item_code(actor=current, partner_id=partner_id, item_code_id=item_code_id)
 
 
 @router.get("/{partner_id}/item-codes", summary="바이어 품번 매핑 목록")

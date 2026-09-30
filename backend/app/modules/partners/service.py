@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.money import minor_units
+from app.core.time import utcnow
 from app.modules.audit import service as audit
 from app.modules.audit.models import AuditAction
 from app.modules.catalog.models import Sku
@@ -417,16 +418,41 @@ def create_partner(
         return 201, body
 
 
-def list_partners(*, offset: int, limit: int) -> tuple[list[PartnerView], int]:
+def list_partners(
+    *, offset: int, limit: int, q: str | None = None, type_code: str | None = None
+) -> tuple[list[PartnerView], int]:
+    """거래처 목록. `q`는 코드·국문명·영문명 부분 검색, `type_code`는 유형 필터(검색형 선택용)."""
+    conditions: list[ColumnElement[bool]] = [Partner.deleted_at.is_(None)]
+    if q:
+        conditions.append(
+            or_(
+                Partner.partner_code.icontains(q, autoescape=True),
+                Partner.name_ko.icontains(q, autoescape=True),
+                Partner.name_en.icontains(q, autoescape=True),
+            )
+        )
+    if type_code:
+        if type_code not in PARTNER_TYPES:
+            raise AppError(
+                ErrorCode.VALIDATION_INVALID_FIELD,
+                detail={"type": f"알 수 없는 거래처 유형입니다({type_code})."},
+            )
+        conditions.append(
+            Partner.id.in_(
+                select(PartnerTypeLink.partner_id).where(
+                    PartnerTypeLink.type_code == type_code, PartnerTypeLink.deleted_at.is_(None)
+                )
+            )
+        )
     with unit_of_work() as uow:
         session = uow.session
         total = session.execute(
-            select(func.count()).select_from(Partner).where(Partner.deleted_at.is_(None))
+            select(func.count()).select_from(Partner).where(*conditions)
         ).scalar_one()
         rows = list(
             session.execute(
                 select(Partner)
-                .where(Partner.deleted_at.is_(None))
+                .where(*conditions)
                 .order_by(Partner.partner_code)
                 .offset(offset)
                 .limit(limit)
@@ -530,6 +556,114 @@ def add_item_code(
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=201, body=body)
         return 201, body
+
+
+def delete_item_code(*, actor: AuthenticatedUser, partner_id: int, item_code_id: int) -> None:
+    """품번 매핑 soft delete (S3-1 F12) — 수정 API는 없다(정정 = 삭제 후 재등록).
+
+    유일키 위반 문구("기존 매핑을 정리해 주세요")가 안내하는 정리 경로다. 잘못 등록된 매핑이
+    인테이크의 "미매핑 시 등록 유도"(§7.4)를 영구히 막는 교착을 없앤다. 이미 확정된 전표는
+    라인에 품번·SKU 스냅샷을 가지므로 영향이 없다. 다른 거래처의 id·이미 삭제된 id는 404다
+    (부모-자식 소속 검사).
+    """
+    with unit_of_work() as uow:
+        session = uow.session
+        row = session.execute(
+            select(CustomerItemCode)
+            .where(
+                CustomerItemCode.id == item_code_id,
+                CustomerItemCode.partner_id == partner_id,
+                CustomerItemCode.deleted_at.is_(None),
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if row is None:
+            raise NotFoundError(
+                log_context={"partner_id": partner_id, "item_code_id": item_code_id}
+            )
+        row.deleted_at = utcnow()
+        row.updated_by_id = actor.id
+        session.flush()
+        audit.record(
+            session,
+            action=AuditAction.ITEM_CODE_DELETED,
+            actor_user_id=actor.id,
+            entity_type="customer_item_codes",
+            entity_id=row.id,
+            detail={"partner_id": partner_id, "sku_id": row.sku_id},
+        )
+        outbox.publish(
+            session,
+            event_type="partners.item_code.deleted",
+            aggregate_type="customer_item_codes",
+            aggregate_id=row.id,
+            payload={"partner_id": partner_id, "item_code_id": row.id},
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedBuyerItem:
+    """바이어 품번 한 건의 해석 결과 — 인테이크 게이트·라인 스냅샷이 쓴다."""
+
+    buyer_item_code: str
+    sku_id: int
+    sku_code: str
+    sku_status: str
+
+
+def resolve_buyer_items(
+    session: Session, partner_id: int, buyer_item_codes: list[str]
+) -> dict[str, ResolvedBuyerItem]:
+    """(바이어, 품번 목록) → SKU 해석을 **한 번의 쿼리**로 한다(N+1 금지 §18.4).
+
+    - 활성 매핑만(`deleted_at IS NULL` — 품번 삭제와 같은 필터), 삭제된 SKU는 제외한다.
+    - 입력 품번은 앞뒤 공백만 트림해 **정확 일치**로 찾는다(등록 시 `.strip()`과 대칭, 대소문자·
+      내부 공백 정규화는 하지 않는다 — 추측 매칭 금지).
+    - 해석되지 않은 품번은 결과에 **없다**(호출자가 '미매핑'으로 다룬다 — 0/None 대체 금지).
+    - BUYER 유형 재확인은 호출자 몫이다(`require_partner_of_any_type`, 확정 시점 잠금 포함).
+    """
+    wanted = {code.strip() for code in buyer_item_codes if code.strip()}
+    if not wanted:
+        return {}
+    rows = session.execute(
+        select(CustomerItemCode.buyer_item_code, Sku.id, Sku.sku_code, Sku.status)
+        .join(Sku, Sku.id == CustomerItemCode.sku_id)
+        .where(
+            CustomerItemCode.partner_id == partner_id,
+            CustomerItemCode.buyer_item_code.in_(wanted),
+            CustomerItemCode.deleted_at.is_(None),
+            Sku.deleted_at.is_(None),
+        )
+    ).all()
+    return {r[0]: ResolvedBuyerItem(r[0], r[1], r[2], r[3]) for r in rows}
+
+
+def require_partner_of_any_type(
+    session: Session,
+    partner_id: int,
+    type_codes: tuple[str, ...],
+    *,
+    field: str,
+    type_label: str,
+    lock: bool = False,
+) -> Partner:
+    """거래처가 주어진 유형 중 **하나라도** 가지는지 확인한다(예: 발주 상대 = SUPPLIER 또는 OEM).
+
+    lock=True면 거래처 행을 FOR SHARE로 잡는다 — 유형 해제 임포트(FOR UPDATE)와 직렬화되어
+    "유형 없는 거래처로 확정"이 성립하지 않는다(S3-1 F11 ③, 전역 잠금 순서의 최상위).
+    미존재·삭제·유형 불일치는 모두 422(fail-closed)다.
+    """
+    query = select(Partner).where(Partner.id == partner_id, Partner.deleted_at.is_(None))
+    if lock:
+        query = query.with_for_update(read=True)
+    partner = session.execute(query).scalar_one_or_none()
+    if partner is None or not (set(type_codes) & set(partner_type_codes(session, partner.id))):
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={field: f"{type_label} 유형의 거래처가 아닙니다. 거래처 유형을 확인해 주세요."},
+            log_context={"partner_id": partner_id},
+        )
+    return partner
 
 
 def list_item_codes(*, partner_id: int, offset: int, limit: int) -> tuple[list[ItemCodeView], int]:
