@@ -22,6 +22,9 @@ import { MaterialsPage } from "./routes/materials";
 import { NotFoundPage } from "./routes/not-found";
 import { PoliciesPage } from "./routes/policies";
 import { PartnersPage } from "./routes/partners";
+import { BankAccountsPage } from "./routes/bank-accounts";
+import { ProformaDetailPage } from "./routes/proforma-detail";
+import { ProformaListPage } from "./routes/proformas";
 import { QuotationDetailPage } from "./routes/quotation-detail";
 import { QuotationListPage } from "./routes/quotations";
 import { ProductDetailPage } from "./routes/product-detail";
@@ -98,6 +101,9 @@ export function AppRoutes() {
         <Route path="/partners" element={<PartnersPage />} />
         <Route path="/quotations" element={<QuotationListPage />} />
         <Route path="/quotations/:quotationId" element={<QuotationDetailPage />} />
+        <Route path="/proforma-invoices" element={<ProformaListPage />} />
+        <Route path="/proforma-invoices/:proformaId" element={<ProformaDetailPage />} />
+        <Route path="/bank-accounts" element={<BankAccountsPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/imports" element={<ImportsPage />} />
         <Route path="/brands" element={<BrandsPage />} />

@@ -19,6 +19,7 @@ const NAV = [
   { to: "/agencies", label: "대행사" },
   { to: "/partners", label: "거래처" },
   { to: "/quotations", label: "견적" },
+  { to: "/proforma-invoices", label: "PI" },
   { to: "/documents", label: "문서보관소" },
   { to: "/imports", label: "엑셀 임포트" },
   { to: "/brands", label: "브랜드" },
@@ -27,6 +28,9 @@ const NAV = [
 
 /** ADMIN에게만 보이는 메뉴 — 표시 편의일 뿐, 서버가 정본이다(§18.1). */
 const ADMIN_NAV = [{ to: "/settings/policies", label: "정책 설정" }] as const;
+
+/** 은행 계좌 — 백엔드 authz_matrix: 조회 ADMIN·TRADE(쓰기는 ADMIN 전용이며 화면 안에서 다시 가른다). 표시 편의일 뿐 서버가 정본. */
+const BANK_NAV = { to: "/bank-accounts", label: "은행 계좌" } as const;
 
 /** 미확인 알림 수 — 셸에 상시 노출한다(알림센터를 열어야만 아는 알림은 안 읽힌다). */
 export const UNREAD_QUERY_KEY = ["alerts", "unread-count"] as const;
@@ -45,7 +49,7 @@ export function AppShell() {
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 p-4">
           <span className="cell-nowrap font-bold">K-Beauty Trade OS</span>
           <nav className="flex gap-4 text-sm">
-            {[...NAV, ...(hasRole(me) ? ADMIN_NAV : [])].map((item) => (
+            {[...NAV, ...(hasRole(me, "TRADE") ? [BANK_NAV] : []), ...(hasRole(me) ? ADMIN_NAV : [])].map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}

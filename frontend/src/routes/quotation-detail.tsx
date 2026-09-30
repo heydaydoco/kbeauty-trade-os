@@ -20,6 +20,7 @@ import {
   PAYMENT_TYPE_LABEL,
   PRICE_BASIS_LABEL,
   canCancelQuotation,
+  canCreateProformaFrom,
   canEditQuotation,
   canIssueQuotation,
   canReviseQuotation,
@@ -35,6 +36,7 @@ import {
   type QuotationLine,
 } from "../lib/quotation";
 import { hasRole, useSession } from "../lib/session";
+import { ProformaCreateDialog } from "./proforma-create";
 import { QuotationStatusBadge } from "./quotations";
 import type { Market } from "./markets";
 import type { Partner } from "./partners";
@@ -85,6 +87,7 @@ function QuotationDetailView() {
   //   null=아직 기준 없음(첫 조회 값 사용). 내 쓰기·'최신 내용 불러오기'에서만 갱신한다.
   const [baseVersion, setBaseVersion] = useState<number | null>(null);
   const [headerDirty, setHeaderDirty] = useState(false);
+  const [creatingPi, setCreatingPi] = useState(false);
   const submitLock = useRef(false);
   const actionKey = useRef<string>("");
 
@@ -104,6 +107,7 @@ function QuotationDetailView() {
     setNotice(null);
     transition.reset();
     setAction(null);
+    setCreatingPi(false);
     // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다).
     void detail.refetch().then((result) => {
       if (result.data) setBaseVersion(result.data.version);
@@ -225,6 +229,23 @@ function QuotationDetailView() {
               발행
             </button>
           )}
+          {canWrite && canCreateProformaFrom(qt.status) && (
+            <button
+              type="button"
+              onClick={() => setCreatingPi(true)}
+              disabled={stale || qt.is_lapsed}
+              title={
+                qt.is_lapsed
+                  ? "유효기간이 지난 견적으로는 PI를 만들 수 없습니다."
+                  : stale
+                    ? "다른 곳에서 수정되었습니다. 먼저 '최신 내용 불러오기'를 누르세요."
+                    : undefined
+              }
+              className="cell-nowrap rounded border border-gray-900 px-3 py-2 text-sm disabled:opacity-50"
+            >
+              PI 만들기
+            </button>
+          )}
           {canWrite && canReviseQuotation(qt.status) && (
             <button
               type="button"
@@ -319,6 +340,14 @@ function QuotationDetailView() {
         />
       </div>
 
+      {creatingPi && canWrite && canCreateProformaFrom(qt.status) && (
+        <ProformaCreateDialog
+          qt={qt}
+          version={base}
+          onClose={() => setCreatingPi(false)}
+          onReload={reload}
+        />
+      )}
       {action === "issue" && (
         <ConfirmDialog
           title="견적을 발행할까요?"
