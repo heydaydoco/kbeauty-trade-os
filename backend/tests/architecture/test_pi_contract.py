@@ -163,7 +163,7 @@ def test_pi_request_schemas_forbid_extra_fields_and_carry_no_server_owned_names(
                     set(obj.model_fields) & forbidden,
                 )
                 checked += 1
-    assert checked >= 6  # 공회전 방지
+    assert checked == 6  # 은행 2(Create·Update) + PI(Line·Overrides·Create·MetaUpdate)
 
 
 def test_pi_create_and_transition_routes_require_a_trade_role_and_an_idempotency_key() -> None:

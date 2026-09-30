@@ -23,6 +23,7 @@ from sqlalchemy import select
 
 from app.core.db.uow import unit_of_work
 from app.core.errors.exceptions import AppError
+from app.core.time import today_kst
 from app.modules.audit import service as audit
 from app.modules.audit.models import AuditAction
 from app.modules.certifications.service import sweep_date_transitions
@@ -170,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     expiry.add_argument(
         "--base-date",
         default=None,
-        help="기준일(YYYY-MM-DD). 생략하면 KST 오늘 — 유효기간은 당일 KST 24:00까지 유효하다",
+        help="기준일(YYYY-MM-DD, 오늘 이전만 — 미래는 거부). 생략하면 KST 오늘 — 유효기간은 당일 KST 24:00까지 유효하다",
     )
 
     # 기일 스캔·브리핑 수동 실행 (S2-3 PR-2 — 스윕과 같은 "스케줄 + CLI 겸용" 계보).
@@ -265,6 +266,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "document-expiry-sweep":
         base = date.fromisoformat(args.base_date) if args.base_date else None
+        if base is not None and base > today_kst():
+            # 미래 기준일은 아직 유효한 견적·PI를 앞당겨 닫는다(되돌릴 수 없는 종결) — 운영 사고 방지로 거부한다.
+            print(f"미래 기준일({base})은 허용하지 않습니다. 오늘(KST) 이전 날짜를 지정하세요.")
+            return 2
         counts = expiry_sweep.sweep_expired_documents(base_date=base)
         print(
             f"만료 스윕 완료: 견적 {counts['expired_qt']}건·PI {counts['expired_pi']}건 만료 — "

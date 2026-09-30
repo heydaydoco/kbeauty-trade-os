@@ -122,10 +122,19 @@ def _require_usable_source(qt: Quotation, today: date) -> None:
         raise AppError(ErrorCode.TRADE_DOCS_VALIDITY_EXPIRED, log_context={"quotation_id": qt.id})
 
 
-def _bank_account(session: Session, account_id: int, currency: str) -> BankAccount:
-    """활성 계좌이고 **통화가 PI 통화와 같을 때만** 허용 — 잘못된 통화 입금 안내를 막는다."""
+def _bank_account(session: Session, account_id: int, currency: str, *, lock: bool) -> BankAccount:
+    """활성 계좌이고 **통화가 PI 통화와 같을 때만** 허용 — 잘못된 통화 입금 안내를 막는다.
+
+    생성 경로(`lock=True`)는 계좌 행을 `FOR SHARE`로 잡는다 — 은행 정정·비활성(UPDATE)과 직렬화돼 PI가 **커밋된 계좌 값 하나**를
+    통째로 복사한다(FOR KEY SHARE는 비키 열 UPDATE·soft delete와 충돌하지 않아 이 보증이 없다 — 검토 지시 6의 KEY SHARE를 SHARE로
+    강화). 잠금 순서: 계좌는 QT 뒤·라인 앞의 말단 마스터이고 계좌 UPDATE 트랜잭션은 다른 전표 행을 잠그지 않아 교착 고리가 없다.
+    미리보기는 잠그지 않는다.
+    """
+    query = select(BankAccount).where(
+        BankAccount.id == account_id, BankAccount.deleted_at.is_(None)
+    )
     account = session.execute(
-        select(BankAccount).where(BankAccount.id == account_id, BankAccount.deleted_at.is_(None))
+        query.with_for_update(read=True) if lock else query
     ).scalar_one_or_none()
     if account is None:
         raise invalid(
@@ -269,7 +278,7 @@ def _plan(
     note = overrides.get("internal_note")
     note = (str(note).strip() or None) if note is not None else None
 
-    account = _bank_account(session, payload["bank_account_id"], qt.currency)
+    account = _bank_account(session, payload["bank_account_id"], qt.currency, lock=lock)
 
     copied_from = payload.get("copied_from_id")
     if copied_from is not None:
@@ -279,11 +288,18 @@ def _plan(
     require_line_capacity(0, len(source_lines))
     unusable = unusable_sku_reasons(session, [line.sku_id for line in source_lines])
     if unusable:
+        # 인덱스는 **요청 lines 순서** 기준(lines를 생략했으면 원천 라인 번호 순) — 화면이 지목한 줄을 정확히 짚게 한다.
+        requested = payload.get("lines")
+        position = (
+            {int(item["source_line_id"]): i for i, item in enumerate(requested)}
+            if requested is not None
+            else {line.id: i for i, line in enumerate(source_lines)}
+        )
         raise AppError(
             ErrorCode.TRADE_DOCS_LINE_SKU_DISCONTINUED,
             detail={
-                f"lines[{index}].source_line_id": unusable[line.sku_id]
-                for index, line in enumerate(source_lines)
+                f"lines[{position[line.id]}].source_line_id": unusable[line.sku_id]
+                for line in sorted(source_lines, key=lambda ln: position[ln.id])
                 if line.sku_id in unusable
             },
         )

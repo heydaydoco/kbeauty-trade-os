@@ -263,7 +263,7 @@ def test_composite_key_targets_exist_for_the_sales_order_and_lines(base: dict[st
 # ── 라인 ────────────────────────────────────────────────────────────────────
 
 _LINE_COLUMNS = (
-    "pi_id, qt_line_id, currency, line_no, sku_id, sku_code, sku_name_ko, sku_kind, quantity,"
+    "pi_id, qt_id, qt_line_id, currency, line_no, sku_id, sku_code, sku_name_ko, sku_kind, quantity,"
     " unit_price_amount, list_price_amount, line_amount, price_basis, is_free, price_reason"
 )
 
@@ -298,6 +298,7 @@ def line_base(base: dict[str, Any]) -> dict[str, Any]:
         ).scalar_one()
     return {
         "pi_id": pi_id,
+        "qt_id": base["qt_id"],
         "qt_line_id": int(qt_line),
         "currency": base["currency"],
         "line_no": 1,
@@ -619,3 +620,37 @@ def test_raw_pi_factory_produces_a_row_that_satisfies_every_check() -> None:
     qt = raw_quotation("ISSUED", buyer_partner_id=create_buyer())
     for status in ("ISSUED", "PARTIALLY_PAID", "PAID", "EXPIRED", "CANCELLED"):
         assert raw_pi(qt, status) > 0
+
+
+def test_a_pi_line_cannot_point_at_another_quotations_line(line_base: dict[str, Any]) -> None:
+    """복합 FK — PI 라인의 원천 QT 라인은 PI 헤더의 QT 소속이어야 한다: 다른 QT의 라인 id·다른 qt_id 표기 오염 삽입은 DB가 거부한다(양성 대조 통과 뒤)"""
+    with engine.begin() as connection:
+        _insert_line(connection, **line_base)  # 양성 대조 — 같은 QT의 라인
+    other_qt = raw_quotation("ISSUED")
+    sku = create_sku(unique("SKU-PX"))
+    with engine.begin() as connection:
+        foreign_line = int(
+            connection.execute(
+                text(
+                    "INSERT INTO quotation_lines (qt_id, currency, line_no, sku_id, sku_code, sku_name_ko,"
+                    " sku_kind, quantity, unit_price_amount, line_amount, price_basis, is_free)"
+                    " VALUES (:q, 'USD', 1, :s, 'X', 'X', 'SINGLE', 5, 100, 500, 'MASTER', false)"
+                    " RETURNING id"
+                ),
+                {"q": other_qt, "s": sku},
+            ).scalar_one()
+        )
+    second_sku = create_sku(unique("SKU-PX2"))
+    polluted = [
+        {"qt_line_id": foreign_line},  # 헤더 qt_id + 다른 QT의 라인 → (qt_id, qt_line_id) FK 위반
+        {
+            "qt_id": other_qt,
+            "qt_line_id": foreign_line,
+        },  # 라인이 자기 QT는 맞지만 헤더의 qt_id와 다름 → (pi_id, qt_id) FK 위반
+    ]
+    for override in polluted:
+        with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+            _insert_line(
+                connection, **{**line_base, "line_no": 2, "sku_id": second_sku, **override}
+            )
+        assert _state(caught.value)[0] == FK_VIOLATION, override

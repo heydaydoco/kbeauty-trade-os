@@ -511,3 +511,68 @@ def test_every_pi_operation_takes_locks_in_the_documented_order() -> None:
     seen = _first_lock_sequence(copy)  # 복제 원본 PI는 QT 뒤에 잠근다
     assert seen.index("quotations") < seen.index("proforma_invoices") < seen.index("lines"), seen
     _assert_follows_lock_order(seen)
+
+
+@pytest.mark.parametrize("round_no", range(4))
+def test_bank_correction_versus_pi_creation_copies_one_committed_snapshot(round_no: int) -> None:
+    """은행 계좌 정정(은행명+계좌번호 동시 변경) vs PI 생성 동시 — PI의 은행 스냅샷은 정정 전 값 전체 또는 정정 후 값 전체(뒤섞임 0),
+    비활성 vs 생성은 (생성 성공 후 비활성) 또는 (비활성 후 생성 422) 중 하나 — 계좌 행 FOR SHARE가 직렬화한다"""
+    from app.modules.bank_accounts import service as bank_service
+
+    actor = _actor()
+    qt = _issued_qt(actor)
+    bank = create_bank_account("USD", account_no="OLD-ACCT-1")
+    with unit_of_work() as uow:  # 원본 은행명 확인용 버전
+        version = int(
+            uow.session.execute(
+                text("SELECT version FROM bank_accounts WHERE id = :i"), {"i": bank}
+            ).scalar_one()
+        )
+
+    def worker(i: int) -> Any:
+        if i == 0:
+            return bank_service.update_bank_account(
+                actor=actor,
+                account_id=bank,
+                payload={"version": version, "bank_name": "New Bank", "account_no": "NEW-ACCT-2"},
+            )
+        return _create(actor, qt, bank, f"bk-{round_no}")
+
+    outcomes = run_concurrently(worker, workers=2)
+    assert all(o.ok for o in outcomes), [o.error for o in outcomes]
+    snap = owner_engine.connect()
+    try:
+        name, number = snap.execute(
+            text("SELECT bank_name, bank_account_no FROM proforma_invoices")
+        ).one()
+    finally:
+        snap.close()
+    assert (name, number) in {("Synthetic Bank", "OLD-ACCT-1"), ("New Bank", "NEW-ACCT-2")}, (
+        name,
+        number,
+    )
+
+
+@pytest.mark.parametrize("round_no", range(4))
+def test_bank_deactivation_versus_pi_creation_is_serialized(round_no: int) -> None:
+    """비활성 vs PI 생성 동시 — 생성이 이기면 PI가 남고 계좌는 비활성, 비활성이 이기면 생성은 422(사용할 수 없는 계좌) — 반쪽 상태 0"""
+    from app.modules.bank_accounts import service as bank_service
+
+    actor = _actor()
+    qt = _issued_qt(actor)
+    bank = create_bank_account("USD")
+
+    def worker(i: int) -> Any:
+        if i == 0:
+            return bank_service.deactivate_bank_account(actor=actor, account_id=bank, version=1)
+        return _create(actor, qt, bank, f"bd-{round_no}")
+
+    outcomes = run_concurrently(worker, workers=2)
+    assert outcomes[0].ok, outcomes[0].error
+    pis = _scalar("SELECT count(*) FROM proforma_invoices")
+    if outcomes[1].ok:
+        assert pis == 1
+    else:
+        assert isinstance(outcomes[1].error, AppError) and outcomes[1].error.status_code == 422
+        assert pis == 0
+    assert _scalar("SELECT deleted_at IS NOT NULL FROM bank_accounts WHERE id = :i", i=bank) is True

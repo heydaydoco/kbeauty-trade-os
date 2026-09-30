@@ -1076,3 +1076,38 @@ def test_the_pi_surface_has_no_create_edit_line_or_delete_endpoints() -> None:
         ("POST", "/api/v1/quotations/{qt_id}/proforma-invoices"),
         ("POST", "/api/v1/quotations/{qt_id}/proforma-invoices/preview"),
     }
+
+
+def test_discontinued_sku_detail_index_follows_the_request_order(trade: TestClient) -> None:
+    """단종 SKU 오류 detail의 `lines[i]` 인덱스는 **요청 lines 순서** 기준이다(원천 라인 번호 순서가 아님) — 뒤섞어 요청해도 지목이 정확하다"""
+    skus = [create_priced_sku(amount=100) for _ in range(3)]
+    qt = issued_quotation(trade, create_buyer(), skus)
+    ids = [ln["id"] for ln in qt["lines"]]
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE skus SET status = 'DISCONTINUED' WHERE id = ANY(:s)"),
+            {"s": [skus[0], skus[2]]},
+        )
+    bank = create_bank_account("USD")
+    # 요청 순서: [라인3(단종), 라인2(정상), 라인1(단종)] → 인덱스 0과 2
+    response = _create(
+        trade,
+        qt,
+        bank,
+        lines=[
+            {"source_line_id": ids[2], "quantity": 1},
+            {"source_line_id": ids[1], "quantity": 1},
+            {"source_line_id": ids[0], "quantity": 1},
+        ],
+    )
+    assert response.status_code == 422
+    assert list(response.json()["error"]["detail"]) == [
+        "lines[0].source_line_id",
+        "lines[2].source_line_id",
+    ]
+    # lines 생략 → 원천 라인 번호 순 인덱스(라인1=0, 라인3=2)
+    omitted = _create(trade, qt, bank)
+    assert list(omitted.json()["error"]["detail"]) == [
+        "lines[0].source_line_id",
+        "lines[2].source_line_id",
+    ]

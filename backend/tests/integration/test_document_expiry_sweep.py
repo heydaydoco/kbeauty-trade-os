@@ -269,14 +269,22 @@ def test_sweep_creates_only_the_two_edges_and_touches_no_other_table() -> None:
 
 
 def test_the_job_is_registered_and_runs_from_cli_and_scheduler() -> None:
-    """레지스트리 daily@06:10 · 마이그레이션 시드 아님(register_jobs로 등록) · CLI --base-date가 같은 함수를 실행 · 실패 0이면 종료코드 0"""
+    """레지스트리 daily@06:10 · 마이그레이션 시드 아님(register_jobs로 등록) · CLI --base-date가 같은 함수를 실행 · 미래 기준일은 거부(종료코드 2)"""
     spec = scheduler.JOBS_BY_CODE["document-expiry-sweep"]
     assert spec.schedule == "daily@06:10"
     assert scheduler.register_jobs().count("document-expiry-sweep") == 1
     assert scheduler.register_jobs() == []  # 멱등
-    qt = _qt(TODAY)
-    assert cli.main(["document-expiry-sweep"]) == 0
-    assert _status("quotations", qt) == "ISSUED"
-    assert cli.main(["document-expiry-sweep", "--base-date", str(TODAY + timedelta(days=1))]) == 0
+    qt = _qt(TODAY - timedelta(days=5))
+    assert cli.main(["document-expiry-sweep", "--base-date", str(TODAY - timedelta(days=6))]) == 0
+    assert _status("quotations", qt) == "ISSUED"  # 기준일이 유효기간 이전이라 유지
+    assert cli.main(["document-expiry-sweep", "--base-date", str(TODAY - timedelta(days=3))]) == 0
     assert _status("quotations", qt) == "EXPIRED"
     assert spec.run()["expired_qt"] == 0  # 잡 본체도 같은 함수 — 이미 닫혔으니 변화 0
+
+
+def test_the_cli_refuses_a_future_base_date(capsys: pytest.CaptureFixture[str]) -> None:
+    """미래 기준일은 아직 유효한 문서를 앞당겨 닫는 되돌릴 수 없는 종결이라 CLI가 거부한다(종료코드 2·상태 무변)"""
+    qt = _qt(TODAY)
+    assert cli.main(["document-expiry-sweep", "--base-date", str(TODAY + timedelta(days=1))]) == 2
+    assert "미래 기준일" in capsys.readouterr().out
+    assert _status("quotations", qt) == "ISSUED"

@@ -132,6 +132,7 @@ FIELD_POLICY: dict[str, dict[str, ColumnClass]] = {
     "proforma_invoice_lines": {
         **_AUDIT_SYSTEM,
         "pi_id": ORG,
+        "qt_id": ORG,
         "qt_line_id": ORG,
         "currency": C,
         "line_no": C,

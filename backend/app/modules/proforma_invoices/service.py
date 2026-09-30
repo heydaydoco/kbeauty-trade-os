@@ -231,6 +231,7 @@ def insert_issued(
         session.add(
             ProformaInvoiceLine(
                 pi_id=row.id,
+                qt_id=row.qt_id,
                 qt_line_id=item.qt_line_id,
                 currency=row.currency,
                 line_no=line_no,

@@ -4,8 +4,8 @@
 ■ 비활성 = soft delete. 활성 계좌만 PI 생성에서 선택된다.
 ■ 중복 방지: 유니크 키에 계좌번호를 넣지 않고(`test_secret_boundaries`) **서비스가 (정규화 계좌번호, SWIFT)로 검사**한다
   — 경합 잔여 위험(동시 등록)은 ADMIN 전용 저빈도라 관찰로 등재했다.
-■ 계좌번호는 로그·audit·이벤트에 싣지 않는다(redaction `_account_no` 접미). 이 모듈은 이벤트·audit를 발행하지 않는다
-  (변경 이력의 정본은 version·updated_by이고, 마스터 소비 세션이 생기면 그때 감사 행을 정한다).
+■ 계좌번호는 로그·audit·이벤트에 싣지 않는다(redaction `_account_no` 접미). 등록·수정·비활성은 audit_log에 남기되(같은 TX)
+  detail은 **변경된 필드 이름만** 싣는다(계좌번호·SWIFT 값·전후값 금지). 이벤트(outbox)는 소비자가 없어 발행하지 않는다.
 """
 
 from __future__ import annotations
@@ -14,12 +14,15 @@ import re
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError, VersionConflictError
 from app.core.time import to_kst, utcnow
+from app.modules.audit import service as audit
+from app.modules.audit.models import AuditAction
 from app.modules.bank_accounts.models import BankAccount
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
@@ -103,6 +106,18 @@ def require_bank_account(session: Session, account_id: int) -> BankAccount:
     return row
 
 
+def _flush_or_duplicate(session: Session) -> None:
+    """flush에서 이름 유니크(부분 인덱스) 경합 위반이 나면 서비스 검사와 같은 422로 번역한다(동시 등록의 500 방지)."""
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        if "uq_bank_accounts_label_active" in str(exc.orig):
+            raise _invalid(
+                "label", "같은 이름의 계좌가 이미 있습니다. 다른 이름을 입력해 주세요."
+            ) from None
+        raise
+
+
 def _label_taken(session: Session, label: str, *, exclude_id: int | None = None) -> bool:
     query = (
         select(func.count())
@@ -143,7 +158,15 @@ def create_bank_account(
             updated_by_id=actor.id,
         )
         session.add(row)
-        session.flush()
+        _flush_or_duplicate(session)
+        audit.record(
+            session,
+            action=AuditAction.BANK_ACCOUNT_CREATED,
+            actor_user_id=actor.id,
+            entity_type="bank_accounts",
+            entity_id=row.id,
+            detail={"fields": sorted([*values, "currency", "swift_code"])},
+        )
         body = _body(row)
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=201, body=body)
@@ -183,7 +206,15 @@ def update_bank_account(
         for field, value in changes.items():
             setattr(row, field, value)
         row.updated_by_id = actor.id
-        session.flush()
+        _flush_or_duplicate(session)
+        audit.record(
+            session,
+            action=AuditAction.BANK_ACCOUNT_UPDATED,
+            actor_user_id=actor.id,
+            entity_type="bank_accounts",
+            entity_id=row.id,
+            detail={"fields": sorted(changes)},  # 값·전후값은 싣지 않는다
+        )
         return _body(row)
 
 
@@ -206,6 +237,14 @@ def deactivate_bank_account(
         row.deleted_at = utcnow()
         row.updated_by_id = actor.id
         session.flush()
+        audit.record(
+            session,
+            action=AuditAction.BANK_ACCOUNT_DEACTIVATED,
+            actor_user_id=actor.id,
+            entity_type="bank_accounts",
+            entity_id=row.id,
+            detail={},
+        )
         return _body(row)
 
 

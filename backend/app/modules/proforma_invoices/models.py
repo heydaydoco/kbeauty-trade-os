@@ -143,14 +143,26 @@ class ProformaInvoiceLine(
     __tablename__ = "proforma_invoice_lines"
 
     pi_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    qt_line_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("quotation_lines.id", ondelete="RESTRICT"), nullable=False
-    )
+    #: 헤더 `qt_id`의 복사 — 복합 FK 두 개로 "이 라인의 원천 QT 라인은 이 PI의 QT 소속"을 DB가 보증한다.
+    qt_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    qt_line_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["pi_id", "currency"],
             ["proforma_invoices.id", "proforma_invoices.currency"],
+            ondelete="RESTRICT",
+        ),
+        # 라인의 qt_id는 헤더의 qt_id와 같아야 하고(헤더 UNIQUE(id, qt_id)),
+        ForeignKeyConstraint(
+            ["pi_id", "qt_id"],
+            ["proforma_invoices.id", "proforma_invoices.qt_id"],
+            ondelete="RESTRICT",
+        ),
+        # 원천 QT 라인은 그 qt_id 소속이어야 한다(quotation_lines UNIQUE(qt_id, id)) — 다른 QT의 라인을 가리키는 오염 삽입 거부.
+        ForeignKeyConstraint(
+            ["qt_id", "qt_line_id"],
+            ["quotation_lines.qt_id", "quotation_lines.id"],
             ondelete="RESTRICT",
         ),
         *sales_line_checks(),

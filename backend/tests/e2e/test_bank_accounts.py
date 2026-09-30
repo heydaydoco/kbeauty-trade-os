@@ -198,3 +198,72 @@ def test_the_account_number_never_reaches_events_audit_or_logs(
     assert is_sensitive_key("account_no") and is_sensitive_key("bank_account_no")
     captured = capfd.readouterr()
     assert secret not in captured.out + captured.err
+
+
+def test_bank_changes_leave_audit_rows_with_field_names_only(admin: TestClient) -> None:
+    """등록·수정·비활성이 같은 TX에서 audit 행(bank_accounts.created|updated|deactivated)을 남기고, detail에는 필드 이름만 있다 —
+    계좌번호·SWIFT·이름 등 값과 전후값은 어디에도 없다"""
+    secret = "AUDIT-SECRET-5150"
+    created = _create(admin, account_no=secret, swift_code="AUDTKRSE")
+    admin.patch(
+        f"{BANK}/{created['id']}",
+        json={"version": 1, "account_no": secret + "-2", "bank_name": "AuditBank"},
+    )
+    dup = admin.post(
+        BANK, json=_body(account_no=secret + "-2", swift_code="AUDTKRSE"), headers=idem()
+    )
+    assert dup.status_code == 422  # 수정 뒤 번호로 중복 등록 시도 — 실패
+    admin.delete(f"{BANK}/{created['id']}", params={"version": 2})
+    with owner_engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT action, entity_type, entity_id, actor_user_id, detail::text FROM audit_log"
+                " WHERE entity_type = 'bank_accounts' ORDER BY id"
+            )
+        ).all()
+    assert [r[0] for r in rows] == [
+        "bank_accounts.created",
+        "bank_accounts.updated",
+        "bank_accounts.deactivated",
+    ]
+    assert all(r[2] == created["id"] and r[3] is not None for r in rows)
+    details = " ".join(r[4] for r in rows)
+    assert "AUDTKRSE" not in details and secret not in details and "AuditBank" not in details
+    assert '"account_no"' in rows[0][4] and '"account_no"' in rows[1][4]  # 필드 이름은 남는다
+    assert '"bank_name"' in rows[1][4] and rows[2][4] == "{}"
+    # 실패한 등록(중복)은 audit를 남기지 않는다 — 같은 TX 롤백
+    assert _scalar("SELECT count(*) FROM audit_log WHERE action = 'bank_accounts.created'") == 1
+
+
+def test_concurrent_creations_with_the_same_label_give_one_201_and_one_422() -> None:
+    """같은 이름 동시 등록(서비스 사전 검사를 함께 통과하는 경합) — 한쪽 201·다른 쪽은 유니크 위반 500이 아니라 기존 중복 오류(422 label)와 같은 응답"""
+    from app.modules.bank_accounts import service
+    from app.modules.identity.service import AuthenticatedUser
+    from tests.support.concurrency import run_concurrently
+    from tests.support.factories import create_user
+
+    address = "bank-race@example.com"
+    user_id = create_user(address, roles=(RoleCode.ADMIN,))
+    actor = AuthenticatedUser(
+        id=user_id,
+        email=address,
+        display_name="관리자",
+        roles=frozenset({RoleCode.ADMIN}),
+        session_id=0,
+    )
+
+    def worker(i: int) -> Any:
+        return service.create_bank_account(
+            actor=actor,
+            idempotency_key=f"race-{i}",
+            payload=_body(label="동일 이름", account_no=f"ACC-{i}"),
+        )
+
+    outcomes = run_concurrently(worker, workers=2)
+    wins = [o for o in outcomes if o.ok]
+    losses = [o for o in outcomes if not o.ok]
+    assert len(wins) == 1 and len(losses) == 1
+    error = losses[0].error
+    assert getattr(error, "code", None) == "COMMON.VALIDATION.INVALID_FIELD"
+    assert "label" in error.detail  # type: ignore[union-attr]
+    assert _scalar("SELECT count(*) FROM bank_accounts") == 1

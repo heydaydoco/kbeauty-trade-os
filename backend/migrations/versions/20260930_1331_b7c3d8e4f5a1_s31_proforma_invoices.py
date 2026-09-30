@@ -8,7 +8,8 @@ S3-1 PR-6a PI(선수금 청구서)·은행계좌 스키마 — M04 (ADR-0051~005
   ① bank_accounts — 자사 수취 계좌 마스터(쓰기 ADMIN 전용, 초기 행은 앱 경로 — 시드 0)
   ② proforma_invoices — PI 헤더(생성=발행=동결: frozen_at NOT NULL DEFAULT now(), qt_id NOT NULL,
      은행정보 6열 스냅샷, UNIQUE(id, currency)=라인 복합 FK 대상, UNIQUE(id, qt_id)=SO 복합 FK 대상[PR-7])
-  ③ proforma_invoice_lines — PI 라인(자기 currency+헤더 복합 FK, qt_line_id NOT NULL=잔량 소비 관계)
+  ③ proforma_invoice_lines — PI 라인(자기 currency+헤더 복합 FK, qt_line_id NOT NULL=잔량 소비 관계, 복합 FK (pi_id,qt_id)·(qt_id,qt_line_id)로 원천 QT 라인의 소속을 DB가 보증)
+  ⑤ ALTER quotation_lines ADD UNIQUE(qt_id, id) — 위 복합 FK의 대상(M03 파일 무수정)
   ④ proforma_invoice_status_log — PI 상태 변경 이력(IMMUTABLE — revoke_mutations)
 
 체크리스트:
@@ -40,6 +41,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # 기존 테이블(M03 quotation_lines)에는 UNIQUE 1건만 ALTER로 더한다 — PI 라인의 복합 FK `(qt_id, qt_line_id)` 대상.
+    # (M03 파일은 건드리지 않는다. 데이터가 있어도 id가 PK라 (qt_id, id)는 항상 유일하므로 안전한 additive다.)
+    op.create_unique_constraint("uq_quotation_lines_qt_id_id", "quotation_lines", ["qt_id", "id"])
     op.create_table(
         "bank_accounts",
         sa.Column("id", sa.BigInteger(), sa.Identity(always=True), nullable=False),
@@ -411,6 +415,7 @@ def upgrade() -> None:
         "proforma_invoice_lines",
         sa.Column("id", sa.BigInteger(), sa.Identity(always=True), nullable=False),
         sa.Column("pi_id", sa.BigInteger(), nullable=False),
+        sa.Column("qt_id", sa.BigInteger(), nullable=False),
         sa.Column("qt_line_id", sa.BigInteger(), nullable=False),
         sa.Column("currency", sa.CHAR(length=3), nullable=False),
         sa.Column("line_no", sa.Integer(), nullable=False),
@@ -497,9 +502,15 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
-            ["qt_line_id"],
-            ["quotation_lines.id"],
-            name=op.f("fk_proforma_invoice_lines_qt_line_id_quotation_lines"),
+            ["pi_id", "qt_id"],
+            ["proforma_invoices.id", "proforma_invoices.qt_id"],
+            name=op.f("fk_proforma_invoice_lines_pi_id_qt_id_proforma_invoices"),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["qt_id", "qt_line_id"],
+            ["quotation_lines.qt_id", "quotation_lines.id"],
+            name=op.f("fk_proforma_invoice_lines_qt_id_qt_line_id_quotation_lines"),
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
@@ -593,3 +604,4 @@ def downgrade() -> None:
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
     op.drop_table("bank_accounts")
+    op.drop_constraint("uq_quotation_lines_qt_id_id", "quotation_lines", type_="unique")

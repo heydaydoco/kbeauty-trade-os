@@ -52,6 +52,10 @@ NON_CHILD_FK_ALLOWLIST: dict[tuple[str, str], str] = {
         "copied_from_id",
     ): "복제 계보 표시 — 사슬 후속이 아니다(살아 있음 판정 제외, X-08)",
     ("proforma_invoice_lines", "pi_id"): "라인은 자기 헤더의 구성 요소다(소비는 LINE_CONSUMERS)",
+    (
+        "proforma_invoice_lines",
+        "qt_id",
+    ): "원천 QT 라인의 소속 보증용 복합 FK((qt_id, qt_line_id) — 소비 관계는 LINE_CONSUMERS가 정본)",
     ("proforma_invoice_status_log", "proforma_invoice_id"): "상태이력은 전표의 사건 기록이다",
     (
         "proforma_invoices",
