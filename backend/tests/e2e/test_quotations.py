@@ -830,7 +830,7 @@ def test_master_changes_never_reach_a_document_that_already_snapshotted(trade: T
     still = trade.get(f"{QT}/{draft['id']}").json()
     assert still["lines"][0]["unit_price_amount"] == 3000 and still["buyer_name"] == "Snapshot Corp"
     issued = issue_via_api(trade, draft)
-    assert (issued["lines"] == draft["lines"] and issued["total_amount"] == 6 * 5000) or True
+    assert issued["lines"] == draft["lines"] and issued["total_amount"] == draft["total_amount"]
     reread = trade.get(f"{QT}/{draft['id']}").json()
     assert reread["lines"][0]["unit_price_amount"] == 3000
     assert (

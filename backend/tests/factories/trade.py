@@ -279,3 +279,74 @@ def fake_successors(
         Base.metadata.remove(table)
         with owner_engine.begin() as connection:
             connection.execute(sa.text(f'DROP TABLE IF EXISTS public."{table_name}"'))
+
+
+# ── DB 직행 견적(서비스를 거치지 않고 임의 상태를 만든다 — 전이표·수렴 시험용) ─────────────────
+
+
+_FROZEN_VALUES: dict[str, Any] = {
+    "payment_type": "TT_ADVANCE",
+    "advance_pct_bp": 3000,
+    "balance_anchor": "ETD_DATE",
+    "balance_days": -7,
+    "incoterm_code": "FOB",
+    "incoterm_place": "Busan",
+    "incoterm_year": 2020,
+    "fx_rate": 1350,
+    "fx_rate_date": date(2026, 9, 1),
+    "buyer_address": "1 Main St",
+}
+
+
+def raw_quotation(
+    status: str = "DRAFT",
+    *,
+    buyer_partner_id: int | None = None,
+    assignee_id: int | None = None,
+    valid_until: date | None = None,
+    doc_date: date = date(2026, 9, 1),
+    with_history: bool = True,
+    complete: bool = True,
+) -> int:
+    """지정 상태의 견적을 SQL로 직접 넣는다(채번은 전용 시퀀스 대신 임시 번호). 이력에 탄생 행 1개를 남긴다.
+
+    기본은 **발행 가능한 완결 값**(결제조건·Incoterms·환율·주소·유효기간)을 모든 상태에 채운다 — 초안도 발행 전이를
+    시험할 수 있게. 발행·전환 상태(ISSUED·CONVERTED)는 동결 시각도 채운다(CHECK).
+    """
+    from sqlalchemy import text
+
+    from app.core.db.session import owner_engine
+
+    buyer = buyer_partner_id or create_buyer()
+    owner = assignee_id or create_user(f"{unique('raw')}@example.com", roles=(RoleCode.TRADE,))
+    create_market("US")
+    frozen = complete
+    values: dict[str, Any] = {
+        "doc_number": f"QT-2026-{next(_counter) + 5000:04d}",
+        "doc_date": doc_date,
+        "status": status,
+        "currency": "USD",
+        "assignee_id": owner,
+        "buyer_partner_id": buyer,
+        "buyer_name": "Raw Buyer",
+        "dest_market_code": "US",
+        "valid_until": valid_until or (date(2099, 1, 1) if complete else None),
+        "frozen_at": "2026-09-02T00:00:00+00:00" if status in ("ISSUED", "CONVERTED") else None,
+        **(_FROZEN_VALUES if frozen else {}),
+    }
+    columns = list(values)
+    sql = (
+        f"INSERT INTO quotations ({', '.join(columns)}) "
+        f"VALUES ({', '.join(':' + c for c in columns)}) RETURNING id"
+    )
+    with owner_engine.begin() as connection:
+        qt_id = int(connection.execute(text(sql), values).scalar_one())
+        if with_history:
+            connection.execute(
+                text(
+                    "INSERT INTO quotation_status_log (quotation_id, from_status, to_status, actor_user_id,"
+                    " automatic) VALUES (:q, NULL, 'DRAFT', :a, false)"
+                ),
+                {"q": qt_id, "a": owner},
+            )
+    return qt_id
