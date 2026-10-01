@@ -144,7 +144,9 @@ def test_a_request_is_refused_when_nothing_needs_approval() -> None:
     so = ready_so(limit=100_000)
     with logged_in(TRADE) as client:
         response = request_credit_approval(client, so["id"])
-    assert response.status_code == 422
+    # 결재선 단계가 아니라 **승인 불필요** 단계에서 거부된다(결재선 미설정 422와 구분 — 불필요 승인 거부 제거 변이의 표적)
+    assert response.status_code == 422 and code_of(response) == "COMMON.VALIDATION.INVALID_FIELD"
+    assert "approval" in error_of(response)["detail"]
     assert approvals_of(so["id"]) == []
 
 
@@ -457,7 +459,9 @@ def test_a_stale_approval_that_clearance_still_sees_is_voided_at_consumption_and
     so = _over()
     with logged_in(TRADE) as client:
         approval_id = _approved(so, client)
-        set_line(so["id"], 1, unit_price=1250, quantity=4, list_price=1250)  # 총액 5,000 불변·digest만 변함
+        set_line(
+            so["id"], 1, unit_price=1250, quantity=4, list_price=1250
+        )  # 총액 5,000 불변·digest만 변함
         fake = ApprovalRef(
             id=approval_id,
             approval_type="SO_CREDIT_EXCEEDED",
