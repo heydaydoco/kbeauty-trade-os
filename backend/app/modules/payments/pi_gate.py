@@ -24,7 +24,8 @@ from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.trade_docs.constants import PaymentType
 from app.modules.trade_docs.payment_terms import split_advance
 
-MODES = ("OFF", "WARN", "BLOCK")
+MODE_OFF, MODE_WARN, MODE_BLOCK = "OFF", "WARN", "BLOCK"
+MODES = (MODE_OFF, MODE_WARN, MODE_BLOCK)
 
 
 class PiAdvanceState(StrEnum):
@@ -106,7 +107,7 @@ def evaluate_pi_advance(
         return result(PiAdvanceState.INDETERMINATE, "PAYMENT_TYPE_UNSET")
     if payment_type != PaymentType.TT_ADVANCE.value:
         return result(PiAdvanceState.NOT_APPLICABLE, "INACTIVE")
-    if mode == "OFF":
+    if mode == MODE_OFF:
         return result(PiAdvanceState.SKIPPED_OFF, "SKIPPED_OFF")
     if not pi_referenced:
         return result(PiAdvanceState.UNMET, "PI_MISSING")

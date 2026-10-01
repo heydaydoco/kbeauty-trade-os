@@ -39,7 +39,7 @@ from tests.factories.trade import (
     unique,
 )
 from tests.support.factories import create_sku, create_user
-from tests.support.gate_coverage import covers, register
+from tests.support.gate_coverage import covers
 
 pytestmark = pytest.mark.group_a
 
@@ -725,12 +725,7 @@ def test_the_required_amount_rounds_half_up_like_the_invoice() -> None:
     )
 
 
-# ══ 틀 결과와 불변 ═════════════════════════════════════════════════════════════
-
-for _gate in GateCode:
-    register(
-        _gate, L.UNKNOWN, R.NONE
-    )  # 평가기 미등록·예외 → UNKNOWN/NONE(test_gate_framework가 7종 전수로 검증)
+# ══ 불변 ════════════════════════════════════════════════════════════════════
 
 
 def test_every_outcome_hash_is_stable_across_two_evaluations() -> None:

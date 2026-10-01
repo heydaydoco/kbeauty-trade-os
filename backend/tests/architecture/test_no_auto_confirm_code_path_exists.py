@@ -279,6 +279,99 @@ REGISTRY: tuple[Entry, ...] = (
     ),
     # request_approval·consume_approval·void_for_target·note_bypass_attempt: **호출자가 생기는 PR-12가 엔트리를 더한다** — 호출처가 없는 지금 등록하면 "죽은 등록 금지" 자기검사가
     # 실패한다. PR-9a~PR-11 동안의 부재는 test_approval_contract(`test_no_domain_module_calls_the_system_channels_yet`·소비 접점 PENDING 장부)가 고정한다.
+    # PR-11a — 게이트 override(사람 결정 통로): 부여·철회는 라우터 1곳+실 사용자 행위자 필수. 스케줄러·CLI·임포트·이관·알림·인테이크·보드 어디서도 호출·임포트하지 않는다(자동·벌크 부여 경로 0).
+    Entry(
+        name="grant_gate_override",
+        defined_in="app.modules.trade_chain.gate_flow",
+        allowed_files=frozenset(
+            {"modules/trade_chain/gate_flow.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "identity",
+                "idempotency",
+                "order_intake",
+                "order_board",
+            }
+        ),
+        notes="**게이트 override 부여** — 라우터 1곳+행위자 필수+멱등 키. 자동 부여·벌크 부여 경로 없음(D3 (d))",
+    ),
+    Entry(
+        name="revoke_gate_override",
+        defined_in="app.modules.trade_chain.gate_flow",
+        allowed_files=frozenset(
+            {"modules/trade_chain/gate_flow.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "identity",
+                "idempotency",
+                "order_intake",
+                "order_board",
+            }
+        ),
+        notes="**게이트 override 철회** — 라우터 1곳+행위자 필수+멱등 키",
+    ),
+    Entry(
+        name="grant_override",
+        defined_in="app.modules.gates.service",
+        allowed_files=frozenset({"modules/gates/service.py", "modules/trade_chain/gate_flow.py"}),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "seeds",
+                "order_intake",
+                "order_board",
+            }
+        ),
+        requires_actor=False,  # 서비스 계층은 actor_user_id·actor_roles를 받는다(행위자 필수 — None 불가는 test_gate_contract가 고정)
+        forbid_module_import=False,  # 정의 모듈이 clearance·평가 틀도 품는다 — 언급 검사로 충분
+        notes="override 부여 서비스 — 오케스트레이터(gate_flow) 1곳만 호출한다",
+    ),
+    Entry(
+        name="revoke_override",
+        defined_in="app.modules.gates.service",
+        allowed_files=frozenset({"modules/gates/service.py", "modules/trade_chain/gate_flow.py"}),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "seeds",
+                "order_intake",
+                "order_board",
+            }
+        ),
+        requires_actor=False,
+        forbid_module_import=False,
+        notes="override 철회 서비스 — 오케스트레이터(gate_flow) 1곳만 호출한다",
+    ),
     Entry(
         name="converge_quotation",
         defined_in="app.modules.trade_chain.chain_ops",

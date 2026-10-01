@@ -38,7 +38,12 @@ from app.modules.gates.types import (
 )
 from app.modules.partners.models import Partner
 from app.modules.partners.service import partner_type_codes, resolve_buyer_items
-from app.modules.payments.pi_gate import PiAdvanceState, SoTerms, evaluate_pi_advance
+from app.modules.payments.pi_gate import (
+    MODE_WARN,
+    PiAdvanceState,
+    SoTerms,
+    evaluate_pi_advance,
+)
 from app.modules.policies.service import get_policy
 from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.readiness import rules as readiness_rules
@@ -648,7 +653,7 @@ def evaluate_pi_deposit(
         ]
     if state is PiAdvanceState.UNMET:
         message = _PI_MESSAGES.get(evaluated.reason, "선수금 입금을 확인할 수 없습니다.")
-        if evaluated.mode == "WARN":
+        if evaluated.mode == MODE_WARN:
             return [
                 outcome(
                     code,
