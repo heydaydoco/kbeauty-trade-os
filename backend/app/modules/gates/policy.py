@@ -78,7 +78,9 @@ GATE_SPECS: dict[GateCode, GateSpec] = {
         _BOTH,
         (
             ResultSpec(L.PASS, R.NONE),
-            ResultSpec(L.WARN, R.NONE, _CONFIRM_ONLY),  # 무상 라인(인테이크는 무상 라인을 받지 않는다 — 단가 ≥1)
+            ResultSpec(
+                L.WARN, R.NONE, _CONFIRM_ONLY
+            ),  # 무상 라인(인테이크는 무상 라인을 받지 않는다 — 단가 ≥1)
             ResultSpec(L.BLOCK, R.OVERRIDE),  # 허용치 초과
             ResultSpec(L.UNKNOWN, R.OVERRIDE),  # 기준가 없음·기준가≤0
         ),
