@@ -63,6 +63,17 @@ class AuditAction:
     BANK_ACCOUNT_CREATED = "bank_accounts.created"
     BANK_ACCOUNT_UPDATED = "bank_accounts.updated"
     BANK_ACCOUNT_DEACTIVATED = "bank_accounts.deactivated"
+    #: 결재선 매핑 등록·수정·삭제(S3-1 PR-9a) — detail=행 id·유형·통화·전후 임계·전후 역할(원가·마진 아님).
+    APPROVAL_LINE_CREATED = "approvals.line.created"
+    APPROVAL_LINE_UPDATED = "approvals.line.updated"
+    APPROVAL_LINE_DELETED = "approvals.line.deleted"
+    #: 대결 등록·종료(S3-1 PR-9a) — detail=위임자·수임자·역할·기간.
+    DELEGATION_CREATED = "approvals.delegation.created"
+    DELEGATION_REVOKED = "approvals.delegation.revoked"
+    #: 거부된 결정 시도(자격 없음·자기 승인) — 막힌 시도야말로 남아야 하는 기록이다(실패도 커밋).
+    APPROVAL_DECISION_DENIED = "approvals.decision.denied"
+    #: 승인 없이 승인 필요 전표를 확정하려는 시도(우회 시도) — ADMIN 포함.
+    APPROVAL_BYPASS_BLOCKED = "approvals.approval.bypass_blocked"
 
 
 class AuditLog(PkMixin, Base):

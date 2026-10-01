@@ -289,6 +289,54 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "같은 건을 다른 사용자가 처리 중입니다. 잠시 후 화면을 새로 고쳐 다시 시도해 주세요.",
     ),
+    ErrorCode.APPROVALS_LINE_NOT_CONFIGURED: ErrorSpec(
+        422,
+        "결재선이 없어 승인 요청을 만들 수 없습니다. 관리자에게 결재선 등록을 요청해 주세요.",
+    ),
+    ErrorCode.APPROVALS_LINE_DUPLICATE: ErrorSpec(
+        409,
+        "같은 유형·통화·임계 금액의 결재선이 이미 있습니다. 목록에서 기존 결재선을 확인해 주세요.",
+    ),
+    ErrorCode.APPROVALS_APPROVAL_NO_ELIGIBLE_APPROVER: ErrorSpec(
+        422,
+        "결재할 수 있는 사람이 없어 승인 요청을 만들 수 없습니다. 관리자에게 결재 역할 보유자 지정을 요청해 주세요.",
+    ),
+    ErrorCode.APPROVALS_APPROVAL_ALREADY_ACTIVE: ErrorSpec(
+        409,
+        "이 건에는 이미 진행 중인 승인이 있습니다. 승인 목록에서 진행 상태를 확인해 주세요.",
+    ),
+    ErrorCode.APPROVALS_APPROVAL_REQUIRED: ErrorSpec(
+        422,
+        "승인이 필요한 건이라 승인 없이는 확정할 수 없습니다. 승인을 요청하고 결재가 끝난 뒤 다시 시도해 주세요.",
+    ),
+    ErrorCode.APPROVALS_APPROVAL_STALE: ErrorSpec(
+        409,
+        "승인 이후 대상이 바뀌어 승인이 무효가 되었습니다. 변경 내용을 확인하고 승인을 다시 요청해 주세요.",
+    ),
+    ErrorCode.APPROVALS_TRANSITION_NOT_ALLOWED: ErrorSpec(
+        409,
+        "현재 승인 상태에서는 할 수 없는 처리입니다. 화면을 새로 고쳐 현재 상태를 확인해 주세요.",
+    ),
+    ErrorCode.APPROVALS_TRANSITION_REASON_REQUIRED: ErrorSpec(
+        422,
+        "반려·회수에는 사유가 필요합니다. 사유를 입력해 주세요.",
+    ),
+    ErrorCode.APPROVALS_DECISION_NOT_APPROVER: ErrorSpec(
+        403,
+        "이 승인을 결재할 권한이 없습니다. 결재 역할이나 유효한 대결 지정이 있는지 확인해 주세요.",
+    ),
+    ErrorCode.APPROVALS_DECISION_SELF_APPROVAL: ErrorSpec(
+        403,
+        "본인이 올린 승인은 직접 결재할 수 없습니다. 다른 결재자에게 결재를 요청해 주세요.",
+    ),
+    ErrorCode.APPROVALS_DELEGATION_OVERLAP: ErrorSpec(
+        409,
+        "같은 위임자·유형·역할의 대결 기간이 겹칩니다. 기존 대결을 종료하거나 기간을 조정해 주세요.",
+    ),
+    ErrorCode.APPROVALS_DELEGATION_NOT_ACTIVE: ErrorSpec(
+        409,
+        "이미 종료되었거나 기간이 지난 대결입니다. 대결 목록에서 현재 상태를 확인해 주세요.",
+    ),
     ErrorCode.IDEMPOTENCY_KEY_CONFLICT: ErrorSpec(
         409,
         "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",

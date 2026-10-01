@@ -30,6 +30,8 @@ IMMUTABLE_TABLES: frozenset[str] = frozenset(
         "proforma_invoice_status_log",  # PR-6a — PI 상태 이력(같은 이유)
         "sales_order_status_log",  # PR-7a — SO 상태 이력(같은 이유)
         "purchase_order_status_log",  # PR-8a — PO 상태 이력(같은 이유)
+        # S3-1 PR-9a — 승인 상태 변경 이력(ADR-0060·§17.5 확장). 시스템 행위자가 없고(actor NOT NULL) 정정은 새 전이 기록이다.
+        "approval_events",
     }
 )
 
@@ -136,6 +138,13 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # (불변은 서비스 동결 가드[편집 구간 없음]+상태이력 IMMUTABLE — ADR-0053). 라인은 생성 시 INSERT만 한다.
         "purchase_orders",
         "purchase_order_lines",
+        # S3-1 PR-9a — 승인 3표(ADR-0060·0061). 앱 계정의 UPDATE가 정상 업무라 MUTABLE이되 **컬럼 단위로 좁혀** 불변을 DB가
+        # 강제한다(아래 COLUMN_UPDATE_ALLOWLIST — 트리거 미채택, ADR-0028·0040 계보): approvals는 상태·결정·소비 컬럼만,
+        # approval_lines는 역할·메모·soft delete만, delegations는 종료(revoke) 컬럼만. DELETE·TRUNCATE는 통째로 회수한다.
+        # 변경 이력의 불변은 approval_events(IMMUTABLE)가 맡는다.
+        "approvals",
+        "approval_lines",
+        "delegations",
     }
 )
 
@@ -145,7 +154,31 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
 #: UPDATE 못 하게 DB가 막는다("승인 후 불변"의 마지막 층). 값은 UPDATE를 허용할 컬럼이며
 #: `updated_at`·`version`처럼 낙관 잠금이 갱신하는 컬럼도 여기 적어야 한다.
 #: 표는 그 테이블을 만드는 세션(S3-1 PR-9)이 채운다 — 등재 없는 선점은 하지 않는다.
-COLUMN_UPDATE_ALLOWLIST: dict[str, frozenset[str]] = {}
+COLUMN_UPDATE_ALLOWLIST: dict[str, frozenset[str]] = {
+    # 스냅샷 컬럼(유형·대상·금액·digest·snapshot·required_role·approval_line_id·requested_by_id)은 목록에 없다 → INSERT 이후 불변.
+    "approvals": frozenset(
+        {
+            "status",
+            "decided_by_id",
+            "decided_on_behalf_of_id",
+            "decided_delegation_id",
+            "decided_at",
+            "consumed_at",
+            "consumed_by_id",
+            "version",
+            "updated_at",
+            "updated_by_id",
+        }
+    ),
+    # 유형·통화·임계는 불변(변경 = 삭제+신규 — 매핑 계보의 정확성). 삭제는 soft delete(deleted_at).
+    "approval_lines": frozenset(
+        {"approver_role", "note", "deleted_at", "version", "updated_at", "updated_by_id"}
+    ),
+    # 당사자·기간·범위는 불변(이력 위변조 차단) — 종료 필드만.
+    "delegations": frozenset(
+        {"revoked_at", "revoked_by_id", "version", "updated_at", "updated_by_id"}
+    ),
+}
 
 
 def classified_tables() -> frozenset[str]:

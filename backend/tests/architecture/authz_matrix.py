@@ -31,6 +31,10 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/sales-orders",
     "/api/v1/document-flow",
     "/api/v1/purchase-orders",
+    # S3-1 PR-9a — 승인 코어(결재선·승인·대결). 승인 요청 생성(`POST /approvals`)은 의도적으로 존재하지 않는다(PR-12가 SO 엔드포인트로 노출).
+    "/api/v1/approval-lines",
+    "/api/v1/approvals",
+    "/api/v1/delegations",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -237,5 +241,45 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         L: ALLOW,
         C: ALLOW,
         V: ALLOW,
+    },
+    # S3-1 PR-9a — 승인 코어. VIEWER는 전면 403(여신 초과액 노출 재판정을 열지 않는 가장 좁은 결정 — C4). 결재 **자격**(역할·SoD·대결)은 서비스가
+    # 판정하므로 이 표는 라우트 게이트만 다룬다: ADMIN은 `require_roles`를 통과하되 자기 기안은 서비스가 막는다(test_approval_core 서비스 층).
+    ("GET", "/api/v1/approval-lines"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: DENY},
+    ("GET", "/api/v1/approval-lines/coverage"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: DENY},
+    ("POST", "/api/v1/approval-lines"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
+    ("PATCH", "/api/v1/approval-lines/{line_id}"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
+    ("DELETE", "/api/v1/approval-lines/{line_id}"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
+    ("GET", "/api/v1/approvals"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: DENY},
+    ("GET", "/api/v1/approvals/inbox-count"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: DENY},
+    ("GET", "/api/v1/approvals/delegation-candidates"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: DENY,
+    },
+    ("GET", "/api/v1/approvals/{approval_id}"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: DENY},
+    ("GET", "/api/v1/approvals/{approval_id}/events"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: DENY,
+    },
+    ("POST", "/api/v1/approvals/{approval_id}/decisions"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: DENY,
+    },
+    ("GET", "/api/v1/delegations"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: DENY},
+    ("POST", "/api/v1/delegations"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: DENY},
+    ("POST", "/api/v1/delegations/{delegation_id}/revoke"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: DENY,
     },
 }

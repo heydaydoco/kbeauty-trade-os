@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from app.core.db.base import Base
+from app.modules.approvals import models as approvals_models
 from app.modules.audit import models as audit_models
 from app.modules.bank_accounts import models as bank_accounts_models
 from app.modules.catalog import models as catalog_models
@@ -36,6 +37,7 @@ from app.modules.worklist import models as worklist_models
 
 __all__ = [
     "Base",
+    "approvals_models",
     "audit_models",
     "bank_accounts_models",
     "catalog_models",
