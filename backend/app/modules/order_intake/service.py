@@ -350,6 +350,7 @@ def register_intake(
         dest_market_code=dest,
         assignee_id=assignee_id,
         last_line_no=len(parsed),
+        copied_from_so_id=header.copied_from_so_id,
         created_by_id=actor.id,
         updated_by_id=actor.id,
     )
@@ -631,7 +632,7 @@ def create_manual_intake(
             buyer_partner_id=payload["buyer_partner_id"],
             header=header,
             lines=lines,
-            extracted_snapshot=_manual_snapshot(payload),
+            extracted_snapshot=jsonable(_manual_snapshot(payload)),
         )
         body = detail_body(session, row)
         assert claim.record is not None

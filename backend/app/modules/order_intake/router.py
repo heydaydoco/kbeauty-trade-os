@@ -40,7 +40,7 @@ def create_order_intake(
     payload: IntakeCreateRequest, current: CurrentUser, key: IdempotencyKey, response: Response
 ) -> IntakeDetail:
     status_code, body = service.create_manual_intake(
-        actor=current, idempotency_key=key, payload=payload.model_dump(mode="json")
+        actor=current, idempotency_key=key, payload=payload.model_dump()
     )
     response.status_code = status_code
     return IntakeDetail.model_validate(body)
@@ -86,7 +86,7 @@ def update_order_intake(
     body = service.update_intake(
         actor=current,
         intake_id=intake_id,
-        payload=payload.model_dump(mode="json", exclude_unset=True),
+        payload=payload.model_dump(exclude_unset=True),
     )
     return IntakeDetail.model_validate(body)
 
