@@ -49,7 +49,7 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), sa.Identity(always=True), nullable=False),
         sa.Column("approval_type", sa.String(length=30), nullable=False),
         sa.Column("threshold_amount", sa.BigInteger(), nullable=False),
-        sa.Column("threshold_currency", sa.String(length=3), nullable=False),
+        sa.Column("threshold_currency", sa.CHAR(length=3), nullable=False),
         sa.Column("approver_role", sa.String(length=20), nullable=False),
         sa.Column("note", sa.String(length=200), nullable=True),
         sa.Column(
@@ -215,7 +215,7 @@ def upgrade() -> None:
         ),
         sa.Column("requested_by_id", sa.BigInteger(), nullable=False),
         sa.Column("basis_amount", sa.BigInteger(), nullable=False),
-        sa.Column("basis_currency", sa.String(length=3), nullable=False),
+        sa.Column("basis_currency", sa.CHAR(length=3), nullable=False),
         sa.Column("snapshot_digest", sa.String(length=64), nullable=False),
         sa.Column(
             "snapshot",

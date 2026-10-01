@@ -15,6 +15,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    CHAR,
     BigInteger,
     CheckConstraint,
     Date,
@@ -67,7 +68,7 @@ class ApprovalLine(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, Actor
 
     approval_type: Mapped[str] = mapped_column(String(30), nullable=False)
     threshold_amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    threshold_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    threshold_currency: Mapped[str] = mapped_column(CHAR(3), nullable=False)
     approver_role: Mapped[str] = mapped_column(String(20), nullable=False)
     note: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
@@ -163,7 +164,7 @@ class Approval(PkMixin, TimestampMixin, VersionMixin, ActorMixin, Base):
     )
     #: 승인이 허용하는 금액 상한 — SO_CREDIT_EXCEEDED에서는 '여신 초과분'(한도 통화).
     basis_amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    basis_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    basis_currency: Mapped[str] = mapped_column(CHAR(3), nullable=False)
     #: 승인 결속 토큰(sha256 hex) — version이 아니라 **대상 판정 입력 내용의 digest**다(X-07: 라인만 바뀌고 부모
     #: version이 안 오르는 S1-3 결함 유형·메모 변경으로 인한 불필요한 재승인 압력 모두 회피).
     snapshot_digest: Mapped[str] = mapped_column(String(64), nullable=False)
