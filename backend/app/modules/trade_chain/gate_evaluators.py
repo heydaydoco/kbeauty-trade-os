@@ -180,7 +180,9 @@ def evaluate_item_mapping(
             reason, message = (
                 (
                     "SKU_DELETED",
-                    "삭제된 품목이 포함되어 있습니다. 품목을 교체하거나 수주에서 제거해 주세요.",
+                    "삭제된 품목이 포함되어 있습니다. 품목을 교체하거나 "
+                    + ("라인을 수정해" if subject.kind == SUBJECT_INTAKE else "수주에서 제거해")
+                    + " 주세요.",
                 )
                 if sku_id is not None
                 else (

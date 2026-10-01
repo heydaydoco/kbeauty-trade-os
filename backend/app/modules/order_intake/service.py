@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from datetime import date
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,7 @@ from app.modules.identity.service import AuthenticatedUser
 from app.modules.markets import service as markets
 from app.modules.order_intake import machine
 from app.modules.order_intake.models import (
+    MAX_BUYER_ITEM_CODE,
     MAX_INTAKE_LINES,
     IntakeSourceKind,
     IntakeStatus,
@@ -43,7 +44,6 @@ from app.modules.order_intake.models import (
     OrderIntakeLine,
 )
 from app.modules.order_intake.schemas import IntakeHeaderIn, IntakeLineIn
-from app.modules.outbox import service as outbox
 from app.modules.partners import service as partners
 from app.modules.partners.models import Partner
 from app.modules.partners.service import ResolvedBuyerItem
@@ -187,8 +187,8 @@ def _clean_code(raw: str, field: str) -> str:
     code = raw.strip()
     if not code:
         raise invalid(field, "바이어 품번을 입력해 주세요.")
-    if len(code) > 100:
-        raise invalid(field, "바이어 품번은 100자 이내로 입력해 주세요.")
+    if len(code) > MAX_BUYER_ITEM_CODE:
+        raise invalid(field, f"바이어 품번은 {MAX_BUYER_ITEM_CODE}자 이내로 입력해 주세요.")
     return code
 
 
@@ -377,18 +377,7 @@ def register_intake(
                 )
             )
         session.flush()
-    outbox.publish(
-        session,
-        event_type=machine.EVENT_CREATED,
-        aggregate_type=machine.AGGREGATE_TYPE,
-        aggregate_id=row.id,
-        payload={
-            "intake_id": row.id,
-            "buyer_partner_id": row.buyer_partner_id,
-            "assignee_id": row.assignee_id,
-            "source_kind": row.source_kind,
-        },
-    )
+    machine.publish_created(session, row)
     session.refresh(row)  # 서버 기본값(status=PENDING)·version 적재
     return row
 
@@ -452,8 +441,36 @@ def _line_body(
     }
 
 
-def detail_body(session: Session, intake: OrderIntake) -> dict[str, Any]:
-    """`IntakeDetail` 본문 — 현재 값 + 불변 원본(`original`). 라인별 품번 해석 파생 상태는 지금 매핑 기준이다(쿼리 상수: 라인 수와 무관)."""
+#: 자유 텍스트(거부 사유)·점유 문서 식별을 볼 수 있는 역할 — 그 외 역할은 null(11a override 사유 선례).
+DETAIL_VISIBLE_ROLES = frozenset({RoleCode.TRADE, RoleCode.ADMIN})
+
+PO_OCCUPIED_SALES_ORDER = "SALES_ORDER"
+PO_OCCUPIED_INTAKE = "INTAKE"
+
+
+def po_occupied_marker(found: dict[str, Any] | None, *, visible: bool) -> dict[str, Any] | None:
+    """서버 계산 표지 — PENDING 인테이크의 (거래처, PO키)를 **다른 문서**가 점유 중이면 `{kind, doc_number, status}`(없으면 None). 금액 없음.
+
+    점유 문서 식별(번호·상태)은 무역·관리자에게만(그 외 역할은 종류만). 이 인테이크는 확정할 수 없다(중복 PO 하드 게이트) — 화면이 '막다른 PENDING'을 미리 안다.
+    """
+    if found is None:
+        return None
+    kind = PO_OCCUPIED_SALES_ORDER if "doc_number" in found else PO_OCCUPIED_INTAKE
+    return {
+        "kind": kind,
+        "doc_number": found.get("doc_number") if visible else None,
+        "status": found.get("status") if visible else None,
+    }
+
+
+def detail_body(
+    session: Session, intake: OrderIntake, *, roles: frozenset[RoleCode]
+) -> dict[str, Any]:
+    """`IntakeDetail` 본문 — 현재 값 + 불변 원본(`original`). 라인별 품번 해석 파생 상태는 지금 매핑 기준이다(쿼리 상수: 라인 수와 무관).
+
+    `roles`는 필수다(깜빡하면 마스킹 없는 응답이 나가는 일을 막는다): 거부 사유·점유 문서 식별은 `DETAIL_VISIBLE_ROLES`만.
+    """
+    visible = bool(roles & DETAIL_VISIBLE_ROLES)
     lines = live_lines(session, intake.id)
     sku_ids = {line.sku_id for line in lines if line.sku_id is not None}
     skus = (
@@ -477,11 +494,24 @@ def detail_body(session: Session, intake: OrderIntake) -> dict[str, Any]:
         "currency": intake.currency,
         "dest_market_code": intake.dest_market_code,
         "assignee_id": intake.assignee_id,
-        "reject_reason": intake.reject_reason,
+        "reject_reason": intake.reject_reason if visible else None,
         "decided_at": intake.decided_at,
         "decided_by_id": intake.decided_by_id,
         "sales_order_id": intake.sales_order_id,
         "copied_from_so_id": intake.copied_from_so_id,
+        "po_occupied": (
+            po_occupied_marker(
+                occupant(
+                    session,
+                    intake.buyer_partner_id,
+                    intake.buyer_po_no_key,
+                    exclude_intake_id=intake.id,
+                ),
+                visible=visible,
+            )
+            if intake.status == IntakeStatus.PENDING.value
+            else None
+        ),
         "last_line_no": intake.last_line_no,
         "created_at": intake.created_at,
         "updated_at": intake.updated_at,
@@ -492,9 +522,9 @@ def detail_body(session: Session, intake: OrderIntake) -> dict[str, Any]:
     }
 
 
-def get_intake(intake_id: int) -> dict[str, Any]:
+def get_intake(intake_id: int, *, roles: frozenset[RoleCode]) -> dict[str, Any]:
     with unit_of_work() as uow:
-        return detail_body(uow.session, require_intake(uow.session, intake_id))
+        return detail_body(uow.session, require_intake(uow.session, intake_id), roles=roles)
 
 
 def list_intakes(
@@ -505,8 +535,9 @@ def list_intakes(
     buyer_partner_id: int | None = None,
     assignee_id: int | None = None,
     q: str | None = None,
+    roles: frozenset[RoleCode],
 ) -> tuple[list[dict[str, Any]], int]:
-    """목록(페이지) — 라인 수·합계는 한 번의 집계 쿼리로(N+1 없음)."""
+    """목록(페이지) — 라인 수·합계·PO 점유 표지는 각각 한 번의 집계 쿼리로(N+1 없음). 점유 표지는 PENDING 행만(다른 PENDING 인테이크는 DB 유니크가 막으므로 SO 점유만 본다)."""
     conditions: list[Any] = [OrderIntake.deleted_at.is_(None)]
     if status:
         conditions.append(OrderIntake.status == status)
@@ -564,6 +595,32 @@ def list_intakes(
                 )
             }
         names = _buyer_names(session, {r.buyer_partner_id for r in rows})
+        visible = bool(roles & DETAIL_VISIBLE_ROLES)
+        pending_keys = [
+            (r.buyer_partner_id, r.buyer_po_no_key)
+            for r in rows
+            if r.status == IntakeStatus.PENDING.value
+        ]
+        occupied: dict[tuple[int, str], dict[str, Any]] = {}
+        if pending_keys:
+            for buyer, key, doc_number, so_status in session.execute(
+                select(
+                    SalesOrder.buyer_partner_id,
+                    SalesOrder.buyer_po_no_key,
+                    SalesOrder.doc_number,
+                    SalesOrder.status,
+                ).where(
+                    tuple_(SalesOrder.buyer_partner_id, SalesOrder.buyer_po_no_key).in_(
+                        pending_keys
+                    ),
+                    SalesOrder.deleted_at.is_(None),
+                    SalesOrder.status != SalesOrderStatus.CANCELLED.value,
+                )
+            ):
+                occupied[(int(buyer), str(key))] = {
+                    "doc_number": str(doc_number),
+                    "status": str(so_status),
+                }
         return [
             {
                 "id": r.id,
@@ -582,6 +639,9 @@ def list_intakes(
                 "total_text": money_text(sums.get(r.id, (0, 0))[1], r.currency) or "0",
                 "sales_order_id": r.sales_order_id,
                 "copied_from_so_id": r.copied_from_so_id,
+                "po_occupied": po_occupied_marker(
+                    occupied.get((r.buyer_partner_id, r.buyer_po_no_key)), visible=visible
+                ),
                 "created_at": r.created_at,
                 "decided_at": r.decided_at,
             }
@@ -634,7 +694,7 @@ def create_manual_intake(
             lines=lines,
             extracted_snapshot=jsonable(_manual_snapshot(payload)),
         )
-        body = detail_body(session, row)
+        body = detail_body(session, row, roles=actor.roles)
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=201, body=jsonable(body))
         return 201, jsonable(body)
@@ -692,7 +752,11 @@ def lock_intake(session: Session, intake_id: int, *, version: int) -> OrderIntak
 def update_intake(
     *, actor: AuthenticatedUser, intake_id: int, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """대기(PENDING) 인테이크 편집 — 헤더(PO번호·PO일자·시장·담당자)와 라인 전체. 라인만 바뀌어도 헤더 version +1. 거래처·통화·상태·스냅샷은 건드릴 수 없다."""
+    """대기(PENDING) 인테이크 편집 — 헤더(PO번호·PO일자·시장·담당자)와 라인 전체. 라인만 바뀌어도 헤더 version +1. 거래처·통화·상태·스냅샷은 건드릴 수 없다.
+
+    **모든 변경 대입과 flush는 하나의 SAVEPOINT(`guarded_flush`) 안에서 한다** — PO 키 대입·라인 교체 flush·최종 flush 어디서 DB 유니크 경합이 터져도 같은 409로 번역된다(500·PendingRollbackError 금지).
+    라인은 **변경·신규된 라인만** 다시 해석하고 변경 없는 라인은 저장된 해석 상태(STALE 포함)를 유지한다(검토자가 보지 않은 낡음을 조용히 갱신하지 않는다).
+    """
     require_intake_writer(actor)
     with unit_of_work() as uow:
         session = uow.session
@@ -700,55 +764,58 @@ def update_intake(
         require_pending(intake, intake.status)
         changed = False
         po_key: str | None = None
+        po_no: str | None = None
         if "buyer_po_no" in payload:
             if payload["buyer_po_no"] is None:
                 raise invalid("buyer_po_no", "바이어 PO번호는 비울 수 없습니다.")
             po_no, po_key = _normalize_po(payload["buyer_po_no"])
-            if po_key != intake.buyer_po_no_key:
-                require_po_free(
-                    session, intake.buyer_partner_id, po_key, exclude_intake_id=intake.id
-                )
-                intake.buyer_po_no_key = po_key
+        with guarded_flush(session, buyer_partner_id=intake.buyer_partner_id, po_key=po_key):
+            if po_key is not None and po_no is not None:
+                if po_key != intake.buyer_po_no_key:
+                    require_po_free(
+                        session, intake.buyer_partner_id, po_key, exclude_intake_id=intake.id
+                    )
+                    intake.buyer_po_no_key = po_key
+                    changed = True
+                if po_no != intake.buyer_po_no:
+                    intake.buyer_po_no = po_no
+                    changed = True
+            if "buyer_po_date" in payload and payload["buyer_po_date"] != intake.buyer_po_date:
+                intake.buyer_po_date = _check_po_date(payload["buyer_po_date"])
                 changed = True
-            if po_no != intake.buyer_po_no:
-                intake.buyer_po_no = po_no
+            if "dest_market_code" in payload:
+                if payload["dest_market_code"] is None:
+                    raise invalid("dest_market_code", "목적지 시장은 비울 수 없습니다.")
+                dest = str(payload["dest_market_code"]).strip().upper()
+                if dest != intake.dest_market_code:
+                    markets.require_active_market_code(session, dest, field="dest_market_code")
+                    intake.dest_market_code = dest
+                    changed = True
+            if "assignee_id" in payload:
+                if payload["assignee_id"] is None:
+                    raise invalid("assignee_id", "담당자는 비울 수 없습니다.")
+                if payload["assignee_id"] != intake.assignee_id:
+                    require_active_user(session, payload["assignee_id"])
+                    intake.assignee_id = payload["assignee_id"]
+                    changed = True
+            if payload.get("lines") is not None and _edit_lines(
+                session, intake, payload["lines"], actor.id
+            ):
                 changed = True
-        if "buyer_po_date" in payload and payload["buyer_po_date"] != intake.buyer_po_date:
-            intake.buyer_po_date = _check_po_date(payload["buyer_po_date"])
-            changed = True
-        if "dest_market_code" in payload:
-            if payload["dest_market_code"] is None:
-                raise invalid("dest_market_code", "목적지 시장은 비울 수 없습니다.")
-            dest = str(payload["dest_market_code"]).strip().upper()
-            if dest != intake.dest_market_code:
-                markets.require_active_market_code(session, dest, field="dest_market_code")
-                intake.dest_market_code = dest
-                changed = True
-        if "assignee_id" in payload:
-            if payload["assignee_id"] is None:
-                raise invalid("assignee_id", "담당자는 비울 수 없습니다.")
-            if payload["assignee_id"] != intake.assignee_id:
-                require_active_user(session, payload["assignee_id"])
-                intake.assignee_id = payload["assignee_id"]
-                changed = True
-        if payload.get("lines") is not None:
-            _edit_lines(session, intake, payload["lines"], actor.id)
-            changed = True
-        if changed:
-            intake.updated_by_id = actor.id
-            editing.bump_header_version(intake)  # 라인만 바뀌어도 헤더 version +1
-            with guarded_flush(session, buyer_partner_id=intake.buyer_partner_id, po_key=po_key):
-                session.flush()
+            if changed:
+                intake.updated_by_id = actor.id
+                editing.bump_header_version(intake)  # 라인만 바뀌어도 헤더 version +1
+            session.flush()
         session.refresh(intake)
-        return detail_body(session, intake)
+        return detail_body(session, intake, roles=actor.roles)
 
 
 def _edit_lines(
     session: Session, intake: OrderIntake, items: list[dict[str, Any]], actor_id: int
-) -> None:
-    """라인 전체 교체 의미 — `id` 있는 항목은 제자리 수정, 없으면 신규(번호는 `last_line_no`+1, 재사용 금지), 목록에 없는 기존 라인은 제외(soft delete).
+) -> bool:
+    """라인 전체 교체 의미 — `id` 있는 항목은 제자리 수정, 없으면 신규(번호는 `last_line_no`+1, 재사용 금지), 목록에 없는 기존 라인은 제외(soft delete). 바뀐 것이 있으면 True.
 
-    **다른 인테이크의 라인 id는 404**(IDOR — 존재 여부도 알리지 않는다). 수정 후 전 라인을 다시 해석한다(저장본 갱신).
+    **다른 인테이크의 라인 id는 404**(IDOR — 존재 여부도 알리지 않는다). **변경·신규된 라인만 재해석**한다 — 건드리지 않은 라인의 저장본(STALE 포함)은 유지된다.
     """
     _require_line_count(len(items))
     existing = {line.id: line for line in live_lines(session, intake.id)}
@@ -774,37 +841,51 @@ def _edit_lines(
     editing.compute_total([line_amount(q, p) for _, q, p, _ in parsed])
     keep = set(ids)
     now = utcnow()
+    changed = False
     for line_id, line in existing.items():
         if line_id not in keep:
             line.deleted_at = now
             line.updated_by_id = actor_id
+            changed = True
     session.flush()
+    touched: list[OrderIntakeLine] = []
     for item, (code, quantity, price, delivery) in zip(items, parsed, strict=True):
         if item.get("id") is not None:
             line = existing[item["id"]]
-            line.buyer_item_code = code
-            line.quantity = quantity
-            line.unit_price_amount = price
-            line.requested_delivery_date = delivery
-            line.updated_by_id = actor_id
+            if (
+                line.buyer_item_code,
+                line.quantity,
+                line.unit_price_amount,
+                line.requested_delivery_date,
+            ) != (code, quantity, price, delivery):
+                line.buyer_item_code = code
+                line.quantity = quantity
+                line.unit_price_amount = price
+                line.requested_delivery_date = delivery
+                line.updated_by_id = actor_id
+                touched.append(line)
+                changed = True
         else:
             intake.last_line_no += 1
-            session.add(
-                OrderIntakeLine(
-                    intake_id=intake.id,
-                    currency=intake.currency,
-                    line_no=intake.last_line_no,
-                    buyer_item_code=code,
-                    sku_id=None,
-                    quantity=quantity,
-                    unit_price_amount=price,
-                    requested_delivery_date=delivery,
-                    created_by_id=actor_id,
-                    updated_by_id=actor_id,
-                )
+            fresh = OrderIntakeLine(
+                intake_id=intake.id,
+                currency=intake.currency,
+                line_no=intake.last_line_no,
+                buyer_item_code=code,
+                sku_id=None,
+                quantity=quantity,
+                unit_price_amount=price,
+                requested_delivery_date=delivery,
+                created_by_id=actor_id,
+                updated_by_id=actor_id,
             )
+            session.add(fresh)
+            touched.append(fresh)
+            changed = True
     session.flush()
-    _apply_resolution(session, intake, live_lines(session, intake.id), actor_id=actor_id)
+    if touched:
+        _apply_resolution(session, intake, touched, actor_id=actor_id)
+    return changed
 
 
 def resolve_intake(
@@ -830,7 +911,7 @@ def resolve_intake(
             editing.bump_header_version(intake)
         session.flush()
         session.refresh(intake)
-        body = jsonable(detail_body(session, intake))
+        body = jsonable(detail_body(session, intake, roles=actor.roles))
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=200, body=body)
         return 200, body
@@ -861,7 +942,7 @@ def reject_intake(
             session, intake, machine.REJECTED, actor_id=actor.id, reason=reason
         )
         session.refresh(intake)
-        body = jsonable(detail_body(session, intake))
+        body = jsonable(detail_body(session, intake, roles=actor.roles))
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=200, body=body)
         return 200, body

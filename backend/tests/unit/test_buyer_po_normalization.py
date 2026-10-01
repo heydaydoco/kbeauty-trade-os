@@ -106,3 +106,31 @@ def test_the_normalizer_is_idempotent() -> None:
     for raw in ("po - 1", "ＰＯ-２", "a​b"):
         key = normalize_buyer_po_no(raw)
         assert normalize_buyer_po_no(key) == key
+
+
+@pytest.mark.parametrize(
+    ("raw", "key"),
+    [
+        ("PO\u2800-1", "PO-1"),  # 점자 빈칸(So 범주 — 렌더가 빈다)
+        ("\u2800\u2800PO-1\u2800", "PO-1"),
+        ("ß-1", "SS-1"),  # 대문자화 확장
+    ],
+)
+def test_blank_symbols_and_case_expansion_normalize_to_the_visible_key(raw: str, key: str) -> None:
+    """렌더가 비는 기호 문자(U+2800)는 제거되고 대문자화 확장 뒤에도 키가 안정된다"""
+    assert normalize_buyer_po_no(raw) == key
+
+
+@pytest.mark.parametrize(
+    "raw", ["po\u2800-1", "ŉ 1", "ﬁ-ŉ\u200b", "ǰ\u0301 9", "İ-1", "PO\u2013\u2800 77"]
+)
+def test_the_normalized_key_is_a_fixed_point(raw: str) -> None:
+    """정규화 결과를 다시 정규화해도 같다(고정점) — upper()가 만든 불가시·결합 문자까지 정리한다"""
+    once = normalize_buyer_po_no(raw)
+    assert normalize_buyer_po_no(once) == once
+
+
+@pytest.mark.parametrize(("a", "b"), [("PO007", "PO7"), ("PO-1", "PO1"), ("РО-1", "PO-1")])
+def test_accepted_non_merges_stay_distinct(a: str, b: str) -> None:
+    """수용 사항(PROGRESS 기록) — 앞자리 0·구두점 차이·키릴 동형문자는 같은 키로 접지 않는다(과병합이 오차단이라 더 위험)"""
+    assert normalize_buyer_po_no(a) != normalize_buyer_po_no(b)

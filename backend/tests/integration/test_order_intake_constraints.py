@@ -402,8 +402,8 @@ def test_identifier_lengths_are_within_the_postgres_limit() -> None:
     assert max(len(n) for n in names) <= 63, [n for n in names if len(n) > 63]
 
 
-def test_downgrade_removes_only_the_two_tables_and_is_safe_without_seed() -> None:
-    """M11은 시드 0 — 두 테이블에 마이그레이션이 넣은 행이 없다(빈 상태에서 시작)"""
+def test_the_tables_start_empty_and_there_is_no_edit_log_table() -> None:
+    """M11은 시드 0 — 두 테이블에 마이그레이션이 넣은 행이 없고 편집 이력 테이블은 만들지 않는다(원본 스냅샷 대 현재 diff). 왕복(downgrade·upgrade)은 test_migrations·CI 왕복이 검증한다"""
     assert scalar("SELECT count(*) FROM order_intakes") == 0
     assert scalar("SELECT count(*) FROM order_intake_lines") == 0
     with pytest.raises(ProgrammingError), owner_engine.connect() as connection:

@@ -17,10 +17,12 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
@@ -52,20 +54,20 @@ from app.modules.sales_orders import service as sales_orders
 from app.modules.trade_chain import gate_evaluators
 from app.modules.trade_chain.gate_flow import DETAIL_VISIBLE_ROLES
 from app.modules.trade_docs import editing
-from app.modules.trade_docs.constants import DocKind, PriceBasis
+from app.modules.trade_docs.constants import PriceBasis
 from app.modules.trade_docs.fx import require_known_currency
-from app.modules.trade_docs.lines import require_sellable_sku
-from app.modules.trade_docs.snapshot import LineSnapshot, line_amount, master_list_price
+from app.modules.trade_docs.snapshot import LineSnapshot, line_amount
 
 CONFIRM_ENDPOINT = "POST /api/v1/order-intakes/{intake_id}/confirm"
 
 #: 인테이크 확정을 요청할 수 있는 역할 — 라우트 게이트(무역·관리자)와 같은 집합을 서비스가 한 번 더 확인한다.
-CONFIRM_ROLES = frozenset({RoleCode.TRADE, RoleCode.ADMIN})
+CONFIRM_ROLES = intake_service.INTAKE_WRITE_ROLES
 
 #: **접수 확정의 하드 게이트** — 데이터 무결성 2종(품번 매핑·중복 PO)뿐이다. 나머지 게이트는 SO 확정 시점에 판정한다(D5-①-4).
 HARD_GATES: tuple[GateCode, ...] = (GateCode.ITEM_MAPPING, GateCode.DUPLICATE_PO)
 
-_UNMAPPED_REASONS = frozenset({"ITEM_UNMAPPED", "SKU_DELETED", "BUYER_LOST"})
+#: BUYER_LOST는 넣지 않는다 — 거래처 유형 상실은 확정의 입력 완결성 단계(422)가 먼저 막아 이 매핑에 도달하지 않는다(게이트 조회에서만 보인다).
+_UNMAPPED_REASONS = frozenset({"ITEM_UNMAPPED", "SKU_DELETED"})
 _STALE_REASONS = frozenset({"MAPPING_CHANGED"})
 _DUPLICATE_REASONS = frozenset({"DUPLICATE_PO_NO"})
 
@@ -74,7 +76,11 @@ _DUPLICATE_REASONS = frozenset({"DUPLICATE_PO_NO"})
 
 
 def subject_from_intake(
-    session: Session, intake: OrderIntake, lines: list[OrderIntakeLine]
+    session: Session,
+    intake: OrderIntake,
+    lines: list[OrderIntakeLine],
+    *,
+    with_prices: bool = True,
 ) -> GateSubject:
     """인테이크(헤더+살아 있는 라인)를 평가 대상으로 어댑트한다 — 호출자가 잠근/읽은 값 그대로.
 
@@ -82,7 +88,7 @@ def subject_from_intake(
     라인 `sku_id`는 검토자가 본 저장본이다(현재 해석과의 비교는 품번 평가기가 한다).
     """
     sku_ids = sorted({line.sku_id for line in lines if line.sku_id is not None})
-    reference = (
+    reference = (  # 기준가는 가격 편차 평가에만 쓴다 — 하드 게이트만 보는 확정 통로는 조회하지 않는다(`with_prices=False`)
         prices_at(
             session,
             sku_ids=sku_ids,
@@ -90,7 +96,7 @@ def subject_from_intake(
             currency=intake.currency,
             on=today_kst(),
         )
-        if sku_ids
+        if sku_ids and with_prices
         else {}
     )
     return GateSubject(
@@ -135,12 +141,13 @@ def evaluate_intake(
     lines: list[OrderIntakeLine],
     *,
     only: tuple[GateCode, ...] | None = None,
+    with_prices: bool = True,
 ) -> IntakeGateBundle:
     """INTAKE phase 평가 — **쓰기 없음**. 평가기는 SO와 같은 등록부의 것(품번·중복 PO·가격·준비도·MOQ)이고 통과 판정은 `gates.service.clearance`뿐이다(override·승인 없음 → `{}`·False).
 
     `only`로 일부만 평가하면 호출자가 그 부분집합에 대한 판정임을 안다(확정 통로는 하드 게이트만 본다).
     """
-    subject = subject_from_intake(session, intake, lines)
+    subject = subject_from_intake(session, intake, lines, with_prices=with_prices)
     outcomes = gates_service.evaluate_all(session, subject, GatePhase.INTAKE, only=only)
     return IntakeGateBundle(
         subject=subject,
@@ -283,13 +290,25 @@ def _duplicate_sku_lines(lines: list[OrderIntakeLine]) -> list[list[int]]:
 def _new_so_lines(
     session: Session, intake: OrderIntake, lines: list[OrderIntakeLine]
 ) -> list[sales_orders.NewSoLine]:
-    """인테이크 라인 → SO 라인 스냅샷(`price_basis='BUYER_PO'`) — 단가는 바이어 PO 값, `list_price_amount`는 **접수 시점 마스터 판가**(없으면 NULL). 이후 인테이크·마스터와 독립(ADR-05 참조 복사)."""
-    doc_date = today_kst()
+    """인테이크 라인 → SO 라인 스냅샷(`price_basis='BUYER_PO'`) — 단가는 바이어 PO 값, `list_price_amount`는 **접수 시점 마스터 판가**(없으면 NULL). 이후 인테이크·마스터와 독립(ADR-05 참조 복사).
+
+    SKU·판가는 **라인 수와 무관하게 쿼리 2개**로 읽는다(`Sku` 일괄·`prices_at` 일괄 — N+1 없음). 삭제·부재 SKU는 하드 게이트가 이미 막았으므로 여기서 없으면 방어적으로 거부한다.
+    """
+    sku_ids = sorted({line.sku_id for line in lines if line.sku_id is not None})
+    skus = {
+        sku.id: sku
+        for sku in session.execute(
+            select(Sku).where(Sku.id.in_(sku_ids), Sku.deleted_at.is_(None))
+        ).scalars()
+    }
+    reference = prices_at(
+        session, sku_ids=sku_ids, price_type="SALES", currency=intake.currency, on=today_kst()
+    )
     out: list[sales_orders.NewSoLine] = []
     for line in lines:
-        if line.sku_id is None:  # 하드 게이트가 막은 뒤라 도달 불가 — 방어(fail-closed)
+        sku = skus.get(line.sku_id) if line.sku_id is not None else None
+        if sku is None:  # 하드 게이트가 막은 뒤라 도달 불가 — 방어(fail-closed)
             raise AppError(ErrorCode.ORDER_INTAKE_LINE_UNMAPPED_ITEMS)
-        sku: Sku = require_sellable_sku(session, line.sku_id, DocKind.SALES_ORDER)
         out.append(
             sales_orders.NewSoLine(
                 snapshot=LineSnapshot(
@@ -300,7 +319,7 @@ def _new_so_lines(
                     sku_kind=sku.kind,
                     buyer_item_code=line.buyer_item_code,
                     unit_price_amount=line.unit_price_amount,
-                    list_price_amount=master_list_price(session, sku.id, intake.currency, doc_date),
+                    list_price_amount=reference[sku.id].amount if sku.id in reference else None,
                     price_basis=PriceBasis.BUYER_PO.value,
                     is_free=False,
                     price_reason=None,
@@ -310,6 +329,36 @@ def _new_so_lines(
             )
         )
     return out
+
+
+_LINE_PATH = re.compile(r"^lines\[(\d+)\]\.(.+)$")
+
+
+def _create_so(
+    session: Session,
+    actor: AuthenticatedUser,
+    lines: list[OrderIntakeLine],
+    *,
+    draft: sales_orders.SalesOrderDraft,
+) -> Any:
+    """SO 착지 호출 — SO 단계 검증 에러의 필드 경로 `lines[i].필드`(SO draft 순번)를 **인테이크 라인 번호** 기준 `line_<번호>.필드`로 바꿔 돌려준다(화면이 어느 라인인지 안다)."""
+    try:
+        return sales_orders.create_received_sales_order(session, actor=actor, draft=draft)
+    except AppError as exc:
+        remapped: dict[str, Any] = {}
+        changed = False
+        for key, value in exc.detail.items():
+            match = _LINE_PATH.match(str(key))
+            if match is not None and int(match.group(1)) < len(lines):
+                remapped[f"line_{lines[int(match.group(1))].line_no}.{match.group(2)}"] = value
+                changed = True
+            else:
+                remapped[key] = value
+        if not changed:
+            raise
+        raise AppError(
+            exc.code, detail=remapped, log_context=exc.log_context, message_override=exc.message
+        ) from None
 
 
 def confirm_intake(
@@ -360,14 +409,15 @@ def confirm_intake(
         )
 
         # 하드 게이트 재평가(잠금 하) — 통과 판정은 `clearance` 하나. 미해소는 예외(롤백·키 미소비).
-        bundle = evaluate_intake(session, intake, lines, only=HARD_GATES)
+        bundle = evaluate_intake(session, intake, lines, only=HARD_GATES, with_prices=False)
         hard = gates_service.clearance(bundle.outcomes, {}, False)
         if not hard.cleared:
             _raise_for_unresolved(bundle.subject, hard.unresolved)
 
-        so = sales_orders.create_received_sales_order(
+        so = _create_so(
             session,
-            actor=actor,
+            actor,
+            lines,
             draft=sales_orders.SalesOrderDraft(
                 buyer_partner_id=intake.buyer_partner_id,
                 currency=intake.currency,
@@ -388,7 +438,7 @@ def confirm_intake(
             "intake_id": intake.id,
             "sales_order_id": so.id,
             "doc_number": so.doc_number,
-            "intake": intake_service.detail_body(session, intake),
+            "intake": intake_service.detail_body(session, intake, roles=actor.roles),
         }
         body = intake_service.jsonable(body)
         assert claim.record is not None

@@ -52,6 +52,32 @@ STATUS_PAYLOAD_KEYS = (
 CREATED_PAYLOAD_KEYS = ("intake_id", "buyer_partner_id", "assignee_id", "source_kind")
 
 
+def _checked_payload(payload: dict[str, object], keys: tuple[str, ...]) -> dict[str, object]:
+    """이벤트 payload는 화이트리스트 키와 **정확히 같아야** 나간다(금액·사유 원문·메모가 새는 회귀를 막는다)."""
+    if set(payload) != set(keys):
+        raise ValueError(f"이벤트 payload 키가 화이트리스트와 다르다: {sorted(payload)}")
+    return payload
+
+
+def publish_created(session: Session, intake: OrderIntake) -> None:
+    """착지 이벤트 — `register_intake`가 부른다."""
+    outbox.publish(
+        session,
+        event_type=EVENT_CREATED,
+        aggregate_type=AGGREGATE_TYPE,
+        aggregate_id=intake.id,
+        payload=_checked_payload(
+            {
+                "intake_id": intake.id,
+                "buyer_partner_id": intake.buyer_partner_id,
+                "assignee_id": intake.assignee_id,
+                "source_kind": intake.source_kind,
+            },
+            CREATED_PAYLOAD_KEYS,
+        ),
+    )
+
+
 def is_allowed(from_status: str, to_status: str) -> bool:
     return (from_status, to_status) in ALLOWED_TRANSITIONS
 
@@ -101,13 +127,16 @@ def apply_intake_transition(
         event_type=EVENT_STATUS_CHANGED,
         aggregate_type=AGGREGATE_TYPE,
         aggregate_id=intake.id,
-        payload={
-            "intake_id": intake.id,
-            "from_status": from_status,
-            "to_status": to,
-            "buyer_partner_id": intake.buyer_partner_id,
-            "assignee_id": intake.assignee_id,
-            "source_kind": intake.source_kind,
-            "sales_order_id": intake.sales_order_id,
-        },
+        payload=_checked_payload(
+            {
+                "intake_id": intake.id,
+                "from_status": from_status,
+                "to_status": to,
+                "buyer_partner_id": intake.buyer_partner_id,
+                "assignee_id": intake.assignee_id,
+                "source_kind": intake.source_kind,
+                "sales_order_id": intake.sales_order_id,
+            },
+            STATUS_PAYLOAD_KEYS,
+        ),
     )

@@ -64,6 +64,7 @@ def list_order_intakes(
         buyer_partner_id=buyer_partner_id,
         assignee_id=assignee_id,
         q=q,
+        roles=current.roles,
     )
     return Page.of([IntakeSummary.model_validate(item) for item in items], total, params)
 
@@ -72,7 +73,7 @@ def list_order_intakes(
     "/{intake_id}", summary="오더 인테이크 상세 (라인·품번 해석 상태·불변 원본 포함 — 전 역할)"
 )
 def get_order_intake(intake_id: Annotated[int, Path(ge=1)], current: CurrentUser) -> IntakeDetail:
-    return IntakeDetail.model_validate(service.get_intake(intake_id))
+    return IntakeDetail.model_validate(service.get_intake(intake_id, roles=current.roles))
 
 
 @router.patch(

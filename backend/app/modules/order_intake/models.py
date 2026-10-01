@@ -46,6 +46,7 @@ from app.core.db.mixins import (
     TimestampMixin,
     VersionMixin,
 )
+from app.modules.gates.text import REASON_MAX, REASON_MIN
 from app.modules.trade_docs.constants import MAX_QUANTITY, MAX_SAFE_INTEGER
 
 
@@ -67,8 +68,13 @@ STATUSES: tuple[str, ...] = tuple(s.value for s in IntakeStatus)
 
 #: 인테이크당 라인 상한(초과 422 `ORDER_INTAKE.LINE.LIMIT_EXCEEDED`).
 MAX_INTAKE_LINES = 200
-REJECT_REASON_MIN = 5
-REJECT_REASON_MAX = 500
+#: 거부 사유 길이 — override 사유와 같은 단일 출처(`gates.text`)를 쓴다.
+REJECT_REASON_MIN = REASON_MIN
+REJECT_REASON_MAX = REASON_MAX
+#: 바이어 품번 최대 길이(열 폭·스키마·서비스 검사가 같은 값).
+MAX_BUYER_ITEM_CODE = 100
+#: 바이어 PO번호 입력 최대 길이(원문 — 정규화 키는 `trade_docs.buyer_po`가 60자로 제한).
+MAX_PO_INPUT = 200
 
 #: 등록 후 변경할 수 없는 열 — ORM `before_update` 가드·AST 스캔이 같은 집합을 쓴다.
 IMMUTABLE_COLUMNS: tuple[str, ...] = (
@@ -222,7 +228,7 @@ class OrderIntakeLine(PkMixin, TimestampMixin, SoftDeleteMixin, ActorMixin, Base
     currency: Mapped[str] = mapped_column(CHAR(3), nullable=False)
     line_no: Mapped[int] = mapped_column(Integer, nullable=False)
     #: 바이어 품번 — strip 원문(대소문자 변환 없음, 추측 보정 금지).
-    buyer_item_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    buyer_item_code: Mapped[str] = mapped_column(String(MAX_BUYER_ITEM_CODE), nullable=False)
     #: **검토자가 본 해석 결과의 저장본**(NULL=미매핑). 요청 스키마에 없다 — 서버가 등록·수정·`resolve`마다 재해석해 대입한다(매핑 우회 금지).
     sku_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("skus.id", ondelete="RESTRICT"), nullable=True

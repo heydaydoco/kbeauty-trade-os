@@ -236,8 +236,8 @@ def test_concurrent_registration_of_the_same_po_lands_exactly_one_intake(threads
     assert scalar("SELECT count(*) FROM order_intake_lines") == 1
 
 
-def test_a_registration_racing_an_so_creation_for_the_same_po_never_double_occupies() -> None:
-    """같은 PO의 인테이크 등록과 SO 접수(직접 착지)가 동시에 오면 — 최종적으로 PENDING 인테이크와 비취소 SO가 함께 존재할 수 있으나 확정은 409로 막힌다(중복 SO 0건)"""
+def test_confirm_is_refused_when_an_so_took_the_same_po_after_landing() -> None:
+    """(순차 시험) 착지 뒤 같은 PO의 SO가 생겨 PENDING 인테이크와 비취소 SO가 공존하면 확정은 409로 막힌다 — 중복 SO 0건"""
     from tests.factories.trade import create_direct_so
 
     w = world()

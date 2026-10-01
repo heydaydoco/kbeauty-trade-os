@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from itertools import permutations
 from typing import Any
 
@@ -151,17 +152,58 @@ def _constructor_keywords(tree: ast.Module, class_name: str) -> list[tuple[str, 
     return found
 
 
+def _decision_assignments(tree: ast.Module) -> list[tuple[str, int, str]]:
+    """인테이크 상태·결정 열 대입 후보 — 속성 대입·setattr·튜플 언패킹 전부. `status`는 소유 객체 이름에 'intake'가 든 것만(SO·PI 등의 status와 구분),
+    `decided_*`·`reject_reason`·`sales_order_id`는 소유 객체 이름에 'approval'이 든 것(승인 모델 — 별도 통로 스캔이 지킨다)을 뺀 전부."""
+    found: list[tuple[str, int, str]] = []
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, ast.AugAssign | ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            for sub in ast.walk(target):
+                if (
+                    isinstance(sub, ast.Attribute)
+                    and isinstance(sub.ctx, ast.Store)
+                    and sub.attr in DECISION_ATTRS
+                ):
+                    owner = ast.unparse(sub.value).lower()
+                    if sub.attr == "status" and "intake" not in owner:
+                        continue
+                    if sub.attr != "status" and "approval" in owner:
+                        continue
+                    found.append((sub.attr, sub.lineno, owner))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "setattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in DECISION_ATTRS
+        ):
+            found.append((str(node.args[1].value), node.lineno, ast.unparse(node.args[0]).lower()))
+    return found
+
+
 def test_decision_columns_are_assigned_only_inside_apply_intake_transition() -> None:
-    """`status`·`decided_at`·`decided_by_id`·`reject_reason`·`sales_order_id` 대입은 order_intake 패키지·확정 통로 전체에서 `machine.apply_intake_transition` 안뿐이다(튜플·setattr 포함)"""
-    hits: list[tuple[str, str, str]] = []
-    for rel in sorted(INTAKE_FILES):
-        for attr, _line, func in _assigned(app_sources()[rel]):
-            if attr in DECISION_ATTRS:
-                hits.append((rel, attr, func))
+    """인테이크 `status`·`decided_at`·`decided_by_id`·`reject_reason`·`sales_order_id` 대입은 **앱 전체**에서 `machine.apply_intake_transition` 안뿐이다(튜플·setattr 포함 — machine 독스트링의 '이 함수 밖 0건')"""
+    hits: list[tuple[str, str]] = []
+    for rel, tree in app_sources().items():
+        for attr, line, _owner in _decision_assignments(tree):
+            enclosing = next(
+                (
+                    f.name
+                    for f in ast.walk(tree)
+                    if isinstance(f, ast.FunctionDef) and f.lineno <= line <= (f.end_lineno or 0)
+                ),
+                "",
+            )
+            hits.append((rel, f"{enclosing}.{attr}"))
     assert hits, "스캔이 공회전하고 있다"
-    assert {(rel, func) for rel, _attr, func in hits} == {
-        ("modules/order_intake/machine.py", "apply_intake_transition")
-    }, hits
+    assert {rel for rel, _ in hits} == {"modules/order_intake/machine.py"}, hits
+    assert {fn.split(".")[0] for _, fn in hits} == {"apply_intake_transition"}, hits
 
 
 @pytest.mark.group_g
@@ -212,27 +254,47 @@ def test_immutable_columns_are_never_assigned_in_the_intake_code() -> None:
                 assert rel == "modules/order_intake/service.py", (rel, attr)
 
 
-def test_no_core_update_insert_or_delete_targets_the_intake_tables_except_the_handover() -> None:
-    """Core `update()`/`insert()`/`delete()`·원시 SQL이 인테이크 표를 겨냥하는 코드는 앱 전체에 0건 — 담당 이관(handover)은 `update(target.model)` 일반형이고 `assignee_id`만 바꾼다"""
-    bad: list[str] = []
-    for rel, tree in app_sources().items():
-        text = ast.unparse(tree)
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id in {"update", "insert", "delete"}
-                and any(
-                    "OrderIntake" in ast.unparse(a) or "order_intakes" in ast.unparse(a)
-                    for a in node.args
-                )
+_TARGET_NAMES = ("OrderIntake", "OrderIntakeLine", "order_intakes", "order_intake_lines")
+_RAW_SQL = re.compile(
+    r"(?is)\b(update|insert\s+into|delete\s+from)\s+(only\s+)?(public\.)?(order_intakes|order_intake_lines)\b"
+)
+
+
+def _core_writes(tree: ast.Module) -> list[int]:
+    """인테이크 표를 겨냥한 Core 쓰기 — `update/insert/delete(OrderIntake…)`(`sa.update`·`sqlalchemy.update` 포함), `OrderIntake.__table__.update()`,
+    `session.query(OrderIntake).update()`, 소문자·`public.` 접두 원시 SQL 문자열."""
+    found: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = (
+                node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", "")
+            )
+            args_text = " ".join(
+                ast.unparse(a) for a in [*node.args, *[k.value for k in node.keywords]]
+            )
+            if name in {"update", "insert", "delete"} and any(
+                t in args_text for t in _TARGET_NAMES
             ):
-                bad.append(f"{rel}:{node.lineno}")
-        if rel != "migrations" and (
-            "UPDATE order_intakes" in text or "DELETE FROM order_intakes" in text
+                found.append(node.lineno)
+            elif name in {"update", "insert", "delete"} and isinstance(node.func, ast.Attribute):
+                receiver = ast.unparse(node.func.value)
+                if any(t in receiver for t in _TARGET_NAMES):
+                    found.append(node.lineno)
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _RAW_SQL.search(node.value)
         ):
-            bad.append(rel)
-    assert bad == []
+            found.append(node.lineno)
+    return found
+
+
+def test_no_core_update_insert_or_delete_targets_the_intake_tables_except_the_handover() -> None:
+    """Core `update()`/`insert()`/`delete()`(`sa.update`·`__table__.update()`·`Query.update`)·원시 SQL(대소문자 무관)이 인테이크 표를 겨냥하는 코드는 앱 전체에 0건 — 담당 이관(handover)은 `update(target.model)` 일반형이고 `assignee_id`만 바꾼다"""
+    bad = {rel: _core_writes(tree) for rel, tree in app_sources().items() if _core_writes(tree)}
+    assert bad == {}
     assert any(
         t.label == "order_intakes" and t.column.key == "assignee_id" for t in ASSIGNMENT_TARGETS
     )
@@ -244,7 +306,7 @@ def test_no_core_update_insert_or_delete_targets_the_intake_tables_except_the_ha
 
 
 def test_the_scanners_catch_violation_corpora() -> None:
-    """자기검사 — 대입·setattr·튜플 언패킹·생성자 키워드·불변 열 대입을 실제로 잡고, 무관한 코드는 통과시킨다"""
+    """자기검사 — 대입·setattr·튜플 언패킹·생성자 키워드·불변 열 대입·Core 쓰기 형태·원시 SQL 소문자를 실제로 잡고, 무관한 코드(승인 모델·이관 일반형)는 통과시킨다"""
     assert _assigned(parse_source("def f(i):\n    i.status = 'X'\n"))[0][0] == "status"
     assert (
         _assigned(parse_source("def f(i):\n    setattr(i, 'decided_at', 1)\n"))[0][0]
@@ -260,6 +322,36 @@ def test_the_scanners_catch_violation_corpora() -> None:
         == "status"
     )
     assert _assigned(parse_source("x = 1\nprint(x)\n")) == []
+    assert _decision_assignments(parse_source("def f(intake):\n    intake.status = 'X'\n"))
+    assert _decision_assignments(parse_source("def f(row):\n    row.reject_reason = 'x'\n"))
+    assert _decision_assignments(
+        parse_source("def f(row):\n    setattr(row, 'sales_order_id', 1)\n")
+    )
+    assert not _decision_assignments(parse_source("def f(so):\n    so.status = 'X'\n"))
+    assert not _decision_assignments(
+        parse_source("def f(approval):\n    approval.decided_at = 1\n")
+    )
+    for source in (
+        "update(OrderIntake).values(status='X')",
+        "sa.update(OrderIntake).where(x)",
+        "sqlalchemy.delete(OrderIntakeLine)",
+        "OrderIntake.__table__.update().values(a=1)",
+        "session.query(OrderIntake).update({'a': 1})",
+        "insert(order_intakes)",
+        "text('update order_intakes set status = 1')",
+        "text('DELETE FROM public.order_intake_lines')",
+    ):
+        assert _core_writes(parse_source(source)), source
+    for clean in (
+        "update(target.model).where(target.column == 1)",
+        "text('select * from order_intakes')",
+        "update(SalesOrder).values(a=1)",
+    ):
+        assert not _core_writes(parse_source(clean)), clean
+    assert _mentions(parse_source("from x import confirm_intake\n"), "confirm_intake")
+    assert _mentions(parse_source("m.confirm_intake(1)\n"), "confirm_intake")
+    assert _mentions(parse_source("def confirm_intake():\n    pass\n"), "confirm_intake")
+    assert not _mentions(parse_source("def other():\n    pass\n"), "confirm_intake")
 
 
 # ── 착지·확정·거부 통로 (G·I) ──────────────────────────────────────────────────
@@ -334,22 +426,23 @@ def test_the_transition_callers_are_exactly_confirm_and_reject() -> None:
     ], calls
 
 
+def _mentions(tree: ast.Module, name: str) -> bool:
+    """정의·이름·속성·임포트 어느 형태로든 `name`을 언급하는가."""
+    return any(
+        (isinstance(n, ast.FunctionDef) and n.name == name)
+        or (isinstance(n, ast.Name) and n.id == name)
+        or (isinstance(n, ast.Attribute) and n.attr == name)
+        or (isinstance(n, ast.ImportFrom) and any(a.name == name for a in n.names))
+        for n in ast.walk(tree)
+    )
+
+
 @pytest.mark.group_i
 def test_intake_confirmation_is_requested_only_by_the_trade_chain_router_and_never_by_machinery() -> (
     None
 ):
     """`confirm_intake`를 언급하는 파일은 정의(intake_flow)와 trade_chain 라우터뿐이다 — 스케줄러·CLI·아웃박스 디스패처·알림·시드·이관·임포트 어디서도 부르지 않는다(자동 확정 부재)"""
-    mentioners = {
-        rel
-        for rel, tree in app_sources().items()
-        if any(
-            (isinstance(n, ast.FunctionDef) and n.name == "confirm_intake")
-            or (isinstance(n, ast.Name) and n.id == "confirm_intake")
-            or (isinstance(n, ast.Attribute) and n.attr == "confirm_intake")
-            or (isinstance(n, ast.ImportFrom) and any(a.name == "confirm_intake" for a in n.names))
-            for n in ast.walk(tree)
-        )
-    }
+    mentioners = {rel for rel, tree in app_sources().items() if _mentions(tree, "confirm_intake")}
     assert mentioners == {"modules/trade_chain/intake_flow.py", "modules/trade_chain/router.py"}
     for rel in ("modules/platform/scheduler.py", "cli.py", "modules/outbox/service.py"):
         assert "intake_flow" not in ast.unparse(app_sources()[rel])

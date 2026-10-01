@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 
 from app.modules.gates.text import REASON_MAX, reason_problem
+from app.modules.order_intake.models import MAX_BUYER_ITEM_CODE, MAX_INTAKE_LINES, MAX_PO_INPUT
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +50,7 @@ class IntakeLineRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    buyer_item_code: StrictStr = Field(min_length=1, max_length=100)
+    buyer_item_code: StrictStr = Field(min_length=1, max_length=MAX_BUYER_ITEM_CODE)
     quantity: StrictInt
     unit_price: StrictStr = Field(min_length=1, max_length=40)
     requested_delivery_date: date | None = None
@@ -61,13 +62,13 @@ class IntakeCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     buyer_partner_id: StrictInt = Field(ge=1)
-    buyer_po_no: StrictStr = Field(min_length=1, max_length=200)
+    buyer_po_no: StrictStr = Field(min_length=1, max_length=MAX_PO_INPUT)
     buyer_po_date: date | None = None
     currency: StrictStr = Field(min_length=3, max_length=3)
     dest_market_code: StrictStr = Field(min_length=2, max_length=2)
     assignee_id: StrictInt | None = Field(default=None, ge=1)
     copied_from_so_id: StrictInt | None = Field(default=None, ge=1)
-    lines: list[IntakeLineRequest] = Field(min_length=1, max_length=200)
+    lines: list[IntakeLineRequest] = Field(min_length=1, max_length=MAX_INTAKE_LINES)
 
 
 class IntakeLineEdit(BaseModel):
@@ -76,7 +77,7 @@ class IntakeLineEdit(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: StrictInt | None = Field(default=None, ge=1)
-    buyer_item_code: StrictStr = Field(min_length=1, max_length=100)
+    buyer_item_code: StrictStr = Field(min_length=1, max_length=MAX_BUYER_ITEM_CODE)
     quantity: StrictInt
     unit_price: StrictStr = Field(min_length=1, max_length=40)
     requested_delivery_date: date | None = None
@@ -88,11 +89,13 @@ class IntakeUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: StrictInt = Field(ge=1)
-    buyer_po_no: StrictStr | None = Field(default=None, min_length=1, max_length=200)
+    buyer_po_no: StrictStr | None = Field(default=None, min_length=1, max_length=MAX_PO_INPUT)
     buyer_po_date: date | None = None
     dest_market_code: StrictStr | None = Field(default=None, min_length=2, max_length=2)
     assignee_id: StrictInt | None = Field(default=None, ge=1)
-    lines: list[IntakeLineEdit] | None = Field(default=None, min_length=1, max_length=200)
+    lines: list[IntakeLineEdit] | None = Field(
+        default=None, min_length=1, max_length=MAX_INTAKE_LINES
+    )
 
 
 class IntakeVersionRequest(BaseModel):
@@ -143,6 +146,16 @@ class IntakeLineOut(BaseModel):
     source_row_no: int | None
 
 
+class PoOccupiedOut(BaseModel):
+    """PENDING 인테이크의 (거래처, PO키)를 **다른 문서**가 점유 중이다 — 이 인테이크는 중복 PO 하드 게이트로 확정할 수 없다(막다른 PENDING). 금액 없음."""
+
+    #: SALES_ORDER(비취소 SO가 점유 — 착지 뒤 참조 생성·PO번호 편집으로 생길 수 있다) 또는 INTAKE.
+    kind: str
+    #: 점유 문서번호·상태 — 무역·관리자에게만(그 외 역할은 null).
+    doc_number: str | None
+    status: str | None
+
+
 class IntakeSummary(BaseModel):
     id: int
     version: int
@@ -160,6 +173,8 @@ class IntakeSummary(BaseModel):
     total_text: str
     sales_order_id: int | None
     copied_from_so_id: int | None
+    #: 서버 계산 — PENDING이고 다른 문서가 같은 PO를 점유 중이면 값이 있다(없으면 null).
+    po_occupied: PoOccupiedOut | None
     created_at: datetime
     decided_at: datetime | None
 
@@ -176,11 +191,13 @@ class IntakeDetail(BaseModel):
     currency: str
     dest_market_code: str
     assignee_id: int
+    #: 자유 텍스트 — 무역·관리자에게만(그 외 역할은 null).
     reject_reason: str | None
     decided_at: datetime | None
     decided_by_id: int | None
     sales_order_id: int | None
     copied_from_so_id: int | None
+    po_occupied: PoOccupiedOut | None
     last_line_no: int
     created_at: datetime
     updated_at: datetime
@@ -220,7 +237,7 @@ class IntakeGateResultOut(BaseModel):
 
 
 class IntakeGateReportOut(BaseModel):
-    """`GET /order-intakes/{id}/gates` — 인테이크 시점 게이트 평가(실시간 계산·**정보**). 접수 확정의 하드 조건은 품번 매핑·중복 PO·입력 완결성뿐이다."""
+    """`GET /order-intakes/{id}/gates` — 인테이크 시점 게이트 평가(실시간 계산·**정보**). 접수 확정의 **게이트 하드 조건**은 품번 매핑·중복 PO뿐이다(입력 완결성은 게이트가 아니라 확정 시 별도 422)."""
 
     intake_id: int
     status: str
@@ -229,6 +246,7 @@ class IntakeGateReportOut(BaseModel):
     #: 시장 준비도는 계산값 표시이며 법적 판정이 아니다 — 고정 문구.
     note: str
     readiness_scope_note: str
-    #: 하드 게이트(품번·중복 PO)가 전부 통과(경고 포함)인가 — 서버 판정(`clearance`), 화면이 다시 판정하지 않는다.
+    #: **하드 게이트 2종(품번 매핑·중복 PO)만의 통과 여부 — 서버 사전 점검**(`clearance`, 화면이 다시 판정하지 않는다). **확정 가능 보장이 아니다**:
+    #: 입력 완결성(거래처 유형·시장·통화·라인≥1·같은 SKU 유상 라인 중복·금액 상한)·확정 시점 납기 경과·복제 원본 자격은 확정 때 다시 검사한다(422·409).
     intake_confirmable: bool
     gates: list[IntakeGateResultOut]

@@ -54,11 +54,13 @@ ASSIGNMENT_TARGETS: tuple[AssignmentTarget, ...] = (
     AssignmentTarget("certifications", Certification, Certification.assignee_id),
     # S3-1 — 전표 담당자(§2 "담당 건(전표…)"). 동결 후에도 FREE 열이라 이관이 통과한다(ADR-0053).
     # 오더 인테이크(PR-13a) — 담당자는 이관 단위다(PENDING 건만 의미가 있으나 종결 건도 담당 이력 표시를 위해 대상에 둔다). 일괄 UPDATE는 version을 올리지 않는다.
+    # ★ 순서가 곧 잠금 순서다(이관은 표마다 UPDATE로 행을 잠근다): **order_intakes를 전표보다 먼저**(전역 LOCK_ORDER (1) 인테이크 → … → (5) SO → (6) PO) —
+    # 복제 인테이크 확정(인테이크 → 원본 SO 잠금)과 교차해도 사이클이 없고, 이관이 확정이 만든 SO를 놓치지 않는다(test_handover_follows_the_global_lock_order).
+    AssignmentTarget("order_intakes", OrderIntake, OrderIntake.assignee_id),
     AssignmentTarget("quotations", Quotation, Quotation.assignee_id),
     AssignmentTarget("proforma_invoices", ProformaInvoice, ProformaInvoice.assignee_id),
     AssignmentTarget("sales_orders", SalesOrder, SalesOrder.assignee_id),
     AssignmentTarget("purchase_orders", PurchaseOrder, PurchaseOrder.assignee_id),
-    AssignmentTarget("order_intakes", OrderIntake, OrderIntake.assignee_id),
 )
 
 
