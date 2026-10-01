@@ -164,6 +164,7 @@ def test_decision_columns_are_assigned_only_inside_apply_intake_transition() -> 
     }, hits
 
 
+@pytest.mark.group_g
 def test_the_intake_constructor_is_called_only_by_register_intake_and_never_with_a_status() -> None:
     """`OrderIntake(...)` 생성은 `register_intake` 한 곳뿐이고 status·결정 열·백링크 키워드를 넘기지 않는다(라우터·파서는 직접 생성 0 — 착지 단일 통로)"""
     callers: dict[str, set[str]] = {}
@@ -264,6 +265,7 @@ def test_the_scanners_catch_violation_corpora() -> None:
 # ── 착지·확정·거부 통로 (G·I) ──────────────────────────────────────────────────
 
 
+@pytest.mark.group_g
 def test_register_intake_has_no_status_parameter_and_no_confirmation_call() -> None:
     """착지 함수 시그니처에 status 인자가 없고(항상 PENDING), 함수 본문에 확정·전이 호출이 없다 — CONFIRMED로의 직행 불가"""
     params = inspect.signature(intake_service.register_intake).parameters
@@ -287,6 +289,7 @@ def test_register_intake_has_no_status_parameter_and_no_confirmation_call() -> N
     }
 
 
+@pytest.mark.group_i
 def test_confirm_and_reject_signatures_require_a_human_actor_and_a_keyword_only_idempotency_key() -> (
     None
 ):
@@ -301,6 +304,7 @@ def test_confirm_and_reject_signatures_require_a_human_actor_and_a_keyword_only_
         assert not {"force", "skip", "bypass", "override", "auto", "threshold"} & set(params)
 
 
+@pytest.mark.group_i
 def test_the_transition_callers_are_exactly_confirm_and_reject() -> None:
     """`apply_intake_transition(CONFIRMED)` 호출은 `confirm_intake` 1곳, `(REJECTED)`는 `reject_intake` 1곳뿐이다(자동 전이 호출처 0)"""
     calls: list[tuple[str, str, str]] = []
@@ -330,6 +334,7 @@ def test_the_transition_callers_are_exactly_confirm_and_reject() -> None:
     ], calls
 
 
+@pytest.mark.group_i
 def test_intake_confirmation_is_requested_only_by_the_trade_chain_router_and_never_by_machinery() -> (
     None
 ):

@@ -97,6 +97,7 @@ def test_unmapped_codes_land_as_pending_with_null_sku(trade: Any) -> None:
     assert lower["lines"][0]["sku_id"] is None
 
 
+@pytest.mark.group_g
 def test_write_schemas_have_no_status_sku_or_key_fields(trade: Any) -> None:
     """요청 본문에 status·sku_id·buyer_po_no_key·source_*·extracted_snapshot을 실어 보내면 422(extra=forbid) — 직행·우회 표면이 구조적으로 없다"""
     w = world()
@@ -728,6 +729,7 @@ def test_list_is_paginated_with_default_50_and_filters(trade: Any) -> None:
 # ── G: DB 직행 불가 ────────────────────────────────────────────────────────────
 
 
+@pytest.mark.group_g
 def test_there_is_no_http_route_that_lands_an_intake_as_anything_but_pending(trade: Any) -> None:
     """HTTP로 CONFIRMED·REJECTED 인테이크를 직접 만드는 길이 없다 — 생성·편집 본문에 상태 필드가 없고, 모든 착지는 PENDING이다"""
     w = world()
@@ -825,3 +827,73 @@ def test_the_reject_reason_is_validated_by_the_service_too() -> None:
             )
         assert caught.value.status_code == 422
     assert scalar("SELECT status FROM order_intakes WHERE id = :i", i=intake["id"]) == "PENDING"
+
+
+def test_a_mapping_registered_after_review_to_a_discontinued_sku_is_still_stale(trade: Any) -> None:
+    """검토 때 미매핑이던 품번에 뒤늦게 (단종) SKU 매핑이 생겨도 낡은 검토다 — 단종 경고(WARN)로 통과하지 않고 409 STALE_MAPPING"""
+    w = world()
+    body = register(trade, w, lines=[line_body(w["codes"][0]), line_body("LATE-CODE")])
+    late_sku = create_priced_sku(status="DISCONTINUED")
+    map_buyer_item_code(w["buyer"], late_sku, "LATE-CODE")
+    r = confirm(trade, get(trade, body["id"]))
+    assert r.status_code == 409 and code_of(r) == "ORDER_INTAKE.LINE.STALE_MAPPING"
+    assert scalar("SELECT count(*) FROM sales_orders") == 0
+
+
+def test_creation_is_idempotent_by_key(trade: Any) -> None:
+    """같은 키·같은 본문 재전송=최초 결과 재생(인테이크 1건) — 같은 키+다른 본문은 409 KEY_CONFLICT, 키 헤더 없으면 400"""
+    w = world()
+    key = idem()
+    payload = intake_payload(w, po_no="PO-IDEM-1")
+    first = trade.post(INTAKES, json=payload, headers=key)
+    again = trade.post(INTAKES, json=payload, headers=key)
+    assert first.status_code == again.status_code == 201 and first.json() == again.json()
+    assert scalar("SELECT count(*) FROM order_intakes") == 1
+    other = trade.post(INTAKES, json=intake_payload(w, po_no="PO-IDEM-2"), headers=key)
+    assert other.status_code == 409 and code_of(other) == "COMMON.IDEMPOTENCY.KEY_CONFLICT"
+    assert trade.post(INTAKES, json=payload).status_code == 400
+
+
+def test_handover_moves_pending_intakes_without_touching_the_version(trade: Any) -> None:
+    """실제 담당 이관(reassign_all)이 인테이크 담당자를 옮긴다 — version 불변이라 검토 내용이 무효화되지 않는다"""
+    from app.modules.handover.service import reassign_all
+    from tests.support.factories import create_user
+
+    w = world()
+    body = register(trade, w)
+    new_owner = create_user(f"{unique('ho')}@example.com", roles=(RoleCode.TRADE,))
+    admin = create_user(f"{unique('ad')}@example.com", roles=(RoleCode.ADMIN,))
+    result = reassign_all(
+        from_user_id=body["assignee_id"], to_user_id=new_owner, actor_user_id=admin
+    )
+    assert result.moved["order_intakes"] == 1
+    after = get(trade, body["id"])
+    assert after["assignee_id"] == new_owner and after["version"] == body["version"]
+    assert confirm(trade, after).status_code == 201
+
+
+def test_query_counts_do_not_grow_with_the_number_of_lines_or_rows(trade: Any) -> None:
+    """상세·게이트·목록의 질의 수는 라인 수·행 수와 무관하다(N+1 없음) — 라인 1개 대 40개, 인테이크 1건 대 10건"""
+    from app.core.db.uow import unit_of_work  # noqa: F401
+    from app.modules.identity.models import RoleCode as _R  # noqa: F401
+    from app.modules.order_intake import service as intake_service
+    from app.modules.trade_chain import intake_flow
+    from tests.support.sqlcount import count_statements
+
+    w1 = world(lines=1)
+    small = register(trade, w1)
+    w40 = world(lines=40)
+    big = register(trade, w40)
+    roles = frozenset({RoleCode.TRADE})
+    d1 = count_statements(lambda: intake_service.get_intake(small["id"]))
+    d40 = count_statements(lambda: intake_service.get_intake(big["id"]))
+    g1 = count_statements(lambda: intake_flow.get_intake_gates(intake_id=small["id"], roles=roles))
+    g40 = count_statements(lambda: intake_flow.get_intake_gates(intake_id=big["id"], roles=roles))
+    assert d1 > 0 and g1 > 0
+    assert d1 == d40, (d1, d40)
+    assert g1 == g40, (g1, g40)
+    l1 = count_statements(lambda: intake_service.list_intakes(offset=0, limit=50))
+    for _ in range(9):
+        register(trade, world())
+    l10 = count_statements(lambda: intake_service.list_intakes(offset=0, limit=50))
+    assert l1 == l10, (l1, l10)
