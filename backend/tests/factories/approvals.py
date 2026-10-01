@@ -11,19 +11,20 @@ from contextlib import contextmanager
 from datetime import date
 from typing import Any
 
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-import app.main  # noqa: F401 — api_router 조립이 credit TargetSpec을 등록한다
+import app.main  # api_router 조립이 credit TargetSpec을 등록한다
 from app.core.db.session import owner_engine
 from app.core.db.uow import unit_of_work
 from app.modules.approvals import service
 from app.modules.approvals.machine import DecisionVerb
-from app.modules.approvals.models import Approval, ApprovalLine
+from app.modules.approvals.models import ApprovalLine
 from app.modules.identity.models import RoleCode
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.partners.models import Partner
 from tests.factories.trade import create_buyer, create_direct_so, create_priced_sku, unique
-from tests.support.factories import create_user
+from tests.support.factories import DEFAULT_PASSWORD, create_user
 
 TYPE = "SO_CREDIT_EXCEEDED"
 
@@ -41,6 +42,17 @@ def make_user(*roles: RoleCode, active: bool = True, name: str | None = None) ->
         roles=frozenset(roles),
         session_id=0,
     )
+
+
+@contextmanager
+def client_for(user: AuthenticatedUser) -> Iterator[TestClient]:
+    """이미 만든 사용자(make_user)로 로그인한 클라이언트 — 서비스 층에서 만든 승인을 API로 이어서 본다."""
+    with TestClient(app.main.app) as client:
+        response = client.post(
+            "/api/v1/auth/login", json={"email": user.email, "password": DEFAULT_PASSWORD}
+        )
+        assert response.is_success, response.text
+        yield client
 
 
 def actor_of(user_id: int, *roles: RoleCode) -> AuthenticatedUser:
@@ -63,6 +75,32 @@ def add_line(
             threshold_amount=threshold,
             threshold_currency=currency,
             approver_role=role,
+        )
+        uow.session.add(row)
+        uow.session.flush()
+        return int(row.id)
+
+
+def add_delegation(
+    delegator: AuthenticatedUser | int,
+    delegate: AuthenticatedUser | int,
+    start_on: date,
+    end_on: date,
+    *,
+    role: str = "TRADE",
+    approval_type: str = TYPE,
+) -> int:
+    """대결 1행을 DB로 직접(소급 금지 같은 등록 검증을 거치지 않고 — 경계일·과거 날짜 시험용)."""
+    from app.modules.approvals.models import Delegation
+
+    with unit_of_work() as uow:
+        row = Delegation(
+            delegator_user_id=delegator if isinstance(delegator, int) else delegator.id,
+            delegate_user_id=delegate if isinstance(delegate, int) else delegate.id,
+            approval_type=approval_type,
+            delegated_role=role,
+            start_on=start_on,
+            end_on=end_on,
         )
         uow.session.add(row)
         uow.session.flush()
@@ -219,6 +257,3 @@ def fixed_today(monkeypatch: Any, today: date) -> Iterator[None]:
 
     monkeypatch.setattr(svc, "kst_today", lambda: today)
     yield
-
-
-__all__ = ["Approval"]
