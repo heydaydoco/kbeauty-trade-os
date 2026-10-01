@@ -1075,6 +1075,9 @@ def test_the_pi_surface_has_no_create_edit_line_or_delete_endpoints() -> None:
         ("POST", "/api/v1/proforma-invoices/{pi_id}/transitions"),
         # PR-7a — PI 참조 생성 2단(PI→SO)은 PI 경로 아래에 붙는다(SO 생성 요청이지 PI 편집이 아니다)
         ("POST", "/api/v1/proforma-invoices/{pi_id}/sales-orders"),
+        # PR-10a — 입금 원장(PI 선수금 입금 기록·열람)은 PI 경로 아래에 붙는다(입금 사실 기록이지 PI 편집이 아니다 — 상태는 순입금에서 자동 수렴)
+        ("GET", "/api/v1/proforma-invoices/{pi_id}/payments"),
+        ("POST", "/api/v1/proforma-invoices/{pi_id}/payments"),
         ("POST", "/api/v1/quotations/{qt_id}/proforma-invoices"),
         ("POST", "/api/v1/quotations/{qt_id}/proforma-invoices/preview"),
     }

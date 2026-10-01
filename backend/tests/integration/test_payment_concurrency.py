@@ -32,6 +32,19 @@ from tests.support.concurrency import run_concurrently
 pytestmark = [pytest.mark.group_j, pytest.mark.concurrency]
 
 
+class _Statements:
+    """엔진이 실행한 SQL을 모은다 — 잠금 대기 중에 원장 INSERT가 이미 나갔는지(= 잠금 이전 쓰기) 판정한다."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def __call__(self, *args: object) -> None:
+        self.seen.append(str(args[2]))
+
+    def wrote_ledger(self) -> bool:
+        return any(s.lstrip().upper().startswith("INSERT INTO PAYMENTS") for s in self.seen)
+
+
 def _receipt(who: Any, pi: int, amount: str, *, key: str | None = None, **kw: Any) -> Any:
     return payment_flow.record_receipt(
         actor=who,
@@ -120,26 +133,36 @@ def test_two_concurrent_reversals_of_the_same_payment_yield_one(round_no: int) -
     assert pi_status(pi) == "ISSUED"
 
 
-def test_the_pi_row_lock_serializes_a_receipt_behind_a_holder() -> None:
-    """결정적 직렬화 증거 — 다른 트랜잭션이 PI 행을 잡고 있으면 입금은 **끝나지 않고 대기**하다 놓은 뒤에 완료된다(PI 잠금 제거 시 즉시 완료되어 이 테스트가 깨진다)"""
-    who = actor()
-    pi = advance_pi()
+def _run_behind_a_pi_lock_holder(pi: int, call: Any) -> Any:
+    """다른 트랜잭션이 PI 행을 잡은 동안 `call`을 스레드로 시작해 (a) 끝나지 않고 대기하며 (b) 원장 INSERT를 아직 내보내지 않았음을 확인한 뒤, 잠금을 놓아 결과를 돌려준다."""
     holder = owner_engine.connect()
     tx = holder.begin()
+    probe = _Statements()
     try:
         holder.execute(text("SELECT 1 FROM proforma_invoices WHERE id = :i FOR UPDATE"), {"i": pi})
+        event.listen(engine, "before_cursor_execute", probe)
         with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_receipt, who, pi, "100.00")
+            future = pool.submit(call)
             time.sleep(1.0)
-            assert not future.done(), "PI 잠금을 무시하고 입금이 진행됐다"
-            tx.rollback()
-            holder.close()
-            tx = None  # type: ignore[assignment]
-            status, body = future.result(timeout=20)
+            try:
+                assert not future.done(), "PI 잠금을 무시하고 진행됐다"
+                assert not probe.wrote_ledger(), "PI 잠금 이전에 원장 INSERT가 나갔다"
+            finally:
+                tx.rollback()
+                holder.close()
+            return future.result(timeout=20)
     finally:
-        if tx is not None:
+        event.remove(engine, "before_cursor_execute", probe)
+        if holder.closed is False:
             tx.rollback()
             holder.close()
+
+
+def test_the_pi_row_lock_serializes_a_receipt_behind_a_holder() -> None:
+    """결정적 직렬화 증거 — 다른 트랜잭션이 PI 행을 잡고 있으면 입금은 대기하고(원장 INSERT도 잠금 뒤) 놓은 뒤에 완료된다(PI 잠금을 빼면 INSERT가 먼저 나가 이 테스트가 깨진다)"""
+    who = actor()
+    pi = advance_pi()
+    status, body = _run_behind_a_pi_lock_holder(pi, lambda: _receipt(who, pi, "100.00"))
     assert status == 201 and body["summary"]["net_received_amount"] == 10_000
     assert len(ledger(pi)) == 1
 
@@ -191,35 +214,20 @@ def test_a_reversal_convergence_failure_rolls_back_the_negative_row(
     assert scalar("SELECT count(*) FROM events WHERE event_type = 'payments.payment.reversed'") == 0
 
 
-def test_reversal_versus_confirm_style_pi_lock_holder_is_serialized(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """확정 통로가 PI를 잡는 상황의 대역 — PI 행을 잡은 트랜잭션이 있는 동안 역기록은 대기하고, 놓은 뒤 정상 완료되어 직렬 순서 중 하나가 된다"""
+def test_reversal_versus_a_confirm_style_pi_lock_holder_is_serialized() -> None:
+    """확정 통로가 PI를 잡는 상황의 대역 — PI 행을 잡은 트랜잭션이 있는 동안 역기록은 대기하고(원장 INSERT도 잠금 뒤), 놓은 뒤 정상 완료되어 직렬 순서 중 하나가 된다"""
     who = actor()
     pi = advance_pi()
     _s, paid = _receipt(who, pi, "100.00")
-    holder = owner_engine.connect()
-    tx = holder.begin()
-    try:
-        holder.execute(text("SELECT 1 FROM proforma_invoices WHERE id = :i FOR UPDATE"), {"i": pi})
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(
-                payment_flow.reverse_payment,
-                actor=who,
-                idempotency_key=unique("rv"),
-                payment_id=paid["payment"]["id"],
-                reason="확정과 경합",
-            )
-            time.sleep(1.0)
-            assert not future.done(), "PI 잠금을 무시하고 역기록이 진행됐다"
-            tx.rollback()
-            holder.close()
-            tx = None  # type: ignore[assignment]
-            status, body = future.result(timeout=20)
-    finally:
-        if tx is not None:
-            tx.rollback()
-            holder.close()
+    status, body = _run_behind_a_pi_lock_holder(
+        pi,
+        lambda: payment_flow.reverse_payment(
+            actor=who,
+            idempotency_key=unique("rv"),
+            payment_id=paid["payment"]["id"],
+            reason="확정과 경합",
+        ),
+    )
     assert status == 201 and body["summary"]["net_received_amount"] == 0
 
 
