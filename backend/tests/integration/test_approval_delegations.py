@@ -550,8 +550,10 @@ def test_inert_delegates_are_neither_notified_nor_counted_as_eligible() -> None:
     inactive_delegate = make_user(RoleCode.CERT)
     viewer_only_delegate = make_user(RoleCode.VIEWER)
     today = today_kst()
-    for delegate in (active_delegate, inactive_delegate, viewer_only_delegate):
-        add_delegation(delegator, delegate, today, today + timedelta(days=3))
+    # 같은 위임자·시작일의 미종료 대결은 하나뿐(DB 유니크)이라 수임자마다 다른 위임자(TRADE)를 쓴다
+    add_delegation(delegator, active_delegate, today, today + timedelta(days=3))
+    for delegate in (inactive_delegate, viewer_only_delegate):
+        add_delegation(make_user(RoleCode.TRADE), delegate, today, today + timedelta(days=3))
     _deactivate(inactive_delegate.id)
     with unit_of_work() as uow:
         approval = uow.session.get(Approval, approval_id)
