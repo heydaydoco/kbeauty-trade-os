@@ -514,6 +514,38 @@ describe("ConfirmPanel — 승인 요청 다이얼로그·성공·오류", () =>
   });
 });
 
+describe("ConfirmPanel — 승인 요청 성공 뒤 키 비움·다이얼로그 유지", () => {
+  it("승인 요청이 성공하면 키 Map을 비운다 — 낡은 승인(APPROVED)을 돌려받아 같은 version에서 다시 요청하면 새 키", async () => {
+    const view = mount([[REQUEST_URL, "POST", () => jsonResponse(approvalRequestOut({ created: false, status: "APPROVED" }), 200)]]);
+    fireEvent.click(await screen.findByRole("button", { name: "승인 요청 올리기" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "승인 요청" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // pending=APPROVED(낡음)라 '승인 다시 요청' 버튼이 나온다.
+    fireEvent.click(await screen.findByRole("button", { name: "승인 다시 요청" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "승인 요청" }));
+    await waitFor(() => expect(posts(view.calls, REQUEST_URL)).toHaveLength(2));
+    expect(posts(view.calls, REQUEST_URL).map((c) => c.headers["Idempotency-Key"])).toEqual(["key-1", "key-2"]);
+  });
+
+  it("승인 요청 오류 표시 중 다른 사람이 처리해 SO가 접수가 아니게 돼도(prop 변경) 오류가 있는 다이얼로그는 닫히지 않는다", async () => {
+    const view = mount([[REQUEST_URL, "POST", () => apiError("COMMON.CONCURRENCY.LOCK_BUSY", 409)]]);
+    fireEvent.click(await screen.findByRole("button", { name: "승인 요청 올리기" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "승인 요청" }));
+    await within(dialog).findByRole("alert");
+    view.setProps({ so: CONFIRMED_SO });
+    expect(screen.getByRole("dialog")).toBe(dialog);
+  });
+
+  it("접수가 아니게 되면(유휴 승인 요청 다이얼로그) 닫힌다", async () => {
+    const view = mount();
+    fireEvent.click(await screen.findByRole("button", { name: "승인 요청 올리기" }));
+    await screen.findByRole("dialog");
+    view.setProps({ so: CONFIRMED_SO });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
+
 describe("ConfirmPanel — 멱등 키(SO id, version)당 1개", () => {
   it("같은 version의 재시도(차단 뒤 다시 확정)는 같은 키를 쓴다 — 거부는 키를 소비하지 않는다", async () => {
     const view = mount([[CONFIRM_URL, "POST", () => blockedResponse()]]);
@@ -894,6 +926,7 @@ describe("ConfirmPanel — 확정된 SO(읽기 전용·증거 요약)", () => {
     const evidence = (await screen.findByText("확정 증거 요약")).closest("section") as HTMLElement;
     expect(evidence).toHaveTextContent(creditText);
     expect(evidence).toHaveTextContent(piText);
+    expect(evidence.textContent).not.toMatch(/NEW_VERDICT|NEW_PI|WITHIN_LIMIT|NOT_MANAGED|SKIPPED_OFF|NOT_APPLICABLE/);
     expect(within(evidence).queryByRole("link")).not.toBeInTheDocument();
     expect(evidence).toHaveTextContent("—");
   });
@@ -927,6 +960,8 @@ describe("확정 오류·차단 파서(단위)", () => {
     expect(parsed?.blocked_gates).toHaveLength(1);
     expect(parsed?.blocked_gates[0]).toMatchObject({ gate_code: "MOQ", can_override: true, basis: {}, override_roles: [] });
     expect(parsed?.pending_approval_id).toBeNull();
+    // can_override 키가 없으면(마스킹·구버전) 부여 가능으로 읽지 않는다.
+    expect(parseBlockedDetail(blockedError({ blocked_gates: [{ gate_code: "MOQ", resolution: "OVERRIDE" }] }))?.blocked_gates[0]?.can_override).toBe(false);
   });
 
   it("에러 문구 함수는 ApiError가 아니면 기본 문구", () => {
