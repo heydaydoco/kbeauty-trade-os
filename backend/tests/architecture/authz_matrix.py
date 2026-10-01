@@ -35,6 +35,8 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/approval-lines",
     "/api/v1/approvals",
     "/api/v1/delegations",
+    # S3-1 PR-10a — 입금 원장(`/proforma-invoices/{id}/payments`는 위 PI 접두어가 이미 통제한다).
+    "/api/v1/payments",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -124,6 +126,28 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         L: ALLOW,
         C: ALLOW,
         V: ALLOW,
+    },
+    # S3-1 PR-10a — 입금 원장: 열람은 전 역할(원가·마진 아님), 기록·역기록은 무역+관리자(E7).
+    ("GET", "/api/v1/proforma-invoices/{pi_id}/payments"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("POST", "/api/v1/proforma-invoices/{pi_id}/payments"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/payments/{payment_id}/reversal"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
     },
     ("PATCH", "/api/v1/proforma-invoices/{pi_id}/meta"): {
         A: ALLOW,

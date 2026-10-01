@@ -109,3 +109,35 @@ def test_parse_minor_amount_rejects_inexact_or_invalid(raw: object, currency: st
 
     with pytest.raises(ValueError, match="단가"):
         parse_minor_amount(raw, currency, field="단가")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["１２.３４", "１２３４", "١٢٣", "12.３４", "1,２34.50", "१२३"],
+    ids=[
+        "fullwidth-both",
+        "fullwidth-int",
+        "arabic-indic",
+        "fullwidth-frac",
+        "grouped-fullwidth",
+        "devanagari",
+    ],
+)
+def test_parse_minor_amount_rejects_non_ascii_digits(raw: str) -> None:
+    """전각·아랍-인도·데바나가리 숫자는 거부 — `\\d`가 유니코드 숫자를 받아 int()가 값을 조용히 바꾸던 입력 차단(re.ASCII). 같은 ASCII 값은 통과(양성 대조)"""
+    from app.core.money import AmountFormatError, parse_minor_amount
+
+    assert parse_minor_amount("12.34", "USD", field="금액") == 1234
+    with pytest.raises(AmountFormatError) as caught:
+        parse_minor_amount(raw, "USD", field="금액")
+    assert caught.value.reason and str(caught.value).startswith("금액: ")
+
+
+def test_amount_format_error_is_structured_and_still_a_value_error() -> None:
+    """AmountFormatError는 ValueError 하위(기존 except ValueError 호출처 호환)이고 field·reason을 구조로 갖는다"""
+    from app.core.money import AmountFormatError, parse_minor_amount
+
+    with pytest.raises(ValueError) as caught:
+        parse_minor_amount("12.345", "USD", field="입금액")
+    assert isinstance(caught.value, AmountFormatError)
+    assert (caught.value.field, "소수점 2자리" in caught.value.reason) == ("입금액", True)

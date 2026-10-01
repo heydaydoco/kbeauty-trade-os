@@ -198,11 +198,10 @@ def test_pi_and_bank_lists_are_paginated() -> None:
         assert "PageParams" in ast.unparse(node.args), rel
 
 
-def test_converge_payment_status_has_no_production_caller_yet() -> None:
-    """`converge_payment_status`는 PR-6a에서 호출자가 테스트뿐이다(PR-10 payments가 배선) — 정의 파일 밖 앱 코드에서 언급되면 이 핀이 실패해 등록(no_auto_confirm 엔트리)을 상기시킨다"""
-    mentions = {
+def _converge_mentions(sources: dict[str, ast.Module]) -> set[str]:
+    return {
         rel
-        for rel, tree in app_sources().items()
+        for rel, tree in sources.items()
         if any(
             (isinstance(n, ast.Name) and n.id == "converge_payment_status")
             or (isinstance(n, ast.Attribute) and n.attr == "converge_payment_status")
@@ -213,7 +212,27 @@ def test_converge_payment_status_has_no_production_caller_yet() -> None:
             for n in ast.walk(tree)
         )
     }
-    assert mentions == set()
+
+
+def test_converge_payment_status_has_exactly_one_production_caller() -> None:
+    """`converge_payment_status`의 앱 코드 언급처는 **입금 오케스트레이터(`trade_chain/payment_flow.py`) 한 곳뿐**이다(PR-10a — 호출자 집합 핀; 정의 파일은 FunctionDef라 언급이 아니다).
+    입금·역기록 외의 경로(스윕·CLI·다른 서비스·payments 모듈)가 PI 상태를 입금 수렴으로 바꾸면 이 핀이 실패해 등록(no_auto_confirm 엔트리)을 상기시킨다"""
+    assert _converge_mentions(app_sources()) == {"modules/trade_chain/payment_flow.py"}
+
+
+def test_the_caller_pin_catches_a_second_caller() -> None:
+    """자기검사 — 같은 스캔이 제2의 파일(임포트·속성 접근·이름 호출)을 잡는다(공회전 방지)"""
+    from tests.support.astscan import parse_source
+
+    fake = {
+        "modules/a.py": parse_source(
+            "from app.modules.trade_chain.payment_status import converge_payment_status\n"
+        ),
+        "modules/b.py": parse_source("payment_status.converge_payment_status(s, 1)\n"),
+        "modules/c.py": parse_source("converge_payment_status(s, 1)\n"),
+        "modules/d.py": parse_source("def converge_payment_status(): ...\n"),
+    }
+    assert _converge_mentions(fake) == {"modules/a.py", "modules/b.py", "modules/c.py"}
 
 
 def test_pi_l1_module_makes_no_transitions_and_bank_module_never_touches_documents() -> None:

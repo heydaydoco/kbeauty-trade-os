@@ -57,6 +57,10 @@ NON_CHILD_FK_ALLOWLIST: dict[tuple[str, str], str] = {
         "qt_id",
     ): "원천 QT 라인의 소속 보증용 복합 FK((qt_id, qt_line_id) — 소비 관계는 LINE_CONSUMERS가 정본)",
     ("proforma_invoice_status_log", "proforma_invoice_id"): "상태이력은 전표의 사건 기록이다",
+    (
+        "payments",
+        "pi_id",
+    ): "입금 원장은 PI의 사건 기록(INSERT-only)이다 — 후속 전표가 아니며 PI 상태는 순입금에서 자동 수렴한다(PR-10a)",
     ("sales_order_lines", "so_id"): "라인은 자기 헤더의 구성 요소다(소비는 LINE_CONSUMERS)",
     ("sales_order_status_log", "sales_order_id"): "상태이력은 전표의 사건 기록이다",
     (

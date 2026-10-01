@@ -169,6 +169,18 @@ class ErrorCode(StrEnum):
     #: 처리 중이다. 30초 초과 쿼리(57014)는 여기 매핑하지 않는다(문구가 거짓이 된다).
     CONCURRENCY_LOCK_BUSY = "COMMON.CONCURRENCY.LOCK_BUSY"
 
+    # 입금 원장 (S3-1 PR-10a / ADR-0068)
+    #: 입금 통화가 PI 통화와 다르다 — 환산은 하지 않는다(환율 원천 도입 시 재판정).
+    PAYMENTS_PAYMENT_CURRENCY_MISMATCH = "PAYMENTS.PAYMENT.CURRENCY_MISMATCH"
+    #: 순입금이 선수금 청구액(`split_advance`)을 넘는다 — 초과분은 잔금이며 S3-3 채권 입금으로 기록한다.
+    PAYMENTS_PAYMENT_EXCEEDS_DUE = "PAYMENTS.PAYMENT.EXCEEDS_DUE"
+    #: 선수금 T/T가 아닌 PI에는 S3-1 입금을 기록할 수 없다(잔금 입금은 S3-3 채권 몫).
+    PAYMENTS_PAYMENT_PI_NOT_ADVANCE = "PAYMENTS.PAYMENT.PI_NOT_ADVANCE"
+    #: 이미 역기록된 입금이다(한 입금은 한 번만 역기록).
+    PAYMENTS_PAYMENT_ALREADY_REVERSED = "PAYMENTS.PAYMENT.ALREADY_REVERSED"
+    #: 역기록 행 자체는 역기록할 수 없다(정정 = 역기록 후 재입금).
+    PAYMENTS_PAYMENT_NOT_REVERSIBLE = "PAYMENTS.PAYMENT.NOT_REVERSIBLE"
+
     # 정책 설정 (S3-1 ADR-0065)
     POLICIES_POLICY_UNKNOWN_KEY = "POLICIES.POLICY.UNKNOWN_KEY"
     POLICIES_POLICY_INVALID_VALUE = "POLICIES.POLICY.INVALID_VALUE"

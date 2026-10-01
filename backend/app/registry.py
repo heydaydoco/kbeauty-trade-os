@@ -25,6 +25,7 @@ from app.modules.notifications import models as notifications_models
 from app.modules.numbering import models as numbering_models
 from app.modules.outbox import models as outbox_models
 from app.modules.partners import models as partners_models
+from app.modules.payments import models as payments_models
 from app.modules.platform import models as platform_models
 from app.modules.policies import models as policies_models
 from app.modules.proforma_invoices import models as proforma_invoices_models
@@ -54,6 +55,7 @@ __all__ = [
     "numbering_models",
     "outbox_models",
     "partners_models",
+    "payments_models",
     "platform_models",
     "policies_models",
     "proforma_invoices_models",
