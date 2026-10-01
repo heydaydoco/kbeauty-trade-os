@@ -27,6 +27,9 @@ import { ProformaDetailPage } from "./routes/proforma-detail";
 import { ProformaListPage } from "./routes/proformas";
 import { QuotationDetailPage } from "./routes/quotation-detail";
 import { QuotationListPage } from "./routes/quotations";
+import { PurchaseOrderCreatePage } from "./routes/purchase-order-create";
+import { PurchaseOrderDetailPage } from "./routes/purchase-order-detail";
+import { PurchaseOrderListPage } from "./routes/purchase-orders";
 import { SalesOrderDetailPage } from "./routes/sales-order-detail";
 import { SalesOrderListPage } from "./routes/sales-orders";
 import { ProductDetailPage } from "./routes/product-detail";
@@ -107,6 +110,9 @@ export function AppRoutes() {
         <Route path="/proforma-invoices/:proformaId" element={<ProformaDetailPage />} />
         <Route path="/sales-orders" element={<SalesOrderListPage />} />
         <Route path="/sales-orders/:salesOrderId" element={<SalesOrderDetailPage />} />
+        <Route path="/purchase-orders" element={<PurchaseOrderListPage />} />
+        <Route path="/purchase-orders/new" element={<PurchaseOrderCreatePage />} />
+        <Route path="/purchase-orders/:purchaseOrderId" element={<PurchaseOrderDetailPage />} />
         <Route path="/bank-accounts" element={<BankAccountsPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/imports" element={<ImportsPage />} />

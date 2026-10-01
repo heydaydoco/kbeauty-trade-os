@@ -2,7 +2,7 @@
 // 값은 전부 서버가 준 문자열·코드 그대로다(금액 산술 0). 미리보기와 상세가 같은 모양이어야 "본 대로 만들어진다".
 
 import type { ReactNode } from "react";
-import { BALANCE_ANCHOR_LABEL, PAYMENT_TYPE_LABEL } from "../lib/doc-status";
+import { PAYMENT_TYPE_LABEL, PO_BALANCE_ANCHOR_LABEL } from "../lib/doc-status";
 import type { Advance, BankSnapshot, Incoterm, PaymentTerms } from "../lib/proforma";
 
 export const EMPTY = "—";
@@ -24,7 +24,7 @@ export function paymentTermsText(terms: PaymentTerms): string {
   if (terms.advance_pct !== null) parts.push(`선수금 ${terms.advance_pct}%`);
   if (terms.balance_anchor !== null) {
     parts.push(
-      `잔금 ${BALANCE_ANCHOR_LABEL[terms.balance_anchor] ?? terms.balance_anchor} 기준 ${show(terms.balance_days)}일`,
+      `잔금 ${PO_BALANCE_ANCHOR_LABEL[terms.balance_anchor] ?? terms.balance_anchor} 기준 ${show(terms.balance_days)}일`,
     );
   }
   return parts.join(" · ");
