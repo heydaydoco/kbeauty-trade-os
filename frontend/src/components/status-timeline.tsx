@@ -14,9 +14,11 @@ export interface StatusLogEntry {
   from_status: string | null;
   to_status: string;
   reason: string | null;
-  actor_user_id: number | null;
+  actor_user_id?: number | null;
   actor_name: string | null;
-  automatic: boolean;
+  automatic?: boolean;
+  /** 대결로 처리된 경우 위임자 표시명(승인 이력만 싣는다). */
+  on_behalf_of_name?: string | null;
 }
 
 interface StatusTimelineProps {
@@ -25,15 +27,19 @@ interface StatusTimelineProps {
   /** 쿼리 키 접두 — 전이 뒤 무효화가 부분 일치로 걸리도록 전표 상세 키 아래에 둔다. */
   queryKey: readonly unknown[];
   statusLabel: (code: string) => string;
+  /** 이력 엔드포인트 경로 — 기본은 `${basePath}/status-log`(승인은 `/events`). */
+  logPath?: string;
+  /** 승인 이력은 오래된 순이라 제목 옆에 순서를 밝힐 때 쓴다(생략 가능). */
+  title?: string;
 }
 
-export function StatusTimeline({ basePath, queryKey, statusLabel }: StatusTimelineProps) {
-  const log = usePagedList<StatusLogEntry>([...queryKey, "status-log"], `${basePath}/status-log`);
+export function StatusTimeline({ basePath, queryKey, statusLabel, logPath, title = "상태 이력" }: StatusTimelineProps) {
+  const log = usePagedList<StatusLogEntry>([...queryKey, "status-log"], logPath ?? `${basePath}/status-log`);
 
   return (
     <section aria-labelledby="status-timeline-title">
       <h2 id="status-timeline-title" className="text-lg font-semibold">
-        상태 이력
+        {title}
       </h2>
       <ListPager data={log.data} page={log.page} onPageChange={log.setPage} className="mt-2" />
       <div className="mt-2 rounded-lg border border-gray-200">
@@ -58,6 +64,9 @@ export function StatusTimeline({ basePath, queryKey, statusLabel }: StatusTimeli
                   <span className="cell-nowrap text-gray-500">
                     {entry.automatic ? "자동(시스템)" : (entry.actor_name ?? "알 수 없음")}
                   </span>
+                  {entry.on_behalf_of_name && (
+                    <span className="cell-nowrap text-gray-500">(대결 — 위임자 {entry.on_behalf_of_name})</span>
+                  )}
                 </p>
                 {entry.reason && (
                   <p className="mt-1 break-keep text-gray-700">사유: {entry.reason}</p>

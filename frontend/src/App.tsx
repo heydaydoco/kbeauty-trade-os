@@ -5,6 +5,10 @@ import { useSession } from "./lib/session";
 import { AgenciesPage } from "./routes/agencies";
 import { MarketWizardPage } from "./routes/market-wizard";
 import { AlertsPage } from "./routes/alerts";
+import { ApprovalDetailPage } from "./routes/approval-detail";
+import { ApprovalLinesPage } from "./routes/approval-lines";
+import { ApprovalsPage } from "./routes/approvals";
+import { DelegationsPage } from "./routes/delegations";
 import { BrandsPage } from "./routes/brands";
 import { DocumentsPage } from "./routes/documents";
 import { HealthPage } from "./routes/health";
@@ -113,6 +117,10 @@ export function AppRoutes() {
         <Route path="/purchase-orders" element={<PurchaseOrderListPage />} />
         <Route path="/purchase-orders/new" element={<PurchaseOrderCreatePage />} />
         <Route path="/purchase-orders/:purchaseOrderId" element={<PurchaseOrderDetailPage />} />
+        <Route path="/approvals" element={<ApprovalsPage />} />
+        <Route path="/approvals/:approvalId" element={<ApprovalDetailPage />} />
+        <Route path="/approval-lines" element={<ApprovalLinesPage />} />
+        <Route path="/delegations" element={<DelegationsPage />} />
         <Route path="/bank-accounts" element={<BankAccountsPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/imports" element={<ImportsPage />} />
