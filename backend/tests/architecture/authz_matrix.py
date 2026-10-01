@@ -37,6 +37,8 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/delegations",
     # S3-1 PR-10a — 입금 원장(`/proforma-invoices/{id}/payments`는 위 PI 접두어가 이미 통제한다).
     "/api/v1/payments",
+    # S3-1 PR-13a — 오더 인테이크(등록·편집·재해석·거부=order_intake 라우터, 확정·게이트 조회=trade_chain 라우터). CSV 입구(import-csv·template.csv)는 PR-14가 행을 더한다.
+    "/api/v1/order-intakes",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -257,6 +259,45 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         V: DENY,
     },
     ("POST", "/api/v1/sales-orders/{so_id}/gate-overrides/revoke"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    # S3-1 PR-13a — 오더 인테이크. 조회·게이트 평가는 전 역할(원가·마진 필드 없음), 쓰기(등록·편집·재해석·거부·확정)는 무역(관리자 상시 통과) — 서비스가 역할을 한 번 더 확인한다.
+    ("GET", "/api/v1/order-intakes"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/order-intakes/{intake_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("GET", "/api/v1/order-intakes/{intake_id}/gates"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("POST", "/api/v1/order-intakes"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("PATCH", "/api/v1/order-intakes/{intake_id}"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("POST", "/api/v1/order-intakes/{intake_id}/resolve"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/order-intakes/{intake_id}/reject"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/order-intakes/{intake_id}/confirm"): {
         A: ALLOW,
         T: ALLOW,
         L: DENY,
