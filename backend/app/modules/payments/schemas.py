@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 from app.core.pagination import Page
 from app.modules.payments.models import REASON_MAX, REASON_MIN, REFERENCE_MAX
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _clean_text(value: str, *, minimum: int, maximum: int) -> str:
+    """제어문자(NUL·탭·개행·DEL 등 \\x00-\\x1f·\\x7f)를 거부하고 앞뒤 공백을 자른 뒤 **자른 값**으로 길이를 검증한다."""
+    if _CONTROL_CHARS.search(value):
+        raise ValueError("제어문자(줄바꿈·탭 등)는 입력할 수 없습니다.")
+    cleaned = value.strip()
+    if not minimum <= len(cleaned) <= maximum:
+        raise ValueError(f"{minimum}~{maximum}자로 입력해 주세요.")
+    return cleaned
 
 
 class PaymentReceiptRequest(BaseModel):
@@ -20,7 +33,12 @@ class PaymentReceiptRequest(BaseModel):
     received_currency: StrictStr = Field(pattern=r"^[A-Z]{3}$")
     received_on: date
     #: 입금 확인 근거(은행 거래 참조·확인 메모) — 필수, 공백만은 불가. 유니크가 아니다.
-    reference: StrictStr = Field(min_length=1, max_length=REFERENCE_MAX, pattern=r"\S")
+    reference: StrictStr = Field(max_length=REFERENCE_MAX * 2)
+
+    @field_validator("reference")
+    @classmethod
+    def _reference(cls, value: str) -> str:
+        return _clean_text(value, minimum=1, maximum=REFERENCE_MAX)
 
 
 class PaymentReversalRequest(BaseModel):
@@ -28,7 +46,12 @@ class PaymentReversalRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    reason: StrictStr = Field(min_length=REASON_MIN, max_length=REASON_MAX, pattern=r"\S.*\S")
+    reason: StrictStr = Field(max_length=REASON_MAX * 2)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, value: str) -> str:
+        return _clean_text(value, minimum=REASON_MIN, maximum=REASON_MAX)
 
 
 class PaymentOut(BaseModel):

@@ -122,8 +122,19 @@ class Money:
         return f"{self.to_decimal()} {self.currency}"
 
 
-_PLAIN_AMOUNT = re.compile(r"^(?P<int>\d+)(?:\.(?P<frac>\d+))?$")
-_GROUPED_AMOUNT = re.compile(r"^(?P<int>\d{1,3}(?:,\d{3})+)(?:\.(?P<frac>\d+))?$")
+_PLAIN_AMOUNT = re.compile(r"^(?P<int>\d+)(?:\.(?P<frac>\d+))?$", re.ASCII)
+_GROUPED_AMOUNT = re.compile(
+    r"^(?P<int>\d{1,3}(?:,\d{3})+)(?:\.(?P<frac>\d+))?$", re.ASCII
+)  # re.ASCII: 전각·아랍 숫자 등 비ASCII 숫자는 거부(int()가 받아 값이 조용히 바뀌는 입력 차단)
+
+
+class AmountFormatError(ValueError):
+    """금액 표기 오류 — 서비스는 `str(exc)`를 쪼개지 않고 `.reason`(사용자용 문구)을 쓴다."""
+
+    def __init__(self, field: str, reason: str) -> None:
+        super().__init__(f"{field}: {reason}")
+        self.field = field
+        self.reason = reason
 
 
 def parse_minor_amount(raw: object, currency: str, *, field: str, max_digits: int = 15) -> int:
@@ -134,24 +145,24 @@ def parse_minor_amount(raw: object, currency: str, *, field: str, max_digits: in
     허용 형식은 `1234`·`1234.5`·`1,234.5`(3자리 그룹 콤마)뿐이다 — 지수 표기·밑줄·
     유럽식 소수점 콤마("12,34")는 값이 조용히 바뀌므로 거부한다(Decimal 연산을 거치지 않고
     문자열에서 바로 정수를 만든다: 컨텍스트 정밀도 반올림·거대 지수 폭주 없음).
-    실패는 ValueError이며 메시지에 field를 싣는다(서비스가 422로 번역).
+    실패는 `AmountFormatError`(ValueError 하위 — `.field`·`.reason` 구조화, str은 "field: reason")이다(서비스가 422로 번역).
     """
     exponent = minor_units(currency)
     text = str(raw).strip()
     if text.startswith("-"):
-        raise ValueError(f"{field}: 음수는 입력할 수 없습니다.")
+        raise AmountFormatError(field, "음수는 입력할 수 없습니다.")
     match = _GROUPED_AMOUNT.match(text) or _PLAIN_AMOUNT.match(text)
     if match is None:
-        raise ValueError(f"{field}: 숫자 형식이 아닙니다(예: 1234.50, 1,234.50).")
+        raise AmountFormatError(field, "숫자 형식이 아닙니다(예: 1234.50, 1,234.50).")
     whole = match.group("int").replace(",", "")
     fraction = (match.group("frac") or "").rstrip("0")
     if len(fraction) > exponent:
-        raise ValueError(
-            f"{field}: {currency.upper()}는 소수점 {exponent}자리까지만 입력할 수 있습니다."
+        raise AmountFormatError(
+            field, f"{currency.upper()}는 소수점 {exponent}자리까지만 입력할 수 있습니다."
         )
     minor = int(whole + fraction.ljust(exponent, "0"))
     if len(str(minor)) > max_digits:
-        raise ValueError(f"{field}: 금액이 너무 큽니다.")
+        raise AmountFormatError(field, "금액이 너무 큽니다.")
     return minor
 
 

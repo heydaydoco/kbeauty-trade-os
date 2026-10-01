@@ -85,8 +85,11 @@ class Payment(PkMixin, Base):
             name="kind_sign",
         ),
         CheckConstraint("kind IN ('RECEIPT', 'REVERSAL')", name="kind_valid"),
-        CheckConstraint("received_currency = upper(received_currency)", name="currency_upper"),
-        CheckConstraint("btrim(reference) <> ''", name="reference_not_blank"),
+        CheckConstraint("received_currency ~ '^[A-Z]{3}$'", name="currency_upper"),
+        CheckConstraint("btrim(reference, E' \\t\\r\\n') <> ''", name="reference_not_blank"),
+        # 제어문자(NUL·탭·개행·DEL 등)는 참조·사유에 들어갈 수 없다 — 로그·CSV·화면 오염 방어(서비스 입력 검증의 DB 백스톱)
+        CheckConstraint("reference !~ '[[:cntrl:]]'", name="reference_clean"),
+        CheckConstraint("reason IS NULL OR reason !~ '[[:cntrl:]]'", name="reason_clean"),
         CheckConstraint(
             f"abs(received_amount) <= {MAX_MINOR_AMOUNT}", name="received_amount_range"
         ),

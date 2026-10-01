@@ -7,7 +7,7 @@
 S3-1 PR-10a 입금 원장 — M08 (ADR-0068 / design-E E7 / design-integrated §2.1):
   `payments` — 부호 있는 INSERT-only 원장(PkMixin만 — Version·SoftDelete·Actor·Timestamp 믹스인 없음). RECEIPT > 0 / REVERSAL < 0(원 입금의 −전액).
   역기록은 같은 PI·같은 통화의 원 입금만 가리킨다(복합 FK `(reverses_payment_id, pi_id, received_currency)` → `UNIQUE(id, pi_id, received_currency)`)
-  이고 한 입금은 한 번만 역기록된다(부분 유니크 `uq_payments_reverses_payment_id`). CHECK `kind_sign`이 부호·역기록 필수 열·사유(≥2자)를 묶고
+  이고 한 입금은 한 번만 역기록된다(부분 유니크 `uq_payments_reverses_payment_id`). CHECK `kind_sign`·참조/사유 제어문자 거부(`reference_clean`·`reason_clean`)·통화 `^[A-Z]{3}$`·참조 비공백(탭·개행 포함)이 부호·역기록 필수 열·사유(≥2자)를 묶고
   REVERSAL이면 `reverses_payment_id NOT NULL`을 요구해 복합 FK의 MATCH SIMPLE 공백을 메운다.
 
 체크리스트:
@@ -57,14 +57,21 @@ def upgrade() -> None:
             "(kind = 'RECEIPT' AND received_amount > 0 AND reverses_payment_id IS NULL AND reason IS NULL) OR (kind = 'REVERSAL' AND received_amount < 0 AND reverses_payment_id IS NOT NULL AND reason IS NOT NULL AND char_length(btrim(reason)) >= 2)",
             name=op.f("ck_payments_kind_sign"),
         ),
-        sa.CheckConstraint("btrim(reference) <> ''", name=op.f("ck_payments_reference_not_blank")),
+        sa.CheckConstraint(
+            "btrim(reference, E' \\t\\r\\n') <> ''",
+            name=op.f("ck_payments_reference_not_blank"),
+        ),
+        sa.CheckConstraint("reference !~ '[[:cntrl:]]'", name=op.f("ck_payments_reference_clean")),
+        sa.CheckConstraint(
+            "reason IS NULL OR reason !~ '[[:cntrl:]]'", name=op.f("ck_payments_reason_clean")
+        ),
         sa.CheckConstraint("kind IN ('RECEIPT', 'REVERSAL')", name=op.f("ck_payments_kind_valid")),
         sa.CheckConstraint(
             "abs(received_amount) <= 9007199254740991",
             name=op.f("ck_payments_received_amount_range"),
         ),
         sa.CheckConstraint(
-            "received_currency = upper(received_currency)", name=op.f("ck_payments_currency_upper")
+            "received_currency ~ '^[A-Z]{3}$'", name=op.f("ck_payments_currency_upper")
         ),
         sa.ForeignKeyConstraint(
             ["partner_id"],

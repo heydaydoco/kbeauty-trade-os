@@ -78,6 +78,14 @@ def test_full_round_trip_walks_the_pi_status_forward_and_back_with_automatic_his
         ("PARTIALLY_PAID", "ISSUED"),
     ]
     assert all(auto is True for _a, _b, auto, _r in log)
+    # 상태 이력 사유 — 입금은 "입금 #id 기록", 역기록은 "입금 #원입금id 역기록"(어느 입금이 상태를 바꿨는지 이력만으로 추적)
+    p1, p2 = originals[0]["id"], originals[1]["id"]
+    assert [r for _a, _b, _auto, r in log] == [
+        f"입금 #{p1} 기록",
+        f"입금 #{p2} 기록",
+        f"입금 #{p2} 역기록",
+        f"입금 #{p1} 역기록",
+    ]
 
 
 def test_a_reversal_row_is_the_exact_negative_of_its_original_on_the_same_pi_currency_and_partner() -> (
@@ -249,14 +257,16 @@ def test_reversal_rules_reversal_of_a_reversal_double_reversal_unknown_and_short
     assert len(ledger(pi)) == 2 and pi_status(pi) == "ISSUED"
 
 
-def test_reversal_after_the_pi_is_closed_is_rejected() -> None:
-    """입금 뒤 PI가 닫힌(만료) 상태가 되면 역기록도 409 PI_NOT_OPEN — 닫힌 PI의 원장은 움직이지 않는다"""
+@pytest.mark.parametrize("closed", ["CANCELLED", "EXPIRED"])
+def test_reversal_after_the_pi_is_closed_is_rejected(closed: str) -> None:
+    """입금 뒤 PI가 닫힌(취소·만료) 상태가 되면 역기록도 409 PI_NOT_OPEN — 닫힌 PI의 원장은 움직이지 않는다"""
     pi = advance_pi()
     with logged_in(RoleCode.TRADE) as client:
         paid = pay(client, pi, "100.00")
         with owner_engine.begin() as connection:
             connection.execute(
-                text("UPDATE proforma_invoices SET status = 'CANCELLED' WHERE id = :i"), {"i": pi}
+                text("UPDATE proforma_invoices SET status = :s WHERE id = :i"),
+                {"s": closed, "i": pi},
             )
         response = reverse(client, paid.json()["payment"]["id"])
     assert response.status_code == 409 and _code(response) == "TRADE_DOCS.PAYMENT.PI_NOT_OPEN"
@@ -455,3 +465,121 @@ def test_retroactive_receipts_keep_the_ledger_order_by_entry_not_by_received_on(
         pay(client, pi, "10.00", received_on=date(2026, 9, 20) - timedelta(days=days_ago))
     rows = ledger(pi)
     assert rows[0]["id"] < rows[1]["id"] and rows[1]["created_at"] >= rows[0]["created_at"]
+
+
+def _set_terms(pi: int, **columns: Any) -> None:
+    sets = ", ".join(f"{c} = :{c}" for c in columns)
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text(f"UPDATE proforma_invoices SET {sets} WHERE id = :i"), {**columns, "i": pi}
+        )
+
+
+@pytest.mark.parametrize(
+    ("total", "bp"),
+    [(100_005, 3000), (100_001, 3333), (99_999, 3333), (1_001, 5000)],
+)
+def test_due_boundary_follows_split_advance_half_up(total: int, bp: int) -> None:
+    """선수금 청구액은 `split_advance`(HALF_UP)와 정확히 같다 — 홀수 총액·bp 3333에서 due와 due+1센트를 경계로 통과/초과가 갈리고 floor·ceil 구현은 깨진다"""
+    from app.modules.trade_docs.payment_terms import split_advance
+
+    due = split_advance(total, bp)[0]
+    exact_floor = total * bp // 10_000
+    pi = advance_pi(total_amount=total)
+    _set_terms(pi, advance_pct_bp=bp)
+    text_of = lambda minor: f"{minor // 100}.{minor % 100:02d}"  # noqa: E731
+    with logged_in(RoleCode.TRADE) as client:
+        over = pay(client, pi, text_of(due + 1))
+        assert over.status_code == 422 and _code(over) == "PAYMENTS.PAYMENT.EXCEEDS_DUE"
+        assert pay(client, pi, text_of(due - 1)).status_code == 201
+        last = pay(client, pi, "0.01")
+        assert last.status_code == 201 and last.json()["summary"]["due_amount"] == due
+        assert pi_status(pi) == "PAID"
+        assert pay(client, pi, "0.01").status_code == 422
+    assert due in (exact_floor, exact_floor + 1)
+
+
+def test_zero_decimal_currency_accepts_whole_units_and_rejects_fractions() -> None:
+    """JPY(소수 0자리) PI — "10"은 통과(10엔=10), "10.5"는 거부(반올림 없음), 요약 표기에 소수점이 없다"""
+    pi = advance_pi()
+    _set_terms(pi, currency="JPY", total_amount=100_000)
+    with logged_in(RoleCode.TRADE) as client:
+        half = pay(client, pi, "10.5", currency="JPY")
+        assert half.status_code == 422 and half.json()["error"]["detail"]["received_amount"]
+        ok = pay(client, pi, "10", currency="JPY")
+        assert ok.status_code == 201, ok.text
+        assert pay(client, pi, "10", currency="USD").status_code == 422  # 통화 불일치도 여전히 거부
+    assert ok.json()["payment"]["received_amount"] == 10
+    assert (
+        ok.json()["summary"]["net_received_text"] == "10"
+        and ok.json()["summary"]["due_text"] == "30000"
+    )
+
+
+def test_absurdly_large_amounts_are_422_and_the_largest_in_range_hits_exceeds_due() -> None:
+    """16자리 이상 금액은 422(너무 큼 — MAX_MINOR_AMOUNT 이하 15자리 상한), 15자리 최대치는 형식은 통과하되 due 초과 422 — 어느 쪽도 행 0"""
+    pi = advance_pi()
+    with logged_in(RoleCode.TRADE) as client:
+        huge = pay(client, pi, "99999999999999999.99")
+        assert huge.status_code == 422 and _code(huge) == "COMMON.VALIDATION.INVALID_FIELD"
+        edge = pay(client, pi, "9999999999999.99")
+        assert edge.status_code == 422 and _code(edge) == "PAYMENTS.PAYMENT.EXCEEDS_DUE"
+        assert pay(client, pi, "9007199254740993").status_code == 422
+    assert ledger(pi) == []
+
+
+@pytest.mark.parametrize("payment_type", ["LC", "TT_DEFERRED"])
+def test_summary_of_a_non_advance_pi_shows_zero_due(payment_type: str) -> None:
+    """선수금 T/T가 아닌 PI의 GET 원장 — 200·빈 목록·due 0·잔여 0·순입금 0·결제유형 표시(입금은 불가하지만 열람은 된다)"""
+    pi = advance_pi()
+    set_payment_terms(pi, payment_type)
+    with logged_in(RoleCode.VIEWER) as client:
+        body = client.get(f"/api/v1/proforma-invoices/{pi}/payments").json()
+    assert body["items"] == [] and body["total"] == 0
+    summary = body["summary"]
+    assert (summary["payment_type"], summary["due_amount"], summary["remaining_amount"]) == (
+        payment_type,
+        0,
+        0,
+    )
+    assert summary["net_received_amount"] == 0 and summary["pi_status"] == "ISSUED"
+
+
+@pytest.mark.parametrize(
+    "bad_reference",
+    ["line1\nline2", "tab\there", "nul\x00byte", "bell\x07", "del\x7f", "\r\n", "\t"],
+    ids=["newline", "tab", "nul", "bell", "del", "crlf-only", "tab-only"],
+)
+def test_control_characters_in_reference_and_reason_are_422(bad_reference: str) -> None:
+    """참조·사유의 제어문자(개행·탭·NUL·BEL·DEL 포함 \\x00-\\x1f·\\x7f)는 422 — 행 0. 앞뒤 일반 공백은 잘려 저장된다(양성 대조)"""
+    pi = advance_pi()
+    with logged_in(RoleCode.TRADE) as client:
+        refused = pay(client, pi, "10.00", reference=bad_reference)
+        assert refused.status_code == 422, refused.text
+        ok = pay(client, pi, "10.00", reference="  BANK-REF-1  ")
+        assert ok.status_code == 201 and ok.json()["payment"]["reference"] == "BANK-REF-1"
+        bad_reason = reverse(client, ok.json()["payment"]["id"], f"정정{bad_reference}사유")
+        assert bad_reason.status_code == 422, bad_reason.text
+        spaced = reverse(client, ok.json()["payment"]["id"], "  정정 사유  ")
+        assert spaced.status_code == 201 and spaced.json()["payment"]["reason"] == "정정 사유"
+    assert len(ledger(pi)) == 2
+
+
+def test_length_is_checked_after_stripping() -> None:
+    """길이는 strip 뒤 값으로 본다 — 공백 포함 101자라도 실질 100자면 통과, 실질 101자는 422, 사유는 공백 포함 1자+공백은 422(2자 미만)"""
+    pi = advance_pi()
+    with logged_in(RoleCode.TRADE) as client:
+        assert pay(client, pi, "1.00", reference=" " + "r" * 100 + " ").status_code == 201
+        assert pay(client, pi, "1.00", reference="r" * 101).status_code == 422
+        paid = pay(client, pi, "1.00")
+        assert reverse(client, paid.json()["payment"]["id"], " 가 ").status_code == 422
+        assert reverse(client, paid.json()["payment"]["id"], "가나").status_code == 201
+
+
+@pytest.mark.parametrize("amount", ["１２.３４", "１００", "١٠٠"])
+def test_non_ascii_digits_in_amount_are_422(amount: str) -> None:
+    """전각·아랍-인도 숫자 금액은 422 — 값이 조용히 바뀌어 기록되지 않는다"""
+    pi = advance_pi()
+    with logged_in(RoleCode.TRADE) as client:
+        assert pay(client, pi, amount).status_code == 422
+    assert ledger(pi) == []

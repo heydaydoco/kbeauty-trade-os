@@ -113,7 +113,7 @@ def test_approvals_knows_no_domain_and_credit_is_the_only_spec_registrar() -> No
 
 
 def test_the_checker_flags_synthetic_violations() -> None:
-    """자기검사 — 계층을 어기는 가짜 소스를 넣으면 5종 위반이 전부 잡힌다"""
+    """자기검사 — 계층을 어기는 가짜 소스를 넣으면 6종 위반(입금→trade_chain 역방향 포함)이 전부 잡히고 정방향(trade_chain→payments)은 통과한다"""
     fake = {
         "modules/credit/x.py": parse_source("from app.modules.trade_chain import lifecycle\n"),
         "modules/trade_docs/x.py": parse_source("from app.modules.quotations import models\n"),
@@ -122,8 +122,14 @@ def test_the_checker_flags_synthetic_violations() -> None:
         "modules/certifications/x.py": parse_source(
             "from app.modules.quotations.models import Quotation\n"
         ),
+        "modules/payments/x.py": parse_source(
+            "from app.modules.trade_chain import payment_status\n"
+        ),
         "modules/quotations/ok.py": parse_source("from app.modules.trade_docs import machine\n"),
+        "modules/trade_chain/ok2.py": parse_source("from app.modules.payments import service\n"),
         "modules/trade_chain/ok.py": parse_source("from app.modules.quotations import service\n"),
     }
     found = _violations(fake)
-    assert len(found) == 5 and not any("ok.py" in line for line in found)
+    assert len(found) == 6 and not any(
+        "ok" in line.split(":")[0].rsplit("/", 1)[-1] for line in found
+    )

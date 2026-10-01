@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+import re
 
 import pytest
 
@@ -71,17 +72,52 @@ def test_the_pure_ledger_never_locks_claims_keys_or_converges() -> None:
         assert forbidden not in names, forbidden
 
 
-def test_net_received_has_a_single_definition_and_nobody_else_sums_the_ledger() -> None:
-    """순입금의 유일한 정의는 `payments.service.net_received_for_pi` — `received_amount`의 SUM은 그 함수 한 곳뿐이고(다른 집계·PI 상태로 대체 금지), 오케스트레이터는 그 함수를 쓴다"""
-    sums: list[tuple[str, str]] = []
-    for rel, tree in app_sources().items():
+def _ledger_sums(sources: dict[str, ast.Module]) -> list[tuple[str, str]]:
+    """`received_amount`를 합산하는 함수 — `func.sum(...)`·내장 `sum(...)`·`SUM(received_amount)` 문자열(raw SQL/text)을 모두 잡는다."""
+    found: list[tuple[str, str]] = []
+    for rel, tree in sources.items():
         for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
             src = ast.unparse(fn)
-            if "func.sum" in src and "received_amount" in src:
-                sums.append((rel, fn.name))
-    assert sums == [(LEDGER, "net_received_for_pi")]
+            sums = (
+                "func.sum" in src
+                or re.search(r"(?<![\w.])sum\(", src) is not None
+                or re.search(r"SUM\s*\(", src, re.IGNORECASE) is not None
+            )
+            if sums and "received_amount" in src:
+                found.append((rel, fn.name))
+    return found
+
+
+def test_net_received_has_a_single_definition_and_nobody_else_sums_the_ledger() -> None:
+    """순입금의 유일한 정의는 `payments.service.net_received_for_pi` — `received_amount` 합산(func.sum·내장 sum·SQL 문자열 SUM)은 그 함수 한 곳뿐이고, 오케스트레이터는 그 함수를 쓴다"""
+    assert _ledger_sums(app_sources()) == [(LEDGER, "net_received_for_pi")]
     assert "net_received_for_pi" in referenced_names(app_sources()[LEDGER])
     assert "append_receipt" in called_names(app_sources()[FLOW])
+
+
+def test_the_sum_scan_catches_every_flavour_of_a_second_definition() -> None:
+    """자기검사 — func.sum·내장 sum(...)·text("SELECT SUM(received_amount)…")·소문자 sum( 문자열 네 변형을 모두 잡고, 무관한 함수는 잡지 않는다"""
+    fake = {
+        "modules/a.py": parse_source(
+            "def f(s):\n    return s.scalar(func.sum(Payment.received_amount))\n"
+        ),
+        "modules/b.py": parse_source(
+            "def g(rows):\n    return sum(r.received_amount for r in rows)\n"
+        ),
+        "modules/c.py": parse_source(
+            "def h(s):\n    return s.execute(text('SELECT SUM(received_amount) FROM payments'))\n"
+        ),
+        "modules/d.py": parse_source(
+            "def i(s):\n    return s.execute(text('select sum (received_amount) from payments'))\n"
+        ),
+        "modules/e.py": parse_source("def ok(rows):\n    return sum(r.qty for r in rows)\n"),
+    }
+    assert sorted(rel for rel, _ in _ledger_sums(fake)) == [
+        "modules/a.py",
+        "modules/b.py",
+        "modules/c.py",
+        "modules/d.py",
+    ]
 
 
 def test_the_orchestrator_orders_claim_then_lock_then_ledger_then_converge_then_complete() -> None:

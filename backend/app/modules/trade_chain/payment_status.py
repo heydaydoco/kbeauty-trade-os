@@ -27,10 +27,11 @@ from app.modules.trade_chain.chain_ops import converge_parent, lock_chain
 from app.modules.trade_docs.chain import has_live_children
 from app.modules.trade_docs.constants import DocKind
 from app.modules.trade_docs.expiry import is_lapsed
+from app.modules.trade_docs.machine import PI_PAYMENT_STATES
 from app.modules.trade_docs.transition import record_transition
 
 KIND = DocKind.PROFORMA_INVOICE
-PAYMENT_STATES = ("ISSUED", "PARTIALLY_PAID", "PAID")
+PAYMENT_STATES = PI_PAYMENT_STATES
 
 
 def derive_pi_status(received_total_amount: int, due_amount: int) -> str:
@@ -52,6 +53,7 @@ def converge_payment_status(
     due_amount: int,
     actor_user_id: int | None,
     today: date | None = None,
+    reason: str | None = None,
 ) -> str | None:
     """PI를 누적 순입금에 맞는 입금 상태로 수렴시킨다 — 바꿨으면 도달 상태(마지막 상태), 아니면 None."""
     today = today or today_kst()
@@ -72,7 +74,7 @@ def converge_payment_status(
         pi,
         target,
         actor_user_id=actor_user_id,
-        reason=None,
+        reason=reason,
         automatic=True,
     )
     final = target

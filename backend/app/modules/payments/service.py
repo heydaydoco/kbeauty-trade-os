@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
-from app.core.money import parse_minor_amount
+from app.core.money import AmountFormatError, parse_minor_amount
 from app.core.time import today_kst
 from app.modules.audit import service as audit
 from app.modules.outbox import service as outbox
@@ -33,14 +33,16 @@ from app.modules.payments.models import (
     Payment,
 )
 from app.modules.proforma_invoices.models import ProformaInvoice
+from app.modules.trade_docs.constants import PaymentType
+from app.modules.trade_docs.machine import PI_PAYMENT_STATES
 from app.modules.trade_docs.payment_terms import split_advance
 from app.modules.trade_docs.validation import invalid
 from app.modules.trade_docs.views import money_text
 
 #: 입금을 받을 수 있는 PI 상태 — 취소·만료 PI는 입금을 받지 않는다(새 PI 발행).
-OPEN_PI_STATES = ("ISSUED", "PARTIALLY_PAID", "PAID")
+OPEN_PI_STATES = PI_PAYMENT_STATES
 
-ADVANCE_PAYMENT_TYPE = "TT_ADVANCE"
+ADVANCE_PAYMENT_TYPE = PaymentType.TT_ADVANCE.value
 
 
 def advance_due_amount(pi: ProformaInvoice) -> int:
@@ -72,17 +74,45 @@ def _constraint_of(exc: IntegrityError) -> str | None:
     return getattr(diag, "constraint_name", None)
 
 
-def _flush(session: Session) -> None:
-    """INSERT를 확정(flush)하고 DB 제약 위반을 업무 오류로 번역한다 — 서비스 선검증이 1차, DB가 최후.
+#: payments의 DB 제약·유니크 인덱스 → 업무 오류 번역표. **모델·마이그레이션의 제약 집합 ⊆ 이 표**임을 테스트가 pg_constraint·pg_indexes로 대사한다
+#: (신규 제약이 번역 없이 500으로 새지 않게). 서비스 선검증이 1차이고 DB 위반은 최후 방어선이다 — CHECK·FK 위반은 선검증이 놓친 입력/상태 결함이라
+#: 422(입력) 또는 409(상태)로 일관되게 번역한다.
+CONSTRAINT_ERRORS: dict[str, ErrorCode] = {
+    "uq_payments_reverses_payment_id": ErrorCode.PAYMENTS_PAYMENT_ALREADY_REVERSED,
+    "fk_payments_reverses_same_pi_currency": ErrorCode.PAYMENTS_PAYMENT_NOT_REVERSIBLE,
+    "ck_payments_kind_sign": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_payments_kind_valid": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_payments_currency_upper": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_payments_reference_not_blank": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_payments_reference_clean": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_payments_reason_clean": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_payments_received_amount_range": ErrorCode.VALIDATION_INVALID_FIELD,
+    # 존재하지 않는 PI·거래처·사용자 FK — 호출 계약 위반(잠금 뒤 조회 통과 후라 정상 경로에서는 발생 불가)
+    "fk_payments_pi_id_proforma_invoices": ErrorCode.RESOURCE_NOT_FOUND,
+    "fk_payments_partner_id_partners": ErrorCode.RESOURCE_NOT_FOUND,
+    "fk_payments_recorded_by_id_users": ErrorCode.RESOURCE_NOT_FOUND,
+    # 자동 생성 키(IDENTITY)라 위반 불가 — 번역표 완결성을 위해 등재
+    "pk_payments": ErrorCode.INTERNAL_UNEXPECTED,
+    "uq_payments_id_pi_id_received_currency": ErrorCode.INTERNAL_UNEXPECTED,
+}
 
-    `uq_payments_reverses_payment_id`(한 입금은 한 번만 역기록)는 409 ALREADY_REVERSED이고, 그 밖의 위반(CHECK·FK)은 선검증이 놓친 결함이므로
-    조용히 삼키지 않고 그대로 전파한다(fail-visible — 500).
-    """
+
+def translate_integrity_error(exc: IntegrityError) -> AppError | None:
+    """DB 제약 위반 → 업무 오류(번역표에 있고 내부 오류가 아닌 것만). 없으면 None — 호출자는 원 예외를 그대로 전파한다(fail-visible)."""
+    code = CONSTRAINT_ERRORS.get(_constraint_of(exc) or "")
+    if code is None or code is ErrorCode.INTERNAL_UNEXPECTED:
+        return None
+    return AppError(code)
+
+
+def _flush(session: Session) -> None:
+    """INSERT를 확정(flush)하고 DB 제약 위반을 번역표대로 업무 오류로 바꾼다 — 번역 불가는 조용히 삼키지 않고 그대로 전파(500)."""
     try:
         session.flush()
     except IntegrityError as exc:
-        if _constraint_of(exc) == "uq_payments_reverses_payment_id":
-            raise AppError(ErrorCode.PAYMENTS_PAYMENT_ALREADY_REVERSED) from exc
+        translated = translate_integrity_error(exc)
+        if translated is not None:
+            raise translated from exc
         raise
 
 
@@ -116,8 +146,8 @@ def append_receipt(
     # ④ 금액 — 자릿수 초과는 반올림 없이 거부, 양수
     try:
         amount = parse_minor_amount(received_amount_text, pi.currency, field="received_amount")
-    except ValueError as exc:
-        raise invalid("received_amount", str(exc).split(": ", 1)[-1]) from exc
+    except AmountFormatError as exc:
+        raise invalid("received_amount", exc.reason) from exc
     if amount <= 0:
         raise invalid("received_amount", "입금액은 0보다 커야 합니다.")
     if amount > MAX_MINOR_AMOUNT:

@@ -114,7 +114,9 @@ TERMINAL_STATUSES: dict[DocKind, frozenset[str]] = {
     DocKind.PURCHASE_ORDER: frozenset({"CANCELLED"}),
 }
 
-_PI_PAYMENT_STATES = ("ISSUED", "PARTIALLY_PAID", "PAID")
+#: PI 입금 3상태 — 입금 수렴(payment_status)·입금 원장(payments)이 공유하는 단일 출처.
+PI_PAYMENT_STATES = ("ISSUED", "PARTIALLY_PAID", "PAID")
+_PI_PAYMENT_STATES = PI_PAYMENT_STATES
 
 #: 사람 전이 — 공개 API(전이 엔드포인트·동결 액션)가 수행한다. 15방향.
 HUMAN_TRANSITIONS: dict[DocKind, frozenset[Pair]] = {

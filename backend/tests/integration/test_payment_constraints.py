@@ -343,7 +343,10 @@ def test_constraint_and_index_names_fit_63_chars_and_the_defs_are_pinned() -> No
         "ck_payments_kind_valid",
         "ck_payments_currency_upper",
         "ck_payments_reference_not_blank",
+        "ck_payments_reference_clean",
+        "ck_payments_reason_clean",
     } <= set(constraints)
+    assert "^[A-Z]{3}$" in constraints["ck_payments_currency_upper"]
     fk = constraints["fk_payments_reverses_same_pi_currency"]
     assert "(reverses_payment_id, pi_id, received_currency)" in fk
     assert "REFERENCES payments(id, pi_id, received_currency)" in fk and "ON DELETE RESTRICT" in fk
@@ -413,3 +416,115 @@ def test_trade_and_admin_can_write(role: RoleCode) -> None:
         )
         assert back.status_code == 201, back.text
     assert scalar("SELECT count(*) FROM payments WHERE pi_id = :p", p=pi) == 2
+
+
+@pytest.mark.parametrize(
+    ("overrides", "constraints"),
+    [
+        ({"reference": "a\nb"}, {"ck_payments_reference_clean"}),
+        ({"reference": "a\tb"}, {"ck_payments_reference_clean"}),
+        ({"reference": "a\x7fb"}, {"ck_payments_reference_clean"}),
+        (
+            {"reference": "\t\r\n"},
+            {"ck_payments_reference_not_blank", "ck_payments_reference_clean"},
+        ),
+        ({"received_currency": "US1"}, {"ck_payments_currency_upper"}),
+        ({"received_currency": "U D"}, {"ck_payments_currency_upper"}),
+        ({"received_currency": "$$$"}, {"ck_payments_currency_upper"}),
+    ],
+    ids=[
+        "ref-newline",
+        "ref-tab",
+        "ref-del",
+        "ref-whitespace-only",
+        "ccy-digit",
+        "ccy-space",
+        "ccy-symbol",
+    ],
+)
+def test_text_and_currency_hygiene_checks(
+    base: dict[str, Any], overrides: dict[str, Any], constraints: set[str]
+) -> None:
+    """참조의 제어문자·탭/개행만의 값, 통화의 대문자 외 문자(숫자·공백·기호)는 DB가 거부(원시 INSERT — 서비스 검증의 백스톱)"""
+    with owner_engine.begin() as connection:
+        _insert(connection, base)  # 양성 대조
+    with pytest.raises(IntegrityError) as caught, owner_engine.begin() as connection:
+        _insert(connection, {**base, **overrides})
+    code, name = _state(caught.value)
+    assert code == CHECK_VIOLATION and name in constraints
+
+
+def test_reason_control_characters_are_rejected_by_the_db(base: dict[str, Any]) -> None:
+    """역기록 사유의 개행·탭·DEL은 DB가 거부(ck_payments_reason_clean) — 정상 사유는 들어간다"""
+    with owner_engine.begin() as connection:
+        original = _insert(connection, base)
+        _insert(connection, _reversal(base, original, reason="정상 사유", reference=unique("OK")))
+        second = _insert(connection, {**base, "reference": unique("S2")})
+    for bad in ("사유\n줄", "사유\t탭", "사유\x7f"):
+        _violates(
+            _reversal(base, second, reason=bad, reference=unique("BAD")),
+            CHECK_VIOLATION,
+            "ck_payments_reason_clean",
+        )
+
+
+def test_every_db_constraint_of_payments_has_a_translation_entry() -> None:
+    """제약 번역표 완결성 — payments의 모든 제약(pg_constraint)·유니크 인덱스가 `CONSTRAINT_ERRORS`에 있고, 표에 DB에 없는 유령 항목이 없다(신규 제약이 번역 없이 500으로 새지 않게)"""
+    from app.modules.payments.service import CONSTRAINT_ERRORS
+
+    with owner_engine.connect() as connection:
+        names = set(
+            connection.execute(
+                text(
+                    "SELECT conname FROM pg_constraint WHERE conrelid = 'public.payments'::regclass"
+                )
+            ).scalars()
+        ) | set(
+            connection.execute(
+                text(
+                    "SELECT i.relname FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid"
+                    " WHERE x.indrelid = 'public.payments'::regclass AND x.indisunique"
+                )
+            ).scalars()
+        )
+    assert len(names) >= 10
+    assert names <= set(CONSTRAINT_ERRORS), sorted(names - set(CONSTRAINT_ERRORS))
+    assert set(CONSTRAINT_ERRORS) <= names, sorted(set(CONSTRAINT_ERRORS) - names)
+
+
+def _flush_rows(*rows: dict[str, Any]) -> Any:
+    """ORM 행을 넣고 service._flush가 번역한 예외를 돌려준다(없으면 None)."""
+    from app.core.db.uow import unit_of_work
+    from app.modules.payments import service
+    from app.modules.payments.models import Payment
+
+    try:
+        with unit_of_work() as uow:
+            for values in rows:
+                uow.session.add(Payment(**values))
+                service._flush(uow.session)
+    except Exception as exc:
+        return exc
+    return None
+
+
+def test_flush_translates_constraint_violations_consistently(base: dict[str, Any]) -> None:
+    """_flush 번역 — 한 입금의 두 번째 역기록 409 ALREADY_REVERSED·다른 PI 입금 역기록 409 NOT_REVERSIBLE·CHECK 위반 422 VALIDATION — 번역 불가(예: 번역표 밖)는 원 예외 그대로"""
+    from app.core.errors.exceptions import AppError
+
+    other = advance_pi()
+    with owner_engine.begin() as connection:
+        mine = _insert(connection, base)
+        theirs = _insert(connection, {**base, "pi_id": other, "reference": unique("OT")})
+        _insert(connection, _reversal(base, mine))
+
+    dup = _flush_rows(_reversal(base, mine, reference=unique("D")))
+    assert isinstance(dup, AppError) and dup.code == "PAYMENTS.PAYMENT.ALREADY_REVERSED"
+    cross = _flush_rows(_reversal(base, theirs, reference=unique("C")))
+    assert isinstance(cross, AppError) and cross.code == "PAYMENTS.PAYMENT.NOT_REVERSIBLE"
+    assert cross.status_code == 409
+    check = _flush_rows({**base, "reference": "a\nb"})
+    assert isinstance(check, AppError) and check.code == "COMMON.VALIDATION.INVALID_FIELD"
+    assert check.status_code == 422
+    fine = _flush_rows({**base, "reference": unique("FINE")})
+    assert fine is None  # 양성 대조

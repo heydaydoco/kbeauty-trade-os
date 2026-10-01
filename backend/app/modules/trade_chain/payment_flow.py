@@ -53,13 +53,14 @@ def confirmed_sales_order_ids(session: Any, pi_id: int) -> list[int]:
     )
 
 
-def _converge(session: Any, pi: ProformaInvoice, net: int, actor_user_id: int) -> None:
+def _converge(session: Any, pi: ProformaInvoice, net: int, actor_user_id: int, reason: str) -> None:
     converge_payment_status(
         session,
         pi.id,
         received_total_amount=net,
         due_amount=payments.advance_due_amount(pi),
         actor_user_id=actor_user_id,
+        reason=reason,
     )
 
 
@@ -89,7 +90,7 @@ def record_receipt(
             received_on=date.fromisoformat(payload["received_on"]),
             reference=payload["reference"],
         )
-        _converge(session, pi, net, actor.id)
+        _converge(session, pi, net, actor.id, f"입금 #{row.id} 기록")
 
         body = {
             "payment": payments.payment_body(row),
@@ -124,7 +125,7 @@ def reverse_payment(
         row, net = payments.append_reversal(
             session, actor_user_id=actor.id, pi=pi, original=original, reason=reason
         )
-        _converge(session, pi, net, actor.id)
+        _converge(session, pi, net, actor.id, f"입금 #{original.id} 역기록")
 
         warnings: list[dict[str, Any]] = []
         due = payments.advance_due_amount(pi)
