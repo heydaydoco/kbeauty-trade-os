@@ -410,3 +410,55 @@ def test_downgrade_removes_only_the_two_tables_and_is_safe_without_seed() -> Non
         connection.execute(
             text("SELECT 1 FROM order_intake_edit_log")
         )  # 이력 테이블은 만들지 않는다(원본 스냅샷 대 현재 diff)
+
+
+# ── 불변 열 ORM 가드 (층2) ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("column", "new_value"),
+    [
+        ("extracted_snapshot", {"kind": "MANUAL", "tampered": True}),
+        ("buyer_partner_id", None),  # 아래에서 다른 바이어 id로 치환
+        ("currency", "KRW"),
+        ("source_kind", "CSV"),
+        ("source_sha256", "b" * 64),
+        ("source_group_key", "x|y"),
+        ("original_filename", "x.csv"),
+    ],
+)
+def test_the_orm_guard_refuses_a_net_change_of_an_immutable_column(
+    base: dict[str, Any], column: str, new_value: Any
+) -> None:
+    """등록 후 변경 불가 열 7종 — ORM으로 값을 실제로 바꾸면 UPDATE 전에 예외이고 DB 행은 그대로다(같은 값 재대입·가변 열 변경은 통과: 양성 대조)"""
+    from app.core.db.uow import unit_of_work
+    from app.modules.order_intake.models import ImmutableIntakeFieldError, OrderIntake
+
+    intake_id = _insert(base)
+    if column == "buyer_partner_id":
+        new_value = create_buyer()
+    before = rows(
+        "SELECT extracted_snapshot, buyer_partner_id, currency, source_kind FROM order_intakes WHERE id = :i",
+        i=intake_id,
+    )
+    with pytest.raises(ImmutableIntakeFieldError), unit_of_work() as uow:
+        row = uow.session.get(OrderIntake, intake_id)
+        assert row is not None
+        setattr(row, column, new_value)
+        uow.session.flush()
+    assert (
+        rows(
+            "SELECT extracted_snapshot, buyer_partner_id, currency, source_kind FROM order_intakes WHERE id = :i",
+            i=intake_id,
+        )
+        == before
+    )
+    # 양성 대조 — 같은 값 재대입과 가변 열 변경은 통과한다
+    with unit_of_work() as uow:
+        row = uow.session.get(OrderIntake, intake_id)
+        assert row is not None
+        row.currency = row.currency
+        row.buyer_po_date = None
+        row.updated_by_id = base["_user"]
+        uow.session.flush()
+    assert scalar("SELECT version FROM order_intakes WHERE id = :i", i=intake_id) >= 1

@@ -758,3 +758,70 @@ def test_viewer_roles_cannot_write_and_see_no_cost_fields() -> None:
             gates = client.get(f"{INTAKES}/{body['id']}/gates")
             assert gates.status_code == 200
     assert scalar("SELECT count(*) FROM sales_orders") == 0
+
+
+def test_the_service_layer_rechecks_roles_independently_of_the_route_gate() -> None:
+    """서비스 층 역할 사전 검증 — 라우트 게이트를 거치지 않고 서비스를 직접 불러도 무역·관리자가 아니면 거부(이중 방어). 착지·편집·재해석·거부·확정 전부"""
+    from app.core.errors.exceptions import ForbiddenError
+    from app.modules.identity.service import AuthenticatedUser
+    from app.modules.order_intake import service as intake_service
+    from app.modules.trade_chain import intake_flow
+    from tests.factories.intake import land
+    from tests.support.factories import create_user
+
+    w = world()
+    intake = land(w)
+    viewer = AuthenticatedUser(
+        id=create_user(f"{unique('v')}@example.com", roles=(RoleCode.VIEWER,)),
+        email="v@example.com",
+        display_name="열람",
+        roles=frozenset({RoleCode.VIEWER}),
+        session_id=0,
+    )
+    calls: list[Any] = [
+        lambda: intake_service.create_manual_intake(
+            actor=viewer, idempotency_key="k1", payload=intake_payload(w)
+        ),
+        lambda: intake_service.update_intake(
+            actor=viewer, intake_id=intake["id"], payload={"version": 1}
+        ),
+        lambda: intake_service.resolve_intake(
+            actor=viewer, idempotency_key="k2", intake_id=intake["id"], version=1
+        ),
+        lambda: intake_service.reject_intake(
+            actor=viewer,
+            idempotency_key="k3",
+            intake_id=intake["id"],
+            version=1,
+            reason="열람자 거부 시도",
+        ),
+        lambda: intake_flow.confirm_intake(
+            actor=viewer, idempotency_key="k4", intake_id=intake["id"], version=1
+        ),
+    ]
+    for call in calls:
+        with pytest.raises(ForbiddenError):
+            call()
+    assert scalar("SELECT status FROM order_intakes WHERE id = :i", i=intake["id"]) == "PENDING"
+    assert scalar("SELECT count(*) FROM sales_orders") == 0
+
+
+def test_the_reject_reason_is_validated_by_the_service_too() -> None:
+    """거부 사유 검증은 서비스에도 있다(스키마를 거치지 않는 호출) — 짧은 사유는 422(AppError)이지 값 오류·DB 오류(500)가 아니다"""
+    from app.core.errors.exceptions import AppError
+    from app.modules.order_intake import service as intake_service
+    from tests.factories.intake import land, trade_actor
+
+    w = world()
+    intake = land(w)
+    for bad in ("짧음", "줄바꿈\n사유입니다"):
+        with pytest.raises(AppError) as caught:
+            intake_service.reject_intake(
+                actor=trade_actor(),
+                idempotency_key=unique("k"),
+                intake_id=intake["id"],
+                version=intake["version"],
+                reason=bad,
+            )
+        assert caught.value.status_code == 422
+    assert scalar("SELECT status FROM order_intakes WHERE id = :i", i=intake["id"]) == "PENDING"

@@ -69,8 +69,8 @@ GATE_SPECS: dict[GateCode, GateSpec] = {
             ResultSpec(L.PASS, R.NONE),
             # 같은 (거래처, 바이어 PO 키)의 다른 비취소 SO — 데이터 무결성이라 override 불가.
             ResultSpec(L.BLOCK, R.NONE),
-            # SO에 바이어 PO번호가 없다(QT·PI 유래 SO는 정상) — 중복 확인 불가를 기록으로 남긴다.
-            ResultSpec(L.WARN, R.NONE),
+            # SO에 바이어 PO번호가 없다(QT·PI 유래 SO는 정상) — 중복 확인 불가를 기록으로 남긴다. 인테이크는 PO 키가 NOT NULL이라 이 결과가 나올 수 없다.
+            ResultSpec(L.WARN, R.NONE, _CONFIRM_ONLY),
         ),
     ),
     GateCode.PRICE_DEVIATION: GateSpec(
@@ -78,7 +78,7 @@ GATE_SPECS: dict[GateCode, GateSpec] = {
         _BOTH,
         (
             ResultSpec(L.PASS, R.NONE),
-            ResultSpec(L.WARN, R.NONE),  # 무상 라인
+            ResultSpec(L.WARN, R.NONE, _CONFIRM_ONLY),  # 무상 라인(인테이크는 무상 라인을 받지 않는다 — 단가 ≥1)
             ResultSpec(L.BLOCK, R.OVERRIDE),  # 허용치 초과
             ResultSpec(L.UNKNOWN, R.OVERRIDE),  # 기준가 없음·기준가≤0
         ),

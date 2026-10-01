@@ -113,3 +113,14 @@ def execute(sql: str, **params: Any) -> None:
 
 def future(days: int = 30) -> str:
     return (today_kst() + timedelta(days=days)).isoformat()
+
+
+def land(w: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    """서비스 직접 호출로 수동 인테이크를 착지시킨다(HTTP 없이) — 201 본문."""
+    from app.modules.order_intake import service as intake_service
+
+    status, body = intake_service.create_manual_intake(
+        actor=trade_actor(), idempotency_key=unique("land"), payload=intake_payload(w, **kwargs)
+    )
+    assert status == 201
+    return body
