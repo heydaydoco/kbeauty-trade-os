@@ -124,15 +124,23 @@ def test_restrict_update_columns_is_enforced_by_the_database(monkeypatch) -> Non
 
 
 def test_restrict_update_columns_rejects_unregistered_or_immutable() -> None:
-    """등록 없는 테이블·불변 테이블·빈 허용 목록은 마이그레이션에서 즉시 실패한다"""
+    """불변 테이블·빈 허용 목록은 마이그레이션에서 즉시 실패한다 — 앱 상수와의 일치는 헬퍼가 보지 않는다(리터럴 고정, ADR-0060 부기)"""
     from app.core.db.table_policy import restrict_update_columns
 
     class _Op:
         def execute(self, statement: str) -> None:  # pragma: no cover
             raise AssertionError("실행되면 안 된다")
 
-    with pytest.raises(ValueError, match="COLUMN_UPDATE_ALLOWLIST"):
-        restrict_update_columns(_Op(), "not_registered", frozenset({"a"}))
+    executed: list[str] = []
+
+    class _Recorder:
+        def execute(self, statement: str) -> None:
+            executed.append(statement)
+
+    restrict_update_columns(
+        _Recorder(), "not_registered", frozenset({"a"})
+    )  # 상수 미등록이어도 적용만 한다
+    assert executed[0].startswith("REVOKE UPDATE") and 'GRANT UPDATE ("a")' in executed[1]
     with pytest.raises(ValueError, match="비어"):
         restrict_update_columns(_Op(), "x", frozenset())
     with pytest.raises(ValueError, match="IMMUTABLE"):
