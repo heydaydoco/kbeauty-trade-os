@@ -23,6 +23,10 @@ export interface SalesOrderSummary {
   assignee_id: number;
   copied_from_id: number | null;
   confirmed_at: string | null;
+  /** 확정 증적 3열(PR-12a) — 접수 SO는 null. 서버 값 그대로(화면은 판정을 다시 하지 않는다). */
+  credit_verdict?: string | null;
+  credit_approval_id?: number | null;
+  pi_gate_verdict?: string | null;
   version: number;
   created_at: string;
 }
@@ -71,6 +75,8 @@ export interface SalesOrderDetail extends SalesOrderSummary {
   payment_terms: PaymentTerms;
   incoterm: Incoterm;
   internal_note: string | null;
+  /** 확정 증거(gate_evaluations CONFIRMED) id — 접수 SO는 null. */
+  confirm_evaluation_id?: number | null;
   last_line_no: number;
   is_reference: boolean;
   lines: SalesOrderLine[];

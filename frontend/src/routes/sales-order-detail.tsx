@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { DocumentFlowPanel } from "../components/document-flow-panel";
+import { ConfirmPanel } from "../components/confirm-panel";
 import { GatePanel } from "../components/gate-panel";
 import { DocField, EMPTY, incotermText, paymentTermsText, show } from "../components/proforma-facts";
 import { SearchSelect } from "../components/search-select";
@@ -88,6 +89,8 @@ function SalesOrderDetailView() {
   const [action, setAction] = useState<Action | null>(null);
   const [notice, setNotice] = useState<unknown>(null);
   const [resetToken, setResetToken] = useState(0);
+  // 이 화면에서 방금 확정했는가 — 상위 stale 배너를 '편집 폼' 문구 대신 확정 맥락으로 바꾼다(기준 version은 여전히 자동으로 옮기지 않는다).
+  const [justConfirmed, setJustConfirmed] = useState(false);
   // ★ 화면이 "마지막으로 본/내가 쓴" version — 창 포커스 재조회로 서버 version이 앞서가도 쓰기는 이 값으로 보낸다
   //   (옛 화면으로 다른 사람의 수정을 덮어쓰지 않게 서버 409가 막는다). 내 쓰기·'최신 내용 불러오기'로만 갱신.
   const [baseVersion, setBaseVersion] = useState<number | null>(null);
@@ -112,6 +115,7 @@ function SalesOrderDetailView() {
 
   function reload() {
     setNotice(null);
+    setJustConfirmed(false);
     transition.reset();
     setAction(null);
     // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다).
@@ -271,8 +275,9 @@ function SalesOrderDetailView() {
       {stale && (
         <div role="status" className="mt-4 rounded border border-gray-400 p-3 text-sm">
           <p className="break-keep">
-            다른 곳에서 이 수주가 수정되었습니다. 아래 라인·합계는 최신이지만 편집 폼은 이전 내용입니다. 저장하면 충돌(409)로
-            거절됩니다.
+            {justConfirmed
+              ? "방금 이 화면에서 수주가 확정되어 화면이 갱신되었습니다. 확정 결과를 확인한 뒤 '최신 내용 불러오기'를 눌러 화면 기준을 새 상태로 맞춰 주세요."
+              : "다른 곳에서 이 수주가 수정되었습니다. 아래 라인·합계는 최신이지만 편집 폼은 이전 내용입니다. 저장하면 충돌(409)로 거절됩니다."}
           </p>
           <button
             type="button"
@@ -310,6 +315,8 @@ function SalesOrderDetailView() {
         />
 
         <GatePanel soId={so.id} soStatus={so.status} />
+
+        <ConfirmPanel so={so} version={base} onReload={reload} reloadToken={resetToken} onConfirmed={() => setJustConfirmed(true)} />
 
         <DocumentFlowPanel kind="SALES_ORDER" id={so.id} />
 

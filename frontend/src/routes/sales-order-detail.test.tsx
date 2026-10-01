@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
 import { stubFetch, type Call } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
+import { confirmOut, blockedResponse } from "../test/confirm-fixtures";
 import { PRICE_BLOCK, report } from "../test/gate-fixtures";
 import { SO_LINE, SO_LOG, chainFlow, soDetail } from "../test/so-fixtures";
 
@@ -558,5 +559,78 @@ describe("SO 상세 — 게이트 패널(PR-11b)", () => {
     const before = detailGets();
     fireEvent.click(within(dialog).getByRole("button", { name: "예외 승인 부여" }));
     await waitFor(() => expect(detailGets()).toBeGreaterThan(before));
+  });
+});
+
+describe("SO 상세 — 수주 확정 패널(PR-12b)", () => {
+  const CONFIRM = "/v1/sales-orders/9/confirm";
+  const detailGets = (calls: Call[]) => calls.filter((c) => c.method === "GET" && c.url.endsWith("/v1/sales-orders/9")).length;
+  const gatesStub: [string, string, () => Response] = ["/v1/sales-orders/9/gates", "GET", () => jsonResponse(report([PRICE_BLOCK]))];
+
+  it("접수 SO에 확정 패널·버튼이 보이고, 확정은 화면이 처음 본 version(기준)을 싣는다(창 포커스로 서버 version이 앞서가도)", async () => {
+    const { calls } = open(soDetail({ version: 3 }), [gatesStub, [CONFIRM, "POST", () => blockedResponse()]]);
+    await heading();
+    expect(await screen.findByRole("heading", { name: "수주 확정" })).toBeInTheDocument();
+    server.so = soDetail({ version: 5 });
+    const before = detailGets(calls);
+    window.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    await waitFor(() => expect(detailGets(calls)).toBeGreaterThan(before));
+    fireEvent.click(await screen.findByRole("button", { name: "수주 확정" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "수주 확정" }));
+    await waitFor(() => expect(sent(calls, "/confirm", "POST")).toHaveLength(1));
+    expect(sent(calls, "/confirm", "POST")[0]?.body).toEqual({ version: 3 });
+  });
+
+  it("확정 성공 뒤 SO 상세를 다시 읽지만 기준 version은 자동으로 옮기지 않는다(stale 배너 → 최신 내용 불러오기로 해소)", async () => {
+    const { calls } = open(soDetail({ version: 3 }), [gatesStub, [CONFIRM, "POST", () => jsonResponse(confirmOut())]]);
+    await heading();
+    fireEvent.click(await screen.findByRole("button", { name: "수주 확정" }));
+    const before = detailGets(calls);
+    server.so = soDetail({ version: 4, status: "CONFIRMED", confirmed_at: "2026-10-01T02:00:00Z", confirm_evaluation_id: 77, credit_verdict: "APPROVED", credit_approval_id: 33, pi_gate_verdict: "PASS" });
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "수주 확정" }));
+    await screen.findByRole("region", { name: "확정 결과" });
+    await waitFor(() => expect(detailGets(calls)).toBeGreaterThan(before));
+    // 자기 확정으로 뜨는 배너는 확정 맥락 문구(편집 폼·다른 곳 수정 문구 없음)
+    expect(await screen.findByText(/방금 이 화면에서 수주가 확정되어 화면이 갱신되었습니다/)).toBeInTheDocument();
+    expect(screen.queryByText(/다른 곳에서 이 수주가 수정되었습니다|편집 폼은 이전 내용/)).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("region", { name: "확정 결과" })).getByRole("button", { name: "최신 내용 불러오기" }));
+    await waitFor(() => expect(screen.queryByText(/방금 이 화면에서 수주가 확정되어/)).not.toBeInTheDocument());
+  });
+
+  it("확정 다이얼로그의 '최신 내용 불러오기'는 SO 상세를 다시 읽는다", async () => {
+    const conflict = () => jsonResponse({ error: { code: "COMMON.CONCURRENCY.VERSION_CONFLICT", message: "raw" } }, 409);
+    const { calls } = open(soDetail(), [gatesStub, [CONFIRM, "POST", conflict]]);
+    await heading();
+    fireEvent.click(await screen.findByRole("button", { name: "수주 확정" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "수주 확정" }));
+    await within(dialog).findByRole("alert");
+    const before = detailGets(calls);
+    fireEvent.click(within(dialog).getByRole("button", { name: "최신 내용 불러오기" }));
+    await waitFor(() => expect(detailGets(calls)).toBeGreaterThan(before));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("페이지 헤더의 '최신 내용 불러오기'도 패널의 차단 결과·승인 대기(로컬 마지막 확인 값)를 비운다", async () => {
+    open(soDetail(), [gatesStub, [CONFIRM, "POST", () => blockedResponse({ pending_approval_id: 61, pending_approval_status: "REQUESTED" })]]);
+    await heading();
+    fireEvent.click(await screen.findByRole("button", { name: "수주 확정" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "수주 확정" }));
+    await screen.findByRole("region", { name: "확정 차단 결과" });
+    fireEvent.click(screen.getAllByRole("button", { name: "최신 내용 불러오기" })[0] as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole("region", { name: "확정 차단 결과" })).not.toBeInTheDocument());
+  });
+
+  it("확정 SO: 확정 버튼 없이 증거 요약(서버 증적·증거 번호)을 보인다", async () => {
+    open(soDetail({ status: "CONFIRMED", confirmed_at: "2026-09-30T02:00:00Z", credit_verdict: "WITHIN_LIMIT", pi_gate_verdict: "PASS", confirm_evaluation_id: 12 }), [
+      ["/v1/sales-orders/9/gates", "GET", () => jsonResponse(report([PRICE_BLOCK], { status: "CONFIRMED" }))],
+    ]);
+    await heading();
+    expect(await screen.findByText("확정 증거 요약")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "수주 확정" })).not.toBeInTheDocument();
+    expect(screen.getByText("한도 이내로 확정")).toBeInTheDocument();
+    expect(screen.getByText("#12")).toBeInTheDocument();
   });
 });
