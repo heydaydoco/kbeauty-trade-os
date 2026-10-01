@@ -428,3 +428,26 @@ def test_unique_headers_are_not_shared_between_requests() -> None:
     assert idem() != idem()
     assert unique("x") != unique("x")
     assert TestClient is not None
+
+
+def test_list_queries_do_not_grow_with_the_number_of_rows() -> None:
+    """목록(결재함·전체)의 SQL 문 수는 행 수와 무관하다 — 행 1개일 때와 8개일 때 같다(N+1 없음, §22 렌즈 7)"""
+    from tests.support.sqlcount import count_statements
+
+    approver = make_user(RoleCode.TRADE)
+    _pending()
+
+    def measure() -> tuple[int, int]:
+        with client_for(approver) as client, logged_in(RoleCode.ADMIN) as admin:
+            inbox = count_statements(lambda: client.get(APPROVALS, params={"scope": "inbox"}))
+            everything = count_statements(lambda: admin.get(APPROVALS, params={"scope": "all"}))
+            return inbox, everything
+
+    one = measure()
+    assert min(one) > 0  # 빈 측정 가드
+    for _ in range(7):
+        _pending()
+    many = measure()
+    assert many == one, (one, many)
+    with client_for(approver) as client:
+        assert client.get(APPROVALS, params={"scope": "inbox"}).json()["total"] == 8

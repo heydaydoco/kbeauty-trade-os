@@ -552,3 +552,225 @@ def test_an_unevaluable_target_never_passes_as_approved_or_consumed() -> None:
     with pytest.raises(AppError):
         _consume(so["id"], make_user(RoleCode.ADMIN).id)
     assert count("approvals") == 0
+
+
+def test_outbox_events_carry_only_ids_and_states_never_amounts_or_digests() -> None:
+    """상태 전이마다 아웃박스 이벤트가 발행되고(요청·승인·소비) 페이로드는 id·유형·대상·from/to·행위자뿐이다 — 금액·digest·사유가 외부 채널로 나가지 않는다"""
+    from sqlalchemy import text
+
+    from app.core.db.session import owner_engine
+
+    so = credit_so()
+    approval_id, requester, approver = approved_for(so)
+    with unit_of_work() as uow:
+        service.consume_approval(
+            uow.session, approval_type=TYPE, target_id=so["id"], actor_user_id=approver.id
+        )
+    with owner_engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT event_type, payload FROM events WHERE event_type LIKE 'approvals.approval.%' ORDER BY id"
+            )
+        ).all()
+    assert [r[0] for r in rows] == [
+        "approvals.approval.requested",
+        "approvals.approval.approved",
+        "approvals.approval.consumed",
+    ]
+    for _, payload in rows:
+        assert set(payload) == {
+            "approval_id",
+            "approval_type",
+            "target_type",
+            "target_id",
+            "from_status",
+            "to_status",
+            "actor_user_id",
+        }
+        assert payload["approval_id"] == approval_id
+    assert requester.id and "digest" not in str(rows) and "100000" not in str(rows)
+
+
+# ── 알림 — 요청·결과 (C7) ───────────────────────────────────────────────────────
+
+
+def _alert_rows(like: str) -> list[dict]:
+    from sqlalchemy import text
+
+    from app.core.db.session import owner_engine
+
+    with owner_engine.connect() as connection:
+        return [
+            dict(r)
+            for r in connection.execute(
+                text("SELECT * FROM alerts WHERE dedup_key LIKE :p ORDER BY id"), {"p": like}
+            ).mappings()
+        ]
+
+
+def test_a_request_notifies_the_role_holders_even_with_no_alert_rules() -> None:
+    """알림 규칙이 0행이어도 요청이 결재 역할 보유자(기안자 제외)에게 알림을 만든다 — ADMIN·다른 역할·VIEWER·기안자는 받지 않는다(전사 폭포 금지)"""
+    so = credit_so()
+    add_line(0, role="TRADE")
+    holder, other_holder = make_user(RoleCode.TRADE), make_user(RoleCode.TRADE)
+    admin, logistics, viewer = (
+        make_user(RoleCode.ADMIN),
+        make_user(RoleCode.LOGISTICS),
+        make_user(RoleCode.VIEWER),
+    )
+    requester = make_user(RoleCode.TRADE)
+    assert count("alert_rules") == 0
+    approval = request(so["id"], requester).approval
+    rows = _alert_rows(f"approval:{approval.id}:requested:%")
+    recipients = {r["recipient_user_id"] for r in rows}
+    assert {holder.id, other_holder.id} <= recipients
+    assert not recipients & {requester.id, admin.id, logistics.id, viewer.id}
+    assert all(r["entity_type"] == "approvals" and r["entity_id"] == approval.id for r in rows)
+    assert all(r["severity"] == "WARN" and "@" not in r["title"] for r in rows)
+    assert not any("100000" in (r["body"] or "") for r in rows)  # 금액을 싣지 않는다
+
+
+def test_a_request_with_no_role_holder_falls_back_to_the_admins_with_a_note() -> None:
+    """결재 역할 보유자가 0명이면 활성 ADMIN 전원에게(기안자 제외) 전달되고 본문에 안내 문구가 붙는다"""
+    from app.modules.approvals import alerts
+
+    so = credit_so()
+    add_line(0, role="CERT")
+    admin = make_user(RoleCode.ADMIN)
+    approval = request(so["id"], make_user(RoleCode.TRADE)).approval
+    rows = _alert_rows(f"approval:{approval.id}:requested:%")
+    assert [r["recipient_user_id"] for r in rows] == [admin.id]
+    assert alerts.ROLE_FALLBACK_NOTE in rows[0]["body"]
+
+
+def test_a_valid_delegate_is_a_recipient_and_a_failed_request_leaves_no_alert() -> None:
+    """유효한 수임자도 요청 알림을 받는다 · 요청이 거부되면(자격자 공집합) 알림도 롤백되어 0건이다(승인 행이 있으면 알림도 있다)"""
+    from datetime import timedelta
+
+    from app.core.time import today_kst
+    from tests.factories.approvals import add_delegation
+
+    so = credit_so()
+    add_line(0, role="TRADE")
+    delegator = make_user(RoleCode.TRADE)
+    delegate = make_user(RoleCode.LOGISTICS)
+    add_delegation(delegator, delegate, today_kst(), today_kst() + timedelta(days=3))
+    approval = request(so["id"], make_user(RoleCode.TRADE)).approval
+    recipients = {
+        r["recipient_user_id"] for r in _alert_rows(f"approval:{approval.id}:requested:%")
+    }
+    assert delegate.id in recipients and delegator.id in recipients
+
+    other = credit_so()
+    from sqlalchemy import text
+
+    from app.core.db.session import owner_engine
+
+    with owner_engine.begin() as connection:  # 자격자를 모두 없앤다(TRADE 전원 비활성)
+        connection.execute(text("UPDATE users SET is_active = false"))
+    admin_requester = make_user(RoleCode.ADMIN)  # 유일한 활성 사용자 = 기안자 ADMIN
+    before = count("alerts")
+    with pytest.raises(AppError) as caught:
+        request(other["id"], admin_requester)
+    assert caught.value.code == ErrorCode.APPROVALS_APPROVAL_NO_ELIGIBLE_APPROVER
+    assert count("alerts") == before
+
+
+def test_results_are_notified_to_the_requester_unless_inactive_or_self_made() -> None:
+    """결과 통지 — 승인·반려는 기안자에게 1건, 기안자 본인이 한 회수는 알리지 않고 ADMIN이 한 회수는 알린다, 기안자가 비활성이면 생략한다"""
+    from sqlalchemy import text
+
+    from app.core.db.session import owner_engine
+
+    add_line(0, role="TRADE")
+    approver = make_user(RoleCode.TRADE)
+
+    def fresh() -> tuple[int, object]:
+        so = credit_so()
+        requester = make_user(RoleCode.TRADE)
+        return int(request(so["id"], requester).approval.id), requester
+
+    a1, r1 = fresh()
+    decide(a1, approver, "APPROVE")
+    a2, r2 = fresh()
+    decide(a2, approver, "REJECT", reason="보완")
+    a3, r3 = fresh()
+    decide(a3, r3, "WITHDRAW", reason="내가 회수")  # 자기 회수 — 알리지 않는다
+    a4, r4 = fresh()
+    decide(a4, make_user(RoleCode.ADMIN), "WITHDRAW", reason="관리자 회수")
+    a5, r5 = fresh()
+    with owner_engine.begin() as connection:
+        connection.execute(text("UPDATE users SET is_active = false WHERE id = :i"), {"i": r5.id})
+    decide(a5, approver, "APPROVE")  # 기안자 비활성 — 생략
+
+    def got(approval_id: int, user: object, outcome: str) -> int:
+        return len(
+            [
+                r
+                for r in _alert_rows(f"approval:{approval_id}:{outcome}:%")
+                if r["recipient_user_id"] == user.id  # type: ignore[attr-defined]
+            ]
+        )
+
+    assert got(a1, r1, "approved") == 1
+    assert got(a2, r2, "rejected") == 1
+    assert got(a3, r3, "withdrawn") == 0
+    assert got(a4, r4, "withdrawn") == 1
+    assert got(a5, r5, "approved") == 0
+
+
+def test_the_transition_function_rejects_all_29_unallowed_pairs() -> None:
+    """상태 대입 통로(`_record_transition`)가 직접 불려도 미허용 29쌍은 전부 거부한다(409 NOT_ALLOWED·행 불변) — HUMAN/SYSTEM 통로 검사에 기대지 않는다"""
+    from app.modules.approvals.machine import ALLOWED, ApprovalStatus
+    from app.modules.approvals.models import Approval
+
+    rejected = 0
+    for state in ApprovalStatus:
+        so = credit_so()
+        if count("approval_lines") == 0:
+            add_line(0)
+        make_user(RoleCode.TRADE)
+        requester = make_user(RoleCode.TRADE)
+        approval_id = int(request(so["id"], requester).approval.id)
+        approver = make_user(RoleCode.TRADE)
+        if state is ApprovalStatus.APPROVED:
+            decide(approval_id, approver, "APPROVE")
+        elif state is ApprovalStatus.REJECTED:
+            decide(approval_id, approver, "REJECT", reason="사유")
+        elif state is ApprovalStatus.WITHDRAWN:
+            decide(approval_id, requester, "WITHDRAW", reason="사유")
+        elif state is ApprovalStatus.CONSUMED:
+            decide(approval_id, approver, "APPROVE")
+            with unit_of_work() as uow:
+                service.consume_approval(
+                    uow.session, approval_type=TYPE, target_id=so["id"], actor_user_id=approver.id
+                )
+        elif state is ApprovalStatus.VOIDED:
+            with unit_of_work() as uow:
+                service.void_for_target(
+                    uow.session,
+                    approval_type=TYPE,
+                    target_id=so["id"],
+                    actor_user_id=approver.id,
+                    reason_code=VoidReasonCode.TARGET_CHANGED,
+                )
+        for target in ApprovalStatus:
+            if (state, target) in ALLOWED:
+                continue
+            kwargs: dict = (
+                {"reason": "사유"}
+                if target in (ApprovalStatus.REJECTED, ApprovalStatus.WITHDRAWN)
+                else {}
+            )
+            if target is ApprovalStatus.VOIDED:
+                kwargs = {"reason_code": VoidReasonCode.TARGET_CHANGED}
+            with pytest.raises(AppError) as caught, unit_of_work() as uow:
+                row = uow.session.get(Approval, approval_id)
+                assert row is not None
+                service._record_transition(
+                    uow.session, row, to=target, actor_user_id=approver.id, **kwargs
+                )
+            assert caught.value.code == ErrorCode.APPROVALS_TRANSITION_NOT_ALLOWED, (state, target)
+            rejected += 1
+        assert approval_row(approval_id)["status"] == state.value
+    assert rejected == 29

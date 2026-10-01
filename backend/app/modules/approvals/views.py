@@ -77,10 +77,12 @@ def approval_body(
     names: dict[int, str] | None = None,
     event: ApprovalEvent | None = None,
     authority: Authority | None = None,
+    roles: frozenset[RoleCode] | None = None,
 ) -> dict[str, Any]:
     """승인 1건의 응답 본문 — 서버 계산 필드(`can_decide`·`can_withdraw`·`decide_blocked_reason`) 포함."""
     today = today or kst_today()
-    roles = active_roles_of(session, actor.id) or frozenset()
+    if roles is None:  # 목록은 한 번 읽은 값을 넘긴다(행마다 다시 읽지 않는다)
+        roles = active_roles_of(session, actor.id) or frozenset()
     names = names or _names(
         session,
         {approval.requested_by_id, approval.decided_by_id, approval.decided_on_behalf_of_id},
@@ -91,7 +93,7 @@ def approval_body(
     blocked: str | None = None
     if approval.status == ApprovalStatus.REQUESTED.value:
         authority = authority or decision_authority(
-            session, actor_id=actor.id, approval=approval, today=today
+            session, actor_id=actor.id, approval=approval, today=today, roles=roles
         )
         can_decide = authority.can_decide
         if not can_decide:
@@ -258,7 +260,13 @@ def list_approvals(
         return (
             [
                 approval_body(
-                    session, r, actor=actor, today=today, names=names, event=events.get(r.id)
+                    session,
+                    r,
+                    actor=actor,
+                    today=today,
+                    names=names,
+                    event=events.get(r.id),
+                    roles=roles,
                 )
                 for r in rows
             ],

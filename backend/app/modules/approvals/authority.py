@@ -152,7 +152,12 @@ def find_delegation(
 
 
 def decision_authority(
-    session: Session, *, actor_id: int, approval: Approval, today: date | None = None
+    session: Session,
+    *,
+    actor_id: int,
+    approval: Approval,
+    today: date | None = None,
+    roles: frozenset[RoleCode] | None = None,
 ) -> Authority:
     """이 사용자가 이 승인을 결정할 수 있는가 — **서비스 판정의 유일한 진입점**.
 
@@ -162,7 +167,8 @@ def decision_authority(
     today = today or kst_today()
     if approval.requested_by_id == actor_id:
         return Authority(AuthorityKind.DENIED_SELF)
-    roles = active_roles_of(session, actor_id)
+    # `roles`는 호출자가 **방금 DB에서 읽은** 값을 넘길 때만(목록이 행마다 다시 읽지 않게 — N+1 방지). 비어 있으면 여기서 읽는다.
+    roles = roles if roles is not None else active_roles_of(session, actor_id)
     if roles is None or not any(role.value in NON_VIEWER_CODES for role in roles):
         return Authority(AuthorityKind.DENIED_NOT_APPROVER)
     if approval.required_role in {role.value for role in roles}:
