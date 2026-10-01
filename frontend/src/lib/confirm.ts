@@ -131,8 +131,8 @@ export function resolutionGuide(gate: Pick<BlockedGate, "resolution" | "can_over
   switch (gate.resolution) {
     case "OVERRIDE":
       return gate.can_override
-        ? "예외 승인(override)으로 해소할 수 있습니다. 위 '게이트 판정' 표에서 해당 항목의 '예외 승인' 버튼으로 처리하세요."
-        : "예외 승인(override)이 필요하지만 현재 역할·상태로는 부여할 수 없습니다. 위 '게이트 판정' 표의 안내를 확인하거나 권한이 있는 담당자에게 요청하세요.";
+        ? "예외 승인으로 해소할 수 있습니다. 위 '게이트 판정' 표에서 해당 항목의 '예외 승인' 버튼으로 처리하세요."
+        : "예외 승인이 필요하지만 현재 역할·상태로는 부여할 수 없습니다. 위 '게이트 판정' 표의 안내를 확인하거나 권한이 있는 담당자에게 요청하세요.";
     case "APPROVAL":
       return "승인(결재)으로만 해소됩니다. 아래 '승인 요청'에서 승인을 올리고 결재가 끝난 뒤 다시 확정하세요.";
     case "NONE":
@@ -145,6 +145,24 @@ export function resolutionGuide(gate: Pick<BlockedGate, "resolution" | "can_over
 // ── 오류 문구 ────────────────────────────────────────────────────────────────
 
 const HANGUL = /[가-힣]/;
+
+/** 연결 끊김(status 0) — 요청이 서버에 닿았는지 알 수 없다. 개발자 어조 대신 사용자가 할 일을 안내한다. */
+const NETWORK_CODE = "CLIENT.NETWORK.UNREACHABLE";
+const isNetworkError = (error: ApiError): boolean => error.status === 0 || error.code === NETWORK_CODE;
+
+const JOSA: Record<"을/를" | "이/가" | "은/는", [string, string]> = { "을/를": ["을", "를"], "이/가": ["이", "가"], "은/는": ["은", "는"] };
+// 숫자를 읽을 때 끝 글자의 받침 — 영(0)·일(1)·삼(3)·육(6)·칠(7)·팔(8)은 받침 있음.
+const DIGIT_BATCHIM = new Set(["0", "1", "3", "6", "7", "8"]);
+
+/** 조사만 고른다 — 마지막 글자의 받침으로 판정(한글 음절·숫자). 알 수 없는 끝 글자(영문 등)는 받침 없음으로 본다. */
+export function josaOf(word: string, kind: "을/를" | "이/가" | "은/는"): string {
+  const last = [...word.trim()].pop() ?? "";
+  const code = last.charCodeAt(0);
+  const hasBatchim = code >= 0xac00 && code <= 0xd7a3 ? (code - 0xac00) % 28 !== 0 : DIGIT_BATCHIM.has(last);
+  return JOSA[kind][hasBatchim ? 0 : 1];
+}
+
+export const withJosa = (word: string, kind: "을/를" | "이/가" | "은/는"): string => `${word}${josaOf(word, kind)}`;
 
 const INCOMPLETE_LABEL: Record<string, string> = {
   payment_terms: "결제조건",
@@ -160,6 +178,11 @@ export function missingFieldLabels(detail: Record<string, unknown> | undefined):
   // 서버 키 순서와 무관하게 고정 순서(결제조건→…→라인)로 — 화면이 흔들리지 않게.
   return Object.entries(INCOMPLETE_LABEL).flatMap(([key, label]) => (key in given ? [label] : []));
 }
+
+const NETWORK_CONFIRM_TEXT =
+  "연결이 끊겼습니다. 확정이 처리되었을 수 있으니 '최신 내용 불러오기'로 상태를 확인한 뒤 필요하면 같은 버튼을 다시 누르세요(중복 확정은 되지 않습니다).";
+const NETWORK_REQUEST_TEXT =
+  "연결이 끊겼습니다. 승인 요청이 처리되었을 수 있으니 '최신 내용 불러오기'로 상태를 확인한 뒤 필요하면 같은 버튼을 다시 누르세요(중복 요청은 만들어지지 않습니다).";
 
 export const CONFIRM_ERROR_TEXT: Record<string, string> = {
   [VERSION_CONFLICT]:
@@ -187,6 +210,7 @@ export function confirmErrorMessage(error: unknown, fallback = "수주를 확정
       ? `확정에 필요한 항목이 비어 있습니다: ${names.join(", ")}. 항목을 입력한 뒤 다시 확정해 주세요.`
       : "확정에 필요한 항목이 비어 있습니다. 수주 내용을 확인한 뒤 다시 확정해 주세요.";
   }
+  if (isNetworkError(error)) return NETWORK_CONFIRM_TEXT;
   const mapped = CONFIRM_ERROR_TEXT[error.code];
   if (mapped !== undefined) return mapped;
   if (error.status === 403) return "수주 확정은 무역·관리자만 할 수 있습니다.";
@@ -198,7 +222,7 @@ export function confirmErrorMessage(error: unknown, fallback = "수주를 확정
 
 /** 확정 다이얼로그에 '최신 내용 불러오기'를 둘 오류 — 409 계열 전체와 승인 필요(422 REQUIRED). */
 export const isConfirmRecoverable = (error: unknown): boolean =>
-  error instanceof ApiError && (error.status === 409 || error.code === APPROVAL_REQUIRED);
+  error instanceof ApiError && (error.status === 409 || error.code === APPROVAL_REQUIRED || isNetworkError(error));
 
 export const APPROVAL_REQUEST_ERROR_TEXT: Record<string, string> = {
   [VERSION_CONFLICT]:
@@ -209,6 +233,7 @@ export const APPROVAL_REQUEST_ERROR_TEXT: Record<string, string> = {
   [LINE_NOT_CONFIGURED]: "여신 초과 승인의 결재선이 없어 승인 요청을 만들 수 없습니다. 관리자에게 결재선 등록을 요청해 주세요.",
   [NO_ELIGIBLE_APPROVER]:
     "결재할 수 있는 사람이 없어 승인 요청을 만들 수 없습니다(요청자 본인은 결재할 수 없습니다). 관리자에게 결재 역할 보유자 지정을 요청해 주세요.",
+  [APPROVAL_STALE]: "승인을 요청할 수 있는 상태가 아닙니다(대상 수주가 접수 상태가 아니거나 승인 대상이 바뀌었습니다). '최신 내용 불러오기'로 수주의 현재 상태를 확인해 주세요.",
   [APPROVAL_ALREADY_ACTIVE]: "이 건에는 이미 진행 중인 승인이 있습니다. 승인 목록에서 진행 상태를 확인해 주세요.",
   [VALIDATION]:
     "승인을 요청할 수 없는 상태입니다. 여신 초과분이 없거나(승인이 필요 없음) 여신을 평가하지 못한 경우입니다. '최신 내용 불러오기' 후 게이트 판정을 확인해 주세요.",
@@ -221,6 +246,7 @@ export function approvalRequestErrorMessage(error: unknown, fallback = "승인�
     const text = [error.detail?.credit, error.detail?.approval].find((v): v is string => typeof v === "string" && HANGUL.test(v));
     return text ?? (APPROVAL_REQUEST_ERROR_TEXT[VALIDATION] as string);
   }
+  if (isNetworkError(error)) return NETWORK_REQUEST_TEXT;
   const mapped = APPROVAL_REQUEST_ERROR_TEXT[error.code];
   if (mapped !== undefined) return mapped;
   if (error.status === 403) return "승인 요청은 무역·관리자만 할 수 있습니다.";
@@ -230,7 +256,7 @@ export function approvalRequestErrorMessage(error: unknown, fallback = "승인�
   return HANGUL.test(error.message) ? error.message : fallback;
 }
 
-export const isApprovalRequestRecoverable = (error: unknown): boolean => error instanceof ApiError && error.status === 409;
+export const isApprovalRequestRecoverable = (error: unknown): boolean => error instanceof ApiError && (error.status === 409 || isNetworkError(error));
 
 /** 같은 본문 → 같은 키(재시도 흡수). 본문(version)이 달라지면 새 키. */
 export function keyFor(map: Map<string, string>, serialized: string, make: () => string): string {

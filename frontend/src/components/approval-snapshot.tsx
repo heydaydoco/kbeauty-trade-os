@@ -17,6 +17,8 @@ export function ApprovalSnapshot({ approval }: { approval: ApprovalView }) {
   const currencies = useCurrencies();
   const list = currencies.data?.items;
   const facts = snapshotFacts(approval.snapshot);
+  // 여신 비관리(한도 없음)는 미수 경고 대상이 아니다 — 한도 없음 안내만(빨간 미수 경고와 병기하지 않는다).
+  const notManaged = facts.verdict === "NOT_MANAGED";
   const cur = facts.limitCurrency ?? approval.basis_currency;
   const money = (amount: number | null) => moneyText(amount, cur, list);
 
@@ -30,7 +32,7 @@ export function ApprovalSnapshot({ approval }: { approval: ApprovalView }) {
       </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {!facts.receivablesReflected && (
+        {!notManaged && !facts.receivablesReflected && (
           <span
             role="status"
             className="cell-nowrap rounded border border-signal-red px-2 py-0.5 text-xs font-medium text-signal-red"
@@ -38,7 +40,7 @@ export function ApprovalSnapshot({ approval }: { approval: ApprovalView }) {
             미수 미반영
           </span>
         )}
-        {facts.exposureIsPartial && (
+        {!notManaged && facts.exposureIsPartial && (
           <span
             role="status"
             className="cell-nowrap rounded border border-gray-500 bg-gray-200 px-2 py-0.5 text-xs text-gray-800"
@@ -55,16 +57,19 @@ export function ApprovalSnapshot({ approval }: { approval: ApprovalView }) {
           </span>
         )}
       </div>
-      {!facts.receivablesReflected && (
+      {!notManaged && !facts.receivablesReflected && (
         <p className="mt-2 break-keep text-sm text-signal-red">
           이 노출에는 미수금이 반영되지 않았습니다. 실제 노출은 아래 금액보다 클 수 있으니 미수 현황을 따로 확인한 뒤 결정해
           주세요.
         </p>
       )}
-      {facts.exposureIsPartial && (
+      {!notManaged && facts.exposureIsPartial && (
         <p className="mt-2 break-keep text-sm text-gray-700">
-          환산하지 못한 주문이 있어 노출 일부만 계산되었습니다.
+          미수 채권이 아직 노출에 반영되지 않아 실제 노출은 더 클 수 있습니다.
         </p>
+      )}
+      {notManaged && (
+        <p className="mt-2 break-keep text-sm text-gray-700">여신 한도가 없는(여신 비관리) 거래처라 한도·미수 확인 대상이 아닙니다.</p>
       )}
       {facts.verdict === "UNEVALUABLE" && (
         <p className="mt-2 break-keep text-sm text-signal-red">

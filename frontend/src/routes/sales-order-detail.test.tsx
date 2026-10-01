@@ -592,9 +592,11 @@ describe("SO 상세 — 수주 확정 패널(PR-12b)", () => {
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "수주 확정" }));
     await screen.findByRole("region", { name: "확정 결과" });
     await waitFor(() => expect(detailGets(calls)).toBeGreaterThan(before));
-    expect(await screen.findByText(/다른 곳에서 이 수주가 수정되었습니다/)).toBeInTheDocument();
+    // 자기 확정으로 뜨는 배너는 확정 맥락 문구(편집 폼·다른 곳 수정 문구 없음)
+    expect(await screen.findByText(/방금 이 화면에서 수주가 확정되어 화면이 갱신되었습니다/)).toBeInTheDocument();
+    expect(screen.queryByText(/다른 곳에서 이 수주가 수정되었습니다|편집 폼은 이전 내용/)).not.toBeInTheDocument();
     fireEvent.click(within(screen.getByRole("region", { name: "확정 결과" })).getByRole("button", { name: "최신 내용 불러오기" }));
-    await waitFor(() => expect(screen.queryByText(/다른 곳에서 이 수주가 수정되었습니다/)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/방금 이 화면에서 수주가 확정되어/)).not.toBeInTheDocument());
   });
 
   it("확정 다이얼로그의 '최신 내용 불러오기'는 SO 상세를 다시 읽는다", async () => {
@@ -609,6 +611,16 @@ describe("SO 상세 — 수주 확정 패널(PR-12b)", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "최신 내용 불러오기" }));
     await waitFor(() => expect(detailGets(calls)).toBeGreaterThan(before));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("페이지 헤더의 '최신 내용 불러오기'도 패널의 차단 결과·승인 대기(로컬 마지막 확인 값)를 비운다", async () => {
+    open(soDetail(), [gatesStub, [CONFIRM, "POST", () => blockedResponse({ pending_approval_id: 61, pending_approval_status: "REQUESTED" })]]);
+    await heading();
+    fireEvent.click(await screen.findByRole("button", { name: "수주 확정" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "수주 확정" }));
+    await screen.findByRole("region", { name: "확정 차단 결과" });
+    fireEvent.click(screen.getAllByRole("button", { name: "최신 내용 불러오기" })[0] as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole("region", { name: "확정 차단 결과" })).not.toBeInTheDocument());
   });
 
   it("확정 SO: 확정 버튼 없이 증거 요약(서버 증적·증거 번호)을 보인다", async () => {

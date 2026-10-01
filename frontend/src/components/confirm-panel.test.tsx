@@ -56,16 +56,28 @@ function mount(extra: GateHandler[] = [], opts: Opts = {}) {
   const stub = stubGateFetch(opts.me ?? TRADER, [...extra, [GATES_URL, "GET", () => jsonResponse(server.rep)]]);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const onReload = opts.onReload ?? vi.fn();
-  const ui = (p: { so: SalesOrderDetail; version: number }) => (
+  const onConfirmed = vi.fn();
+  const ui = (p: { so: SalesOrderDetail; version: number; reloadToken: number }) => (
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <ConfirmPanel so={p.so} version={p.version} onReload={onReload} />
+        <ConfirmPanel so={p.so} version={p.version} onReload={onReload} reloadToken={p.reloadToken} onConfirmed={onConfirmed} />
       </MemoryRouter>
     </QueryClientProvider>
   );
-  const initial = { so: opts.so ?? soDetail(), version: opts.version ?? 3 };
+  const initial = { so: opts.so ?? soDetail(), version: opts.version ?? 3, reloadToken: 0 };
   const view = render(ui(initial));
-  return { ...stub, ...view, client, onReload, setProps: (p: Partial<{ so: SalesOrderDetail; version: number }>) => view.rerender(ui({ ...initial, ...p })) };
+  let current = initial;
+  return {
+    ...stub,
+    ...view,
+    client,
+    onReload,
+    onConfirmed,
+    setProps: (p: Partial<typeof initial>) => {
+      current = { ...current, ...p };
+      view.rerender(ui(current));
+    },
+  };
 }
 
 const posts = (calls: GateCall[], url: string) => calls.filter((c) => c.method === "POST" && c.url === `/api${url}`);
@@ -122,7 +134,8 @@ describe("ConfirmPanel — 버튼·안내(서버가 최종 판정)", () => {
 
   it("서버가 cleared=false인데 모든 행이 통과여도 '확정 가능 후보'라고 말하지 않는다(프런트 재판정 없음)", async () => {
     mount([], { gates: report([gate()], { clearance: { cleared: false, needs_approval: false, unresolved_count: 0 } }) });
-    expect(await screen.findByText(/미해소 게이트 0건이 있습니다/)).toBeInTheDocument();
+    expect(await screen.findByText(/서버가 아직 확정 가능으로 보지 않았습니다/)).toBeInTheDocument();
+    expect(screen.queryByText(/미해소 게이트 0건/)).not.toBeInTheDocument();
     expect(screen.queryByText(/확정 가능 후보입니다/)).not.toBeInTheDocument();
   });
 
@@ -183,15 +196,15 @@ describe("ConfirmPanel — 확정 다이얼로그·성공", () => {
     fireEvent.click(dialogConfirm(await openConfirm()));
     const region = await screen.findByRole("region", { name: "확정 결과" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(region).toHaveTextContent("수주 SO-2026-0001를 확정했습니다");
+    expect(region).toHaveTextContent("수주 SO-2026-0001을 확정했습니다");
     expect(within(region).getByRole("link", { name: "QT-2026-0001" })).toHaveAttribute("href", "/quotations/7");
-    expect(region).toHaveTextContent("'수주전환'으로 표시됩니다");
+    expect(region).toHaveTextContent("QT-2026-0001이 '수주전환'으로 표시됩니다");
     expect(region).toHaveTextContent("예외 승인을 사용한 게이트: PI 선수금 입금");
     expect(region).toHaveTextContent("경고 상태로 통과한 게이트: 중복 PO");
     expect(region).toHaveTextContent("재고 할당은 아직 구현 전이라 할당되지 않았습니다 — 재고 할당 포트가 아직 연결되지 않았습니다.");
     expect(screen.getByRole("status", { name: "확정 처리 결과" })).toHaveTextContent("수주를 확정했습니다.");
     await waitFor(() => expect(document.activeElement).toBe(region));
-    expect(region.textContent).not.toMatch(/NOT_IMPLEMENTED|OVERRIDDEN|PI_DEPOSIT|WARN/);
+    expect(region.textContent).not.toMatch(/NOT_IMPLEMENTED|OVERRIDDEN|PI_DEPOSIT|WARN/i);
   });
 
   it("성공 뒤 확정 증거 요약(증적 3열·승인 링크·증거 번호)이 응답으로 채워진다", async () => {
@@ -253,7 +266,7 @@ describe("ConfirmPanel — 409 GATE_BLOCKED(서버 blocked_gates[] 그대로)", 
 
   it("영문 코드·reason_code·판정 열거값·detail은 화면에 나오지 않는다", async () => {
     const { region } = await attemptBlocked({ blocked_gates: [{ ...PRICE_BLOCKED, detail: { other_doc_number: "RAWDOC" } }, blockedGate()] });
-    expect(region.textContent).not.toMatch(/PRICE_DEVIATION|CREDIT|PRICE_ABOVE_TOLERANCE|LIMIT_EXCEEDED|OVERRIDE|APPROVAL|BLOCK|GATE_BLOCKED|RAWDOC/);
+    expect(region.textContent).not.toMatch(/PRICE_DEVIATION|CREDIT|PRICE_ABOVE_TOLERANCE|LIMIT_EXCEEDED|OVERRIDE|APPROVAL|BLOCK|GATE_BLOCKED|RAWDOC/i);
     expect(screen.getByRole("status", { name: "확정 처리 결과" })).toHaveTextContent("해소되지 않은 게이트가 2건 있습니다");
   });
 
@@ -436,7 +449,7 @@ describe("ConfirmPanel — 승인 요청 다이얼로그·성공·오류", () =>
     fireEvent.click(within(dialog).getByRole("button", { name: "승인 요청" }));
     const alert = await within(dialog).findByRole("alert");
     expect(alert).toHaveTextContent(text);
-    expect(alert.textContent).not.toMatch(/RAW_DETAIL_CODE|Internal raw message|APPROVALS\.|COMMON\./);
+    expect(alert.textContent).not.toMatch(/RAW_DETAIL_CODE|Internal raw message|APPROVALS\.|COMMON\./i);
   });
 
   it("승인 요청 409에는 '최신 내용 불러오기'가 있고 누르면 닫고 상위 onReload를 부른다", async () => {
@@ -515,16 +528,25 @@ describe("ConfirmPanel — 승인 요청 다이얼로그·성공·오류", () =>
 });
 
 describe("ConfirmPanel — 승인 요청 성공 뒤 키 비움·다이얼로그 유지", () => {
-  it("승인 요청이 성공하면 키 Map을 비운다 — 낡은 승인(APPROVED)을 돌려받아 같은 version에서 다시 요청하면 새 키", async () => {
-    const view = mount([[REQUEST_URL, "POST", () => jsonResponse(approvalRequestOut({ created: false, status: "APPROVED" }), 200)]]);
-    fireEvent.click(await screen.findByRole("button", { name: "승인 요청 올리기" }));
+  it("승인 요청이 성공하면 키 Map을 비운다 — 같은 version에서 낡은 승인(409 차단)을 다시 만나 재요청하면 새 키", async () => {
+    const view = mount([
+      [CONFIRM_URL, "POST", () => blockedResponse({ pending_approval_id: 61, pending_approval_status: "APPROVED" })],
+      [REQUEST_URL, "POST", () => jsonResponse(approvalRequestOut(), 201)],
+    ]);
+    fireEvent.click(dialogConfirm(await openConfirm()));
+    await blockedRegion();
+    fireEvent.click(screen.getByRole("button", { name: "승인 다시 요청" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "승인 요청" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    // pending=APPROVED(낡음)라 '승인 다시 요청' 버튼이 나온다.
+    await waitFor(() => expect(posts(view.calls, REQUEST_URL)).toHaveLength(1));
+    // 다시 확정 시도 → 또 낡은 승인으로 차단 → 재요청
+    fireEvent.click(await confirmButton());
+    fireEvent.click(dialogConfirm(await screen.findByRole("dialog")));
+    await waitFor(() => expect(posts(view.calls, CONFIRM_URL)).toHaveLength(2));
     fireEvent.click(await screen.findByRole("button", { name: "승인 다시 요청" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "승인 요청" }));
     await waitFor(() => expect(posts(view.calls, REQUEST_URL)).toHaveLength(2));
-    expect(posts(view.calls, REQUEST_URL).map((c) => c.headers["Idempotency-Key"])).toEqual(["key-1", "key-2"]);
+    const keys = posts(view.calls, REQUEST_URL).map((c) => c.headers["Idempotency-Key"]);
+    expect(keys[0]).not.toBe(keys[1]);
   });
 
   it("승인 요청 오류 표시 중 다른 사람이 처리해 SO가 접수가 아니게 돼도(prop 변경) 오류가 있는 다이얼로그는 닫히지 않는다", async () => {
@@ -570,14 +592,12 @@ describe("ConfirmPanel — 멱등 키(SO id, version)당 1개", () => {
     expect(sent[0]?.headers["Idempotency-Key"]).not.toBe(sent[1]?.headers["Idempotency-Key"]);
   });
 
-  it("성공하면 키 Map을 비운다 — 같은 version에서 다음 확정 요청은 새 키", async () => {
+  it("성공하면 확정 버튼이 사라져 같은 SO를 다시 확정할 수 없다(재클릭 방지)", async () => {
     const view = mount([[CONFIRM_URL, "POST", () => jsonResponse(confirmOut())]]);
     fireEvent.click(dialogConfirm(await openConfirm()));
     await screen.findByRole("region", { name: "확정 결과" });
-    fireEvent.click(await confirmButton());
-    fireEvent.click(dialogConfirm(await screen.findByRole("dialog")));
-    await waitFor(() => expect(posts(view.calls, CONFIRM_URL)).toHaveLength(2));
-    expect(posts(view.calls, CONFIRM_URL).map((c) => c.headers["Idempotency-Key"])).toEqual(["key-1", "key-2"]);
+    expect(screen.queryByRole("button", { name: "수주 확정" })).not.toBeInTheDocument();
+    expect(posts(view.calls, CONFIRM_URL)).toHaveLength(1);
   });
 
   it("crypto.randomUUID가 던져도 폴백 키로 요청한다", async () => {
@@ -723,7 +743,7 @@ describe("ConfirmPanel — 확정 오류 한국어화", () => {
     const { alert, dialog } = await failWith("COMMON.CONCURRENCY.VERSION_CONFLICT", 409);
     expect(alert).toHaveTextContent("같은 거래처의 다른 수주가 바뀌어(여신 판정 경합)");
     expect(within(dialog).getByRole("button", { name: "최신 내용 불러오기" })).toBeInTheDocument();
-    expect(alert.textContent).not.toMatch(/RAW_DETAIL_CODE|Internal raw message|COMMON\./);
+    expect(alert.textContent).not.toMatch(/RAW_DETAIL_CODE|Internal raw message|COMMON\./i);
   });
 
   it("KEY_CONFLICT: 같은 키 다른 내용 안내 + 최신 내용 불러오기", async () => {
@@ -760,7 +780,7 @@ describe("ConfirmPanel — 확정 오류 한국어화", () => {
   it("DOCUMENT.INCOMPLETE(422): 서버가 준 누락 항목 키를 한국어 이름으로 나열(영문 키 비노출)", async () => {
     const { alert, dialog } = await failWith("TRADE_DOCS.DOCUMENT.INCOMPLETE", 422, { fx_rate: "환율을 입력해 주세요.", lines: "라인을 1개 이상 추가해 주세요.", payment_terms: "x" });
     expect(alert).toHaveTextContent("결제조건, 환율, 라인(1개 이상)");
-    expect(alert.textContent).not.toMatch(/fx_rate|payment_terms|lines/);
+    expect(alert.textContent).not.toMatch(/fx_rate|payment_terms|lines/i);
     expect(within(dialog).queryByRole("button", { name: "최신 내용 불러오기" })).not.toBeInTheDocument();
   });
 
@@ -777,7 +797,7 @@ describe("ConfirmPanel — 확정 오류 한국어화", () => {
     }
   });
 
-  it("네트워크 오류(서버 한국어 메시지)는 그대로 보인다", async () => {
+  it("네트워크 오류(status 0)는 처리됐을 수 있다는 안내+최신 내용 불러오기", async () => {
     vi.stubGlobal("fetch", vi.fn((input: string) => (input === "/api/v1/auth/me" ? Promise.resolve(jsonResponse(TRADER)) : input.endsWith("/gates") ? Promise.resolve(jsonResponse(server.rep)) : Promise.reject(new Error("net")))));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     render(
@@ -789,7 +809,11 @@ describe("ConfirmPanel — 확정 오류 한국어화", () => {
     );
     const dialog = await openConfirm();
     fireEvent.click(dialogConfirm(dialog));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("서버에 연결할 수 없습니다");
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent("연결이 끊겼습니다. 확정이 처리되었을 수 있으니");
+    expect(alert).toHaveTextContent("중복 확정은 되지 않습니다");
+    expect(alert.textContent).not.toMatch(/백엔드|기동/);
+    expect(within(dialog).getByRole("button", { name: "최신 내용 불러오기" })).toBeInTheDocument();
   });
 
   it("403(라우트 역할 게이트)이면 확정·승인 요청 버튼을 숨기고 같은 화면에서 복구하지 않는다", async () => {
@@ -869,7 +893,7 @@ describe("CreditEvaluationCard — 서버 값만 표시(산술·재판정 없음
     expect(within(el).getByText("평가 불능", { selector: "span" })).toBeInTheDocument();
     expect(el).toHaveTextContent("다른 통화의 수주를 환산하지 못해");
     expect(el).toHaveTextContent("미수금 조회에 실패해");
-    expect(el.textContent).not.toMatch(/CURRENCY_NOT_CONVERTIBLE|UNEVALUABLE|UNKNOWN/);
+    expect(el.textContent).not.toMatch(/CURRENCY_NOT_CONVERTIBLE|UNEVALUABLE|UNKNOWN/i);
   });
 
   it("마스킹 역할(basis {}·basis_hash 빈 문자열): 수치 비공개 안내만 — 미수 경고·금액 안내를 만들지 않는다", async () => {
@@ -912,7 +936,7 @@ describe("ConfirmPanel — 확정된 SO(읽기 전용·증거 요약)", () => {
     expect(evidence).toHaveTextContent("예외 승인을 사용해 확정");
     expect(evidence).toHaveTextContent("#77");
     expect(evidence).toHaveTextContent("2026");
-    expect(evidence.textContent).not.toMatch(/APPROVED|OVERRIDDEN|WITHIN_LIMIT/);
+    expect(evidence.textContent).not.toMatch(/APPROVED|OVERRIDDEN|WITHIN_LIMIT/i);
   });
 
   it.each([
@@ -926,7 +950,7 @@ describe("ConfirmPanel — 확정된 SO(읽기 전용·증거 요약)", () => {
     const evidence = (await screen.findByText("확정 증거 요약")).closest("section") as HTMLElement;
     expect(evidence).toHaveTextContent(creditText);
     expect(evidence).toHaveTextContent(piText);
-    expect(evidence.textContent).not.toMatch(/NEW_VERDICT|NEW_PI|WITHIN_LIMIT|NOT_MANAGED|SKIPPED_OFF|NOT_APPLICABLE/);
+    expect(evidence.textContent).not.toMatch(/NEW_VERDICT|NEW_PI|WITHIN_LIMIT|NOT_MANAGED|SKIPPED_OFF|NOT_APPLICABLE/i);
     expect(within(evidence).queryByRole("link")).not.toBeInTheDocument();
     expect(evidence).toHaveTextContent("—");
   });

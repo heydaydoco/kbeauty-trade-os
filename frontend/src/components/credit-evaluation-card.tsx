@@ -44,6 +44,8 @@ export function CreditEvaluationCard({
   // 마스킹 역할은 basis_hash가 빈 문자열이다(서버 규칙) — 값이 없는 것과 마스킹을 구분한다.
   const masked = row.basis_hash === "";
   const facts = snapshotFacts(row.basis);
+  // 여신 비관리(한도 없음)는 미수·노출 경고 대상이 아니다 — 한도 없음 안내만(빨간 미수 경고와 병기하지 않는다).
+  const notManaged = facts.verdict === "NOT_MANAGED";
   const shown = TEXT_FIELDS.flatMap(([key, label]) => {
     const text = textOf(row.basis, key);
     return text === null ? [] : [{ key, label, text }];
@@ -71,30 +73,31 @@ export function CreditEvaluationCard({
       ) : (
         <>
           <div className="mt-2 flex flex-wrap gap-2">
-            {!facts.receivablesReflected && (
-              <span role="status" className="cell-nowrap rounded border border-signal-red px-2 py-0.5 text-xs font-medium text-signal-red">
+            {!notManaged && !facts.receivablesReflected && (
+              <span className="cell-nowrap rounded border border-signal-red px-2 py-0.5 text-xs font-medium text-signal-red">
                 미수 미반영
               </span>
             )}
-            {facts.exposureIsPartial && (
-              <span role="status" className="cell-nowrap rounded border border-gray-500 bg-gray-200 px-2 py-0.5 text-xs text-gray-800">
+            {!notManaged && facts.exposureIsPartial && (
+              <span className="cell-nowrap rounded border border-gray-500 bg-gray-200 px-2 py-0.5 text-xs text-gray-800">
                 노출 일부만 반영
               </span>
             )}
             {facts.verdict === "UNEVALUABLE" && (
-              <span role="status" className="cell-nowrap rounded border border-signal-red px-2 py-0.5 text-xs font-medium text-signal-red">
+              <span className="cell-nowrap rounded border border-signal-red px-2 py-0.5 text-xs font-medium text-signal-red">
                 평가 불능
               </span>
             )}
           </div>
-          {!facts.receivablesReflected && (
+          {!notManaged && !facts.receivablesReflected && (
             <p className="mt-2 break-keep text-sm text-signal-red">
               이 노출에는 미수금이 반영되지 않았습니다. 실제 노출은 평가값보다 클 수 있으니 미수 현황을 따로 확인하세요.
             </p>
           )}
-          {facts.exposureIsPartial && (
-            <p className="mt-2 break-keep text-sm text-gray-700">환산하지 못한 주문이 있어 노출 일부만 계산되었습니다.</p>
+          {!notManaged && facts.exposureIsPartial && (
+            <p className="mt-2 break-keep text-sm text-gray-700">미수 채권이 아직 노출에 반영되지 않아 실제 노출은 더 클 수 있습니다.</p>
           )}
+          {notManaged && <p className="mt-2 break-keep text-sm text-gray-700">여신 한도가 없는(여신 비관리) 거래처라 한도·미수 확인 대상이 아닙니다.</p>}
           {facts.reasonCodes.length > 0 && (
             <ul className="mt-2 list-disc pl-5 text-sm text-gray-700">
               {facts.reasonCodes.map((code) => (
@@ -106,12 +109,12 @@ export function CreditEvaluationCard({
           )}
           <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div>
-              <dt className="text-xs text-gray-500">평가 결과(서버)</dt>
+              <dt className="break-keep text-xs text-gray-500">평가 결과(서버)</dt>
               <dd className="break-keep text-center">{facts.verdict === null ? "—" : verdictLabel(facts.verdict)}</dd>
             </div>
             {shown.map((item) => (
               <div key={item.key}>
-                <dt className="text-xs text-gray-500">{item.label}</dt>
+                <dt className="break-keep text-xs text-gray-500">{item.label}</dt>
                 <dd className="num text-center">{item.text}</dd>
               </div>
             ))}

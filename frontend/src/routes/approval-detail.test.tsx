@@ -68,6 +68,18 @@ describe("승인 상세 — 근거 표시", () => {
     expect(screen.queryByText("미수 미반영")).not.toBeInTheDocument();
     expect(screen.getAllByText("평가 불능").length).toBeGreaterThan(0);
     expect(screen.getByText(/환산하지 못해 노출 계산에서 빠졌습니다/)).toBeInTheDocument();
+    // 노출 일부 반영 설명은 서버 의미(미수 채권 미반영)이다 — '환산하지 못한 주문' 거짓 설명 금지.
+    expect(screen.getByText("미수 채권이 아직 노출에 반영되지 않아 실제 노출은 더 클 수 있습니다.")).toBeInTheDocument();
+    expect(screen.queryByText(/환산하지 못한 주문이 있어/)).not.toBeInTheDocument();
+  });
+
+  it("여신 비관리(NOT_MANAGED) 스냅샷은 한도 없음 안내만 — 빨간 미수 경고와 병기하지 않는다", async () => {
+    open(approval({ snapshot: { ...approval().snapshot, verdict: "NOT_MANAGED", receivables_reflected: false, exposure_is_partial: true } }));
+    expect(await screen.findByText(/여신 한도가 없는\(여신 비관리\) 거래처/)).toBeInTheDocument();
+    expect(screen.queryByText("미수 미반영")).not.toBeInTheDocument();
+    expect(screen.queryByText("노출 일부만 반영")).not.toBeInTheDocument();
+    expect(screen.queryByText(/미수금이 반영되지 않았습니다/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/미수 채권이 아직 노출에/)).not.toBeInTheDocument();
   });
 });
 
