@@ -20,6 +20,7 @@ from tests.factories.confirm import (
     code_of,
     complete_for_confirm,
     confirm,
+    confirm_service,
     error_of,
     evaluations,
     ready_so,
@@ -511,3 +512,44 @@ def test_complete_for_confirm_is_idempotent_for_a_prepared_order() -> None:
     complete_for_confirm(so["id"])
     assert so_row(so["id"])["fx_rate"] == before["fx_rate"]
     assert audit_actions("approvals.approval.bypass_blocked") == []
+
+
+# ══ 증거용 digest — 승인 결속 digest가 덮지 않는 입력까지 ═══════════════════════════════════
+
+
+def test_the_evidence_digest_changes_with_gate_inputs_the_approval_digest_does_not_cover() -> None:
+    """`results.evaluation_digest`(증거용)는 MOQ·준비도·결제조건 같은 **승인 결속 digest 밖의** 게이트 입력이 바뀌면 달라지고, `input_digest`(승인 결속)는 그대로다 —
+    11a 인계 ⑧(승인 결속 digest 변경은 미소비 승인을 전부 무효화하므로 별도 값으로 둔다) · 같은 입력으로 다시 시도하면 같은 값(결정적)"""
+    so = ready_so(quantity=5)
+    for sku in so["sku_ids"]:
+        set_moq(sku, 100)
+    with logged_in(TRADE) as client:
+        assert confirm(client, so["id"]).status_code == 409
+        assert confirm(client, so["id"]).status_code == 409
+        for sku in so["sku_ids"]:
+            set_moq(sku, 200)  # MOQ 기준값만 바뀜 — 라인·환율·거래처는 그대로
+        assert confirm(client, so["id"]).status_code == 409
+    first, second, third = evaluations(so["id"], "BLOCKED")
+    assert first["results"]["evaluation_digest"] == second["results"]["evaluation_digest"]
+    assert first["results"]["evaluation_digest"] != third["results"]["evaluation_digest"]
+    assert len(third["results"]["evaluation_digest"]) == 64
+    assert first["input_digest"] == second["input_digest"] == third["input_digest"]
+
+
+def test_the_confirmation_query_count_does_not_grow_with_the_number_of_lines() -> None:
+    """확정 전체 트랜잭션의 SQL 문 수는 라인 수와 무관하다(2줄 = 8줄) — 확정 통로에 라인별 질의(N+1)가 없다"""
+    from tests.support.sqlcount import count_statements
+
+    small = ready_so(skus=2)
+    large = ready_so(skus=8)
+    actor = make_actor()
+    few = count_statements(lambda: confirm_service(actor, small["id"]))
+    many = count_statements(lambda: confirm_service(actor, large["id"]))
+    assert few > 0 and many > 0
+    assert few == many, f"질의 수가 라인 수에 비례한다: 2줄={few}, 8줄={many}"
+
+
+def make_actor() -> Any:
+    from tests.factories.approvals import make_user
+
+    return make_user(TRADE)

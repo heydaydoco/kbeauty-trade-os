@@ -240,3 +240,16 @@ def test_the_credit_target_spec_is_registered_whenever_the_confirm_modules_are_i
     spec = registered_specs()["SO_CREDIT_EXCEEDED"]
     assert spec.consumer_module == "trade_chain"
     assert "consume_approval" in called_names(app_sources()[CONFIRM])
+
+
+def test_so_edit_paths_lock_the_header_row_with_lock_document_before_changing_anything() -> None:
+    """11a 인계 ⑥ — SO 편집·메타·라인 4경로는 `lock_document`로 SO 행을 `FOR UPDATE` 잠근 뒤 변경한다(확정 통로의 "잠금 하 평가" 가정이 편집 쪽에서도 성립: 확정과 편집이 같은 행 잠금으로 직렬화된다) —
+    잠금 호출이 void 훅·변경보다 앞선다"""
+    tree = app_sources()["modules/sales_orders/service.py"]
+    for name in ("update_sales_order", "update_meta", "add_line", "update_line", "remove_line"):
+        lines = _call_lines(_function(tree, name))
+        assert "lock_document" in lines, name
+        if "void_open_approval_on_input_change" in lines:
+            assert min(lines["lock_document"]) < min(lines["void_open_approval_on_input_change"]), (
+                name
+            )

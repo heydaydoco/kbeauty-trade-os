@@ -144,6 +144,9 @@ def test_edit_content_in_received_bumps_the_version_and_keeps_origin(trade: Test
         "confirmed_at",
         "buyer_po_no_key",
         "content_rev",
+        "credit_verdict",
+        "credit_approval_id",
+        "pi_gate_verdict",
     ],
 )
 def test_origin_and_server_owned_fields_have_no_edit_path(trade: TestClient, field: str) -> None:
