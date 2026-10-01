@@ -482,3 +482,51 @@ def test_the_reason_validator_enforces_five_to_five_hundred_characters_after_tri
     for bad in ["1234", "    a    ", "가" * 501, "줄\n바꿈사유", "탭\t사유입니다"]:
         with pytest.raises(AppError):
             service.clean_reason(bad)
+
+
+class _NoWriteSession:
+    """쓰기를 하면 실패하는 가짜 세션 — 서비스가 DB CHECK 이전에 거부하는지(방어층이 DB뿐이 아닌지) 확인한다."""
+
+    def add(self, *_args: Any) -> None:
+        raise AssertionError("거부해야 할 override가 DB 쓰기까지 갔다")
+
+    def flush(self) -> None:
+        raise AssertionError("거부해야 할 override가 DB 쓰기까지 갔다")
+
+
+@pytest.mark.group_h
+@pytest.mark.parametrize(
+    ("level", "resolution", "expected"),
+    [
+        (L.PASS, R.NONE, "GATES.OVERRIDE.NOT_APPLICABLE"),
+        (L.WARN, R.NONE, "GATES.OVERRIDE.NOT_APPLICABLE"),
+        (L.UNKNOWN, R.NONE, "GATES.OVERRIDE.NOT_APPLICABLE"),
+        (L.BLOCK, R.OVERRIDE, "OK"),
+    ],
+    ids=["pass", "warn", "unknown-none", "block-override"],
+)
+def test_the_service_refuses_a_non_overridable_result_before_touching_the_database(
+    level: GateLevel, resolution: GateResolution, expected: str
+) -> None:
+    """서비스가 PASS·WARN·해소 수단 없는 UNKNOWN에는 DB 쓰기 전에 422 NOT_APPLICABLE로 거부한다(DB CHECK는 마지막 방어선일 뿐 — 서비스 규칙이 먼저). 양성 대조: BLOCK/OVERRIDE는 쓰기까지 간다"""
+    from app.core.errors.exceptions import AppError
+
+    target = outcome(G.PRICE_DEVIATION, level, resolution, "T", "m", {"p": 1}, line_id=3)
+    args: dict[str, Any] = {
+        "subject_type": "SALES_ORDER",
+        "subject_id": 1,
+        "outcomes": [target],
+        "gate_code": "PRICE_DEVIATION",
+        "line_id": 3,
+        "basis_hash": target.basis_hash,
+        "reason": "시험 사유입니다",
+        "actor_user_id": 1,
+        "actor_roles": {RoleCode.TRADE},
+    }
+    if expected == "OK":
+        with pytest.raises(AssertionError):  # 쓰기에 도달했다(양성 대조)
+            service.grant_override(_NoWriteSession(), **args)  # type: ignore[arg-type]
+        return
+    with pytest.raises(AppError) as caught:
+        service.grant_override(_NoWriteSession(), **args)  # type: ignore[arg-type]
+    assert caught.value.code.value == expected
