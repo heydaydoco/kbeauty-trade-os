@@ -21,6 +21,11 @@ describe("알림 이동 표", () => {
     expect(alertRoute("purchase_orders", null)).toBeNull();
   });
 
+  it("approvals 알림(요청·결과·대결·정체 독촉)은 승인 상세로 이동한다", () => {
+    expect(alertRoute("approvals", 7)).toBe("/approvals/7");
+    expect(alertRoute("approvals", null)).toBeNull();
+  });
+
   it("표에 없는 종류·빈 값은 이동하지 않는다(없는 화면으로 보내지 않는다)", () => {
     expect(alertRoute("certifications", 3)).toBeNull();
     expect(alertRoute(null, null)).toBeNull();

@@ -69,6 +69,8 @@ interface ConfirmDialogProps {
   /** 사유 입력칸 바로 아래 안내(예: 자유 텍스트에 원가를 적지 말라는 경고 — ADR-0057). */
   reasonHint?: ReactNode;
   pending?: boolean;
+  /** 확인 버튼을 막는 외부 조건(예: 표시에 필요한 정보를 못 불러옴) — 사유는 description에 밝힌다. */
+  confirmDisabled?: boolean;
   error?: string | null;
   /** 낙관 잠금 충돌(409)일 때 다이얼로그 안에 '최신 내용 불러오기'를 둔다 — 누르면 호출(보통 닫고 재조회). */
   onReload?: () => void;
@@ -85,6 +87,7 @@ export function ConfirmDialog({
   reasonMaxLength = 500,
   reasonHint,
   pending = false,
+  confirmDisabled = false,
   error = null,
   onReload,
   onConfirm,
@@ -99,7 +102,7 @@ export function ConfirmDialog({
   useDialogBehavior(boxRef, onCancel, firstRef);
 
   const needsReason = reasonLabel !== undefined;
-  const blocked = pending || (needsReason && reason.trim() === "");
+  const blocked = pending || confirmDisabled || (needsReason && reason.trim() === "");
 
   return (
     <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40 p-4">

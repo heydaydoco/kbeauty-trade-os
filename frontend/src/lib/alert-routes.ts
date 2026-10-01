@@ -8,6 +8,8 @@ const ALERT_ROUTES: Record<string, (id: number) => string> = {
   proforma_invoices: (id) => `/proforma-invoices/${id}`,
   sales_orders: (id) => `/sales-orders/${id}`,
   purchase_orders: (id) => `/purchase-orders/${id}`,
+  // 승인 알림(요청·결과·대결·정체 독촉)은 모두 entity_type="approvals" — 서버 approvals/alerts.py (PR-9b).
+  approvals: (id) => `/approvals/${id}`,
 };
 
 export function alertRoute(entityType: string | null, entityId: number | null): string | null {
