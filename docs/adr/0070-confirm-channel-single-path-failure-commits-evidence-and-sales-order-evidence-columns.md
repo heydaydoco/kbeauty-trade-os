@@ -1,0 +1,15 @@
+# ADR-0070: 수주 확정 통로 — 단일 경로·실패도 커밋(BLOCKED 증거)·승인 소비 순서·SO 증적 3열(DB CHECK)·void 훅·증거용 digest 분리
+
+- **상태**: 자율 확정(2026-10-01) — 사후 번복 가능 (S3-1 PR-12a)
+- **날짜**: 2026-10-01
+- **관련**: DESIGN.md §7.4·§7.10·§17.1·§17.2·§17.5 / ADR-0059·0060·0063·0064·0069 / docs/plans/s3-1/design-D.md D5, design-E.md E3·E4·E5, design-integrated.md §2.10·X-11·X-30·X-33·X-49
+
+**맥락** — 확정은 S3-1에서 가장 통제 민감한 동작이다: 여신 초과는 승인 게이트를 거쳐야 하고(DoD ③), 확정 후 단가·환율은 불변이며(DoD ④), 승인 우회(ADMIN 포함)·자동 확정이 없어야 한다. 구현에는 설계 침묵·충돌이 있었다 — (a) 거부 응답을 예외로 던지면 `gate_evaluations(BLOCKED)` 증거·우회 시도 audit·소비 시점 VOID가 롤백되어 사라진다(11a 인계 ⑦) (b) E4는 승인 없는 확정을 422 `APPROVAL.REQUIRED`로, D5는 409 `GATE_BLOCKED`로 정했다(통합 X-30) (c) 거래처 잠금이 평가기 안(authoritative)에도 있어 순서가 코드로 강제되지 않는다 (d) `gate_evaluations.input_digest`는 승인 결속 digest라 게이트 입력 전부를 덮지 않는다.
+
+**결정** — ① **확정은 `trade_chain/confirm.py::confirm_sales_order` 하나**(동결 액션 엣지의 유일 호출처·호출처=라우터 1곳·`no_auto_confirm` 등록, 시그니처에 우회 인자·ADMIN 분기 없음). 순서: 역할 사전 검증 → 멱등 claim → **거래처 잠금 → QT→PI→SO 사슬 잠금**(전역 LOCK_ORDER) → 상태·완결성 검증 → `evaluate_sales_order(authoritative=True)` → `clearance`. ② **실패도 커밋**: 미해소(또는 소비 시점 거부)는 BLOCKED 증거(+승인 필요면 우회 시도 audit)를 INSERT하고 **UoW를 정상 종료한 뒤** 예외를 raise한다(`deferred` 패턴 — 승인 코어 `decide_approval`과 같은 규약). 미해소 시도는 승인을 **소비하지도 만들지도 않는다**, 거부는 멱등 결과로 기록하지 않는다. ③ **미해소는 전부 409 `TRADE_CHAIN.CONFIRM.GATE_BLOCKED` 하나**(X-30 채택 — `blocked_gates[]`가 게이트·해소 방식·사유 코드를 싣고, `APPROVALS.APPROVAL.REQUIRED`·`STALE`은 소비 시점 경합에서만) — 근거: 프런트가 "해소 수단별 안내"를 한 모델로 렌더링하고 벌크가 한 코드만 본다. ④ **소비는 해소 확정 뒤 마지막 부작용**(`consume_approval` 항상 호출 — NOT_REQUIRED 정리 포함), 정산(`Settlement`)과 소비 결과가 어긋나면(잠금 하에서는 불가능) fail-closed로 전체 롤백. ⑤ **M10**: SO +3열(`credit_verdict`·`credit_approval_id`·`pi_gate_verdict`)과 CHECK 5종·부분 유니크로 게이트 통과 기록 없는 확정을 DB가 거부(X-11 — `pi_gate_override_reason`·`confirm_gate_snapshot`은 `gate_evaluations`가 원천이라 두지 않음), 이력 +`approval_id`(확정 행에만·1승인=1행). ⑥ **void 훅**: SO 편집 4경로(환율·라인 추가·수정·제외)·취소가 같은 트랜잭션에서 열린 승인을 VOID(eager, 게이트 입력이 실제로 바뀔 때만), 승인 코어의 결정·소비 시점 digest 재검증이 백스톱(lazy). `void_for_target`은 승인을 좁히기만 하므로 TargetSpec 등록을 요구하지 않는다. ⑦ **증거용 digest**: 승인 결속 `input_digest`는 그대로 두고 모든 결과의 `basis_hash`+정책 출처를 해시한 `results.evaluation_digest`를 증거에 더한다(승인 결속에는 쓰지 않음).
+
+**근거** — 단일 통로+구조 스캔(호출 순서·`raise` 위치·증적 열 쓰기 통로)은 "다른 경로가 게이트 없이 CONFIRMED를 만드는" 회귀를 기계로 막고, 실패도 커밋은 증적이 가장 필요한 순간(차단·우회 시도)에 증적이 사라지는 사고를 막는다. 거래처→SO 순서는 결정(거래처→SO)·입금(거래처→QT→PI)과 교차해도 사이클이 없다(교차 30회 데드락 0 실측). DB CHECK는 정상 코드의 위조까지는 못 막지만(트리거 미채택 — ADR-0028·0040) 원시 UPDATE·잘못된 신규 경로를 구조적으로 거부한다. 승인 결속 digest를 바꾸지 않아 기존 승인이 보존된다.
+
+**기각한 대안** — 차단을 예외 롤백으로 응답(증거·audit 소멸), 별도 트랜잭션으로 증거 기록(같은 연결 규약·커넥션 2개·순서 보장 약화), 미해소 시도에서 승인을 자동 요청(승인 폭주·자동 경로), 승인 결속 digest 확장(미소비 승인 전부 무효화), 확정 응답을 202+자동 요청 생성(벌크·프런트 재작업), SO 편집을 전부 void(무관 변경으로 재승인 압력), 증적 상세를 SO JSONB 열로 이중 저장(X-11 — 원천 2개).
+
+**되돌리기 비용** — 낮음~중간. 서비스 순서·소비 규칙은 파일 1곳(낮음), M10은 additive라 downgrade 안전하나 확정 행이 생긴 뒤에는 증적 열 제거가 감사 증적 손실이다(이후는 되돌리지 않는다). 409 단일 코드는 와이어 계약이라 프런트 분기와 함께 바꾼다(중간). 거래처 잠금 방식(advisory 등)은 `lock_buyer_for_credit` 내부 1곳.

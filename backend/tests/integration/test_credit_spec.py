@@ -256,6 +256,7 @@ def test_note_bypass_attempt_records_who_tried_what_with_the_pending_flag() -> N
         "target_type": "SALES_ORDER",
         "target_id": so["id"],
         "pending_request": False,
+        "stale_approved": False,
     }
 
 

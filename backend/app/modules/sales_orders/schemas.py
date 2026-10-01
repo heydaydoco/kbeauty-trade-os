@@ -177,6 +177,10 @@ class SalesOrderSummary(BaseModel):
     assignee_id: int
     copied_from_id: int | None
     confirmed_at: datetime | None
+    #: 확정 증적 — 접수 SO는 None. 여신 판정(WITHIN_LIMIT·NOT_MANAGED·APPROVED)·소비한 승인 id·PI 입금 게이트 판정(PASS·NOT_APPLICABLE·WARN·OVERRIDDEN·SKIPPED_OFF).
+    credit_verdict: str | None
+    credit_approval_id: int | None
+    pi_gate_verdict: str | None
     version: int
     created_at: datetime
 
@@ -189,6 +193,8 @@ class SalesOrderDetail(SalesOrderSummary):
     payment_terms: PaymentTermsOut
     incoterm: IncotermOut
     internal_note: str | None
+    #: 확정 증거 스냅샷(`gate_evaluations` CONFIRMED) id — 접수 SO는 None. 12b가 이 id로 override·WARN·승인 ref 상세를 연결한다.
+    confirm_evaluation_id: int | None = None
     last_line_no: int
     #: 참조 수주(QT/PI에서 만든 수주)인가 — 참조 수주는 목적지 시장 변경·원천 외 품목 추가가 안 된다.
     is_reference: bool

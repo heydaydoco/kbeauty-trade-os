@@ -234,6 +234,21 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         C: ALLOW,
         V: ALLOW,
     },
+    # S3-1 PR-12a — 확정·여신 초과 승인 요청(무역·관리자 — 게이트·승인 통과는 서비스가 증거로 판정하고 관리자도 우회 못 한다)
+    ("POST", "/api/v1/sales-orders/{so_id}/confirm"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/sales-orders/{so_id}/approval-requests"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
     ("POST", "/api/v1/sales-orders/{so_id}/gate-overrides"): {
         A: ALLOW,
         T: ALLOW,

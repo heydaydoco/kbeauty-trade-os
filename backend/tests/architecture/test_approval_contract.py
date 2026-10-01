@@ -451,11 +451,9 @@ def test_only_the_router_and_the_service_mention_the_decision_channel() -> None:
 
 # ── 소비 접점 — PR-12로 미룬 항목의 장부 ──────────────────────────────────────
 
-#: spec이 등록됐지만 소비자(`consume_approval(` 호출)가 아직 없는 유형 → 소비 PR. **PR-12가 소비 호출을 더하면서 이 항목을 지운다**(그 PR에서 스캔이 켜진다).
-#: 한 PR 창(PR-9a~PR-11) 동안 접점 스캔이 부재함을 코드로 기록한다 — 조용히 넘기지 않는다.
-PENDING_CONSUMER_SCAN: dict[str, str] = {
-    "SO_CREDIT_EXCEEDED": "PR-12 (SO 확정 배선 — 요청 엔드포인트·소비·void 훅)"
-}
+#: spec이 등록됐지만 소비자(`consume_approval(` 호출)가 아직 없는 유형 → 소비 PR. **PR-12a가 소비 호출을 더하면서 항목을 지웠다 — 스캔이 켜져 있다.**
+#: 새 승인 유형이 spec만 등록하고 소비 PR을 미룰 때만 여기에 사유와 함께 적는다(조용히 넘기지 않는다).
+PENDING_CONSUMER_SCAN: dict[str, str] = {}
 
 
 def test_every_spec_either_has_a_consumer_call_or_is_listed_as_pending() -> None:
@@ -477,17 +475,26 @@ def test_every_spec_either_has_a_consumer_call_or_is_listed_as_pending() -> None
         )
 
 
-def test_no_domain_module_calls_the_system_channels_yet() -> None:
-    """PR-9a 시점에는 `request_approval`·`consume_approval`·`void_for_target`의 호출자가 승인 패키지 밖에 없다(PR-12가 trade_chain·sales_orders 호출을 더하며 허용 집합을 갱신한다)"""
+#: 승인 시스템 통로 4종의 **도메인 쪽 호출처 장부**(PR-12a — 소비 접점 스캔) — 새 호출처는 이 표와 `test_no_auto_confirm` 엔트리를 짝으로 갱신해야 한다.
+SYSTEM_CHANNEL_CALLERS: dict[str, set[str]] = {
+    "request_approval": {"modules/trade_chain/approval_requests.py"},
+    "consume_approval": {"modules/trade_chain/confirm.py"},
+    "void_for_target": {"modules/sales_orders/service.py"},
+    "note_bypass_attempt": {"modules/trade_chain/confirm.py"},
+}
+
+
+def test_system_channels_are_called_only_from_their_registered_domain_callers() -> None:
+    """`request_approval`(요청 모듈)·`consume_approval`+`note_bypass_attempt`(확정 통로)·`void_for_target`(SO 편집·취소 훅)의 호출자는 승인 패키지 밖에서 등록된 파일뿐이다 — 소비 접점이 코드로 고정된다"""
     from tests.support.astscan import called_names
 
-    names = {"request_approval", "consume_approval", "void_for_target"}
-    callers = {
-        rel
-        for rel, tree in app_sources().items()
-        if called_names(tree) & names and not rel.startswith(APPROVALS_PREFIX)
-    }
-    assert callers == set()
+    found: dict[str, set[str]] = {name: set() for name in SYSTEM_CHANNEL_CALLERS}
+    for rel, tree in app_sources().items():
+        if rel.startswith(APPROVALS_PREFIX):
+            continue
+        for name in called_names(tree) & set(SYSTEM_CHANNEL_CALLERS):
+            found[name].add(rel)
+    assert found == SYSTEM_CHANNEL_CALLERS
 
 
 # ── 에러 코드·분류 ────────────────────────────────────────────────────────────

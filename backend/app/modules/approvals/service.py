@@ -603,20 +603,43 @@ def note_bypass_attempt(
     approval_type: str,
     target_id: int,
 ) -> None:
-    """승인 필요·승인 없음 상태의 확정 시도(우회 시도)를 audit에 남긴다 — ADMIN 포함. 커밋은 호출부 몫(BLOCKED 기록과 같은 커밋)."""
+    """승인 필요·승인 없음 상태의 확정 시도(우회 시도)를 audit에 남긴다 — ADMIN 포함. 커밋은 호출부 몫(BLOCKED 기록과 같은 커밋).
+
+    같은 (행위자·대상·승인 행·상태 표지)의 반복 시도는 **한 건으로 합산**한다(`_deny`와 같은 규율 — 반복 호출이 audit를 무한 소모하지 못한다). 상태 표지: `pending_request`(결재 대기 REQUESTED)·
+    `stale_approved`(APPROVED인데 입력 변경·상한 초과 등으로 낡아 소비 불가 — 화면은 '재요청'을 안내해야 한다). 상태가 바뀌면(요청 생성·승인 등) 새 행이다.
+    """
     active = _active_approval(session, approval_type, target_id, lock=False)
+    pending = active is not None and active.status == ApprovalStatus.REQUESTED.value
+    stale_approved = active is not None and active.status == ApprovalStatus.APPROVED.value
+    entity_id = active.id if active is not None else None
+    already = session.execute(
+        select(AuditLog.id)
+        .where(
+            AuditLog.action == AuditAction.APPROVAL_BYPASS_BLOCKED,
+            AuditLog.actor_user_id == actor_user_id,
+            AuditLog.entity_type == "approvals",
+            AuditLog.entity_id.is_(None) if entity_id is None else AuditLog.entity_id == entity_id,
+            AuditLog.detail["approval_type"].astext == approval_type,
+            AuditLog.detail["target_id"].astext == str(target_id),
+            AuditLog.detail["pending_request"].astext == str(pending).lower(),
+            AuditLog.detail["stale_approved"].astext == str(stale_approved).lower(),
+        )
+        .limit(1)
+    ).first()
+    if already is not None:
+        return
     audit.record(
         session,
         action=AuditAction.APPROVAL_BYPASS_BLOCKED,
         actor_user_id=actor_user_id,
         entity_type="approvals",
-        entity_id=active.id if active is not None else None,
+        entity_id=entity_id,
         detail={
             "approval_type": approval_type,
             "target_type": TYPE_TARGET[approval_type],
             "target_id": target_id,
-            "pending_request": active is not None
-            and active.status == ApprovalStatus.REQUESTED.value,
+            "pending_request": pending,
+            "stale_approved": stale_approved,
         },
     )
 
@@ -646,6 +669,16 @@ def peek_active_approved(
         basis_currency=active.basis_currency,
         required_role=active.required_role,
     )
+
+
+def peek_active_approval(
+    session: Session, *, approval_type: str, target_id: int
+) -> tuple[int, str] | None:
+    """**읽기 전용** — 대상의 활성(요청됨·승인됨) 승인의 `(id, 상태)`. 없으면 None. 확정 거부 응답이 "승인 대기 중(요청 #n)"을 안내하는 용도다(판정에 쓰지 않는다)."""
+    if approval_type not in TYPE_TARGET:
+        raise RuntimeError(f"알 수 없는 승인 유형입니다: {approval_type!r}")
+    active = _active_approval(session, approval_type, target_id, lock=False)
+    return (active.id, active.status) if active is not None else None
 
 
 def consume_approval(
@@ -730,7 +763,10 @@ def void_for_target(
 
     훅이 빠진 경로(임포트·벌크)가 있어도 지연 검증(결정·소비 시점 digest·통화·상한 재검증)이 백스톱이다 — eager(결재함 위생)+lazy(안전망) 둘 다 둔다.
     """
-    _spec_for(approval_type)
+    if (
+        approval_type not in TYPE_TARGET
+    ):  # 알 수 없는 유형은 거부 — 단 TargetSpec 등록은 요구하지 않는다(무효화는 승인을 좁히기만 하고 대상 스냅샷을 쓰지 않는다)
+        raise RuntimeError(f"알 수 없는 승인 유형입니다: {approval_type!r}")
     active = _active_approval(session, approval_type, target_id, lock=True)
     if active is None:
         return 0

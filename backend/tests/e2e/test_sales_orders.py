@@ -219,6 +219,9 @@ def test_the_reference_request_schema_has_no_field_that_restates_source_values()
         "pi_id",
         "confirmed_at",
         "buyer_po_no_key",
+        "credit_verdict",
+        "credit_approval_id",
+        "pi_gate_verdict",
     ],
 )
 def test_restating_or_server_owned_fields_are_rejected_on_create(

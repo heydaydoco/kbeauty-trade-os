@@ -397,7 +397,7 @@ def _confirm_in(session: Any, so_id: int) -> None:
     """확정을 흉내 낸다(PR-12 확정 통로의 증적 대용) — 같은 트랜잭션에서 확정 시각·상태와 동결 완결 값(결제조건·Incoterms·환율)을 채운다."""
     session.execute(
         text(
-            "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now(), payment_type = 'TT_DEFERRED',"
+            "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now(), credit_verdict = 'NOT_MANAGED', pi_gate_verdict = 'NOT_APPLICABLE', payment_type = 'TT_DEFERRED',"
             " balance_anchor = 'RECEIPT_DATE', balance_days = 30, incoterm_code = 'EXW', incoterm_place = 'Seoul',"
             " incoterm_year = 2020, fx_rate = 1350, fx_rate_date = doc_date WHERE id = :i"
         ),

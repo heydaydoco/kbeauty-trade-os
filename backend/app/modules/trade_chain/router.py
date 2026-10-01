@@ -2,7 +2,7 @@
 
 전부 **사람 1클릭 + `Idempotency-Key` 필수**이고 무역(관리자 상시 통과)이 한다. 동결 액션(`issue`)은 범용
 `/transitions`로 못 넘는다(스키마 `to` Literal에서 동결 엣지·자동 엣지·RESERVED를 구조적으로 제외 — 우회 표면 제거).
-이 라우터가 `issue_quotation`의 **유일한 호출처**다(자동 확정 경로 부재 — test_no_auto_confirm_code_path_exists).
+이 라우터가 `issue_quotation`·`confirm_sales_order`·`request_credit_approval`의 **유일한 호출처**다(자동 확정·자동 승인 요청 경로 부재 — test_no_auto_confirm_code_path_exists).
 """
 
 from __future__ import annotations
@@ -31,12 +31,20 @@ from app.modules.purchase_orders.schemas import PurchaseOrderCostHiddenDetail, P
 from app.modules.quotations.schemas import QuotationDetail
 from app.modules.sales_orders.schemas import SalesOrderDetail, SalesOrderReferenceRequest
 from app.modules.trade_chain import (
+    approval_requests,
+    confirm,
     document_flow,
     gate_flow,
     lifecycle,
     payment_flow,
     reference,
     so_reference,
+)
+from app.modules.trade_chain.schemas import (
+    SalesOrderApprovalRequest,
+    SalesOrderApprovalRequestOut,
+    SalesOrderConfirmOut,
+    SalesOrderConfirmRequest,
 )
 from app.modules.trade_docs.constants import DocKind
 from app.modules.trade_docs.machine import public_transition_targets
@@ -371,7 +379,49 @@ def transition_sales_order(
     return SalesOrderDetail.model_validate(body)
 
 
-# ── 게이트 판정·override (S3-1 PR-11a — 확정 통로 배선은 PR-12) ─────────────────────────────
+# ── 수주 확정·여신 초과 승인 요청 (S3-1 PR-12a) ──────────────────────────────────────────
+
+
+@so_router.post(
+    "/{so_id}/confirm",
+    summary="수주 확정 (사람 1클릭 — 게이트 7종 잠금 하 재평가·승인 소비·동결을 한 트랜잭션에서. 미해소 게이트는 409 GATE_BLOCKED, 관리자도 우회 불가)",
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def confirm_sales_order(
+    so_id: Annotated[int, Path(ge=1)],
+    payload: SalesOrderConfirmRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> SalesOrderConfirmOut:
+    status_code, body = confirm.confirm_sales_order(
+        actor=current, idempotency_key=key, so_id=so_id, version=payload.version
+    )
+    response.status_code = status_code
+    return SalesOrderConfirmOut.model_validate(body)
+
+
+@so_router.post(
+    "/{so_id}/approval-requests",
+    summary="여신 초과 승인 요청 (사람의 명시 동작 — 초과분 0·평가 불능이면 422, 같은 입력의 활성 승인이 있으면 그대로 반환)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def request_sales_order_credit_approval(
+    so_id: Annotated[int, Path(ge=1)],
+    payload: SalesOrderApprovalRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> SalesOrderApprovalRequestOut:
+    status_code, body = approval_requests.request_credit_approval(
+        actor=current, idempotency_key=key, so_id=so_id, version=payload.version
+    )
+    response.status_code = status_code
+    return SalesOrderApprovalRequestOut.model_validate(body)
+
+
+# ── 게이트 판정·override (S3-1 PR-11a — 확정 통로 배선은 위 confirm) ─────────────────────────────
 
 
 @so_router.get(
