@@ -182,26 +182,31 @@ export function OrderIntakeCreatePage() {
             />
             <span className="break-keep text-xs text-gray-500">바이어 유형 거래처만 선택할 수 있습니다. 등록 뒤에는 바꿀 수 없습니다(잘못 골랐으면 거부 후 다시 등록).</span>
           </div>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-gray-600">통화 *</span>
-            <select
-              value={currency}
-              onChange={(e) => {
-                touched();
-                setCurrency(e.target.value);
-              }}
-              disabled={create.isPending}
-              className={inputClass}
-            >
-              <option value="">선택</option>
-              {(currencies.data?.items ?? []).map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.code}
-                </option>
-              ))}
-            </select>
-            <span className="break-keep text-xs text-gray-500">통화 규칙(자릿수·단가 형식)은 서버가 확인합니다. 등록 뒤에는 바꿀 수 없습니다.</span>
-          </label>
+          <div className="flex flex-col gap-1 text-sm">
+            <label className="flex flex-col gap-1">
+              <span className="text-gray-600">통화 *</span>
+              <select
+                value={currency}
+                aria-describedby="intake-currency-hint"
+                onChange={(e) => {
+                  touched();
+                  setCurrency(e.target.value);
+                }}
+                disabled={create.isPending}
+                className={inputClass}
+              >
+                <option value="">선택</option>
+                {(currencies.data?.items ?? []).map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.code}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span id="intake-currency-hint" className="break-keep text-xs text-gray-500">
+              통화 규칙(자릿수·단가 형식)은 서버가 확인합니다. 등록 뒤에는 바꿀 수 없습니다.
+            </span>
+          </div>
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-gray-600">도착 시장 *</span>
             <select
