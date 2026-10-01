@@ -193,9 +193,41 @@ describe("대결 — 등록", () => {
     fireEvent.change(within(form).getByLabelText("위임할 결재 역할"), { target: { value: "TRADE" } });
     fireEvent.change(within(form).getByLabelText("시작일"), { target: { value: "2099-01-10" } });
     fireEvent.change(within(form).getByLabelText("종료일"), { target: { value: "2099-01-12" } });
+    // 타인 명의 부여는 안내 확인 없이는 보내지 않는다.
+    expect(within(form).getByText(/물류 담당 님 명의로 대결 권한을 부여합니다 — 감사 기록에 남습니다/)).toBeInTheDocument();
+    fireEvent.click(within(form).getByRole("button", { name: "등록" }));
+    expect(within(form).getByRole("alert")).toHaveTextContent("대리 등록 안내를 확인");
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
+    fireEvent.click(within(form).getByRole("checkbox"));
     fireEvent.click(within(form).getByRole("button", { name: "등록" }));
     await waitFor(() => expect(calls.filter((c) => c.method === "POST")).toHaveLength(1));
     expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({ delegate_user_id: 4, delegator_user_id: 5 });
+  });
+});
+
+describe("대결 — 대리 등록 UX·배지 갱신", () => {
+  it("위임자를 비우면 '본인 명의' 안내가 보이고, 위임자=수임자는 화면에서 막는다", async () => {
+    const { calls } = open(ADMIN, [], []);
+    const form = await screen.findByRole("form", { name: "대결 등록" });
+    expect(within(form).getByText("선택하지 않으면 본인 명의로 등록됩니다.")).toBeInTheDocument();
+    fireEvent.focus(await screen.findByRole("combobox", { name: "수임자" }));
+    fireEvent.click(await screen.findByRole("option", { name: "인증 담당" }));
+    fireEvent.focus(screen.getByRole("combobox", { name: "위임자" }));
+    fireEvent.click((await screen.findAllByRole("option", { name: "인증 담당" }))[0] as HTMLElement);
+    fireEvent.change(within(form).getByLabelText("위임할 결재 역할"), { target: { value: "TRADE" } });
+    fireEvent.click(within(form).getByRole("button", { name: "등록" }));
+    expect(within(form).getByRole("alert")).toHaveTextContent("위임자와 수임자가 같을 수 없습니다.");
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0);
+  });
+
+  it("등록·종료 뒤 결재함 배지(inbox-count)도 다시 조회한다", async () => {
+    const { calls } = open(TRADER, [["/v1/delegations/31/revoke", "POST", () => jsonResponse(delegation({ state: "REVOKED", can_revoke: false, version: 2 }))]]);
+    const out = await screen.findByRole("region", { name: "내가 위임한 대결" });
+    await waitFor(() => expect(calls.filter((c) => c.url.includes("/inbox-count")).length).toBeGreaterThan(0));
+    const before = calls.filter((c) => c.url.includes("/inbox-count")).length;
+    fireEvent.click(within(out).getAllByRole("button", { name: "종료" })[0] as HTMLElement);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "대결 종료" }));
+    await waitFor(() => expect(calls.filter((c) => c.url.includes("/inbox-count")).length).toBeGreaterThan(before));
   });
 });
 

@@ -16,6 +16,7 @@ import { SearchSelect } from "../components/search-select";
 import { ApiError, apiFetch } from "../lib/api";
 import { errorMessage, isVersionConflict } from "../lib/api-errors";
 import {
+  APPROVALS_QUERY_KEY,
   APPROVAL_TYPE_CODES,
   APPROVER_ROLE_CODES,
   DELEGATIONS_QUERY_KEY,
@@ -48,7 +49,11 @@ export function DelegationsPage() {
   const [info, setInfo] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<Delegation | null>(null);
 
-  const refresh = () => void client.invalidateQueries({ queryKey: DELEGATIONS_QUERY_KEY });
+  // 수임자의 결재함 배지(승인 접두 키)도 같이 갱신한다 — 대결 등록·종료가 결재 가능 범위를 바꾼다.
+  const refresh = () => {
+    void client.invalidateQueries({ queryKey: DELEGATIONS_QUERY_KEY });
+    void client.invalidateQueries({ queryKey: APPROVALS_QUERY_KEY });
+  };
   const items = list.data?.items ?? [];
   const mineOut = items.filter((d) => d.delegator_user_id === me?.id);
   const mineIn = items.filter((d) => d.delegate_user_id === me?.id && d.delegator_user_id !== me?.id);
@@ -200,6 +205,7 @@ function CreateForm({ isAdmin, onCreated }: { isAdmin: boolean; onCreated: () =>
   const [end, setEnd] = useState(() => todayKst());
   const [note, setNote] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  const [proxyAck, setProxyAck] = useState(false);
   const lock = useRef(false);
   const openKey = useRef(crypto.randomUUID());
   const keysByBody = useRef(new Map<string, string>());
@@ -210,6 +216,7 @@ function CreateForm({ isAdmin, onCreated }: { isAdmin: boolean; onCreated: () =>
     onSuccess: () => {
       setDelegate(null);
       setDelegator(null);
+      setProxyAck(false);
       setNote("");
       openKey.current = crypto.randomUUID();
       keysByBody.current = new Map();
@@ -221,6 +228,8 @@ function CreateForm({ isAdmin, onCreated }: { isAdmin: boolean; onCreated: () =>
     if (lock.current) return;
     if (delegate === null) return setProblem("대신 결재할 사람(수임자)을 선택해 주세요.");
     if (role === "") return setProblem("위임할 결재 역할을 선택해 주세요.");
+    if (delegator !== null && delegator.id === delegate.id) return setProblem("위임자와 수임자가 같을 수 없습니다.");
+    if (delegator !== null && !proxyAck) return setProblem("타인 명의 대리 등록 안내를 확인하고 체크해 주세요.");
     if (start === "" || end === "") return setProblem("시작일과 종료일을 입력해 주세요.");
     if (start < todayKst()) return setProblem("과거 날짜로는 대결을 등록할 수 없습니다. 시작일을 오늘 이후로 입력해 주세요.");
     if (end < start) return setProblem("종료일은 시작일 이후여야 합니다.");
@@ -272,7 +281,7 @@ function CreateForm({ isAdmin, onCreated }: { isAdmin: boolean; onCreated: () =>
         </div>
         {isAdmin && (
           <div className="flex flex-col gap-1">
-            <span className="cell-nowrap text-gray-600">위임자 (관리자 대리 등록 — 비우면 본인)</span>
+            <span className="cell-nowrap text-gray-600">위임자 (관리자 대리 등록 — 비우면 본인 명의)</span>
             <SearchSelect<Candidate>
               label="위임자"
               path="/v1/approvals/delegation-candidates"
@@ -284,6 +293,16 @@ function CreateForm({ isAdmin, onCreated }: { isAdmin: boolean; onCreated: () =>
               placeholder="이름으로 검색"
               disabled={pending}
             />
+            {delegator === null ? (
+              <span className="break-keep text-xs text-gray-500">선택하지 않으면 본인 명의로 등록됩니다.</span>
+            ) : (
+              <label className="flex items-start gap-2 break-keep text-xs text-signal-red">
+                <input type="checkbox" checked={proxyAck} onChange={(e) => setProxyAck(e.target.checked)} className="mt-0.5" />
+                <span>
+                  관리자가 {delegator.display_name} 님 명의로 대결 권한을 부여합니다 — 감사 기록에 남습니다. 확인했습니다.
+                </span>
+              </label>
+            )}
           </div>
         )}
         <label className="flex flex-col gap-1">

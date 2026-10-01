@@ -123,7 +123,10 @@ describe("셸 — 내비·결재함 배지", () => {
     stubFetch(TRADER, [["/v1/approvals/inbox-count", "GET", () => jsonResponse({ error: { code: "X", message: "오류" } }, 500)]]);
     renderWithProviders(<AppRoutes />, { route: "/approvals" });
     const nav = await screen.findByRole("navigation");
-    expect(await within(nav).findByRole("link", { name: "결재함" })).toBeInTheDocument();
+    // 조회 실패는 0건과 구분한다 — 숫자 대신 '!'와 안내(title).
+    const link = await within(nav).findByRole("link", { name: "결재함 !" });
+    expect(link).toHaveAttribute("title", expect.stringContaining("불러오지 못했습니다"));
+    expect(link.textContent).not.toMatch(/\d/);
   });
 
   it("조회 전용 역할에는 승인 메뉴가 없고 배지 API를 부르지 않는다", async () => {

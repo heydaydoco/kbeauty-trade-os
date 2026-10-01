@@ -19,6 +19,7 @@ import { DocField } from "../components/proforma-facts";
 import { StatusTimeline } from "../components/status-timeline";
 import { ApiError, apiFetch } from "../lib/api";
 import { errorMessage, isVersionConflict } from "../lib/api-errors";
+import { decisionErrorMessage } from "../lib/approval";
 import {
   APPROVALS_QUERY_KEY,
   DECISION_VERBS,
@@ -90,6 +91,9 @@ function ApprovalDetailView() {
     void client.invalidateQueries({ queryKey: APPROVALS_QUERY_KEY });
   }
 
+  const actionRef = useRef<DecisionVerb | null>(null);
+  actionRef.current = action;
+
   const decide = useMutation({
     mutationFn: (input: { body: DecisionBody; key: string }) =>
       apiFetch<ApprovalView>(`/v1/approvals/${id}/decisions`, {
@@ -97,6 +101,16 @@ function ApprovalDetailView() {
         idempotencyKey: input.key,
         body: input.body,
       }),
+    // ★ 잠금 해제는 훅 수준 onSettled — mutate()에 건 콜백은 reset()으로 옵저버가 떨어지면 호출되지 않아 잠금이 영구 고착된다.
+    onSettled: () => {
+      submitLock.current = false;
+    },
+    onError: (error) => {
+      // 요청 중에 창 포커스 재조회로 다이얼로그가 닫혔다면 실패가 조용히 사라지지 않게 화면에 알린다.
+      if (actionRef.current === null) {
+        setInfo(`결정 요청이 실패했습니다 — ${decisionErrorMessage(error)} 최신 상태를 확인해 주세요.`);
+      }
+    },
     onSuccess: (result, input) => {
       setAction(null);
       afterWrite(
@@ -126,7 +140,7 @@ function ApprovalDetailView() {
 
   function reload() {
     setInfo(null);
-    decide.reset();
+    if (!decide.isPending) decide.reset();
     setAction(null);
     void detail.refetch().then((result) => {
       if (result.data) setBaseVersion(result.data.version);
@@ -145,12 +159,13 @@ function ApprovalDetailView() {
       key = keysByBody.current.size === 0 ? openKey.current : crypto.randomUUID();
       keysByBody.current.set(serialized, key);
     }
-    decide.mutate({ body, key }, { onSettled: () => (submitLock.current = false) });
+    decide.mutate({ body, key });
   }
 
   const live = detail.data;
   const isRequester = live !== undefined && me !== null && live.requested_by_id === me.id;
   // 승인·반려: 서버 자격 + REQUESTED. 본인 기안은 서버가 이미 막지만 화면도 한 번 더 닫는다(방어 — 열기만 닫는다).
+  const inFlight = decide.isPending;
   const decideOpen = live !== undefined && live.status === "REQUESTED" && live.can_decide && !isRequester;
   const withdrawOpen = live !== undefined && live.can_withdraw;
 
@@ -159,7 +174,8 @@ function ApprovalDetailView() {
     if (action === null || live === undefined) return;
     const allowed = action === "WITHDRAW" ? withdrawOpen : decideOpen;
     if (!allowed) {
-      decide.reset();
+      // 요청이 나가 있으면 옵저버를 떼지 않는다(결과 콜백이 살아 있어야 잠금 해제·실패 안내가 된다).
+      if (!decide.isPending) decide.reset();
       setAction(null);
       setInfo("다른 곳에서 승인 상태가 바뀌어 열려 있던 확인창을 닫았습니다. 최신 상태를 확인해 주세요.");
     }
@@ -189,6 +205,8 @@ function ApprovalDetailView() {
   const retryable =
     decide.error instanceof ApiError && (decide.error.status === 409 || decide.error.status === 403);
   const staleTitle = stale ? "다른 곳에서 수정되었습니다. 먼저 '최신 내용 불러오기'를 누르세요." : undefined;
+  // 통화표를 못 불러왔으면(로딩·실패) 금액이 '…'로 남는다 — 금액을 못 본 채 승인하지 않게 승인만 막는다(반려·회수는 허용).
+  const currencyMissing = currencies.data === undefined;
   const voidText = voidReasonText(approval.void_reason_code);
 
   return (
@@ -220,7 +238,7 @@ function ApprovalDetailView() {
               <button
                 type="button"
                 onClick={() => openAction("APPROVE")}
-                disabled={stale}
+                disabled={stale || inFlight}
                 title={staleTitle}
                 className="cell-nowrap rounded border border-gray-900 bg-gray-900 px-3 py-2 text-sm text-white disabled:opacity-50"
               >
@@ -229,7 +247,7 @@ function ApprovalDetailView() {
               <button
                 type="button"
                 onClick={() => openAction("REJECT")}
-                disabled={stale}
+                disabled={stale || inFlight}
                 title={staleTitle}
                 className="cell-nowrap rounded border border-signal-red px-3 py-2 text-sm text-signal-red disabled:opacity-50"
               >
@@ -241,7 +259,7 @@ function ApprovalDetailView() {
             <button
               type="button"
               onClick={() => openAction("WITHDRAW")}
-              disabled={stale}
+              disabled={stale || inFlight}
               title={staleTitle}
               className="cell-nowrap rounded border border-gray-400 px-3 py-2 text-sm disabled:opacity-50"
             >
@@ -358,6 +376,11 @@ function ApprovalDetailView() {
               <p>
                 승인하면 요청자가 이 수주를 확정할 수 있게 되며, 승인은 <strong>1회만</strong> 쓰입니다. 승인 기준 금액은{" "}
                 <span className="num">{money}</span>입니다. 근거(미수 반영 여부 포함)를 확인하셨나요?
+                {currencyMissing && (
+                  <span role="alert" className="mt-2 block text-signal-red">
+                    금액 표시에 필요한 통화 정보를 불러오지 못했습니다 — 새로고침하세요. 금액을 확인할 수 없어 승인할 수 없습니다.
+                  </span>
+                )}
               </p>
             ) : action === "REJECT" ? (
               <p>반려하면 이 승인은 종결되고 되돌릴 수 없습니다. 요청자는 사유를 확인한 뒤 새로 요청해야 합니다.</p>
@@ -365,9 +388,10 @@ function ApprovalDetailView() {
               <p>회수하면 이 승인은 종결되고 되돌릴 수 없습니다. 다시 진행하려면 새로 요청해야 합니다.</p>
             )
           }
+          confirmDisabled={action === "APPROVE" && currencyMissing}
           reasonMaxLength={1000}
           pending={decide.isPending}
-          error={decide.error ? errorMessage(decide.error, undefined, NOUN) : null}
+          error={decide.error ? decisionErrorMessage(decide.error) : null}
           onReload={retryable || isVersionConflict(decide.error) ? reload : undefined}
           onCancel={closeAction}
           onConfirm={(reason) =>

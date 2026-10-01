@@ -38,7 +38,8 @@ function open(
 
 const decisionCalls = (calls: Call[]) => calls.filter((c) => c.url.endsWith("/decisions"));
 const keysOf = (calls: Call[]) => decisionCalls(calls).map((c) => c.headers["Idempotency-Key"]);
-const ERR = (status: number, code: string, message: string) => () => jsonResponse({ error: { code, message } }, status);
+const ERR = (status: number, code: string, message: string, detail: Record<string, unknown> = {}) => () =>
+  jsonResponse({ error: { code, message, detail } }, status);
 
 describe("승인 상세 — 근거 표시", () => {
   it("헤더·대상 링크·스냅샷 근거를 서버 값 그대로 보인다(요청 이력은 대결 표기 포함)", async () => {
@@ -302,5 +303,96 @@ describe("승인 상세 — 결정 다이얼로그", () => {
     expect(await screen.findByText(/다른 곳에서 이 승인이 수정되었습니다/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "승인" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "반려" })).toBeDisabled();
+  });
+
+  it("결정 본문의 version은 다이얼로그를 열 때 화면이 본 값이다(재조회로 서버 version이 앞서가도)", async () => {
+    const { calls } = open(approval(), [["/v1/approvals/7/decisions", "POST", ERR(409, "COMMON.CONCURRENCY.VERSION_CONFLICT", "충돌")]]);
+    fireEvent.click(await screen.findByRole("button", { name: "승인" }));
+    const dialog = await screen.findByRole("dialog");
+    server.approval = approval({ version: 5 });
+    window.dispatchEvent(new Event("visibilitychange"));
+    await screen.findByText(/다른 곳에서 이 승인이 수정되었습니다/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "승인" }));
+    await waitFor(() => expect(decisionCalls(calls)).toHaveLength(1));
+    expect(decisionCalls(calls)[0]?.body).toEqual({ verb: "APPROVE", version: 3 }); // 5가 아니다
+  });
+
+  it("★ 요청 중 재조회로 다이얼로그가 닫혀도 잠금이 고착되지 않는다 — 실패는 화면에 알리고, 다시 열어 정상 제출된다", async () => {
+    let fail!: (value: Response) => void;
+    let n = 0;
+    const { calls } = open(approval());
+    const base = globalThis.fetch as unknown as (u: string, i?: RequestInit) => Promise<Response>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((u: string, i?: RequestInit) => {
+        if (u.endsWith("/decisions")) {
+          calls.push({ url: u, method: "POST", body: i?.body ? JSON.parse(String(i.body)) : null, headers: (i?.headers ?? {}) as Record<string, string> });
+          n += 1;
+          if (n === 1) return new Promise<Response>((resolve) => (fail = resolve));
+          return Promise.resolve(jsonResponse(approval({ status: "APPROVED", can_decide: false, version: 4 })));
+        }
+        return base(u, i);
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "승인" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "승인" }));
+    await waitFor(() => expect(decisionCalls(calls)).toHaveLength(1));
+    // 요청이 나가 있는 동안 다른 곳에서 상태가 바뀌어 다이얼로그가 닫힌다.
+    server.approval = approval({ status: "REJECTED", can_decide: false, version: 4 });
+    window.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // 요청이 실패로 끝나도 조용히 사라지지 않는다.
+    fail(jsonResponse({ error: { code: "X", message: "서버 오류입니다." } }, 500));
+    expect(await screen.findByText(/결정 요청이 실패했습니다 — 서버 오류입니다/)).toBeInTheDocument();
+    // 상태가 다시 결재 가능으로 돌아오면 다시 열어 정상 제출할 수 있다(잠금 해제됨).
+    server.approval = approval();
+    window.dispatchEvent(new Event("visibilitychange"));
+    fireEvent.click(await screen.findByRole("button", { name: "승인" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "승인" }));
+    await waitFor(() => expect(decisionCalls(calls)).toHaveLength(2));
+    expect(await screen.findByText("승인했습니다.")).toBeInTheDocument();
+  });
+
+  it("★ 통화표를 못 불러오면 승인은 막히고 안내가 보이며, 반려는 할 수 있다", async () => {
+    const { calls } = open(approval(), [
+      ["/v1/system/currencies", "GET", ERR(500, "X", "통화 조회 실패")],
+      ["/v1/approvals/7/decisions", "POST", () => jsonResponse(approval({ status: "REJECTED", can_decide: false, version: 4 }))],
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: "승인" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("금액 표시에 필요한 통화 정보를 불러오지 못했습니다 — 새로고침하세요");
+    expect(within(dialog).getByRole("button", { name: "승인" })).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "반려" }));
+    const reject = await screen.findByRole("dialog");
+    fireEvent.change(within(reject).getByLabelText("반려 사유 (필수)"), { target: { value: "사유" } });
+    expect(within(reject).getByRole("button", { name: "반려" })).toBeEnabled();
+    fireEvent.click(within(reject).getByRole("button", { name: "반려" }));
+    await waitFor(() => expect(decisionCalls(calls)).toHaveLength(1));
+  });
+
+  it("결정 오류의 서버 내부 코드(상태·사유 코드)는 한국어로 옮겨 보인다", async () => {
+    open(approval(), [
+      ["/v1/approvals/7/decisions", "POST", ERR(409, "APPROVALS.TRANSITION.NOT_ALLOWED", "현재 승인 상태에서는 할 수 없는 처리입니다.", { current: "APPROVED", attempted: "APPROVED" })],
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: "승인" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "승인" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent("현재 상태: 승인, 시도한 처리: 승인");
+    expect(alert).not.toHaveTextContent("APPROVED");
+  });
+
+  it("STALE의 사유 코드도 한국어 설명으로 옮긴다", async () => {
+    open(approval(), [
+      ["/v1/approvals/7/decisions", "POST", ERR(409, "APPROVALS.APPROVAL.STALE", "승인 이후 대상이 바뀌어 승인이 무효가 되었습니다.", { reason: "TARGET_CHANGED" })],
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: "승인" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "승인" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent("승인 뒤 대상(수주)이 바뀌어");
+    expect(alert).not.toHaveTextContent("TARGET_CHANGED");
   });
 });

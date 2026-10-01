@@ -4,6 +4,8 @@
 //   (ADMIN은 hasRole이 늘 true라 역할로 추정하면 '기안자=승인자' 버튼이 열린다 — 추정 금지).
 // ★ 금액은 서버가 준 정수 최소단위를 lib/money의 자릿수 옮김으로만 표시한다(프런트 산술 0).
 
+import { ApiError } from "./api";
+import { errorMessage } from "./api-errors";
 import { formatMoney, type Currency } from "./money";
 
 export const APPROVALS_QUERY_KEY = ["approvals"] as const;
@@ -261,3 +263,25 @@ export const DECISION_VERBS = {
   WITHDRAW: { title: "회수할까요?", confirm: "회수", reason: "회수 사유 (필수)" },
 } as const;
 export type DecisionVerb = keyof typeof DECISION_VERBS;
+
+/**
+ * 결정 요청 오류 문구 — 서버 한국어 message에 내부 코드(`APPROVED / APPROVE`·`TARGET_CHANGED`)를 그대로 붙이지 않고 한국어로 옮긴다.
+ * 승인 화면 전용(lib/api-errors의 공용 동작은 불변).
+ */
+export function decisionErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    const d = error.detail ?? {};
+    if (error.code === "APPROVALS.TRANSITION.NOT_ALLOWED") {
+      const current = typeof d.current === "string" ? approvalStatusLabel(d.current) : null;
+      const attempted = typeof d.attempted === "string" ? approvalStatusLabel(d.attempted) : null;
+      return current && attempted ? `${error.message} (현재 상태: ${current}, 시도한 처리: ${attempted})` : error.message;
+    }
+    if (error.code === "APPROVALS.APPROVAL.STALE") {
+      const text = typeof d.reason === "string" ? voidReasonText(d.reason) : null;
+      return text ? `${error.message} ${text}` : error.message;
+    }
+    if (error.code.startsWith("APPROVALS.")) return error.message;
+  }
+  return errorMessage(error, undefined, "승인");
+}
+

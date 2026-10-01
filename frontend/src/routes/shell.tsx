@@ -80,12 +80,14 @@ export function AppShell() {
               <NavLink
                 key={item.to}
                 to={item.to}
+                title={item.to === "/approvals" && inbox.isError ? "결재 대기 건수를 불러오지 못했습니다(0건이 아닙니다)" : undefined}
                 className={({ isActive }) =>
                   `cell-nowrap ${isActive ? "font-semibold text-gray-900 underline" : "text-gray-500"}`
                 }
               >
                 {item.label}
-                {item.to === "/approvals" && inboxCount > 0 ? ` ${inboxCount}` : ""}
+                {item.to === "/approvals" && inbox.isError ? " !" : ""}
+                {item.to === "/approvals" && !inbox.isError && inboxCount > 0 ? ` ${inboxCount}` : ""}
               </NavLink>
             ))}
           </nav>

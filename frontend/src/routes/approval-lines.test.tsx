@@ -59,6 +59,40 @@ describe("결재선 — 조회·권한 노출", () => {
   });
 });
 
+describe("결재선 — 경고·편집 보존", () => {
+  it("configured=true여도 서버 messages에 fail-closed 사유가 있으면 경고 스타일이다", async () => {
+    open(ADMIN, [], [line()], { configured: true, entries: [], messages: ["임계 0 결재선이 없어 소액 건은 승인 요청이 거절됩니다."] });
+    const msg = await screen.findByText("임계 0 결재선이 없어 소액 건은 승인 요청이 거절됩니다.");
+    expect(msg.closest("[role=status]")?.className).toContain("text-signal-red");
+  });
+
+  it("messages가 없으면 일반 스타일이다", async () => {
+    open(ADMIN);
+    const box = (await screen.findByText("결재선이 없으면 승인 요청이 거절됩니다.")).closest("[role=status]");
+    expect(box?.className).not.toContain("text-signal-red");
+  });
+
+  it("편집 중 목록이 갱신(version↑)되어도 입력은 유지되고 안내가 뜨며, 저장은 시작 때 본 version으로 나가 충돌한다", async () => {
+    let rows = [line()];
+    const { calls } = stubFetch(ADMIN, [
+      CURRENCY_HANDLER,
+      ["/v1/approval-lines/21", "PATCH", () => jsonResponse({ error: { code: "COMMON.CONCURRENCY.VERSION_CONFLICT", message: "충돌" } }, 409)],
+      ["/v1/approval-lines/coverage", "GET", () => jsonResponse(COVERED)],
+      ["/v1/approval-lines", "GET", () => jsonResponse(page(rows))],
+    ]);
+    renderWithProviders(<AppRoutes />, { route: "/approval-lines" });
+    fireEvent.click(await screen.findByRole("button", { name: "수정" }));
+    fireEvent.change(screen.getByLabelText("메모"), { target: { value: "내 메모" } });
+    rows = [line({ version: 3, note: "남이 고침" })];
+    window.dispatchEvent(new Event("visibilitychange"));
+    expect(await screen.findByText(/다른 곳에서 이 결재선이 수정되었습니다. 입력은 유지/)).toBeInTheDocument();
+    expect(screen.getByLabelText("메모")).toHaveValue("내 메모");
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")).toBeDefined());
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ version: 2, note: "내 메모" });
+  });
+});
+
 describe("결재선 — 등록", () => {
   async function fill(form: HTMLElement, threshold = "5000.50") {
     await within(form).findByRole("option", { name: "USD" });

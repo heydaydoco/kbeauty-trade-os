@@ -60,7 +60,8 @@ export function ApprovalLinesPage() {
       <div
         role="status"
         className={`mt-4 break-keep rounded border p-3 text-sm ${
-          coverage.data && !coverage.data.configured ? "border-signal-red text-signal-red" : "border-gray-300 text-gray-700"
+          coverage.data && (!coverage.data.configured || coverage.data.messages.length > 0)
+            ? "border-signal-red text-signal-red" : "border-gray-300 text-gray-700"
         }`}
       >
         <p className="font-medium">결재선이 없으면 승인 요청이 거절됩니다.</p>
@@ -132,7 +133,7 @@ export function ApprovalLinesPage() {
             <tbody>
               {list.data?.items.map((line) => (
                 <LineRow
-                  key={`${line.id}-${line.version}`}
+                  key={line.id}
                   line={line}
                   isAdmin={isAdmin}
                   onSaved={() => {
@@ -326,7 +327,10 @@ function LineRow({
   const [editing, setEditing] = useState(false);
   const [role, setRole] = useState(line.approver_role);
   const [note, setNote] = useState(line.note ?? "");
+  // 수정을 시작할 때 본 version — 편집 중 목록이 갱신돼도 입력을 지우지 않고, 저장은 이 version으로 보내 서버 409가 덮어쓰기를 막는다.
+  const [editBase, setEditBase] = useState(line.version);
   const lock = useRef(false);
+  const outdated = editing && line.version !== editBase;
 
   const save = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
@@ -346,7 +350,7 @@ function LineRow({
   function submit() {
     if (lock.current || !changed) return;
     lock.current = true;
-    const body: Record<string, unknown> = { version: line.version };
+    const body: Record<string, unknown> = { version: editBase };
     if (roleChanged) body.approver_role = role;
     if (noteChanged) body.note = note.trim();
     save.mutate(body, { onSettled: () => (lock.current = false) });
@@ -354,7 +358,14 @@ function LineRow({
 
   return (
     <tr className="border-t border-gray-100 align-top">
-      <td className="break-keep px-3 py-2">{approvalTypeLabel(line.approval_type)}</td>
+      <td className="break-keep px-3 py-2">
+        {approvalTypeLabel(line.approval_type)}
+        {outdated && (
+          <p role="status" className="mt-1 break-keep text-xs text-signal-red">
+            다른 곳에서 이 결재선이 수정되었습니다. 입력은 유지했지만 저장하면 충돌로 거절됩니다 — 취소한 뒤 최신 내용으로 다시 수정하세요.
+          </p>
+        )}
+      </td>
       <td className="cell-nowrap px-3 py-2">{line.threshold_currency}</td>
       <td className="cell-nowrap num px-3 py-2 text-center">
         {line.threshold_text !== "" ? line.threshold_text : String(line.threshold_amount)}
@@ -422,7 +433,12 @@ function LineRow({
               <>
                 <button
                   type="button"
-                  onClick={() => setEditing(true)}
+                  onClick={() => {
+                    setRole(line.approver_role);
+                    setNote(line.note ?? "");
+                    setEditBase(line.version);
+                    setEditing(true);
+                  }}
                   className="cell-nowrap rounded border border-gray-300 px-2 py-1"
                 >
                   수정
