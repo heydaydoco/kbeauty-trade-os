@@ -537,3 +537,28 @@ def test_the_candidate_directory_exposes_only_id_and_display_name() -> None:
         )
     with logged_in(RoleCode.VIEWER) as viewer:
         assert viewer.get("/api/v1/approvals/delegation-candidates").status_code == 403
+
+
+def test_inert_delegates_are_neither_notified_nor_counted_as_eligible() -> None:
+    """수임자가 비활성이거나 비조회 역할이 없으면(대결이 계산상 무효) 요청 알림 수신자·결재 자격자 집합에서 빠진다 — 유효한 수임자는 들어간다"""
+    from app.core.db.uow import unit_of_work
+    from app.modules.approvals.authority import eligible_user_ids, notification_recipients
+    from app.modules.approvals.models import Approval
+
+    approval_id, _, delegator = _setup()
+    active_delegate = make_user(RoleCode.LOGISTICS)
+    inactive_delegate = make_user(RoleCode.CERT)
+    viewer_only_delegate = make_user(RoleCode.VIEWER)
+    today = today_kst()
+    for delegate in (active_delegate, inactive_delegate, viewer_only_delegate):
+        add_delegation(delegator, delegate, today, today + timedelta(days=3))
+    _deactivate(inactive_delegate.id)
+    with unit_of_work() as uow:
+        approval = uow.session.get(Approval, approval_id)
+        assert approval is not None
+        eligible = set(eligible_user_ids(uow.session, approval))
+        recipients, fallback = notification_recipients(uow.session, approval)
+    assert active_delegate.id in eligible and active_delegate.id in recipients
+    for inert in (inactive_delegate, viewer_only_delegate):
+        assert inert.id not in eligible and inert.id not in recipients
+    assert fallback is False

@@ -30,6 +30,7 @@ from tests.factories.approvals import (
     line_set,
     make_user,
     request,
+    set_credit_limit,
     so_set,
 )
 
@@ -774,3 +775,17 @@ def test_the_transition_function_rejects_all_29_unallowed_pairs() -> None:
             rejected += 1
         assert approval_row(approval_id)["status"] == state.value
     assert rejected == 29
+
+
+def test_approving_when_nothing_needs_approval_any_more_voids_with_not_required() -> None:
+    """요청 뒤 노출이 줄어 초과분이 0이 되면 결정(APPROVE)은 승인되지 않고 VOID(NOT_REQUIRED)+409 STALE이 커밋된다"""
+    so = credit_so()
+    add_line(0)
+    make_user(RoleCode.TRADE)
+    approval = request(so["id"], make_user(RoleCode.TRADE)).approval
+    set_credit_limit(so["buyer_partner_id"], 1_000_000)
+    with pytest.raises(AppError) as caught:
+        decide(approval.id, make_user(RoleCode.TRADE), "APPROVE")
+    assert caught.value.code == ErrorCode.APPROVALS_APPROVAL_STALE
+    assert approval_row(approval.id)["status"] == "VOIDED"
+    assert events_of(approval.id)[-1]["reason_code"] == "NOT_REQUIRED"
