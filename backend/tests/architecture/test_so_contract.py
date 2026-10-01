@@ -119,7 +119,7 @@ def test_so_request_schemas_forbid_extra_fields_and_carry_no_server_owned_names(
 
 
 def test_so_routes_are_bounded_no_create_no_document_delete_no_confirm() -> None:
-    """SO 표면 고정 — 직접 POST /sales-orders 없음(생성은 참조 생성·인테이크 확정 착지뿐)·문서 DELETE 없음(라인 제외만)·**확정 경로 없음(PR-12)**"""
+    """SO 표면 고정 — 직접 POST /sales-orders 없음(생성은 참조 생성·인테이크 확정 착지뿐)·문서 DELETE 없음(라인 제외만)·**확정 경로 없음(PR-12)**·게이트 3경로(PR-11a)"""
     from app.main import app
 
     routes = {
@@ -130,7 +130,13 @@ def test_so_routes_are_bounded_no_create_no_document_delete_no_confirm() -> None
     }
     assert ("POST", "/api/v1/sales-orders") not in routes
     assert {m for m, p in routes if p == "/api/v1/sales-orders/{so_id}"} == {"GET", "PATCH"}
-    assert not [p for _, p in routes if "confirm" in p or "approv" in p or "gate" in p]
+    assert not [p for _, p in routes if "confirm" in p or "approv" in p]
+    # PR-11a: 게이트 판정 조회·override 부여·철회 3경로만 있다 — 확정·승인 요청 경로는 PR-12
+    assert {p for _, p in routes if "gate" in p} == {
+        "/api/v1/sales-orders/{so_id}/gates",
+        "/api/v1/sales-orders/{so_id}/gate-overrides",
+        "/api/v1/sales-orders/{so_id}/gate-overrides/revoke",
+    }
     assert routes == {
         ("GET", "/api/v1/sales-orders"),
         ("GET", "/api/v1/sales-orders/export.csv"),
@@ -142,6 +148,9 @@ def test_so_routes_are_bounded_no_create_no_document_delete_no_confirm() -> None
         ("PATCH", "/api/v1/sales-orders/{so_id}/lines/{line_id}"),
         ("DELETE", "/api/v1/sales-orders/{so_id}/lines/{line_id}"),
         ("POST", "/api/v1/sales-orders/{so_id}/transitions"),
+        ("GET", "/api/v1/sales-orders/{so_id}/gates"),
+        ("POST", "/api/v1/sales-orders/{so_id}/gate-overrides"),
+        ("POST", "/api/v1/sales-orders/{so_id}/gate-overrides/revoke"),
         ("POST", "/api/v1/quotations/{qt_id}/sales-orders"),
         ("POST", "/api/v1/proforma-invoices/{pi_id}/sales-orders"),
     }

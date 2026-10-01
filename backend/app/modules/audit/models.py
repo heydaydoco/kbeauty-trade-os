@@ -74,6 +74,9 @@ class AuditAction:
     APPROVAL_DECISION_DENIED = "approvals.decision.denied"
     #: 승인 없이 승인 필요 전표를 확정하려는 시도(우회 시도) — ADMIN 포함.
     APPROVAL_BYPASS_BLOCKED = "approvals.approval.bypass_blocked"
+    #: 게이트 override 부여·철회(S3-1 PR-11a) — detail=override id·게이트·대상 id·라인·허용 역할(사유·금액 금지; 사유 원문은 불변 `gate_overrides`가 정본).
+    GATE_OVERRIDE_GRANTED = "gates.override.granted"
+    GATE_OVERRIDE_REVOKED = "gates.override.revoked"
 
 
 class AuditLog(PkMixin, Base):

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Path, Response, status
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
+from app.modules.gates.schemas import GateOverrideOut, GateOverrideRequest, GateReportOut
 from app.modules.identity.models import RoleCode
 from app.modules.payments.schemas import (
     PaymentReceiptRequest,
@@ -31,6 +32,7 @@ from app.modules.quotations.schemas import QuotationDetail
 from app.modules.sales_orders.schemas import SalesOrderDetail, SalesOrderReferenceRequest
 from app.modules.trade_chain import (
     document_flow,
+    gate_flow,
     lifecycle,
     payment_flow,
     reference,
@@ -367,6 +369,63 @@ def transition_sales_order(
     )
     response.status_code = status_code
     return SalesOrderDetail.model_validate(body)
+
+
+# ── 게이트 판정·override (S3-1 PR-11a — 확정 통로 배선은 PR-12) ─────────────────────────────
+
+
+@so_router.get(
+    "/{so_id}/gates",
+    summary="수주 게이트 판정 7종 + 확정 가능 여부 (참고값 — 잠금·저장 없음, 여신 포함, 전 역할 열람·여신 수치는 무역·관리자만)",
+)
+def get_sales_order_gates(so_id: Annotated[int, Path(ge=1)], current: CurrentUser) -> GateReportOut:
+    return GateReportOut.model_validate(gate_flow.get_gates(so_id=so_id, roles=current.roles))
+
+
+@so_router.post(
+    "/{so_id}/gate-overrides",
+    summary="게이트 예외 통과(override) 부여 (사유 5~500자·판정 해시 결속·역할은 서비스가 판정 — 가격·MOQ=무역·관리자, 준비도·PI=관리자, 품번·중복 PO·여신은 불가)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def grant_sales_order_gate_override(
+    so_id: Annotated[int, Path(ge=1)],
+    payload: GateOverrideRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> GateOverrideOut:
+    status_code, body = gate_flow.grant_gate_override(
+        actor=current,
+        idempotency_key=key,
+        so_id=so_id,
+        payload=payload.model_dump(mode="json"),
+    )
+    response.status_code = status_code
+    return GateOverrideOut.model_validate(body)
+
+
+@so_router.post(
+    "/{so_id}/gate-overrides/revoke",
+    summary="게이트 예외 통과(override) 철회 (부여자 본인 또는 관리자 — REVOKE 행 추가, 삭제 없음)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def revoke_sales_order_gate_override(
+    so_id: Annotated[int, Path(ge=1)],
+    payload: GateOverrideRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> GateOverrideOut:
+    status_code, body = gate_flow.revoke_gate_override(
+        actor=current,
+        idempotency_key=key,
+        so_id=so_id,
+        payload=payload.model_dump(mode="json"),
+    )
+    response.status_code = status_code
+    return GateOverrideOut.model_validate(body)
 
 
 # ── PO 전이(공급사 확인·취소) ──────────────────────────────────────────────────

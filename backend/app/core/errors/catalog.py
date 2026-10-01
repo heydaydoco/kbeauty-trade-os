@@ -357,6 +357,18 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "이미 종료되었거나 기간이 지난 대결입니다. 대결 목록에서 현재 상태를 확인해 주세요.",
     ),
+    ErrorCode.GATES_OVERRIDE_NOT_ALLOWED: ErrorSpec(
+        403,
+        "이 게이트의 예외 통과(override)는 현재 역할로 할 수 없습니다. 권한이 있는 담당자(관리자 등)에게 요청해 주세요.",
+    ),
+    ErrorCode.GATES_OVERRIDE_NOT_APPLICABLE: ErrorSpec(
+        422,
+        "예외 통과(override) 대상이 아닌 항목입니다. 품번 매핑·중복 PO·여신 한도는 데이터를 고치거나 승인으로만 해소됩니다. 판정을 새로 확인해 주세요.",
+    ),
+    ErrorCode.GATES_OVERRIDE_STALE: ErrorSpec(
+        409,
+        "확인하신 판정이 이미 바뀌었습니다. 수주의 게이트 판정을 새로 불러와 다시 확인해 주세요.",
+    ),
     ErrorCode.IDEMPOTENCY_KEY_CONFLICT: ErrorSpec(
         409,
         "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",
