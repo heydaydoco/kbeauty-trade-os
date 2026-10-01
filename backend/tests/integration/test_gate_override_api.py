@@ -615,6 +615,24 @@ def test_after_an_admin_revoke_a_trade_user_cannot_regrant_but_an_admin_can() ->
     assert [r["action"] for r in _rows("gate_overrides")] == ["GRANT", "REVOKE", "GRANT"]
 
 
+def test_can_override_follows_the_regrant_rule_after_a_revoke_trade_false_admin_true() -> None:
+    """철회된 판정의 `can_override`는 서버 재부여 규칙(ADMIN만)과 같다 — 무역에게는 false(버튼이 사유 입력 뒤에야 403 나는 일이 없다)·ADMIN에게는 true, 아직 부여 안 된 항목은 그대로 true"""
+    so, line = _price_block()
+    with _clients(TRADE, ADMIN) as (trade, admin):
+        item = find(gates_of(trade, so["id"]), "PRICE_DEVIATION", line)
+        assert item["can_override"] is True  # 부여 이력 없음 — 기존 동작 유지
+        assert _post(trade, so["id"], override_body(item)).status_code == 201
+        seen = find(gates_of(trade, so["id"]), "PRICE_DEVIATION", line)
+        assert seen["can_override"] is False  # 유효 부여 중
+        revoke = _post(trade, so["id"], override_body(item, "합의에 따른 철회"), revoke=True)
+        assert revoke.status_code == 201
+        assert find(gates_of(trade, so["id"]), "PRICE_DEVIATION", line)["can_override"] is False
+        assert find(gates_of(admin, so["id"]), "PRICE_DEVIATION", line)["can_override"] is True
+        # 표시와 서버 판정이 일치 — 무역 재부여는 403, ADMIN은 201
+        assert _post(trade, so["id"], override_body(item, "되돌리기를 시도")).status_code == 403
+        assert _post(admin, so["id"], override_body(item, "관리자 재부여")).status_code == 201
+
+
 def test_credit_hash_duplicate_detail_and_override_reasons_are_hidden_from_other_roles() -> None:
     """마스킹 역할(조회·물류)에게: CREDIT 결과의 basis_hash도 비고, override 사유(자유 텍스트)는 null. 무역에게는 보인다"""
     so, line = _price_block()

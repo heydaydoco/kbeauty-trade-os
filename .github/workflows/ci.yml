@@ -77,8 +77,10 @@ jobs:
   # ── 백엔드 테스트 + 마이그레이션 드라이런 ────────────────────────────────
   backend:
     runs-on: ubuntu-latest
-    # 테스트 3,000+건 — 러너가 느린 날 15분을 넘겨 취소된 선례(S3-1 PR-7b, 2026-09-30). 여유를 둔다.
-    timeout-minutes: 30
+    # 테스트 4,000+건 — 15분(PR-7b, 2026-09-30)·30분(PR-11b, 2026-10-01: 러너가 느린 날 30분 한도에 걸려 취소)
+    # 한도를 연달아 넘겼다. 직렬 단일 DB 구조라 병렬화가 어려우니 우선 60분으로 늘리고,
+    # 분할(샤드+커버리지 병합)은 PROGRESS 부채로 둔다.
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:16.14
@@ -111,6 +113,13 @@ jobs:
         env:
           PGPASSWORD: ci_postgres_pw
         run: |
+          # CI 전용 속도 설정 — 테스트는 일회용 DB라 내구성(fsync)이 필요 없다. 느린 러너에서 체크포인트가
+          # 49초씩 걸려 백엔드 잡이 60분 한도에 걸린 선례(PR #42, 2026-10-01). 운영 DB와 무관(CI 서비스 컨테이너만).
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+               -c "ALTER SYSTEM SET fsync = off" \
+               -c "ALTER SYSTEM SET synchronous_commit = off" \
+               -c "ALTER SYSTEM SET full_page_writes = off" \
+               -c "SELECT pg_reload_conf()"
           for f in infra/postgres/init/*.sql; do
             echo "== $f"
             psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
