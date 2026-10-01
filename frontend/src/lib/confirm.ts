@@ -156,7 +156,9 @@ const INCOMPLETE_LABEL: Record<string, string> = {
 
 /** 확정 전 완결성 422의 누락 항목 이름 — 서버가 준 키를 한국어 이름으로(모르는 키는 건너뜀). */
 export function missingFieldLabels(detail: Record<string, unknown> | undefined): string[] {
-  return Object.keys(detail ?? {}).flatMap((key) => (INCOMPLETE_LABEL[key] !== undefined ? [INCOMPLETE_LABEL[key]] : []));
+  const given = detail ?? {};
+  // 서버 키 순서와 무관하게 고정 순서(결제조건→…→라인)로 — 화면이 흔들리지 않게.
+  return Object.entries(INCOMPLETE_LABEL).flatMap(([key, label]) => (key in given ? [label] : []));
 }
 
 export const CONFIRM_ERROR_TEXT: Record<string, string> = {
