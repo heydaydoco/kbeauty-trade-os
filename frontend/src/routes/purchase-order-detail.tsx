@@ -449,16 +449,21 @@ function OcDialog({
               className={inputClass}
             />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-gray-600">OC 참조 (선택)</span>
-            <input
-              value={ocReference}
-              maxLength={100}
-              onChange={(e) => setOcReference(e.target.value)}
-              className={inputClass}
-            />
-            <span className="break-keep text-xs text-signal-red">{NO_COST_IN_FREE_TEXT}</span>
-          </label>
+          <div className="flex flex-col gap-1">
+            <label className="flex flex-col gap-1">
+              <span className="text-gray-600">OC 참조 (선택)</span>
+              <input
+                value={ocReference}
+                maxLength={100}
+                aria-describedby={`${titleId}-hint`}
+                onChange={(e) => setOcReference(e.target.value)}
+                className={inputClass}
+              />
+            </label>
+            <span id={`${titleId}-hint`} className="break-keep text-xs text-signal-red">
+              {NO_COST_IN_FREE_TEXT}
+            </span>
+          </div>
         </div>
         {error && (
           <p role="alert" className="mt-3 break-keep text-sm text-signal-red">
@@ -517,6 +522,7 @@ function MetaPanel({
   const [ocReference, setOcReference] = useState(po.oc_reference ?? "");
   const [formError, setFormError] = useState<string | null>(null);
   const lock = useRef(false);
+  const hintId = useId();
   const editOc = canEditPurchaseOrderOc(po.status);
 
   const noteChanged = note.trim() !== (po.internal_note ?? "");
@@ -566,20 +572,22 @@ function MetaPanel({
       </p>
       <fieldset disabled={save.isPending} className="contents">
         <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-gray-600">담당자</span>
-            <select
-              value={assignee}
-              onChange={(e) => setAssignee(e.target.value)}
-              className={inputClass}
-            >
-              {!known && <option value={assignee}>사용자 #{assignee}</option>}
-              {items.map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.display_name}
-                </option>
-              ))}
-            </select>
+          <div className="flex flex-col gap-1 text-sm">
+            <label className="flex flex-col gap-1">
+              <span className="text-gray-600">담당자</span>
+              <select
+                value={assignee}
+                onChange={(e) => setAssignee(e.target.value)}
+                className={inputClass}
+              >
+                {!known && <option value={assignee}>사용자 #{assignee}</option>}
+                {items.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.display_name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <span className="break-keep text-xs text-gray-500">
               무역·관리자 역할 사용자만 담당자가 될 수 있습니다(서버가 확인합니다).
             </span>
@@ -588,18 +596,23 @@ function MetaPanel({
                 {users.data.total}명 중 {items.length}명만 표시합니다.
               </span>
             )}
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-gray-600">내부 메모</span>
-            <textarea
-              value={note}
-              maxLength={1000}
-              rows={2}
-              onChange={(e) => setNote(e.target.value)}
-              className={inputClass}
-            />
-            <span className="break-keep text-xs text-signal-red">{NO_COST_IN_FREE_TEXT}</span>
-          </label>
+          </div>
+          <div className="flex flex-col gap-1 text-sm">
+            <label className="flex flex-col gap-1">
+              <span className="text-gray-600">내부 메모</span>
+              <textarea
+                value={note}
+                maxLength={1000}
+                rows={2}
+                aria-describedby={`${hintId}-note`}
+                onChange={(e) => setNote(e.target.value)}
+                className={inputClass}
+              />
+            </label>
+            <span id={`${hintId}-note`} className="break-keep text-xs text-signal-red">
+              {NO_COST_IN_FREE_TEXT}
+            </span>
+          </div>
           {editOc && (
             <>
               <label className="flex flex-col gap-1 text-sm">
@@ -612,16 +625,21 @@ function MetaPanel({
                   className={inputClass}
                 />
               </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-gray-600">OC 참조</span>
-                <input
-                  value={ocReference}
-                  maxLength={100}
-                  onChange={(e) => setOcReference(e.target.value)}
-                  className={inputClass}
-                />
-                <span className="break-keep text-xs text-signal-red">{NO_COST_IN_FREE_TEXT}</span>
-              </label>
+              <div className="flex flex-col gap-1 text-sm">
+                <label className="flex flex-col gap-1">
+                  <span className="text-gray-600">OC 참조</span>
+                  <input
+                    value={ocReference}
+                    maxLength={100}
+                    aria-describedby={`${hintId}-oc`}
+                    onChange={(e) => setOcReference(e.target.value)}
+                    className={inputClass}
+                  />
+                </label>
+                <span id={`${hintId}-oc`} className="break-keep text-xs text-signal-red">
+                  {NO_COST_IN_FREE_TEXT}
+                </span>
+              </div>
             </>
           )}
         </div>

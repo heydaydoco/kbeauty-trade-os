@@ -92,6 +92,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const titleId = useId();
   const descId = useId();
+  const hintId = useId();
   const [reason, setReason] = useState("");
   const firstRef = useRef<HTMLTextAreaElement | HTMLButtonElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -118,20 +119,27 @@ export function ConfirmDialog({
           {description}
         </div>
         {needsReason && (
-          <label className="mt-4 flex flex-col gap-1 text-sm">
-            <span className="text-gray-600">{reasonLabel}</span>
-            <textarea
-              ref={(node) => {
-                firstRef.current = node;
-              }}
-              value={reason}
-              maxLength={reasonMaxLength}
-              rows={3}
-              onChange={(event) => setReason(event.target.value)}
-              className="rounded border border-gray-300 px-3 py-2"
-            />
-            {reasonHint && <span className="break-keep text-xs text-gray-500">{reasonHint}</span>}
-          </label>
+          <div className="mt-4 flex flex-col gap-1 text-sm">
+            <label className="flex flex-col gap-1">
+              <span className="text-gray-600">{reasonLabel}</span>
+              <textarea
+                ref={(node) => {
+                  firstRef.current = node;
+                }}
+                value={reason}
+                maxLength={reasonMaxLength}
+                rows={3}
+                aria-describedby={reasonHint ? hintId : undefined}
+                onChange={(event) => setReason(event.target.value)}
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            {reasonHint && (
+              <span id={hintId} className="break-keep text-xs text-gray-500">
+                {reasonHint}
+              </span>
+            )}
+          </div>
         )}
         {error && (
           <p role="alert" className="mt-3 break-keep text-sm text-signal-red">

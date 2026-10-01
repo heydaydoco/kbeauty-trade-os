@@ -501,50 +501,62 @@ export function PurchaseOrderCreatePage() {
             <section className="rounded-lg border border-gray-200 p-4">
               <h2 className="text-lg font-semibold">공급사명·메모·담당자</h2>
               <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-gray-600">공급사명 표기 (비우면 거래처 영문명·국문명)</span>
-                  <input
-                    value={supplierName}
-                    maxLength={200}
-                    onChange={(e) => {
-                      touched();
-                      setSupplierName(e.target.value);
-                    }}
-                    className={inputClass}
-                  />
-                  <span className="break-keep text-xs text-signal-red">{NO_COST_IN_FREE_TEXT}</span>
-                </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-gray-600">내부 메모 (선택)</span>
-                  <textarea
-                    value={note}
-                    maxLength={1000}
-                    rows={2}
-                    onChange={(e) => {
-                      touched();
-                      setNote(e.target.value);
-                    }}
-                    className={inputClass}
-                  />
-                  <span className="break-keep text-xs text-signal-red">{NO_COST_IN_FREE_TEXT}</span>
-                </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-gray-600">담당자 (비우면 나)</span>
-                  <select
-                    value={assignee}
-                    onChange={(e) => {
-                      touched();
-                      setAssignee(e.target.value);
-                    }}
-                    className={inputClass}
-                  >
-                    <option value="">나</option>
-                    {userItems.map((user) => (
-                      <option key={user.id} value={user.id}>
-                        {user.display_name}
-                      </option>
-                    ))}
-                  </select>
+                <div className="flex flex-col gap-1 text-sm">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-gray-600">공급사명 표기 (비우면 거래처 영문명·국문명)</span>
+                    <input
+                      value={supplierName}
+                      maxLength={200}
+                      aria-describedby="po-supplier-name-hint"
+                      onChange={(e) => {
+                        touched();
+                        setSupplierName(e.target.value);
+                      }}
+                      className={inputClass}
+                    />
+                  </label>
+                  <span id="po-supplier-name-hint" className="break-keep text-xs text-signal-red">
+                    {NO_COST_IN_FREE_TEXT}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1 text-sm">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-gray-600">내부 메모 (선택)</span>
+                    <textarea
+                      value={note}
+                      maxLength={1000}
+                      rows={2}
+                      aria-describedby="po-note-hint"
+                      onChange={(e) => {
+                        touched();
+                        setNote(e.target.value);
+                      }}
+                      className={inputClass}
+                    />
+                  </label>
+                  <span id="po-note-hint" className="break-keep text-xs text-signal-red">
+                    {NO_COST_IN_FREE_TEXT}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1 text-sm">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-gray-600">담당자 (비우면 나)</span>
+                    <select
+                      value={assignee}
+                      onChange={(e) => {
+                        touched();
+                        setAssignee(e.target.value);
+                      }}
+                      className={inputClass}
+                    >
+                      <option value="">나</option>
+                      {userItems.map((user) => (
+                        <option key={user.id} value={user.id}>
+                          {user.display_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <span className="break-keep text-xs text-gray-500">
                     무역·관리자 역할 사용자만 담당자가 될 수 있습니다(서버가 확인합니다).
                   </span>
@@ -553,7 +565,7 @@ export function PurchaseOrderCreatePage() {
                       {users.data.total}명 중 {userItems.length}명만 표시합니다.
                     </span>
                   )}
-                </label>
+                </div>
               </div>
             </section>
 
