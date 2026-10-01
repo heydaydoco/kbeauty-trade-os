@@ -130,7 +130,7 @@ export function GatePanel({ soId, soStatus }: { soId: number; soStatus: string }
     write.mutate({ mode, body, key });
   }
 
-  /** 충돌 안내의 '최신 판정 불러오기' — 다이얼로그를 닫고 판정·SO를 다시 읽는다(입력한 사유는 사라진다). */
+  /** 충돌 안내의 '최신 내용 불러오기' — 다이얼로그를 닫고 판정·SO를 다시 읽는다(입력한 사유는 사라진다). */
   function reload() {
     write.reset();
     setDialog(null);
@@ -145,8 +145,8 @@ export function GatePanel({ soId, soStatus }: { soId: number; soStatus: string }
   const data = report.data;
   const gates = Array.isArray(data?.gates) ? data.gates : null;
   // 접수가 아닌 SO(ORDER_NOT_OPEN)는 서버가 거부한다 — 화면은 버튼을 숨기고 사유를 보인다. 서버 report.status가 더 최신이다.
-  const effectiveStatus = data?.status ?? soStatus;
-  const open = effectiveStatus === OPEN_STATUS && soStatus === OPEN_STATUS;
+  const effectiveStatus = soStatus !== OPEN_STATUS ? soStatus : (data?.status ?? soStatus);
+  const open = effectiveStatus === OPEN_STATUS;
 
   return (
     <section aria-labelledby="gate-panel-title" className="rounded-lg border border-gray-200 p-4">

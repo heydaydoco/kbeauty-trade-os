@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
 import { stubFetch, type Call } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
+import { PRICE_BLOCK, report } from "../test/gate-fixtures";
 import { SO_LINE, SO_LOG, chainFlow, soDetail } from "../test/so-fixtures";
 
 let keySeq = 0;
@@ -527,5 +528,21 @@ describe("SO 상세 — 보류·재개·취소 다이얼로그", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(document.activeElement).toBe(button);
+  });
+});
+
+describe("SO 상세 — 게이트 패널(PR-11b)", () => {
+  it("게이트 판정 패널이 보이고 SO 상태를 넘긴다(확정 SO는 override 버튼 없음)", async () => {
+    open(soDetail({ status: "CONFIRMED", confirmed_at: "2026-09-30T02:00:00Z" }), [["/v1/sales-orders/9/gates", "GET", () => jsonResponse(report([PRICE_BLOCK], { status: "CONFIRMED" }))]]);
+    await heading();
+    expect(await screen.findByRole("heading", { name: "게이트 판정" })).toBeInTheDocument();
+    expect(await screen.findByText("기준가 대비 편차가 허용치를 넘습니다.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /예외 승인/ })).not.toBeInTheDocument();
+  });
+
+  it("접수 SO에서 can_override 항목에 버튼이 보이고 다이얼로그가 열린다", async () => {
+    open(soDetail(), [["/v1/sales-orders/9/gates", "GET", () => jsonResponse(report([PRICE_BLOCK]))]]);
+    fireEvent.click(await screen.findByRole("button", { name: "가격 편차 · 라인 1 예외 승인" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("예외 승인(override)을 부여할까요?");
   });
 });
