@@ -4,7 +4,8 @@ import {
   PO_BALANCE_ANCHOR_LABEL,
   canCancelPurchaseOrder,
   canConfirmPurchaseOrder,
-  canEditPurchaseOrderMeta,
+  canEditPurchaseOrderAssignee,
+  canEditPurchaseOrderNote,
   canEditPurchaseOrderOc,
   purchaseOrderStatusLabel,
   canCancelQuotation,
@@ -141,9 +142,10 @@ describe("PO 상태별 가능 동작 (서버 전이표와 같아야 한다)", ()
     expect(canCancelPurchaseOrder(status)).toBe(cancel);
   });
 
-  it("취소된 발주는 메모도 닫고, OC 열은 공급사 확인 상태에서만 열린다", () => {
-    expect(canEditPurchaseOrderMeta("ISSUED")).toBe(true);
-    expect(canEditPurchaseOrderMeta("CANCELLED")).toBe(false);
+  it("취소된 발주도 내부 메모는 열려 있고(원가 오기 정정) 담당자는 닫힌다, OC 열은 공급사 확인 상태에서만 열린다", () => {
+    expect(canEditPurchaseOrderNote("CANCELLED")).toBe(true);
+    expect(canEditPurchaseOrderAssignee("ISSUED")).toBe(true);
+    expect(canEditPurchaseOrderAssignee("CANCELLED")).toBe(false);
     expect(canEditPurchaseOrderOc("SUPPLIER_CONFIRMED")).toBe(true);
     expect(canEditPurchaseOrderOc("ISSUED")).toBe(false);
   });

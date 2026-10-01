@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
 import { PO_LOG, SENTINELS, poDetail, poDetailHidden } from "../test/po-fixtures";
+import { assertNoLeakOutsideText, captureConsole } from "../test/po-leak";
 import { stubFetch, type Call } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
 
@@ -86,13 +87,23 @@ describe("발주 상세 — Full 응답(원가 열람 역할)", () => {
     expect(screen.queryByRole("button", { name: "공급사 확인(OC)" })).not.toBeInTheDocument();
   });
 
-  it("취소됨: 전이 버튼도 메모 편집 폼도 없고 메모는 글로만 보인다(읽기 전용)", async () => {
-    open(poDetail({ status: "CANCELLED", internal_note: "취소 건 메모" }));
+  it("취소됨: 전이 버튼·담당자·OC 열은 닫히고 내부 메모만 고칠 수 있다(원가 오기 사후 정정 경로)", async () => {
+    const { calls } = open(poDetail({ status: "CANCELLED", internal_note: "원가 12.5 오기", oc_received_on: "2026-10-01" }), [
+      ["/v1/purchase-orders/9/meta", "PATCH", () => jsonResponse(poDetail({ status: "CANCELLED", internal_note: null, version: 3 }))],
+    ]);
     await screen.findByRole("heading", { name: /PO-2026-0001/ });
     expect(screen.queryByRole("button", { name: "취소" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "공급사 확인(OC)" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("form", { name: /내부 메모·담당자/ })).not.toBeInTheDocument();
-    expect(screen.getByText("내부 메모: 취소 건 메모")).toBeInTheDocument();
+    const form = screen.getByRole("form", { name: "내부 메모·담당자" });
+    expect(within(form).queryByLabelText("담당자")).not.toBeInTheDocument();
+    expect(within(form).queryByLabelText("OC 일자")).not.toBeInTheDocument();
+    const note = within(form).getByLabelText("내부 메모");
+    expect(note).toHaveValue("원가 12.5 오기");
+    fireEvent.change(note, { target: { value: "" } });
+    fireEvent.click(within(form).getByRole("button", { name: "저장" }));
+    await waitFor(() => {
+      expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ version: 2, internal_note: null });
+    });
   });
 
   it("없는 발주는 404 문구와 목록 링크", async () => {
@@ -132,6 +143,7 @@ describe("발주 상세 — CostHidden 응답(원가 키 없음): 깨지지 않�
       expect(JSON.stringify({ ...sessionStorage })).not.toContain(sentinel);
       expect(calls.map((c) => c.url).join("\n")).not.toContain(sentinel);
     }
+    assertNoLeakOutsideText(SENTINELS, logs, calls);
     // 쓰기 버튼·폼 없음 / 메모는 글로만.
     expect(screen.queryByRole("button", { name: "취소" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "공급사 확인(OC)" })).not.toBeInTheDocument();
@@ -141,10 +153,14 @@ describe("발주 상세 — CostHidden 응답(원가 키 없음): 깨지지 않�
     expect(calls.some((c) => c.url.includes("/v1/users/lookup"))).toBe(false);
   });
 
-  it("같은 PO를 Full로 열면 같은 센티널이 보인다(마스킹이 화면 로직이 아니라 응답 키 유무임을 대조)", async () => {
-    open(poDetail());
+  it("같은 PO를 Full로 열면 같은 센티널이 보인다(마스킹이 화면 로직이 아니라 응답 키 유무임을 대조) — 그래도 화면 글자 외 채널(콘솔·스토리지·URL·속성)에는 없다", async () => {
+    const logs = captureConsole();
+    const { calls } = open(poDetail());
     await screen.findByRole("heading", { name: /PO-2026-0001/ });
+    await screen.findByText("발행 (작성)");
     expect(document.body.textContent).toContain("76543219.87");
+    expect(document.body.textContent).toContain("7654321.98");
+    assertNoLeakOutsideText(SENTINELS, logs, calls);
   });
 
   it("CostHidden 취소 상태·공급사 확인 상태도 깨지지 않는다(OC 값은 보인다)", async () => {
@@ -320,7 +336,62 @@ describe("발주 상세 — 취소 다이얼로그", () => {
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await waitFor(() => expect(screen.queryByRole("button", { name: "취소" })).not.toBeInTheDocument());
-    expect(screen.queryByRole("form", { name: /내부 메모·담당자/ })).not.toBeInTheDocument();
+    // 취소 뒤에도 메모 폼은 남고 담당자 칸만 닫힌다.
+    const form = screen.getByRole("form", { name: "내부 메모·담당자" });
+    expect(within(form).queryByLabelText("담당자")).not.toBeInTheDocument();
+  });
+
+  it("전이 성공은 폼을 재시작하지 않는다 — 미저장 메모가 보존되고, OC 기록 값은 OC 칸에 반영된다", async () => {
+    const confirmed = poDetail({ status: "SUPPLIER_CONFIRMED", oc_received_on: "2026-10-01", oc_reference: "OC-9", version: 3 });
+    open(poDetail(), [["/v1/purchase-orders/9/transitions", "POST", () => jsonResponse((server.po = confirmed))]]);
+    const form = await screen.findByRole("form", { name: "내부 메모·담당자" });
+    fireEvent.change(within(form).getByLabelText("내부 메모"), { target: { value: "쓰던 메모" } });
+    fireEvent.click(screen.getByRole("button", { name: "공급사 확인(OC)" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("OC 일자 (필수)"), { target: { value: "2026-10-01" } });
+    fireEvent.change(within(dialog).getByLabelText("OC 참조 (선택)"), { target: { value: "OC-9" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "공급사 확인 기록" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const after = await screen.findByRole("form", { name: /내부 메모·담당자/ });
+    expect(within(after).getByLabelText("내부 메모")).toHaveValue("쓰던 메모");
+    expect(within(after).getByLabelText("OC 일자")).toHaveValue("2026-10-01");
+    expect(within(after).getByLabelText("OC 참조")).toHaveValue("OC-9");
+    // OC 값이 서버 값과 같으므로 OC 열은 '변경'으로 잡히지 않는다 — 메모만 저장 대상.
+    expect(within(after).getByRole("button", { name: "저장" })).toBeEnabled();
+  });
+
+  it("OC 기록 중(전송 대기)에는 다이얼로그 입력란이 잠긴다", async () => {
+    let release!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => (release = resolve));
+    const { calls } = open(poDetail());
+    const base = globalThis.fetch as unknown as (u: string, i?: RequestInit) => Promise<Response>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((u: string, i?: RequestInit) => {
+        if (u.endsWith("/transitions")) {
+          calls.push({ url: u, method: "POST", body: null, headers: {} });
+          return pending;
+        }
+        return base(u, i);
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "공급사 확인(OC)" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("OC 일자 (필수)"), { target: { value: "2026-10-01" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "공급사 확인 기록" }));
+    await waitFor(() => expect(within(dialog).getByLabelText("OC 일자 (필수)")).toBeDisabled());
+    expect(within(dialog).getByLabelText("OC 참조 (선택)")).toBeDisabled();
+    release(jsonResponse(poDetail({ status: "SUPPLIER_CONFIRMED", oc_received_on: "2026-10-01", version: 3 })));
+  });
+
+  it("다이얼로그가 열린 채 창 포커스 재조회로 상태가 바뀌면(이미 취소됨) 확인창을 닫고 안내한다", async () => {
+    open(poDetail());
+    fireEvent.click(await screen.findByRole("button", { name: "공급사 확인(OC)" }));
+    await screen.findByRole("dialog");
+    server.po = poDetail({ status: "CANCELLED", version: 3 });
+    window.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await screen.findByText(/열려 있던 확인창을 닫았습니다/)).toBeInTheDocument();
   });
 
   it("공급사 확인 상태에서도 취소할 수 있다", async () => {

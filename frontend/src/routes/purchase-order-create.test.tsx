@@ -3,7 +3,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
-import { PO_LOG, poDetail, poPreview } from "../test/po-fixtures";
+import { PO_LOG, SENTINELS, SENTINEL_LINE, SENTINEL_TOTAL, SENTINEL_UNIT, poDetail, poPreview } from "../test/po-fixtures";
+import { assertNoLeakOutsideText, captureConsole } from "../test/po-leak";
 import { stubFetch, type Call } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
 
@@ -201,7 +202,7 @@ describe("발주 만들기 — 2단 흐름", () => {
     // 확정 본문 = 미리보기 본문 + 미리보기가 준 증빙일 고정. 멱등 키 1개.
     expect(post?.body).toEqual({ ...body, doc_date: "2026-09-30" });
     expect(post?.body).not.toHaveProperty("version");
-    expect(post?.headers["Idempotency-Key"]).toBe("key-1");
+    expect(post?.headers["Idempotency-Key"]).toBe("key-2");
     // 상세로 이동.
     expect(await screen.findByRole("heading", { name: /PO-2026-0001/ })).toBeInTheDocument();
   });
@@ -328,7 +329,7 @@ describe("발주 만들기 — 확정 다이얼로그 규율", () => {
     fail = false;
     fireEvent.click(within(dialog).getByRole("button", { name: "발주 확정" }));
     await waitFor(() => expect(createCalls(calls)).toHaveLength(2));
-    expect(createCalls(calls).map((c) => c.headers["Idempotency-Key"])).toEqual(["key-1", "key-1"]);
+    expect(createCalls(calls).map((c) => c.headers["Idempotency-Key"])).toEqual(["key-2", "key-2"]);
     await screen.findByRole("heading", { name: /PO-2026-0001/ });
   });
 
@@ -369,5 +370,112 @@ describe("발주 만들기 — 확정 다이얼로그 규율", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(createCalls(calls)).toHaveLength(0);
     expect(screen.getByRole("heading", { name: "발주 미리보기" })).toBeInTheDocument();
+  });
+});
+
+
+describe("발주 만들기 — 적대 검토 반영", () => {
+  async function previewAndOpenDialog() {
+    clickPreview();
+    await screen.findByRole("heading", { name: "발주 미리보기" });
+    fireEvent.click(screen.getByRole("button", { name: "발주 확정…" }));
+    return screen.findByRole("dialog");
+  }
+
+  it("확정 다이얼로그에 '확정 시점에 단가를 다시 읽어 합계가 달라질 수 있다' 고지가 있다", async () => {
+    open([["/v1/purchase-orders/preview", "POST", () => jsonResponse(poPreview())]]);
+    await fillValid();
+    const dialog = await previewAndOpenDialog();
+    expect(
+      within(dialog).getByText("마스터 매입가 단가는 확정 시점에 서버가 다시 읽으므로 미리보기와 합계가 달라질 수 있습니다."),
+    ).toBeInTheDocument();
+  });
+
+  it("확정 합계가 미리보기 합계와 문자열로 다르면 상세 진입 시 안내한다 / 같으면 안내하지 않는다", async () => {
+    open([
+      ["/v1/purchase-orders/preview", "POST", () => jsonResponse(poPreview())], // 125.00
+      ["/v1/purchase-orders", "POST", () => jsonResponse(poDetail(), 201)], // 센티널 합계
+    ]);
+    await fillValid();
+    const dialog = await previewAndOpenDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "발주 확정" }));
+    expect(await screen.findByText(/미리보기와 합계가 달라졌습니다\(미리보기 125\.00 → 확정 76543219\.87\)/)).toBeInTheDocument();
+  });
+
+  it("합계가 같으면 안내가 없다", async () => {
+    open([
+      ["/v1/purchase-orders/preview", "POST", () => jsonResponse(poPreview({ total_text: SENTINEL_TOTAL }))],
+      ["/v1/purchase-orders", "POST", () => jsonResponse(poDetail(), 201)],
+    ]);
+    await fillValid();
+    const dialog = await previewAndOpenDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "발주 확정" }));
+    await screen.findByRole("heading", { name: /PO-2026-0001/ });
+    expect(screen.queryByText(/미리보기와 합계가 달라졌습니다/)).not.toBeInTheDocument();
+  });
+
+  it("멱등 키는 본문별 — A(실패) → B로 수정 확정 → 다시 A로 돌아가 확정하면 A의 원래 키를 쓴다", async () => {
+    const { calls } = open([
+      ["/v1/purchase-orders/preview", "POST", () => jsonResponse(poPreview())],
+      ["/v1/purchase-orders", "POST", () => jsonResponse({ error: { code: "X", message: "잠시 실패" } }, 500)],
+    ]);
+    await fillValid();
+    const confirmWith = async (qty: string | null) => {
+      if (qty !== null) {
+        fireEvent.click(screen.getByRole("button", { name: "입력 수정" }));
+        fireEvent.change(await screen.findByLabelText("라인 1 수량"), { target: { value: qty } });
+      }
+      const dialog = await previewAndOpenDialog();
+      const before = createCalls(calls).length;
+      fireEvent.click(within(dialog).getByRole("button", { name: "발주 확정" }));
+      await waitFor(() => expect(createCalls(calls)).toHaveLength(before + 1));
+      await within(dialog).findByRole("alert");
+      fireEvent.click(within(dialog).getByRole("button", { name: "닫기" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    };
+    await confirmWith(null); // A(수량 10)
+    await confirmWith("11"); // B
+    await confirmWith("10"); // 다시 A
+    const keys = createCalls(calls).map((c) => c.headers["Idempotency-Key"]);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(keys[2]).toBe(keys[0]);
+  });
+
+  it("통화를 KRW로 바꾸면 환율·기준일 입력이 비워지고, 비KRW로 복귀해도 이전 값이 되살아나지 않는다", async () => {
+    open();
+    await screen.findByRole("form", { name: "발주 입력" });
+    await screen.findByRole("option", { name: "USD" });
+    fireEvent.change(screen.getByLabelText("통화 *"), { target: { value: "USD" } });
+    fireEvent.change(screen.getByLabelText("환율 *"), { target: { value: "1350.5" } });
+    fireEvent.change(screen.getByLabelText("환율 기준일 (비우면 증빙일)"), { target: { value: "2026-09-01" } });
+    fireEvent.change(screen.getByLabelText("통화 *"), { target: { value: "KRW" } });
+    fireEvent.change(screen.getByLabelText("통화 *"), { target: { value: "USD" } });
+    expect(screen.getByLabelText("환율 *")).toHaveValue("");
+    expect(screen.getByLabelText("환율 기준일 (비우면 증빙일)")).toHaveValue("");
+  });
+
+  it("원가가 있는 미리보기·확정 경로에서도 화면 글자 외 채널(콘솔·스토리지·URL·속성·history)로 원가가 새지 않는다", async () => {
+    const logs = captureConsole();
+    const { calls } = open([
+      ["/v1/purchase-orders/preview", "POST", () =>
+        jsonResponse(
+          poPreview({
+            total_text: SENTINEL_TOTAL,
+            lines: [{ ...poPreview().lines[0]!, unit_cost_text: SENTINEL_UNIT, line_cost_text: SENTINEL_LINE }],
+          }),
+        )],
+      ["/v1/purchase-orders", "POST", () => jsonResponse(poDetail(), 201)],
+    ]);
+    await fillValid();
+    clickPreview();
+    await screen.findByRole("heading", { name: "발주 미리보기" });
+    expect(document.body.textContent).toContain(SENTINEL_TOTAL); // 쓰기 역할에겐 보인다
+    assertNoLeakOutsideText(SENTINELS, logs, calls);
+    fireEvent.click(screen.getByRole("button", { name: "발주 확정…" }));
+    const dialog = await screen.findByRole("dialog");
+    assertNoLeakOutsideText(SENTINELS, logs, calls);
+    fireEvent.click(within(dialog).getByRole("button", { name: "발주 확정" }));
+    await screen.findByRole("heading", { name: /PO-2026-0001/ });
+    assertNoLeakOutsideText(SENTINELS, logs, calls);
   });
 });

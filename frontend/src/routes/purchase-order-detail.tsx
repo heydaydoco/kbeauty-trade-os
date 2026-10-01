@@ -23,11 +23,12 @@ import {
   PRICE_BASIS_LABEL,
   canCancelPurchaseOrder,
   canConfirmPurchaseOrder,
-  canEditPurchaseOrderMeta,
+  canEditPurchaseOrderAssignee,
   canEditPurchaseOrderOc,
   purchaseOrderStatusLabel,
 } from "../lib/doc-status";
 import { usePagedQuery } from "../lib/paging";
+import { clearTotalMismatch, peekTotalMismatch } from "../lib/po-total-notice";
 import {
   NO_COST_IN_FREE_TEXT,
   PURCHASE_ORDERS_QUERY_KEY,
@@ -81,6 +82,10 @@ function PurchaseOrderDetailView() {
   const [action, setAction] = useState<Action | null>(null);
   const [notice, setNotice] = useState<unknown>(null);
   const [resetToken, setResetToken] = useState(0);
+  const [info, setInfo] = useState<string | null>(null);
+  // 확정 직후 상세 진입 시 한 번만 읽는다(메모리 저장소 — 원가 문자열을 URL·스토리지에 싣지 않는다).
+  const [totalMismatch] = useState(() => peekTotalMismatch(id));
+  useEffect(() => clearTotalMismatch(id), [id]);
   // ★ 화면이 "마지막으로 본/내가 쓴" version — 창 포커스 재조회로 서버 version이 앞서가도 쓰기는 이 값으로 보낸다
   //   (옛 화면으로 다른 사람의 수정을 덮어쓰지 않게 서버 409가 막는다). 내 쓰기·'최신 내용 불러오기'로만 갱신.
   const [baseVersion, setBaseVersion] = useState<number | null>(null);
@@ -92,11 +97,13 @@ function PurchaseOrderDetailView() {
     client.setQueryData(detailKey, next);
     setBaseVersion(next.version);
     setNotice(null);
+    setInfo(null);
     void client.invalidateQueries({ queryKey: PURCHASE_ORDERS_QUERY_KEY });
   }
 
   function reload() {
     setNotice(null);
+    setInfo(null);
     transition.reset();
     setAction(null);
     // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다).
@@ -115,8 +122,8 @@ function PurchaseOrderDetailView() {
       }),
     onSuccess: (result) => {
       setAction(null);
+      // ★ 폼을 재시작(resetToken)하지 않는다 — 전이 뒤에도 사용자의 미저장 메모 입력을 보존한다.
       afterWrite(result);
-      setResetToken((value) => value + 1);
     },
   });
 
@@ -150,6 +157,19 @@ function PurchaseOrderDetailView() {
   useEffect(() => {
     if (baseVersion === null && loadedVersion !== undefined) setBaseVersion(loadedVersion);
   }, [baseVersion, loadedVersion]);
+
+  // 창 포커스 재조회로 상태가 바뀌어 열려 있던 다이얼로그의 동작이 더는 가능하지 않으면 조용히 사라지지 않게 정리하고 안내한다.
+  const liveStatus = detail.data?.status;
+  useEffect(() => {
+    if (action === null || liveStatus === undefined) return;
+    const allowed = action === "confirm" ? canConfirmPurchaseOrder(liveStatus) : canCancelPurchaseOrder(liveStatus);
+    if (!allowed) {
+      transition.reset();
+      setAction(null);
+      setInfo("다른 곳에서 발주 상태가 바뀌어 열려 있던 확인창을 닫았습니다. 최신 상태를 확인해 주세요.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [action, liveStatus]);
 
   if (detail.isPending) return <p className="p-5 text-gray-500">불러오는 중…</p>;
   if (detail.error || !detail.data) {
@@ -230,6 +250,18 @@ function PurchaseOrderDetailView() {
         </div>
       </header>
 
+      {info !== null && (
+        <div role="status" className="mt-4 break-keep rounded border border-gray-400 p-3 text-sm">
+          {info}
+        </div>
+      )}
+      {totalMismatch !== null && po.status !== "CANCELLED" && (
+        <div role="status" className="mt-4 break-keep rounded border border-signal-red p-3 text-sm text-signal-red">
+          미리보기와 합계가 달라졌습니다(미리보기 {totalMismatch.preview} → 확정 {totalMismatch.confirmed}). 마스터 매입가가 그 사이
+          바뀌어 확정 시점 가격으로 만들어졌습니다. 아래 라인을 확인하세요.
+        </div>
+      )}
+
       {notice !== null && (
         <div role="alert" className="mt-4 rounded border border-signal-red p-3 text-sm text-signal-red">
           <p className="break-keep">{errorMessage(notice, undefined, NOUN)}</p>
@@ -281,14 +313,8 @@ function PurchaseOrderDetailView() {
           </dl>
         </section>
 
-        {canWrite && canEditPurchaseOrderMeta(po.status) ? (
-          <MetaPanel
-            key={`meta-${po.id}-${resetToken}`}
-            po={po}
-            version={base}
-            onSaved={afterWrite}
-            onError={setNotice}
-          />
+        {canWrite ? (
+          <MetaPanel key={`meta-${po.id}-${resetToken}`} po={po} version={base} onSaved={afterWrite} onError={setNotice} />
         ) : (
           <p className="break-keep text-sm text-gray-600">내부 메모: {show(po.internal_note)}</p>
         )}
@@ -437,7 +463,7 @@ function OcDialog({
           공급사가 발주를 확인(Order Confirmation)해 회신한 사실을 기록합니다. OC 일자는 발주 증빙일({docDate}) 이후, 오늘
           이전이어야 합니다.
         </p>
-        <div className="mt-4 flex flex-col gap-3 text-sm">
+        <fieldset disabled={pending} className="mt-4 flex flex-col gap-3 text-sm">
           <label className="flex flex-col gap-1">
             <span className="text-gray-600">OC 일자 (필수)</span>
             <input
@@ -464,7 +490,7 @@ function OcDialog({
               {NO_COST_IN_FREE_TEXT}
             </span>
           </div>
-        </div>
+        </fieldset>
         {error && (
           <p role="alert" className="mt-3 break-keep text-sm text-signal-red">
             {error}
@@ -524,9 +550,20 @@ function MetaPanel({
   const lock = useRef(false);
   const hintId = useId();
   const editOc = canEditPurchaseOrderOc(po.status);
+  const editAssignee = canEditPurchaseOrderAssignee(po.status);
+
+  // 전이(OC 기록 등)로 서버의 OC 값이 바뀌면, 사용자가 아직 건드리지 않은 칸만 새 값으로 맞춘다(폼을 재시작하지 않아 미저장 메모는 보존).
+  const serverOcDate = po.oc_received_on ?? "";
+  const serverOcRef = po.oc_reference ?? "";
+  const [seenOc, setSeenOc] = useState({ date: serverOcDate, ref: serverOcRef });
+  if (seenOc.date !== serverOcDate || seenOc.ref !== serverOcRef) {
+    if (ocDate === seenOc.date) setOcDate(serverOcDate);
+    if (ocReference === seenOc.ref) setOcReference(serverOcRef);
+    setSeenOc({ date: serverOcDate, ref: serverOcRef });
+  }
 
   const noteChanged = note.trim() !== (po.internal_note ?? "");
-  const assigneeChanged = assignee !== String(po.assignee_id);
+  const assigneeChanged = editAssignee && assignee !== String(po.assignee_id);
   const ocDateChanged = editOc && ocDate !== (po.oc_received_on ?? "");
   const ocRefChanged = editOc && ocReference.trim() !== (po.oc_reference ?? "");
   // 바뀐 게 없으면 저장하지 않는다 — 불필요한 version 증가가 다른 화면의 409를 부른다.
@@ -565,13 +602,18 @@ function MetaPanel({
         save.mutate(undefined, { onSettled: () => (lock.current = false) });
       }}
     >
-      <h2 className="text-lg font-semibold">내부 메모·담당자{editOc ? "·OC 기록" : ""}</h2>
+      <h2 className="text-lg font-semibold">
+        {editAssignee ? "내부 메모·담당자" : "내부 메모"}
+        {editOc ? "·OC 기록" : ""}
+      </h2>
       <p className="mt-1 break-keep text-sm text-gray-500">
-        공급사에 나가지 않는 항목입니다. 동결된 뒤에도 고칠 수 있습니다(취소 전까지).
-        {!editOc && " OC 일자·참조는 ‘공급사 확인(OC)’으로 기록합니다."}
+        공급사에 나가지 않는 항목입니다. 동결된 뒤에도 고칠 수 있습니다.
+        {!editAssignee && " 취소된 발주는 내부 메모만 고칠 수 있습니다(원가를 잘못 적었다면 지워 주세요)."}
+        {editAssignee && !editOc && " OC 일자·참조는 ‘공급사 확인(OC)’으로 기록합니다."}
       </p>
       <fieldset disabled={save.isPending} className="contents">
         <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {editAssignee && (
           <div className="flex flex-col gap-1 text-sm">
             <label className="flex flex-col gap-1">
               <span className="text-gray-600">담당자</span>
@@ -597,6 +639,7 @@ function MetaPanel({
               </span>
             )}
           </div>
+          )}
           <div className="flex flex-col gap-1 text-sm">
             <label className="flex flex-col gap-1">
               <span className="text-gray-600">내부 메모</span>

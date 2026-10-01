@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
 import { SENTINELS, poSummary, poSummaryHidden } from "../test/po-fixtures";
+import { assertNoLeakOutsideText, captureConsole } from "../test/po-leak";
 import { stubFetch } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
 
@@ -38,6 +39,14 @@ describe("발주 목록 — 원가 열람 역할(Full 응답)", () => {
     expect(within(rowOf("PO-2026-0002")).getByText("2026-10-01")).toBeInTheDocument();
     expect(within(rowOf("PO-2026-0003")).getByText("취소")).toBeInTheDocument();
     expect(screen.getByText("전체 3건")).toBeInTheDocument();
+  });
+
+  it("Full 목록에서도 화면 글자 외 채널(콘솔·스토리지·URL·속성)로 원가가 새지 않는다", async () => {
+    const logs = captureConsole();
+    const { calls } = stubFetch(TRADER, [["/v1/purchase-orders", "GET", () => jsonResponse(page(ROWS))]]);
+    renderWithProviders(<AppRoutes />, { route: "/purchase-orders" });
+    await screen.findAllByText("76543219.87 USD");
+    assertNoLeakOutsideText(SENTINELS, logs, calls);
   });
 
   it("무역은 '발주 만들기' 링크가 있고 만들기 화면으로 간다", async () => {

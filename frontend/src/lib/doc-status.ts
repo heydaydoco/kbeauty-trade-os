@@ -144,8 +144,10 @@ export const canConfirmPurchaseOrder = (status: string): boolean => status === "
 /** 취소는 발행·공급사 확인에서만(서버 엣지 ISSUED·SUPPLIER_CONFIRMED→CANCELLED). */
 export const canCancelPurchaseOrder = (status: string): boolean =>
   status === "ISSUED" || status === "SUPPLIER_CONFIRMED";
-/** 취소된 발주는 내부 메모·담당자도 읽기 전용으로 닫는다(서버는 허용하지만 죽은 전표를 고칠 이유가 없다). */
-export const canEditPurchaseOrderMeta = (status: string): boolean => status !== "CANCELLED";
+/** 내부 메모는 취소 뒤에도 고칠 수 있다 — 원가를 잘못 적은 채 취소한 경우의 사후 정정 경로(ADR-0057 수용된 사실). */
+export const canEditPurchaseOrderNote = (_status: string): boolean => true;
+/** 담당자는 취소된 발주에서 닫는다(죽은 전표의 담당 이관은 의미가 없다). */
+export const canEditPurchaseOrderAssignee = (status: string): boolean => status !== "CANCELLED";
 /** OC 일자·참조는 공급사 확인 상태에서만 고칠 수 있다(서버 422와 같은 규칙). */
 export const canEditPurchaseOrderOc = (status: string): boolean => status === "SUPPLIER_CONFIRMED";
 

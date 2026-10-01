@@ -24,6 +24,7 @@ import {
   PO_KIND_LABEL,
   PRICE_BASIS_LABEL,
 } from "../lib/doc-status";
+import { recordTotalMismatch } from "../lib/po-total-notice";
 import { useCurrencies } from "../lib/money";
 import { usePagedQuery } from "../lib/paging";
 import {
@@ -93,10 +94,11 @@ export function PurchaseOrderCreatePage() {
 
   const previewLock = useRef(false);
   const createLock = useRef(false);
-  // 멱등 키는 폼 인스턴스당 1개. 새 키는 마지막으로 보낸 본문과 실제로 다른 본문을 보낼 때만.
+  // 멱등 키는 **본문별 1개**(본문→키 Map). A(결과를 모르는 실패) → B로 고쳐 확정 → 다시 A로 돌아가 확정하면 A의 원래 키를 쓴다
+  // (A가 서버에서 이미 만들어졌을 수 있으므로 같은 키여야 중복 발주가 안 생긴다). 새 본문일 때만 새 키.
   const keyRef = useRef<string>("");
-  if (keyRef.current === "") keyRef.current = crypto.randomUUID();
-  const lastSent = useRef<string | null>(null);
+  const keyByBody = useRef(new Map<string, string>());
+  const previewTotal = useRef<string | undefined>(undefined);
 
   const previewMutation = useMutation({
     mutationFn: (body: PoCreateBody) =>
@@ -113,6 +115,7 @@ export function PurchaseOrderCreatePage() {
         body,
       }),
     onSuccess: (created) => {
+      recordTotalMismatch(created.id, previewTotal.current, created.total_text);
       client.setQueryData(purchaseOrderDetailKey(created.id), created);
       void client.invalidateQueries({ queryKey: PURCHASE_ORDERS_QUERY_KEY });
       void navigate(`/purchase-orders/${created.id}`);
@@ -244,8 +247,13 @@ export function PurchaseOrderCreatePage() {
     if (preview === null || createLock.current) return;
     createLock.current = true;
     const serialized = JSON.stringify(preview.body);
-    if (lastSent.current !== null && lastSent.current !== serialized) keyRef.current = crypto.randomUUID();
-    lastSent.current = serialized;
+    let key = keyByBody.current.get(serialized);
+    if (key === undefined) {
+      key = crypto.randomUUID();
+      keyByBody.current.set(serialized, key);
+    }
+    keyRef.current = key;
+    previewTotal.current = preview.data.total_text;
     // ★ 미리보기 때의 본문 그대로 — 입력이 그사이 바뀌었어도(수정하러 가면 미리보기가 버려진다) 다른 것을 만들지 않는다.
     createMutation.mutate(preview.body, { onSettled: () => (createLock.current = false) });
   }
@@ -333,6 +341,11 @@ export function PurchaseOrderCreatePage() {
                     onChange={(e) => {
                       touched();
                       setCurrency(e.target.value);
+                      // KRW는 환율을 서버가 채운다 — 입력해 둔 값이 비KRW로 복귀할 때 되살아나지 않게 비운다.
+                      if (e.target.value === "KRW") {
+                        setFxRate("");
+                        setFxDate("");
+                      }
                     }}
                     className={inputClass}
                   >
@@ -717,6 +730,9 @@ export function PurchaseOrderCreatePage() {
                 (라인 {preview.data.lines.length}개)를 만듭니다.
               </p>
               <p className="mt-2">{PO_RISK_NOTICE}</p>
+              <p className="mt-2">
+                마스터 매입가 단가는 확정 시점에 서버가 다시 읽으므로 미리보기와 합계가 달라질 수 있습니다.
+              </p>
             </>
           }
           pending={createMutation.isPending}
