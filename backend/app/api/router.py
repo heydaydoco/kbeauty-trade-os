@@ -5,10 +5,14 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1 import system
+from app.modules.approvals import router as approvals_router
 from app.modules.bank_accounts import router as bank_accounts_router
 from app.modules.catalog import router as catalog_router
 from app.modules.certifications import router as certifications_router
 from app.modules.collaboration import router as collaboration_router
+from app.modules.credit import (
+    spec as credit_spec,  # noqa: F401 — TargetSpec 등록 배선(approvals는 도메인을 모른다)
+)
 from app.modules.deadlines import router as deadlines_router
 from app.modules.documents import router as documents_router
 from app.modules.handover import router as handover_router
@@ -41,6 +45,9 @@ api_router.include_router(notifications_router.router)
 api_router.include_router(notifications_router.rules_router)
 api_router.include_router(platform_router.router)
 api_router.include_router(policies_router.router)
+api_router.include_router(approvals_router.lines_router)
+api_router.include_router(approvals_router.router)
+api_router.include_router(approvals_router.delegations_router)
 api_router.include_router(quotations_router.router)
 api_router.include_router(trade_chain_router.router)
 api_router.include_router(trade_chain_router.pi_router)

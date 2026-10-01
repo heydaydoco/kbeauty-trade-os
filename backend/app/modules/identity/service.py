@@ -347,6 +347,22 @@ def holders_of_role(session: Session, role: RoleCode) -> list[int]:
     )
 
 
+def active_roles_of(session: Session, user_id: int) -> frozenset[RoleCode] | None:
+    """사용자의 **현재** 역할 — 비활성·삭제 계정이면 None.
+
+    세션 시작 때 읽은 `AuthenticatedUser.roles`는 결정 트랜잭션 도중 바뀔 수 있다(TOCTOU). 결재 자격처럼 "지금 이 순간"의
+    권한이 필요한 곳(승인 결정·대결 유효성)이 잠금 뒤에 이 함수로 다시 읽는다 — 비활성은 즉시 무자격이다(fail-closed).
+    """
+    active = session.execute(
+        select(User.id).where(
+            User.id == user_id, User.deleted_at.is_(None), User.is_active.is_(True)
+        )
+    ).scalar_one_or_none()
+    if active is None:
+        return None
+    return frozenset(_roles_by_user(session, [user_id]).get(user_id, set()))
+
+
 def list_active_user_names(*, offset: int, limit: int) -> tuple[list[tuple[int, str]], int]:
     """활성 사용자의 (id, 표시명) — 이메일·역할은 싣지 않는다.
 

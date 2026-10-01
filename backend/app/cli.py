@@ -24,6 +24,7 @@ from sqlalchemy import select
 from app.core.db.uow import unit_of_work
 from app.core.errors.exceptions import AppError
 from app.core.time import today_kst
+from app.modules.approvals import stagnation as approval_stagnation
 from app.modules.audit import service as audit
 from app.modules.audit.models import AuditAction
 from app.modules.certifications.service import sweep_date_transitions
@@ -197,6 +198,15 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="기준일(YYYY-MM-DD). 생략하면 KST 오늘. ★ 운영 DB에서 미래 날짜를 주지 말 것",
     )
+    approval_scan = commands.add_parser(
+        "approval-stagnation-scan",
+        help="결재 대기 정체 N일 독촉 스캔을 1회 실행한다(알림만 생성 — 승인 상태는 바꾸지 않음, 멱등)",
+    )
+    approval_scan.add_argument(
+        "--base-date",
+        default=None,
+        help="기준일(YYYY-MM-DD). 생략하면 KST 오늘. ★ 운영 DB에서 미래 날짜를 주지 말 것",
+    )
     briefing = commands.add_parser(
         "daily-briefing", help="담당 건 보유 사용자에게 데일리 브리핑을 1회 보낸다(하루 1통 dedup)"
     )
@@ -292,6 +302,14 @@ def main(argv: list[str] | None = None) -> int:
             f"정체 스캔 완료: 인증 {counts['certifications']}건·통신 기록 {counts['follow_ups']}건 — "
             f"신규 알림 정체 {counts['stagnant']}·기한 당일 {counts['follow_up_due']}·"
             f"기한 도과 {counts['follow_up_overdue']}·실패 {counts['failed']}건"
+        )
+        return 1 if counts["failed"] else 0
+    if args.command == "approval-stagnation-scan":
+        base = date.fromisoformat(args.base_date) if args.base_date else None
+        counts = approval_stagnation.scan_approval_stagnation(base_date=base)
+        print(
+            f"결재 정체 스캔 완료: 대기 승인 {counts['approvals']}건 — "
+            f"신규 알림 {counts['stagnant']}건·실패 {counts['failed']}건"
         )
         return 1 if counts["failed"] else 0
     if args.command == "daily-briefing":

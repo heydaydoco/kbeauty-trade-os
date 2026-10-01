@@ -76,6 +76,21 @@ USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
     ("sales_order_status_log", "actor_user_id"): "ACTOR_LOG",
     ("purchase_order_status_log", "actor_user_id"): "ACTOR_LOG",
     ("import_staging", "confirmed_by_id"): "ACTOR_LOG",
+    # S3-1 PR-9a — 승인 4표(ADR-0061). 승인 대기 건은 **역할 기반**이라 이관 대상이 아니다(requested_by·decided_by는 이력이고,
+    # 대결은 개인 결재 권한의 임시 위탁이라 이관하지 않는다 — 이관 도구가 대상 계정을 비활성화하면 대결은 계산 술어로 즉시 무효).
+    # 기안자 퇴사로 남은 REQUESTED는 결재자 반려·ADMIN 회수·정체 독촉으로 정리한다. ASSIGNMENT 이름 4종 컬럼을 두지 않는다.
+    ("approvals", "requested_by_id"): "ACTOR_LOG",
+    ("approvals", "decided_by_id"): "ACTOR_LOG",
+    ("approvals", "decided_on_behalf_of_id"): "ACTOR_LOG",
+    ("approvals", "consumed_by_id"): "ACTOR_LOG",
+    ("approval_events", "actor_user_id"): "ACTOR_LOG",
+    ("approval_events", "on_behalf_of_user_id"): "ACTOR_LOG",
+    (
+        "delegations",
+        "delegator_user_id",
+    ): "IDENTITY_LINK",  # 개인 결재 권한의 위탁자 — 그 사람 자신에 속한 행
+    ("delegations", "delegate_user_id"): "IDENTITY_LINK",  # 수임자 — 개인 권한(이관 대상 아님)
+    ("delegations", "revoked_by_id"): "ACTOR_LOG",
     ("user_roles", "user_id"): "IDENTITY_LINK",
     ("user_sessions", "user_id"): "IDENTITY_LINK",
 }

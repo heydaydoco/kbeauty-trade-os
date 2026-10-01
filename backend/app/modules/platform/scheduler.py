@@ -47,6 +47,7 @@ from sqlalchemy.orm import Session
 from app.core.db.uow import unit_of_work
 from app.core.logging.redaction import scrub_text
 from app.core.time import KST, utcnow
+from app.modules.approvals import stagnation as approval_stagnation
 from app.modules.certifications import service as certifications
 from app.modules.collaboration import stagnation
 from app.modules.deadlines import service as deadlines
@@ -157,6 +158,12 @@ def _run_stagnation_scan() -> dict[str, int]:
     return _fail_if_any_failed(stagnation.scan_stagnation(), what="정체 스캔")
 
 
+def _run_approval_stagnation_scan() -> dict[str, int]:
+    return _fail_if_any_failed(
+        approval_stagnation.scan_approval_stagnation(), what="결재 정체 스캔"
+    )
+
+
 def _run_storage_monitor() -> dict[str, int]:
     return storage.run_storage_monitor()
 
@@ -249,6 +256,14 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         # (ADR-0056 4금 논증). 인증 스윕(06:00) 뒤·기일 스캔(06:30) 앞.
         schedule="daily@06:10",
         run=_run_document_expiry_sweep,
+    ),
+    JobSpec(
+        code="approval-stagnation-scan",
+        name_ko="결재 대기 정체 N일 독촉 스캔(알림만)",
+        # 알림만 만든다 — 승인 상태·전표를 바꾸지 않는다(만료·자동 결정 없음, ADR-0061 4금 논증). 인증 정체 스캔(07:00) 뒤·브리핑(09:00) 앞 —
+        # 브리핑의 "미확인 알림" 집계에 오늘 독촉분이 들어간다.
+        schedule="daily@07:10",
+        run=_run_approval_stagnation_scan,
     ),
 )
 

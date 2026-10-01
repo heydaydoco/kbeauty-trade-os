@@ -245,6 +245,40 @@ REGISTRY: tuple[Entry, ...] = (
         requires_actor=False,  # 자동 스윕 — 행위자 없음(actor NULL·automatic=true)
         notes="만료 스윕 — (QT,ISSUED→EXPIRED)·(PI,ISSUED→EXPIRED) 두 엣지만(ADR-0056 4금 논증)",
     ),
+    # S3-1 PR-9a — 승인 통로 5종. 승인 결정은 **사람만**(자동 승인 경로 0): 호출처를 코드로 고정하고, 잡·CLI·임포트·이관·알림·아웃박스·시드는 닿지 못한다.
+    # 요청·소비·무효의 호출 모듈(trade_chain 확정·요청 엔드포인트·편집·취소)은 PR-12가 자기 파일을 이 엔트리의 allowed_files에 더한다.
+    Entry(
+        name="decide_approval",
+        defined_in="app.modules.approvals.service",
+        allowed_files=frozenset({"modules/approvals/service.py", "modules/approvals/router.py"}),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "readiness",
+                "policies",
+                "order_intake",
+                "order_board",
+                "gates",
+                "credit",
+                "payments",
+                "trade_chain",
+                "sales_orders",
+            }
+        ),
+        forbid_module_import=False,  # 정의 모듈이 요청·소비·무효도 품는다 — 언급 검사로 충분(임포트 경계는 test_approval_contract가 따로 고정)
+        notes="**사람 결정 통로(승인·반려·회수)** — 라우터 1곳+실 사용자 행위자 필수. 호출처 집합 = DECIDE_CALLERS(P7 Slack 어댑터가 더할 때 ADR 동반)",
+    ),
+    # request_approval·consume_approval·void_for_target·note_bypass_attempt: **호출자가 생기는 PR-12가 엔트리를 더한다** — 호출처가 없는 지금 등록하면 "죽은 등록 금지" 자기검사가
+    # 실패한다. PR-9a~PR-11 동안의 부재는 test_approval_contract(`test_no_domain_module_calls_the_system_channels_yet`·소비 접점 PENDING 장부)가 고정한다.
     Entry(
         name="converge_quotation",
         defined_in="app.modules.trade_chain.chain_ops",

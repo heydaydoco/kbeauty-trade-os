@@ -57,6 +57,12 @@ _NEVER_SEEDED = (
     "notification_channels",
     "webhook_subscriptions",
     "policy_settings",  # S3-1 — 행이 없는 것이 정상 초기 상태(미설정=fail-closed)
+    # S3-1 PR-9a — 승인 4표: 결재선은 업무 정책이라 코드·시드가 지어낼 수 없다(ADMIN 화면/API만 공급 — 등록 전 fail-closed),
+    # 나머지 3표는 업무 행위의 기록이다.
+    "approval_lines",
+    "approvals",
+    "approval_events",
+    "delegations",
 )
 
 
@@ -141,5 +147,7 @@ def test_registered_jobs_stay_clear_of_the_four_bans() -> None:
             "trade-docs-totals-verify",
             # S3-1 PR-6a — 견적·PI 만료 스윕(전이 두 엣지 QT/PI ISSUED→EXPIRED뿐 — 발주·SO 무접촉·대외 발송 없음·후속 보유 제외, ADR-0056)
             "document-expiry-sweep",
+            # S3-1 PR-9a — 결재 대기 정체 독촉(읽기+alerts INSERT뿐 — 승인 상태 불변·자동 결정 없음·대외 발송 없음, ADR-0061 4금 논증)
+            "approval-stagnation-scan",
         }
     )
