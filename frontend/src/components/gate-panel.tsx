@@ -8,7 +8,7 @@
 // - 다이얼로그는 열 때의 판정 스냅샷을 들고 있다 — 창 포커스 재조회로 목록이 바뀌어도 열린 다이얼로그·입력은 닫히거나 지워지지 않는다(서버가 STALE로 막는다).
 // - 쓰기 성공 뒤 게이트·SO 상세를 무효화한다. SO version 기준(baseVersion)은 건드리지 않는다(override는 SO 행을 바꾸지 않는다).
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { apiFetch } from "../lib/api";
@@ -33,6 +33,7 @@ import {
   salesOrderDetailKey,
   settlementLabel,
   toleranceLabel,
+  useGateReport,
   validateOverrideReason,
   type GateOverrideBody,
   type GateReport,
@@ -71,13 +72,7 @@ export function GatePanel({ soId, soStatus }: { soId: number; soStatus: string }
   const roleWrite = hasRole(me, "TRADE") && !forbidden;
   const isAdmin = me?.roles.includes("ADMIN") ?? false;
 
-  const report = useQuery({
-    queryKey: gatesKey(soId),
-    queryFn: () => apiFetch<GateReport>(`/v1/sales-orders/${soId}/gates`),
-    enabled: Number.isInteger(soId) && soId > 0,
-    // 참고값 — 다른 화면에서 고치고 돌아왔을 때 옛 판정이 남지 않게. 창 포커스 재조회는 다이얼로그 상태와 무관하다(상태는 컴포넌트에 있다).
-    staleTime: 0,
-  });
+  const report = useGateReport(soId);
 
   const [dialog, setDialog] = useState<DialogState | null>(null);
   // 성공 알림(live region)과 포커스 이동 — 다이얼로그가 닫히고 버튼이 사라져도 포커스가 body로 빠지지 않게 요약 영역으로 옮긴다.

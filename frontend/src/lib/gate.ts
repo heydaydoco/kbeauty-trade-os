@@ -2,7 +2,8 @@
 // ★ 화면은 통과·미통과를 다시 판정하지 않는다: level·resolution·settlement·can_override·clearance·approval은 서버 값을 그대로 표시한다.
 // 금액은 표시하지 않는다(여신 수치는 정수 최소단위뿐이고 *_text 계약이 없다 — PROGRESS 11b 부채). 프런트 산술 0.
 
-import { ApiError } from "./api";
+import { useQuery } from "@tanstack/react-query";
+import { ApiError, apiFetch } from "./api";
 import { salesOrderDetailKey } from "./sales-order";
 
 export type GateCode =
@@ -65,6 +66,17 @@ export interface GateOverrideBody {
 
 // SALES_ORDERS_QUERY_KEY 접두 아래 — SO 편집·전이 뒤의 prefix 무효화가 게이트 판정도 함께 새로 읽게 한다(판정 입력이 바뀌었으므로).
 export const gatesKey = (soId: number) => ["sales-orders", "gates", soId] as const;
+
+/** 게이트 판정 조회(참고값) — GatePanel·ConfirmPanel이 같은 키·같은 함수로 읽어 한 번만 요청된다. */
+export function useGateReport(soId: number) {
+  return useQuery({
+    queryKey: gatesKey(soId),
+    queryFn: () => apiFetch<GateReport>(`/v1/sales-orders/${soId}/gates`),
+    enabled: Number.isInteger(soId) && soId > 0,
+    // 참고값 — 다른 화면에서 고치고 돌아왔을 때 옛 판정이 남지 않게.
+    staleTime: 0,
+  });
+}
 export { salesOrderDetailKey };
 
 export const GATE_LABEL: Record<string, string> = {

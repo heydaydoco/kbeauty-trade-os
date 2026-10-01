@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { DocumentFlowPanel } from "../components/document-flow-panel";
+import { ConfirmPanel } from "../components/confirm-panel";
 import { GatePanel } from "../components/gate-panel";
 import { DocField, EMPTY, incotermText, paymentTermsText, show } from "../components/proforma-facts";
 import { SearchSelect } from "../components/search-select";
@@ -310,6 +311,8 @@ function SalesOrderDetailView() {
         />
 
         <GatePanel soId={so.id} soStatus={so.status} />
+
+        <ConfirmPanel so={so} version={base} onReload={reload} />
 
         <DocumentFlowPanel kind="SALES_ORDER" id={so.id} />
 
