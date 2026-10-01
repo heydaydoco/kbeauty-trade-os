@@ -3,6 +3,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
+import { PAYMENT_SUMMARY, paymentRow } from "../test/payment-fixtures";
 import { PI_LOG, piDetail } from "../test/pi-fixtures";
 import { stubFetch } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
@@ -19,6 +20,8 @@ afterEach(() => {
 
 const REFS: Array<[string, string, () => Response]> = [
   ["/v1/proforma-invoices/5/status-log", "GET", () => jsonResponse(PI_LOG)],
+  // 입금 패널(10b) — 상세 핸들러(/v1/proforma-invoices/5)가 접두 일치로 가로채지 않게 먼저 둔다.
+  ["/v1/proforma-invoices/5/payments", "GET", () => jsonResponse({ ...page([]), summary: PAYMENT_SUMMARY })],
   ["/v1/users/lookup", "GET", () => jsonResponse(page([{ id: 1, display_name: "무역 담당" }]))],
 ];
 
@@ -44,8 +47,10 @@ describe("PI 상세 — 표시와 상태별 버튼", () => {
     expect(await screen.findByRole("heading", { name: /PI-2026-0001/ })).toBeInTheDocument();
     expect(screen.getByText("선수금 T/T · 선수금 30% · 잔금 B/L일 기준 30일")).toBeInTheDocument();
     expect(screen.getByText("75.00 USD")).toBeInTheDocument();
-    expect(screen.getByText("22.50 USD")).toBeInTheDocument(); // 선수금 청구액(서버 계산)
-    expect(screen.getByText("52.50 USD")).toBeInTheDocument();
+    // PI 상세 영역(입금 패널 요약과 구분) — 선수금 청구액·잔금은 서버 계산 문자열 그대로
+    const advance = within(screen.getByLabelText("선수금 청구액"));
+    expect(advance.getByText("22.50 USD")).toBeInTheDocument();
+    expect(advance.getByText("52.50 USD")).toBeInTheDocument();
     expect(screen.getByText("Shinhan Bank")).toBeInTheDocument();
     expect(screen.getByText("110-123-456789")).toBeInTheDocument();
     expect(screen.getByText("SHBKKRSE")).toBeInTheDocument();
@@ -329,5 +334,58 @@ describe("PI 상세 — meta(FREE 열)·낙관 잠금", () => {
       const patch = calls.find((c) => c.method === "PATCH");
       expect(patch?.body).toMatchObject({ version: 3 });
     });
+  });
+  async function recordPayment() {
+    await screen.findByRole("form", { name: "입금 기록" });
+    fireEvent.change(screen.getByLabelText(/입금액/), { target: { value: "10.00" } });
+    fireEvent.change(screen.getByLabelText(/입금 확인 근거/), { target: { value: "REF" } });
+    fireEvent.click(screen.getByRole("button", { name: "입금 기록" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "입금 기록 확정" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("일부입금").length).toBeGreaterThan(0));
+  }
+  const META_PATCH: [string, string, () => Response] = [
+    "/v1/proforma-invoices/5/meta",
+    "PATCH",
+    () => jsonResponse(piDetail({ version: 9 })),
+  ];
+  const payPost = (bump: number): [string, string, () => Response] => [
+    "/v1/proforma-invoices/5/payments",
+    "POST",
+    () => {
+      server.pi = piDetail({ version: bump, status: "PARTIALLY_PAID" });
+      return jsonResponse({ payment: paymentRow(), summary: PAYMENT_SUMMARY, warnings: [] }, 201);
+    },
+  ];
+
+  it("입금 기록으로 PI version이 오르면 기준을 자동으로 옮기지 않고 배너+재조회로 안내한다(오경보가 덮어쓰기보다 안전) — 이후 쓰기는 옛 version을 싣는다", async () => {
+    const { calls } = open(piDetail(), [payPost(3), META_PATCH]);
+    await recordPayment();
+    expect(await screen.findByText(/방금 입금 기록으로 PI 상태가 갱신되었습니다/)).toBeInTheDocument();
+    // 기준이 옮겨졌다면 version 3으로 나갔을 것 — 옛 기준(2)으로 나가 서버 409가 막게 둔다
+    fireEvent.change(screen.getByLabelText("내부 메모"), { target: { value: "메모" } });
+    fireEvent.click(screen.getByRole("button", { name: "메모·담당자 저장" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toMatchObject({ version: 2 }));
+  });
+
+  it("'최신 내용 불러오기'를 누르면 기준이 맞춰지고 배너가 사라진다", async () => {
+    open(piDetail(), [payPost(3)]);
+    await recordPayment();
+    await screen.findByText(/방금 입금 기록으로/);
+    fireEvent.click(screen.getAllByRole("button", { name: "최신 내용 불러오기" })[0] as HTMLElement);
+    await waitFor(() => expect(screen.queryByText(/방금 입금 기록으로/)).not.toBeInTheDocument());
+  });
+
+  it("이미 다른 곳에서 수정돼 어긋난 상태에서 입금해도 배너가 유지된다", async () => {
+    const { calls } = open(piDetail(), [payPost(4), META_PATCH]);
+    await screen.findByRole("form", { name: "입금 기록" });
+    server.pi = piDetail({ version: 3 });
+    window.dispatchEvent(new Event("visibilitychange"));
+    await screen.findByText(/다른 곳에서 이 PI가 수정되었습니다/);
+    await recordPayment();
+    expect(screen.queryByText(/방금 입금 기록으로/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("내부 메모"), { target: { value: "메모" } });
+    fireEvent.click(screen.getByRole("button", { name: "메모·담당자 저장" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PATCH")?.body).toMatchObject({ version: 2 }));
   });
 });

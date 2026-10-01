@@ -66,6 +66,10 @@ interface ConfirmDialogProps {
   /** 지정하면 사유 입력칸을 보이고 1자 이상을 요구한다. */
   reasonLabel?: string;
   reasonMaxLength?: number;
+  /** 사유 최소 글자 수(기본 1) — 서버 규칙이 더 엄격할 때(예: 입금 역기록 2자) 서버 거절 전에 막는다. */
+  reasonMinLength?: number;
+  /** 사유 사전 검증 — 문제 문구를 돌려주면 입력칸 아래에 보이고 확정이 막힌다(서버가 최종). */
+  reasonValidator?: (reason: string) => string | null;
   /** 사유 입력칸 바로 아래 안내(예: 자유 텍스트에 원가를 적지 말라는 경고 — ADR-0057). */
   reasonHint?: ReactNode;
   pending?: boolean;
@@ -85,6 +89,8 @@ export function ConfirmDialog({
   danger = false,
   reasonLabel,
   reasonMaxLength = 500,
+  reasonMinLength = 1,
+  reasonValidator,
   reasonHint,
   pending = false,
   confirmDisabled = false,
@@ -102,7 +108,14 @@ export function ConfirmDialog({
   useDialogBehavior(boxRef, onCancel, firstRef);
 
   const needsReason = reasonLabel !== undefined;
-  const blocked = pending || confirmDisabled || (needsReason && reason.trim() === "");
+  // 길이는 코드포인트 기준(서버 문자 수와 맞춤 — 이모지 등 서로게이트 쌍이 2로 세어지지 않게).
+  const reasonProblem =
+    needsReason && reason !== "" && reasonValidator !== undefined ? reasonValidator(reason) : null;
+  const blocked =
+    pending ||
+    confirmDisabled ||
+    (needsReason && [...reason.trim()].length < reasonMinLength) ||
+    reasonProblem !== null;
 
   return (
     <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40 p-4">
@@ -137,6 +150,11 @@ export function ConfirmDialog({
                 className="rounded border border-gray-300 px-3 py-2"
               />
             </label>
+            {reasonProblem && (
+              <span role="alert" className="break-keep text-xs text-signal-red">
+                {reasonProblem}
+              </span>
+            )}
             {reasonHint && (
               <span id={hintId} className="break-keep text-xs text-gray-500">
                 {reasonHint}

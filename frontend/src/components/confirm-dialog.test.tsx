@@ -46,4 +46,23 @@ describe("ConfirmDialog", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(opener).toHaveFocus();
   });
+
+  it("reasonMinLength: 최소 글자 수 미만이면 확정 버튼이 막힌다", () => {
+    render(
+      <ConfirmDialog
+        title="제목"
+        description="설명"
+        confirmLabel="확정"
+        reasonLabel="사유"
+        reasonMinLength={2}
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+      />,
+    );
+    const confirm = screen.getByRole("button", { name: "확정" });
+    fireEvent.change(screen.getByLabelText("사유"), { target: { value: " 가 " } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("사유"), { target: { value: "가나" } });
+    expect(confirm).toBeEnabled();
+  });
 });

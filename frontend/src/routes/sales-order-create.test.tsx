@@ -3,6 +3,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
+import { PAYMENT_SUMMARY } from "../test/payment-fixtures";
 import { PI_LOG, piDetail } from "../test/pi-fixtures";
 import { LOG, detail, stubFetch, type Call } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
@@ -99,6 +100,7 @@ function openPi(pi: ReturnType<typeof piDetail>, extra: Array<[string, string, (
     ...extra,
     ...COMMON,
     ["/v1/sales-orders/9", "GET", () => jsonResponse(soDetail())],
+    ["/v1/proforma-invoices/5/payments", "GET", () => jsonResponse({ ...page([]), summary: PAYMENT_SUMMARY })],
     ["/v1/proforma-invoices/5", "GET", () => jsonResponse(server.pi)],
   ]);
   renderWithProviders(<AppRoutes />, { route: "/proforma-invoices/5" });

@@ -3,6 +3,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
+import { PAYMENT_SUMMARY } from "../test/payment-fixtures";
 import { PI_LOG, bankAccount, piDetail, piPreview } from "../test/pi-fixtures";
 import { LOG, detail, stubFetch, type Call } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
@@ -58,6 +59,7 @@ function open(
     ["/v1/bank-accounts", "GET", () => jsonResponse(page(banks))],
     ["/v1/quotations/7/status-log", "GET", () => jsonResponse(LOG)],
     ["/v1/proforma-invoices/5/status-log", "GET", () => jsonResponse(PI_LOG)],
+    ["/v1/proforma-invoices/5/payments", "GET", () => jsonResponse({ ...page([]), summary: PAYMENT_SUMMARY })],
     ["/v1/proforma-invoices/5", "GET", () => jsonResponse(piDetail())],
     ["/v1/system/currencies", "GET", () => jsonResponse(page([{ code: "USD", minor_units: 2 }]))],
     ["/v1/users/lookup", "GET", () => jsonResponse(page([{ id: 1, display_name: "무역 담당" }]))],
