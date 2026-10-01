@@ -49,7 +49,8 @@ from app.core.db.mixins import (
 )
 
 #: 판매 상태. 단종된 SKU·제품은 지우지 않는다 — 과거 전표가 참조한다.
-SKU_STATUSES = ("ACTIVE", "DISCONTINUED")
+SKU_STATUS_DISCONTINUED = "DISCONTINUED"
+SKU_STATUSES = ("ACTIVE", SKU_STATUS_DISCONTINUED)
 PRODUCT_STATUSES = SKU_STATUSES
 
 #: SKU의 종류 (§4.2 / ADR-0016).

@@ -33,6 +33,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db.base import Base
 from app.core.db.mixins import PkMixin
+from app.modules.gates.text import REASON_MAX, REASON_MIN
 
 SUBJECT_SALES_ORDER = "SALES_ORDER"
 #: S5-1이 `CHANNEL_LISTING`을 추가한다(소비분 한정 재정의 — ADR-0041 규율).
@@ -51,9 +52,6 @@ OVERRIDABLE_GATE_CODES = ("MARKET_READINESS", "MOQ", "PI_DEPOSIT", "PRICE_DEVIAT
 #: override를 부여할 수 있는 판정 결과 — BLOCK·UNKNOWN만(PASS·WARN은 해소가 필요 없다).
 OVERRIDE_RESULTS = ("BLOCK", "UNKNOWN")
 ROLE_CODES = ("ADMIN", "CERT", "LOGISTICS", "TRADE", "VIEWER")
-
-REASON_MIN = 5
-REASON_MAX = 500
 
 
 def _in_list(values: tuple[str, ...]) -> str:
@@ -137,6 +135,7 @@ class GateOverride(PkMixin, Base):
             f"char_length(btrim(reason)) BETWEEN {REASON_MIN} AND {REASON_MAX}",
             name="reason_length",
         ),
+        # 로캘·ASCII에 의존하는 최후 방어선 — 사유의 정본 검증은 `gates.text.reason_problem`(유니코드 Cc/Cf/Zl/Zp·한글 채움·실질 5자)이다.
         CheckConstraint("reason !~ '[[:cntrl:]]'", name="reason_clean"),
         CheckConstraint("basis_hash ~ '^[0-9a-f]{64}$'", name="basis_hash_format"),
         CheckConstraint("jsonb_typeof(basis) = 'object'", name="basis_is_object"),

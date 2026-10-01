@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 
-from app.modules.gates.models import REASON_MAX, REASON_MIN
+from app.modules.gates.text import REASON_MAX, reason_problem
 from app.modules.gates.types import GateCode
-
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 GateCodeLiteral = Literal[
     "ITEM_MAPPING",
@@ -22,7 +19,8 @@ GateCodeLiteral = Literal[
     "MOQ",
     "PI_DEPOSIT",
 ]
-assert set(GateCodeLiteral.__args__) == {c.value for c in GateCode}  # type: ignore[attr-defined]
+if set(GateCodeLiteral.__args__) != {c.value for c in GateCode}:  # type: ignore[attr-defined]
+    raise RuntimeError("GateCodeLiteral이 GateCode 열거와 다릅니다 — 스키마를 갱신하세요.")
 
 
 class GateOverrideRequest(BaseModel):
@@ -40,17 +38,16 @@ class GateOverrideRequest(BaseModel):
     @field_validator("reason")
     @classmethod
     def _reason(cls, value: str) -> str:
-        if _CONTROL_CHARS.search(value):
-            raise ValueError("제어문자(줄바꿈·탭 등)는 입력할 수 없습니다.")
-        cleaned = value.strip()
-        if not REASON_MIN <= len(cleaned) <= REASON_MAX:
-            raise ValueError(f"{REASON_MIN}~{REASON_MAX}자로 입력해 주세요.")
-        return cleaned
+        problem = reason_problem(value)
+        if problem is not None:
+            raise ValueError(problem)
+        return value.strip()
 
 
 class GateOverrideInfo(BaseModel):
     id: int
-    reason: str
+    #: 자유 텍스트 — 무역·관리자에게만(그 외 역할은 null).
+    reason: str | None
     authorized_role: str
     granted_by_id: int
     created_at: datetime
@@ -67,6 +64,9 @@ class GateResultOut(BaseModel):
     reason_code: str
     message_ko: str
     basis: dict[str, Any]
+    #: 표시 전용 상세(판정 입력 아님·해시 불포함) — 다른 문서번호 등. 무역·관리자에게만.
+    detail: dict[str, Any]
+    #: 여신(CREDIT)은 마스킹 역할에게 빈 문자열(override 불가라 결속 값이 필요 없다).
     basis_hash: str
     #: 이 결과에 override를 부여할 수 있는 역할(해소가 OVERRIDE일 때만).
     override_roles: list[str]

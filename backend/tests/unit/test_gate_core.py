@@ -478,8 +478,17 @@ def test_the_reason_validator_enforces_five_to_five_hundred_characters_after_tri
 
     assert service.clean_reason("  다섯글자요  ") == "다섯글자요"
     assert service.clean_reason("12345") == "12345"
+    assert service.clean_reason("가 나 다 라 마") == "가 나 다 라 마"  # 내부 공백은 허용(실질 5자)
     assert len(service.clean_reason("가" * 500)) == 500
-    for bad in ["1234", "    a    ", "가" * 501, "줄\n바꿈사유", "탭\t사유입니다"]:
+    for bad in [
+        "1234",
+        "    a    ",
+        "가" * 501,
+        "줄\n바꿈사유",
+        "탭\t사유입니다",
+        "가나다라\u3164",
+        "a b c d",
+    ]:
         with pytest.raises(AppError):
             service.clean_reason(bad)
 
@@ -492,6 +501,15 @@ class _NoWriteSession:
 
     def flush(self) -> None:
         raise AssertionError("거부해야 할 override가 DB 쓰기까지 갔다")
+
+    def execute(self, *_args: Any) -> Any:
+        """최신 부여 행 조회 — 빈 결과(첫 부여)."""
+
+        class _Empty:
+            def scalar_one_or_none(self) -> None:
+                return None
+
+        return _Empty()
 
 
 @pytest.mark.group_h

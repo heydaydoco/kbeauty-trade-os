@@ -199,36 +199,27 @@ def test_duplicate_po_warns_when_the_order_has_no_po_number() -> None:
 
 @covers(G.DUPLICATE_PO, L.BLOCK, R.NONE)
 def test_duplicate_po_blocks_a_live_duplicate_and_it_cannot_be_overridden() -> None:
-    """같은 거래처·같은 PO 키의 다른 비취소 SO가 있으면 BLOCK/NONE — DB 부분 유니크가 정상 경로의 중복을 막으므로 인덱스를 잠시 내려 방어적 재조회 분기를 재현한다(데이터 무결성: override 불가)"""
+    """같은 거래처·같은 PO 키의 다른 비취소 SO가 있으면 BLOCK/NONE(override 불가). SO 부분 유니크가 정상 경로의 중복을 막으므로 합성 대상(po_no_key = 다른 SO의 키)으로 평가기를 직접 부른다 — DDL 조작 없음.
+    다른 문서번호·상태는 해시에 안 들어가는 표시 전용 detail에만 있다"""
     buyer = create_buyer()
-    second = 0
-    _sql("DROP INDEX uq_sales_orders_buyer_po_live")
-    try:
-        # 서비스 선검증(`require_po_free`)도 중복을 막으므로 DB 직행으로 같은 키의 두 번째 SO를 만든다
-        first = raw_so(
-            "RECEIVED", buyer_partner_id=buyer, buyer_po_no="PO-DUP-1", buyer_po_no_key="PO-DUP-1"
-        )
-        second = raw_so(
-            "RECEIVED", buyer_partner_id=buyer, buyer_po_no="po-dup-1", buyer_po_no_key="PO-DUP-1"
-        )
-        result = one(evaluate(second, only=[G.DUPLICATE_PO]), G.DUPLICATE_PO)
-        assert (result.level, result.resolution, result.reason_code) == (
-            L.BLOCK,
-            R.NONE,
-            "DUPLICATE_PO_NO",
-        )
-        assert result.basis["other_doc_number"] == scalar(
-            "SELECT doc_number FROM sales_orders WHERE id = :i", i=first
-        )
-        assert result.override_roles == ()
-    finally:
-        if second:
-            _sql("UPDATE sales_orders SET status = 'CANCELLED' WHERE id = :i", i=second)
-        _sql(
-            "CREATE UNIQUE INDEX uq_sales_orders_buyer_po_live ON sales_orders"
-            " (buyer_partner_id, buyer_po_no_key) WHERE deleted_at IS NULL"
-            " AND buyer_po_no_key IS NOT NULL AND status <> 'CANCELLED'"
-        )
+    first = create_direct_so(buyer, buyer_po_no="PO-DUP-1")
+    second = create_direct_so(buyer, buyer_po_no="PO-OTHER-2")
+    first_key = scalar("SELECT buyer_po_no_key FROM sales_orders WHERE id = :i", i=first["id"])
+    subject = dataclasses.replace(_subject(second["id"]), po_no_key=first_key)
+    (result,) = _eval_subject(subject, G.DUPLICATE_PO)
+    assert (result.level, result.resolution, result.reason_code) == (
+        L.BLOCK,
+        R.NONE,
+        "DUPLICATE_PO_NO",
+    )
+    assert result.detail["other_doc_number"] == first["doc_number"]
+    assert "other_doc_number" not in result.basis and result.override_roles == ()
+    twin = dataclasses.replace(result, detail={"other_doc_number": "SO-X"})
+    assert twin.basis_hash == result.basis_hash  # 표시 상세는 해시에 영향이 없다
+    # 취소된 SO가 쥔 키는 점유가 아니다(반대 방향 대조)
+    _sql("UPDATE sales_orders SET status = 'CANCELLED' WHERE id = :i", i=first["id"])
+    (free,) = _eval_subject(subject, G.DUPLICATE_PO)
+    assert free.level is L.PASS
 
 
 # ══ PRICE_DEVIATION ═════════════════════════════════════════════════════════════
@@ -287,8 +278,23 @@ def test_the_price_check_is_an_integer_cross_multiplication_not_a_floored_divisi
     (line,) = line_ids(so["id"])
     result = one(evaluate(so["id"], only=[G.PRICE_DEVIATION]), G.PRICE_DEVIATION, line)
     assert result.level is L.BLOCK
-    assert result.basis["deviation_bp"] == 3333  # 표시용 내림값은 허용치와 같지만 판정은 교차곱이다
-    assert result.basis["deviation_pct"] == "33.33"
+    # 표시 편차는 올림 — 허용치(33.33%)를 넘긴 BLOCK이 "33.33"으로 보이는 오독이 없다(판정은 교차곱)
+    assert result.basis["deviation_bp"] == 3334
+    assert result.basis["deviation_pct"] == "33.34"
+
+
+def test_the_price_basis_carries_the_sku_so_the_hash_binds_the_product() -> None:
+    """가격 근거에 sku_id가 실린다 — 같은 가격 조건에서 라인의 SKU가 바뀌면 판정 해시가 달라져 기존 override가 무효가 된다(결속 강화)"""
+    so = passing_so(price=1000)
+    set_policy("price_deviation_tolerance_bp", 500)
+    set_line(so["id"], 1, unit_price=1100, list_price=1000)
+    (line,) = line_ids(so["id"])
+    before = one(evaluate(so["id"], only=[G.PRICE_DEVIATION]), G.PRICE_DEVIATION, line)
+    assert before.basis["sku_id"] == so["sku_ids"][0]
+    other = create_sku(unique("SWAP"))
+    set_line(so["id"], 1, sku_id=other)
+    after = one(evaluate(so["id"], only=[G.PRICE_DEVIATION]), G.PRICE_DEVIATION, line)
+    assert after.basis["sku_id"] == other and after.basis_hash != before.basis_hash
 
 
 def test_an_unset_tolerance_means_zero_basis_points_and_says_so() -> None:
@@ -684,6 +690,21 @@ def test_a_referenced_pi_that_cannot_take_payments_is_not_usable() -> None:
     assert _pi_outcome(so).level is L.WARN
 
 
+def test_a_referenced_pi_that_cannot_be_read_is_not_usable_whatever_the_order_terms_say() -> None:
+    """PI를 참조하는데 PI 행을 읽을 수 없으면(삭제) SO 결제유형을 L/C로 바꿔도 PASS가 아니다 — BLOCK 모드는 UNKNOWN/OVERRIDE(PI_NOT_USABLE), WARN 모드는 WARN. 결제유형 편집으로 게이트를 끄는 우회 차단"""
+    so, pi = _pi_so("BLOCK", net=30_000)
+    set_terms(so, "LC")
+    _sql("UPDATE proforma_invoices SET deleted_at = now() WHERE id = :i", i=pi)
+    blocked = _pi_outcome(so)
+    assert (blocked.level, blocked.resolution, blocked.reason_code) == (
+        L.UNKNOWN,
+        R.OVERRIDE,
+        "PI_NOT_USABLE",
+    )
+    set_policy("pi_advance_gate_mode", "WARN")
+    assert (_pi_outcome(so).level, _pi_outcome(so).reason_code) == (L.WARN, "PI_NOT_USABLE")
+
+
 def test_the_amount_not_the_pi_status_decides() -> None:
     """PI 상태값은 판정에 쓰지 않는다 — PARTIALLY_PAID PI가 30% 입금으로 통과하고, 같은 상태에서 입금이 모자라면 차단"""
     so, pi = _pi_so("BLOCK", net=30_000)
@@ -738,3 +759,16 @@ def test_every_outcome_hash_is_stable_across_two_evaluations() -> None:
     changed = {(o.gate_code, o.line_id): o.basis_hash for o in evaluate(so["id"])}
     assert changed != first
     assert scalar("SELECT count(*) FROM gate_evaluations") == 0  # 평가는 아무것도 저장하지 않는다
+
+
+def test_a_partial_evaluation_is_never_a_clearance() -> None:
+    """`only`로 일부 게이트만 평가한 묶음은 모든 결과가 PASS여도 cleared=False·partial=True — 부분 평가로 확정 가능을 판정할 수 없다(확정 통로가 only를 실수로 넘겨도 우회 불가). 전건 평가는 cleared=True"""
+    from app.modules.trade_chain import gate_flow
+
+    so = passing_so()
+    with unit_of_work() as uow:
+        full = gate_flow.evaluate_sales_order(uow.session, so["id"])
+        partial = gate_flow.evaluate_sales_order(uow.session, so["id"], only=[G.MOQ])
+    assert (full.clearance.cleared, full.partial) == (True, False)
+    assert (partial.clearance.cleared, partial.partial) == (False, True)
+    assert {o.level for o in partial.outcomes} == {L.PASS}

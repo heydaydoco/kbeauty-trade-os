@@ -70,48 +70,59 @@ def test_double_click_with_the_same_key_creates_exactly_one_override() -> None:
 
 
 @pytest.mark.parametrize("round_no", range(3))
-def test_many_concurrent_grants_are_serialized_without_deadlock_or_server_errors(
+def test_many_concurrent_grants_yield_exactly_one_and_the_rest_are_already_granted(
     round_no: int,
 ) -> None:
-    """같은 SO·같은 판정에 서로 다른 키로 8건 동시 부여 → SO 잠금이 직렬화해 전부 성공(500·교착 0)하고 부여 행 8건이 쌓이며 유효 override는 한 키(같은 해시)뿐이다"""
+    """같은 SO·같은 판정에 서로 다른 키로 8건 동시 부여 → SO 잠금이 직렬화해 정확히 1건만 성공하고 나머지 7건은 409 ALREADY_GRANTED(500·교착 0) — 부여 행·이벤트·감사 모두 1건, 유효 override 한 키"""
+    from app.core.errors.exceptions import AppError
+
     so, line, digest = _price_block()
     people = [actor(RoleCode.TRADE) for _ in range(8)]
     outcomes = run_concurrently(
         lambda i: _grant(people[i], so["id"], _body(line, digest)), workers=8
     )
-    assert all(o.ok for o in outcomes), [repr(o.error) for o in outcomes if not o.ok]
-    assert scalar("SELECT count(*) FROM gate_overrides WHERE action = 'GRANT'") == 8
-    assert scalar("SELECT count(*) FROM events WHERE event_type = 'gates.override.granted'") == 8
+    ok = [o for o in outcomes if o.ok]
+    failed = [o.error for o in outcomes if not o.ok]
+    assert len(ok) == 1, [repr(e) for e in failed]
+    assert all(
+        isinstance(e, AppError) and e.code.value == "GATES.OVERRIDE.ALREADY_GRANTED" for e in failed
+    )
+    assert scalar("SELECT count(*) FROM gate_overrides") == 1
+    assert scalar("SELECT count(*) FROM events WHERE event_type = 'gates.override.granted'") == 1
+    assert scalar("SELECT count(*) FROM audit_log WHERE action = 'gates.override.granted'") == 1
     from app.core.db.uow import unit_of_work
 
     with unit_of_work() as uow:
         effective = gates_service.effective_overrides(uow.session, SUBJECT_SALES_ORDER, so["id"])
     assert list(effective) == [("PRICE_DEVIATION", line, digest)]
-    assert effective[("PRICE_DEVIATION", line, digest)] == scalar(
-        "SELECT max(id) FROM gate_overrides"
-    )
 
 
 @pytest.mark.parametrize("round_no", range(4))
-def test_concurrent_grant_and_revoke_end_in_a_state_equal_to_the_last_row(round_no: int) -> None:
-    """선부여된 판정에 철회(같은 부여자)와 재부여를 동시에: SO 잠금이 직렬화하므로 둘 다 성공하고(500·교착 0) 최종 유효 상태 = 마지막 행의 action이다(GRANT→REVOKE→GRANT면 유효, GRANT→GRANT→REVOKE면 무효 — 행 순서가 결정한다)"""
+def test_concurrent_revoke_and_regrant_end_in_a_state_equal_to_the_last_row(round_no: int) -> None:
+    """선부여된 판정에 철회와 재부여(둘 다 ADMIN)를 동시에: 재부여가 먼저 잠금을 잡으면 이미 유효해 409, 철회가 먼저면 재부여 성공 — 어느 쪽이든 500·교착 0이고 최종 유효 상태 = 마지막 행의 action이다"""
+    from app.core.errors.exceptions import AppError
+
     so, line, digest = _price_block()
-    who = actor(RoleCode.TRADE)
-    assert _grant(who, so["id"], _body(line, digest))[0] == 201  # 먼저 부여해 둔다(철회 대상)
+    admin = actor(RoleCode.ADMIN)
+    assert _grant(admin, so["id"], _body(line, digest))[0] == 201
 
     def worker(index: int) -> Any:
         if index == 0:
-            return _revoke(who, so["id"], _body(line, digest, "철회 사유입니다"))
-        return _grant(who, so["id"], _body(line, digest, "재부여 사유입니다"))
+            return _revoke(admin, so["id"], _body(line, digest, "철회 사유입니다"))
+        return _grant(admin, so["id"], _body(line, digest, "재부여 사유입니다"))
 
     outcomes = run_concurrently(worker, workers=2)
-    assert all(o.ok for o in outcomes), [repr(o.error) for o in outcomes if not o.ok]
+    for o in outcomes:
+        assert o.ok or (
+            isinstance(o.error, AppError) and o.error.code.value == "GATES.OVERRIDE.ALREADY_GRANTED"
+        ), repr(o.error)
     rows = scalar("SELECT json_agg(action ORDER BY id) FROM gate_overrides")
     from app.core.db.uow import unit_of_work
 
     with unit_of_work() as uow:
         effective = gates_service.effective_overrides(uow.session, SUBJECT_SALES_ORDER, so["id"])
     assert (("PRICE_DEVIATION", line, digest) in effective) == (rows[-1] == "GRANT")
+    assert rows in (["GRANT", "REVOKE", "GRANT"], ["GRANT", "REVOKE"])
 
 
 def test_the_override_flow_takes_the_idempotency_claim_then_the_order_lock_then_writes() -> None:

@@ -474,7 +474,9 @@ def test_a_non_open_order_does_not_accept_overrides(status: str) -> None:
         item = find(gates_of(client, so["id"]), "PRICE_DEVIATION", line)
         assert _post(client, so["id"], override_body(item)).status_code == 201
         _sql("UPDATE sales_orders SET status = :s WHERE id = :i", s=status, i=so["id"])
-        assert _post(client, so["id"], override_body(item)).status_code == 409
+        refused = _post(client, so["id"], override_body(item, "재시도 사유입니다"))
+        assert refused.status_code == 409
+        assert refused.json()["error"]["code"] == "GATES.OVERRIDE.ORDER_NOT_OPEN"
         assert _post(client, so["id"], override_body(item), revoke=True).status_code == 409
         assert find(gates_of(client, so["id"]), "PRICE_DEVIATION", line)["can_override"] is False
     assert len(_rows("gate_overrides")) == 1
@@ -494,18 +496,23 @@ def test_revoking_removes_the_clearance_and_only_the_granter_or_an_admin_may_rev
             denied.status_code == 403
             and denied.json()["error"]["code"] == "GATES.OVERRIDE.NOT_ALLOWED"
         )
-        revoked = _post(granter, so["id"], override_body(item, "합의 철회"), revoke=True)
+        revoked = _post(granter, so["id"], override_body(item, "합의에 따른 철회"), revoke=True)
         assert revoked.status_code == 201 and revoked.json()["action"] == "REVOKE"
         report = gates_of(granter, so["id"])
         assert (
             find(report, "PRICE_DEVIATION", line)["settlement"] == "UNRESOLVED"
             and report["clearance"]["cleared"] is False
         )
-        again = _post(granter, so["id"], override_body(item, "합의 철회"), revoke=True)
+        again = _post(granter, so["id"], override_body(item, "합의에 따른 철회"), revoke=True)
         assert again.status_code == 422
+        assert again.json()["error"]["code"] == "GATES.OVERRIDE.NOT_GRANTED"
         unknown = _post(granter, so["id"], override_body(item, basis_hash="b" * 64), revoke=True)
         assert unknown.status_code == 422
-        assert _post(granter, so["id"], override_body(item, "다시 합의")).status_code == 201
+        # 철회된 판정의 재부여는 ADMIN만 — 부여자 본인(무역)이 자기 철회를 되돌리지 못한다
+        retry = _post(granter, so["id"], override_body(item, "다시 합의합니다"))
+        assert retry.status_code == 403
+        assert retry.json()["error"]["code"] == "GATES.OVERRIDE.NOT_ALLOWED"
+        assert _post(admin, so["id"], override_body(item, "관리자 재부여")).status_code == 201
         assert (
             find(gates_of(granter, so["id"]), "PRICE_DEVIATION", line)["settlement"] == "OVERRIDDEN"
         )
@@ -556,7 +563,7 @@ def test_the_same_key_and_body_replays_the_first_result_and_a_different_body_con
         no_key = client.post(
             f"/api/v1/sales-orders/{so['id']}/gate-overrides", json=override_body(item)
         )
-        assert no_key.status_code in (400, 422)
+        assert no_key.status_code == 400
     assert len(_rows("gate_overrides")) == 1
     assert len(_rows("events", "event_type = 'gates.override.granted'")) == 1
     assert len(_rows("audit_log", "action = 'gates.override.granted'")) == 1
@@ -572,3 +579,118 @@ def test_a_refused_override_does_not_consume_the_idempotency_key() -> None:
         assert bad.status_code == 409 and bad.json()["error"]["code"] == "GATES.OVERRIDE.STALE"
         good = _post(client, so["id"], override_body(item), key=key)
         assert good.status_code == 201, good.text
+
+
+# ══ 적대 검토 반영 — 재부여·마스킹·사유 위생 ═══════════════════════════════════
+
+
+def test_a_valid_grant_cannot_be_granted_again_and_leaves_no_duplicate_trace() -> None:
+    """이미 유효한 부여가 있는 같은 판정에 다시 부여하면 409 GATES.OVERRIDE.ALREADY_GRANTED — 행·audit·outbox가 늘지 않는다(중복 행으로 철회를 무력화하는 경로 차단)"""
+    so, line = _price_block()
+    with logged_in(TRADE) as client:
+        item = find(gates_of(client, so["id"]), "PRICE_DEVIATION", line)
+        assert _post(client, so["id"], override_body(item)).status_code == 201
+        again = _post(client, so["id"], override_body(item, "중복 부여 시도"))
+        assert again.status_code == 409
+        assert again.json()["error"]["code"] == "GATES.OVERRIDE.ALREADY_GRANTED"
+    assert len(_rows("gate_overrides")) == 1
+    assert len(_rows("events", "event_type = 'gates.override.granted'")) == 1
+    assert len(_rows("audit_log", "action = 'gates.override.granted'")) == 1
+
+
+def test_after_an_admin_revoke_a_trade_user_cannot_regrant_but_an_admin_can() -> None:
+    """부여→ADMIN 철회→TRADE 재부여는 403, ADMIN 재부여는 201 — 상급 철회를 하위 역할이 되돌리지 못한다. (본인 철회 뒤 본인 재부여 403은 철회 테스트가 고정)"""
+    so, line = _price_block()
+    with _clients(TRADE, ADMIN) as (trade, admin):
+        item = find(gates_of(trade, so["id"]), "PRICE_DEVIATION", line)
+        assert _post(trade, so["id"], override_body(item)).status_code == 201
+        assert (
+            _post(admin, so["id"], override_body(item, "관리자 철회"), revoke=True).status_code
+            == 201
+        )
+        assert _post(trade, so["id"], override_body(item, "되돌리기를 시도")).status_code == 403
+        assert gates_of(trade, so["id"])["clearance"]["cleared"] is False
+        assert _post(admin, so["id"], override_body(item, "관리자 재부여")).status_code == 201
+        assert gates_of(trade, so["id"])["clearance"]["cleared"] is True
+    assert [r["action"] for r in _rows("gate_overrides")] == ["GRANT", "REVOKE", "GRANT"]
+
+
+def test_credit_hash_duplicate_detail_and_override_reasons_are_hidden_from_other_roles() -> None:
+    """마스킹 역할(조회·물류)에게: CREDIT 결과의 basis_hash도 비고, override 사유(자유 텍스트)는 null. 무역에게는 보인다"""
+    so, line = _price_block()
+    with _clients(TRADE, RoleCode.VIEWER, RoleCode.LOGISTICS) as (trade, viewer, logistics):
+        item = find(gates_of(trade, so["id"]), "PRICE_DEVIATION", line)
+        assert (
+            _post(trade, so["id"], override_body(item, "원가 서술이 섞인 사유")).status_code == 201
+        )
+        seen = gates_of(trade, so["id"])
+        assert find(seen, "PRICE_DEVIATION", line)["override"]["reason"] == "원가 서술이 섞인 사유"
+        assert len(find(seen, "CREDIT")["basis_hash"]) == 64
+        for client in (viewer, logistics):
+            hidden = gates_of(client, so["id"])
+            assert find(hidden, "PRICE_DEVIATION", line)["override"]["reason"] is None
+            assert find(hidden, "CREDIT")["basis_hash"] == ""
+            assert find(hidden, "DUPLICATE_PO")["detail"] == {}
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "가나다라\u3164",
+        "가나다라\u200b마",
+        "가나다라\u115f마",
+        "\u1160" * 5,
+        "가나다라\u2028마",
+        "a b c d",
+        "\u00a0" * 3 + "ab" + "\u3000" * 3,
+        "가나다\ufeff라마",
+    ],
+    ids=[
+        "hangul-filler",
+        "zero-width",
+        "choseong",
+        "jungseong",
+        "line-sep",
+        "four-real",
+        "nbsp",
+        "bom",
+    ],
+)
+def test_invisible_and_whitespace_only_reasons_are_refused(reason: str) -> None:
+    """보이지 않는 글자(Cf·한글 채움·줄 구분)·공백으로 길이만 채운 사유·실질 글자 4자 이하는 422 — 5자 규칙 우회 차단"""
+    so, line = _price_block()
+    with logged_in(TRADE) as client:
+        item = find(gates_of(client, so["id"]), "PRICE_DEVIATION", line)
+        response = _post(client, so["id"], override_body(item, reason))
+    assert response.status_code == 422, response.text
+    assert _rows("gate_overrides") == []
+
+
+def test_the_duplicate_po_detail_is_shown_to_trade_and_admin_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """중복 PO 결과의 다른 문서번호·상태(표시 전용 detail)는 무역·관리자 응답에만 있고 조회·인증 역할은 빈 값 — 판정 해시에는 영향이 없다"""
+    from app.modules.gates.policy import outcome
+    from app.modules.gates.types import GateLevel, GateResolution
+
+    def duplicate(*_args: object) -> list[object]:
+        return [
+            outcome(
+                "DUPLICATE_PO",
+                GateLevel.BLOCK,
+                GateResolution.NONE,
+                "DUPLICATE_PO_NO",
+                "중복",
+                {"buyer_po_no_key": "K"},
+                detail={"other_doc_number": "SO-2026-0001", "other_status": "RECEIVED"},
+            )
+        ]
+
+    monkeypatch.setitem(DEFAULT_REGISTRY._evaluators, "DUPLICATE_PO", duplicate)
+    so = passing_so()
+    with _clients(TRADE, ADMIN, RoleCode.VIEWER, RoleCode.CERT) as (trade, admin, viewer, cert):
+        for client in (trade, admin):
+            shown = find(gates_of(client, so["id"]), "DUPLICATE_PO")["detail"]
+            assert shown["other_doc_number"] == "SO-2026-0001"
+        for client in (viewer, cert):
+            assert find(gates_of(client, so["id"]), "DUPLICATE_PO")["detail"] == {}

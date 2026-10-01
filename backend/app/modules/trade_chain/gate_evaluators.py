@@ -20,10 +20,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors.exceptions import AppError
-from app.modules.catalog.models import Sku
+from app.modules.catalog.models import SKU_STATUS_DISCONTINUED, Sku
 from app.modules.credit import evaluation as credit_evaluation
 from app.modules.credit.locking import lock_buyer_for_credit
 from app.modules.gates import registry as gate_registry
+from app.modules.gates.models import SUBJECT_SALES_ORDER
 from app.modules.gates.policy import outcome
 from app.modules.gates.registry import EvaluatorRegistry
 from app.modules.gates.types import (
@@ -36,7 +37,7 @@ from app.modules.gates.types import (
     GateResolution,
     GateSubject,
 )
-from app.modules.partners.models import Partner
+from app.modules.partners.models import PARTNER_TYPE_BUYER, Partner
 from app.modules.partners.service import partner_type_codes, resolve_buyer_items
 from app.modules.payments.pi_gate import (
     MODE_WARN,
@@ -49,8 +50,7 @@ from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.readiness import rules as readiness_rules
 from app.modules.readiness import service as readiness_service
 from app.modules.sales_orders.models import SalesOrder, SalesOrderLine
-
-SUBJECT_SALES_ORDER = "SALES_ORDER"
+from app.modules.trade_docs.machine import SalesOrderStatus
 
 #: 정책 키 — 게이트 평가·증적이 쓰는 두 값(`policies.registry`와 1:1).
 POLICY_PI_MODE = "pi_advance_gate_mode"
@@ -133,7 +133,9 @@ def evaluate_item_mapping(
         ).first()
         is not None
     )
-    if not buyer_alive or "BUYER" not in partner_type_codes(session, subject.buyer_partner_id):
+    if not buyer_alive or PARTNER_TYPE_BUYER not in partner_type_codes(
+        session, subject.buyer_partner_id
+    ):
         found.append(
             outcome(
                 code,
@@ -184,7 +186,7 @@ def evaluate_item_mapping(
                     line_id=line.line_id,
                 )
             )
-        elif sku.status == "DISCONTINUED":
+        elif sku.status == SKU_STATUS_DISCONTINUED:
             found.append(
                 outcome(
                     code,
@@ -250,7 +252,7 @@ def evaluate_duplicate_po(
             SalesOrder.buyer_po_no_key == key,
             SalesOrder.id != subject.id,
             SalesOrder.deleted_at.is_(None),
-            SalesOrder.status != "CANCELLED",
+            SalesOrder.status != SalesOrderStatus.CANCELLED.value,
         )
         .order_by(SalesOrder.id)
         .limit(1)
@@ -263,7 +265,9 @@ def evaluate_duplicate_po(
                 GateResolution.NONE,
                 "DUPLICATE_PO_NO",
                 "같은 거래처·같은 바이어 PO번호의 다른 수주가 있습니다. 기존 수주를 취소하거나 PO번호를 확인해 주세요.",
-                {"buyer_po_no_key": key, "other_doc_number": other[0], "other_status": other[1]},
+                {"buyer_po_no_key": key},
+                # 다른 문서번호·상태는 표시 전용 상세(해시·증거 불포함) — 무역·관리자 응답에만 실린다
+                detail={"other_doc_number": other[0], "other_status": other[1]},
             )
         ]
     return [
@@ -296,6 +300,7 @@ def evaluate_price_deviation(
     found: list[GateOutcome] = []
     for line in subject.lines:
         base: Basis = {
+            "sku_id": line.sku_id,
             "unit_price_amount": line.unit_price_amount,
             "currency": subject.currency,
             "tolerance_bp": tolerance,
@@ -341,7 +346,8 @@ def evaluate_price_deviation(
             )
         else:
             diff = abs(line.unit_price_amount - ref)
-            deviation_bps = diff * 10000 // ref
+            # 표시용 편차는 **올림**(bp·퍼센트) — 허용치를 1단위라도 넘긴 BLOCK이 "허용치와 같은 값"으로 보이는 오독을 막는다(판정은 교차곱)
+            deviation_bps = -(-diff * 10000 // ref)
             detail: Basis = {
                 **base,
                 "reference_price_amount": ref,

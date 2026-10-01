@@ -110,6 +110,8 @@ class GateOutcome:
     basis: Mapping[str, BasisValue] = field(default_factory=dict)
     #: 이 결과에 override를 부여할 수 있는 역할(해소가 OVERRIDE일 때만 값이 있다).
     override_roles: tuple[RoleCode, ...] = ()
+    #: 표시 전용 상세 — **판정 입력이 아니다**(해시·증거에 들어가지 않음). 노출 역할 제한이 필요한 값(다른 문서번호 등)을 basis와 분리해 담는다.
+    detail: Mapping[str, BasisValue] = field(default_factory=dict)
 
     @property
     def basis_hash(self) -> str:

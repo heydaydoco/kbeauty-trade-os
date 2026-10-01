@@ -103,6 +103,9 @@ def evaluate_pi_advance(
             currency=currency,
         )
 
+    # PI를 참조하는데 행을 읽을 수 없으면(삭제 등) **결제유형과 무관하게** 사용 불가 — SO의 결제유형 편집으로 게이트를 끄는 우회를 막는다(모드 OFF는 확인 생략이라 제외)
+    if pi_referenced and pi is None and mode != MODE_OFF:
+        return result(PiAdvanceState.UNMET, "PI_NOT_USABLE")
     if payment_type is None:
         return result(PiAdvanceState.INDETERMINATE, "PAYMENT_TYPE_UNSET")
     if payment_type != PaymentType.TT_ADVANCE.value:

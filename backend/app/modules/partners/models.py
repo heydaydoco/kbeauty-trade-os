@@ -39,6 +39,9 @@ from app.core.db.mixins import (
 #: 거래처 유형 — §4.6 열거 10종과 1:1이다(순서도 문면 순).
 #: 공급사/OEM/바이어/RP(EU 등 책임자)/IOR(수입자 기록)/경내책임자(중국)/
 #: 포워더/관세사/3PL/인증대행.
+#: 바이어 유형 코드(품번 매핑·게이트가 쓴다).
+PARTNER_TYPE_BUYER = "BUYER"
+
 PARTNER_TYPES = (
     "SUPPLIER",
     "OEM",

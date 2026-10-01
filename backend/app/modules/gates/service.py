@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -30,8 +29,6 @@ from app.modules.audit.models import AuditAction
 from app.modules.gates.models import (
     ACTION_GRANT,
     ACTION_REVOKE,
-    REASON_MAX,
-    REASON_MIN,
     GateEvaluation,
     GateOverride,
 )
@@ -44,6 +41,7 @@ from app.modules.gates.policy import (
     outcome,
 )
 from app.modules.gates.registry import DEFAULT_REGISTRY, EvaluatorRegistry
+from app.modules.gates.text import reason_problem
 from app.modules.gates.types import (
     GateCode,
     GateLevel,
@@ -58,9 +56,6 @@ from app.modules.outbox import service as outbox
 logger = get_logger(__name__)
 
 OverrideKey = tuple[str, int | None, str]
-
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
-
 
 # ── 평가 ─────────────────────────────────────────────────────────────────────
 
@@ -318,19 +313,11 @@ def require_override_authority(gate_code: str, roles: Collection[RoleCode]) -> R
 
 
 def clean_reason(reason: str) -> str:
-    """사유 검증 — 제어문자 불가, 앞뒤 공백을 자른 값이 5~500자(스키마와 DB CHECK의 서비스 계층 백스톱)."""
-    if _CONTROL_CHARS.search(reason):
-        raise AppError(
-            ErrorCode.VALIDATION_INVALID_FIELD,
-            detail={"reason": "사유에는 줄바꿈·탭 같은 제어문자를 쓸 수 없습니다."},
-        )
-    cleaned = reason.strip()
-    if not REASON_MIN <= len(cleaned) <= REASON_MAX:
-        raise AppError(
-            ErrorCode.VALIDATION_INVALID_FIELD,
-            detail={"reason": f"사유는 {REASON_MIN}~{REASON_MAX}자로 입력해 주세요."},
-        )
-    return cleaned
+    """사유 검증 — 정본 규칙은 `gates.text.reason_problem`(보이지 않는 글자·한글 채움 거부, 실질 5~500자). 통과하면 앞뒤 공백을 자른 값."""
+    problem = reason_problem(reason)
+    if problem is not None:
+        raise AppError(ErrorCode.VALIDATION_INVALID_FIELD, detail={"reason": problem})
+    return reason.strip()
 
 
 #: gate_overrides·gate_evaluations의 DB 제약 → 업무 오류. 서비스 선검증이 1차이고 DB 위반은 최후 방어선이다(완결성 테스트가 pg_constraint와 대사).
@@ -450,7 +437,7 @@ def grant_override(
     """override 부여(GRANT) — 호출자가 대상을 잠그고 **지금** 평가한 `outcomes`를 넘긴다.
 
     검사 순서(먼저 걸린 것이 응답): ① 대상 게이트가 override 가능한 4종인가(422) ② 행위자 역할 허용(403) ③ 해당 (게이트, 라인) 결과가 BLOCK·UNKNOWN + OVERRIDE인가(422 —
-    PASS·WARN·NONE·APPROVAL은 조용한 통과가 되지 않게 거부) ④ 서버 해시 == 요청 해시인가(409 — 사람이 본 판정이 낡음) ⑤ 사유.
+    PASS·WARN·NONE·APPROVAL은 조용한 통과가 되지 않게 거부) ④ 서버 해시 == 요청 해시인가(409 — 사람이 본 판정이 낡음) ⑤ 이미 유효한 부여가 있으면 409(`ALREADY_GRANTED`)·최신 행이 철회(REVOKE)면 재부여는 ADMIN만(403) ⑥ 사유.
     """
     role = require_override_authority(gate_code, actor_roles)
     target = next((o for o in outcomes if o.gate_code == gate_code and o.line_id == line_id), None)
@@ -463,6 +450,15 @@ def grant_override(
         raise AppError(
             ErrorCode.GATES_OVERRIDE_STALE, log_context={"gate_code": gate_code, "line_id": line_id}
         )
+    latest = latest_override(session, subject_type, subject_id, gate_code, line_id, basis_hash)
+    if latest is not None and latest.action == ACTION_GRANT:
+        raise AppError(
+            ErrorCode.GATES_OVERRIDE_ALREADY_GRANTED,
+            log_context={"gate_code": gate_code, "line_id": line_id},
+        )
+    if latest is not None and RoleCode.ADMIN not in actor_roles:
+        # 최신 행이 REVOKE — 철회된 판정의 재부여는 ADMIN만(상급 철회를 하위 역할이 되돌리지 못한다, 자율 확정)
+        raise AppError(ErrorCode.GATES_OVERRIDE_NOT_ALLOWED, log_context={"gate_code": gate_code})
     cleaned = clean_reason(reason)
     return _record(
         session,
@@ -503,7 +499,7 @@ def revoke_override(
     latest = latest_override(session, subject_type, subject_id, gate_code, line_id, basis_hash)
     if latest is None or latest.action != ACTION_GRANT:
         raise AppError(
-            ErrorCode.GATES_OVERRIDE_NOT_APPLICABLE,
+            ErrorCode.GATES_OVERRIDE_NOT_GRANTED,
             log_context={"gate_code": gate_code, "line_id": line_id},
         )
     if latest.granted_by_id != actor_user_id and RoleCode.ADMIN not in actor_roles:

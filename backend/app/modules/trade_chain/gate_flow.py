@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -43,15 +44,18 @@ from app.modules.sales_orders.digest import gate_input_digest
 from app.modules.sales_orders.models import SalesOrder
 from app.modules.trade_chain import gate_evaluators
 from app.modules.trade_docs.locking import lock_document
+from app.modules.trade_docs.machine import SalesOrderStatus
 
 OVERRIDE_ENDPOINT = "POST /api/v1/sales-orders/{so_id}/gate-overrides"
 REVOKE_ENDPOINT = "POST /api/v1/sales-orders/{so_id}/gate-overrides/revoke"
 
 #: 게이트 대상 상태 — 확정 전(접수)뿐(override 부여·철회 허용 상태).
-OVERRIDE_OPEN_STATUS = "RECEIVED"
+OVERRIDE_OPEN_STATUS = SalesOrderStatus.RECEIVED.value
 
 #: 응답에서 여신 수치(한도·노출 등)를 볼 수 있는 역할 — 그 외 역할 응답에서는 CREDIT 근거 필드가 없다(ADR-0024 방식, 여신 수치는 운영 필요 데이터).
 CREDIT_VISIBLE_ROLES = frozenset({RoleCode.TRADE, RoleCode.ADMIN})
+#: 값 노출이 제한되는 자유 텍스트(override 사유)·표시 전용 상세(다른 문서번호)를 볼 수 있는 역할 — 그 외 역할은 null·빈 값.
+DETAIL_VISIBLE_ROLES = CREDIT_VISIBLE_ROLES
 
 NOTE_READINESS = gate_evaluators.NOTE_READINESS
 
@@ -68,6 +72,8 @@ class GateBundle:
     approval_id: int | None
     input_digest: str
     policy_sources: dict[str, str]
+    #: `only`로 일부 게이트만 평가했다 — 이 묶음의 `clearance.cleared`는 **항상 False**(부분 평가로 확정 가능을 판정할 수 없다).
+    partial: bool = False
 
 
 def evaluate_sales_order(
@@ -101,6 +107,10 @@ def evaluate_sales_order(
         approval_id = ref.id if ref is not None else None
     overrides = gates_service.effective_overrides(session, SUBJECT_SALES_ORDER, so_id)
     clr = gates_service.clearance(outcomes, overrides, approval_id is not None)
+    if (
+        only is not None
+    ):  # 부분 평가는 확정 가능 판정이 아니다 — PR-12가 only를 실수로 넘겨도 우회 불가(fail-closed)
+        clr = dataclasses.replace(clr, cleared=False)
     policy_sources: dict[str, str] = {
         key: get_policy(session, key).source
         for key in (gate_evaluators.POLICY_PI_MODE, gate_evaluators.POLICY_PRICE_TOLERANCE)
@@ -114,6 +124,7 @@ def evaluate_sales_order(
         approval_id=approval_id,
         input_digest=gate_input_digest(session, so_id),
         policy_sources=policy_sources,
+        partial=only is not None,
     )
 
 
@@ -146,6 +157,7 @@ def gate_report_body(
     infos = _override_infos(session, bundle.clearance.used_overrides)
     open_for_override = so.status == OVERRIDE_OPEN_STATUS
     show_credit = bool(roles & CREDIT_VISIBLE_ROLES)
+    show_detail = bool(roles & DETAIL_VISIBLE_ROLES)
     gates: list[dict[str, Any]] = []
     for item, state in bundle.clearance.settlements:
         override_id = bundle.overrides.get((item.gate_code, item.line_id, item.basis_hash))
@@ -163,7 +175,8 @@ def gate_report_body(
                 "reason_code": item.reason_code,
                 "message_ko": item.message_ko,
                 "basis": {} if mask else dict(item.basis),
-                "basis_hash": item.basis_hash,
+                "detail": dict(item.detail) if show_detail else {},
+                "basis_hash": "" if mask else item.basis_hash,
                 "override_roles": [role.value for role in item.override_roles],
                 "settlement": state.value,
                 "can_override": (
@@ -175,7 +188,7 @@ def gate_report_body(
                 "override": (
                     {
                         "id": override_row.id,
-                        "reason": override_row.reason,
+                        "reason": override_row.reason if show_detail else None,
                         "authorized_role": override_row.authorized_role,
                         "granted_by_id": override_row.granted_by_id,
                         "created_at": override_row.created_at,
@@ -244,7 +257,7 @@ def _lock_open_so(session: Session, so_id: int) -> SalesOrder:
     so = lock_document(session, SalesOrder, so_id)
     if so.status != OVERRIDE_OPEN_STATUS:
         raise AppError(
-            ErrorCode.TRADE_DOCS_TRANSITION_NOT_ALLOWED,
+            ErrorCode.GATES_OVERRIDE_ORDER_NOT_OPEN,
             detail={"status": so.status},
             log_context={"sales_order_id": so_id, "op": "gate_override"},
         )

@@ -161,6 +161,7 @@ def outcome(
     basis: Mapping[str, BasisValue] | None = None,
     *,
     line_id: int | None = None,
+    detail: Mapping[str, BasisValue] | None = None,
 ) -> GateOutcome:
     """GateOutcome 팩토리 — 명세(`GATE_SPECS`)에 없는 (결과, 해소) 조합이면 ValueError.
 
@@ -181,4 +182,5 @@ def outcome(
         message_ko=message_ko,
         basis=dict(basis or {}),
         override_roles=roles,
+        detail=dict(detail or {}),
     )

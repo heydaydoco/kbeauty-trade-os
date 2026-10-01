@@ -369,6 +369,18 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "확인하신 판정이 이미 바뀌었습니다. 수주의 게이트 판정을 새로 불러와 다시 확인해 주세요.",
     ),
+    ErrorCode.GATES_OVERRIDE_ALREADY_GRANTED: ErrorSpec(
+        409,
+        "이미 같은 판정에 유효한 예외 통과가 있습니다. 수주의 게이트 판정을 새로 불러와 현재 상태를 확인해 주세요.",
+    ),
+    ErrorCode.GATES_OVERRIDE_NOT_GRANTED: ErrorSpec(
+        422,
+        "철회할 유효한 예외 통과가 없습니다(없거나 이미 철회되었습니다). 게이트 판정을 새로 불러와 확인해 주세요.",
+    ),
+    ErrorCode.GATES_OVERRIDE_ORDER_NOT_OPEN: ErrorSpec(
+        409,
+        "접수 상태가 아닌 수주는 예외 통과를 부여하거나 철회할 수 없습니다. 수주의 현재 상태를 확인해 주세요.",
+    ),
     ErrorCode.IDEMPOTENCY_KEY_CONFLICT: ErrorSpec(
         409,
         "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",
