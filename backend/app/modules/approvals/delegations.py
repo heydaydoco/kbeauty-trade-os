@@ -214,10 +214,13 @@ def create_delegation(
             raise _invalid("delegate_user_id", "본인에게 대결을 지정할 수 없습니다.")
 
         # 위임자 행을 먼저 잠근다 — 같은 위임자의 동시 등록(겹침 검사)을 직렬화한다.
+        # ★ `FOR NO KEY UPDATE`여야 한다: 이 트랜잭션은 앞서 멱등 행(idempotency_keys.actor_user_id FK)을 INSERT해 이 users 행에
+        #   `FOR KEY SHARE`를 쥐고 있다. `FOR UPDATE`는 KEY SHARE와 충돌하므로 동시 요청끼리 서로의 KEY SHARE를 기다리는 **교착**이 난다
+        #   (J 테스트가 실제로 잡았다 — 여신 거래처 잠금이 NO KEY UPDATE인 이유와 같다).
         locked = session.execute(
             select(User.id)
             .where(User.id == delegator_id, User.deleted_at.is_(None))
-            .with_for_update()
+            .with_for_update(key_share=True)
         ).scalar_one_or_none()
         if locked is None:
             raise _invalid("delegator_user_id", "존재하지 않는 사용자입니다.")
