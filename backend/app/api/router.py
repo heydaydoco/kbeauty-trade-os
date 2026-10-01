@@ -23,6 +23,7 @@ from app.modules.markets import router as markets_router
 from app.modules.materials import router as materials_router
 from app.modules.notifications import router as notifications_router
 from app.modules.partners import router as partners_router
+from app.modules.payments import router as payments_router
 from app.modules.platform import router as platform_router
 from app.modules.policies import router as policies_router
 from app.modules.proforma_invoices import router as proforma_invoices_router
@@ -51,6 +52,8 @@ api_router.include_router(approvals_router.delegations_router)
 api_router.include_router(quotations_router.router)
 api_router.include_router(trade_chain_router.router)
 api_router.include_router(trade_chain_router.pi_router)
+api_router.include_router(trade_chain_router.payments_router)
+api_router.include_router(payments_router.router)
 api_router.include_router(trade_chain_router.so_router)
 api_router.include_router(trade_chain_router.po_router)
 api_router.include_router(trade_chain_router.flow_router)

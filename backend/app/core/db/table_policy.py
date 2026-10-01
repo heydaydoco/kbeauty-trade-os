@@ -32,6 +32,8 @@ IMMUTABLE_TABLES: frozenset[str] = frozenset(
         "purchase_order_status_log",  # PR-8a — PO 상태 이력(같은 이유)
         # S3-1 PR-9a — 승인 상태 변경 이력(ADR-0060·§17.5 확장). 시스템 행위자가 없고(actor NOT NULL) 정정은 새 전이 기록이다.
         "approval_events",
+        # S3-1 PR-10a — 입금 원장(ADR-0068·§17.5 확장). 부호 있는 INSERT-only 원장이고 정정은 반대 부호의 신규 행(역기록, ADR-05)이다.
+        "payments",
     }
 )
 

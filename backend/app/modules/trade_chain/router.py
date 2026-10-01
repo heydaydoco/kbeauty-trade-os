@@ -15,6 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.modules.identity.models import RoleCode
+from app.modules.payments.schemas import (
+    PaymentReceiptRequest,
+    PaymentReversalRequest,
+    PaymentWriteOut,
+)
 from app.modules.proforma_invoices.schemas import (
     ProformaInvoiceCreateRequest,
     ProformaInvoiceDetail,
@@ -24,7 +29,13 @@ from app.modules.purchase_orders.router import detail_response as purchase_order
 from app.modules.purchase_orders.schemas import PurchaseOrderCostHiddenDetail, PurchaseOrderDetail
 from app.modules.quotations.schemas import QuotationDetail
 from app.modules.sales_orders.schemas import SalesOrderDetail, SalesOrderReferenceRequest
-from app.modules.trade_chain import document_flow, lifecycle, reference, so_reference
+from app.modules.trade_chain import (
+    document_flow,
+    lifecycle,
+    payment_flow,
+    reference,
+    so_reference,
+)
 from app.modules.trade_docs.constants import DocKind
 from app.modules.trade_docs.machine import public_transition_targets
 
@@ -230,6 +241,54 @@ def transition_proforma_invoice(
     )
     response.status_code = status_code
     return ProformaInvoiceDetail.model_validate(body)
+
+
+# ── 입금 기록·역기록 (PI 선수금 — payments 원장 + PI 상태 자동 수렴, 한 트랜잭션) ─────────────
+
+payments_router = APIRouter(prefix="/payments", tags=["payments"])
+
+
+@pi_router.post(
+    "/{pi_id}/payments",
+    summary="PI 선수금 입금 기록 (선수금 T/T 전용·통화 일치·선수금 청구액 초과 422 — PI 상태 자동 수렴)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def record_pi_payment(
+    pi_id: Annotated[int, Path(ge=1)],
+    payload: PaymentReceiptRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> PaymentWriteOut:
+    status_code, body = payment_flow.record_receipt(
+        actor=current,
+        idempotency_key=key,
+        pi_id=pi_id,
+        payload=payload.model_dump(mode="json"),
+    )
+    response.status_code = status_code
+    return PaymentWriteOut.model_validate(body)
+
+
+@payments_router.post(
+    "/{payment_id}/reversal",
+    summary="입금 역기록 (전액·사유 필수 — 반대 부호 신규 행, 확정 SO가 있으면 경고만 싣고 취소하지 않는다)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def reverse_payment(
+    payment_id: Annotated[int, Path(ge=1)],
+    payload: PaymentReversalRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> PaymentWriteOut:
+    status_code, body = payment_flow.reverse_payment(
+        actor=current, idempotency_key=key, payment_id=payment_id, reason=payload.reason
+    )
+    response.status_code = status_code
+    return PaymentWriteOut.model_validate(body)
 
 
 # ── 참조 생성: QT → SO (직접 경로), PI → SO (활성 1:1) ─────────────────────────────

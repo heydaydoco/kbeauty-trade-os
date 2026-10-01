@@ -63,6 +63,7 @@ _NEVER_SEEDED = (
     "approvals",
     "approval_events",
     "delegations",
+    "payments",  # S3-1 PR-10a — 입금 원장: 업무 행위의 기록(시드 불가·users FK 보유)
 )
 
 

@@ -3,6 +3,7 @@
     L0  trade_docs                                  : 상수·상태 기계·통로·FIELD_POLICY·잠금·사슬 레지스트리·잔량·검산
     L1  quotations·proforma_invoices·bank_accounts·sales_orders·purchase_orders : 모델·스키마·CRUD·라인 편집만
     L2  trade_chain (+ credit·payments·order_*)     : 모든 전이 오케스트레이션·수렴·잠금
+        (PR-10a: payments=순수 원장 — trade_chain→payments 정방향, payments→trade_chain 금지[L2_NO_CHAIN])
     허용 간선: L1→L0 / L2→L1·L0. 금지: L0→L1·L2 / L1→L2 / L1→다른 L1 / 플랫폼 공용(정책·승인 등)→전표.
     PR-9a: approvals는 도메인 무임포트 플랫폼(TargetSpec 레지스트리), credit은 L2(→ sales_orders·approvals·partners 허용,
     → trade_chain 금지 — "credit·payments·order_intake→trade_chain 금지", design-integrated §2.8).
@@ -21,7 +22,7 @@ pytestmark = pytest.mark.group_k
 
 L0 = {"trade_docs"}
 L1 = {"quotations", "proforma_invoices", "bank_accounts", "sales_orders", "purchase_orders"}
-L2 = {"trade_chain", "credit"}
+L2 = {"trade_chain", "credit", "payments"}
 S3_DOMAIN = L0 | L1 | L2
 #: 전표 도메인과 무관해야 하는 S3 공용 모듈(전표를 임포트하면 안 된다).
 S3_PLATFORM = {"policies", "approvals"}

@@ -83,6 +83,10 @@ USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
     ("approvals", "decided_by_id"): "ACTOR_LOG",
     ("approvals", "decided_on_behalf_of_id"): "ACTOR_LOG",
     ("approvals", "consumed_by_id"): "ACTOR_LOG",
+    (
+        "payments",
+        "recorded_by_id",
+    ): "ACTOR_LOG",  # PR-10a — 입금 기록자(불변 원장의 행위자 — 이관으로 바뀌지 않는다)
     ("approval_events", "actor_user_id"): "ACTOR_LOG",
     ("approval_events", "on_behalf_of_user_id"): "ACTOR_LOG",
     (

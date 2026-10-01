@@ -277,6 +277,26 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         403,
         "여신한도는 관리자만 등록·변경할 수 있습니다. 관리자에게 설정을 요청해 주세요.",
     ),
+    ErrorCode.PAYMENTS_PAYMENT_CURRENCY_MISMATCH: ErrorSpec(
+        422,
+        "입금 통화가 PI 통화와 다릅니다. PI와 같은 통화로 입금액을 다시 입력해 주세요(환산 입금은 지원하지 않습니다).",
+    ),
+    ErrorCode.PAYMENTS_PAYMENT_EXCEEDS_DUE: ErrorSpec(
+        422,
+        "입금액이 PI 선수금 청구액을 넘습니다. 남은 선수금 이하로 입력해 주세요(선수금을 넘는 금액은 잔금 입금으로 따로 기록합니다).",
+    ),
+    ErrorCode.PAYMENTS_PAYMENT_PI_NOT_ADVANCE: ErrorSpec(
+        422,
+        "선수금 T/T가 아닌 PI에는 입금을 기록할 수 없습니다. 결제유형을 확인해 주세요(잔금 입금은 채권 입금으로 기록합니다).",
+    ),
+    ErrorCode.PAYMENTS_PAYMENT_ALREADY_REVERSED: ErrorSpec(
+        409,
+        "이미 역기록된 입금입니다. 입금 목록을 새로 고쳐 확인해 주세요(정정이 필요하면 새 입금을 기록해 주세요).",
+    ),
+    ErrorCode.PAYMENTS_PAYMENT_NOT_REVERSIBLE: ErrorSpec(
+        409,
+        "역기록 행은 다시 역기록할 수 없습니다. 정정이 필요하면 새 입금을 기록해 주세요.",
+    ),
     ErrorCode.POLICIES_POLICY_UNKNOWN_KEY: ErrorSpec(
         404,
         "알 수 없는 정책 항목입니다. 정책 목록을 새로 고쳐 확인해 주세요.",
