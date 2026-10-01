@@ -224,6 +224,48 @@ def approved_for(
     return int(approval.id), requester, approver
 
 
+def raw_open_so(
+    buyer: int,
+    *,
+    status: str = "CONFIRMED",
+    total: int = 100,
+    currency: str = "USD",
+    fx_rate: int | None = 1350,
+    confirmed: bool | None = None,
+    deleted: bool = False,
+) -> int:
+    """노출 산정 시험용 SO 1건을 SQL로(라인 없음) — 통화·환율·총액·확정 여부·삭제 여부를 지정한다. KRW는 환율 1로 맞춘다."""
+    from tests.factories.trade import raw_so
+
+    so_id = raw_so(status, buyer_partner_id=buyer, confirmed=confirmed)
+    rate = 1 if currency == "KRW" else fx_rate
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE sales_orders SET total_amount = :t, currency = :c, fx_rate = :r,"
+                " deleted_at = CASE WHEN :d THEN now() END WHERE id = :i"
+            ),
+            {"t": total, "c": currency, "r": rate, "d": deleted, "i": so_id},
+        )
+    return so_id
+
+
+def evaluate(so_id: int, *, locked: bool = True) -> Any:
+    """`evaluate_credit`(잠금 하) 또는 `evaluate_credit_unlocked`를 SO id로 부른다."""
+    from app.modules.credit import evaluation
+    from app.modules.credit.locking import lock_buyer_for_credit
+    from app.modules.sales_orders.models import SalesOrder
+
+    with unit_of_work() as uow:
+        order = uow.session.get(SalesOrder, so_id)
+        assert order is not None
+        if locked:
+            return evaluation.evaluate_credit(
+                uow.session, lock_buyer_for_credit(uow.session, order.buyer_partner_id), order
+            )
+        return evaluation.evaluate_credit_unlocked(uow.session, order)
+
+
 def so_set(so_id: int, **columns: Any) -> None:
     """SO 행을 소유자 권한으로 직접 바꾼다(서비스 훅·version을 우회한 변조 — 지연 검증 백스톱 시험용)."""
     sets = ", ".join(f"{k} = :{k}" for k in columns)
