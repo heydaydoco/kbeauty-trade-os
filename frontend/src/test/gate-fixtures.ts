@@ -1,6 +1,8 @@
 // 게이트 패널 테스트 픽스처 (S3-1 PR-11b) — 서버 응답 모양 그대로(backend gates/schemas.py). 값은 서버가 준 것으로 고정한다.
 
+import { vi } from "vitest";
 import type { GateReport, GateResult } from "../lib/gate";
+import { jsonResponse } from "./render";
 
 export const HASH_A = "a".repeat(64);
 export const HASH_B = "b".repeat(64);
@@ -101,3 +103,40 @@ export const SEVEN: GateResult[] = [
     settlement: "UNRESOLVED",
   }),
 ];
+
+export interface GateCall {
+  url: string;
+  method: string;
+  body: Record<string, unknown> | null;
+  headers: Record<string, string>;
+}
+
+export type GateHandler = [path: string, method: string, respond: () => Response | Promise<Response>];
+
+/**
+ * 정확 경로·메서드 일치 fetch 스텁 — 부분 일치(includes)가 아니라서 잘못된 경로 호출은 404로 터진다(공회전·오라우팅 방지).
+ * 핸들러 배열은 호출 뒤에 바꿔도 반영된다(변경 가능). `/auth/me`만 내장.
+ */
+export function stubGateFetch(me: unknown, handlers: GateHandler[]): { calls: GateCall[] } {
+  const calls: GateCall[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      calls.push({
+        url: input,
+        method,
+        body: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+      });
+      if (input === "/api/v1/auth/me") return Promise.resolve(jsonResponse(me));
+      for (const [path, wanted, respond] of handlers) {
+        if (input === `/api${path}` && method === wanted) return Promise.resolve(respond());
+      }
+      return Promise.resolve(
+        jsonResponse({ error: { code: "TEST.UNMATCHED", message: `스텁에 없는 호출: ${method} ${input}`, detail: {} } }, 404),
+      );
+    }),
+  );
+  return { calls };
+}

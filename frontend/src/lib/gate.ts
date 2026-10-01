@@ -117,8 +117,12 @@ export const PRICE_TOLERANCE_KEY = "price_deviation_tolerance_bp";
 /** 서버가 정책 미설정을 알리는 출처 값 — 가장 엄격한 기본 동작이 적용 중이다. */
 export const POLICY_UNSET = "UNSET_DEFAULT";
 
-const PI_MODE_LABEL: Record<string, string> = { OFF: "끔(OFF)", WARN: "경고(WARN)", BLOCK: "차단(BLOCK)" };
+// 한국어 우선 표기 — 영문 코드를 단독으로 노출하지 않는다.
+const PI_MODE_LABEL: Record<string, string> = { OFF: "끔", WARN: "경고", BLOCK: "차단" };
 export const piModeLabel = (value: string | number): string => PI_MODE_LABEL[String(value)] ?? "확인 불가";
+
+/** 허용 편차(bp) 표기 — 서버 값 그대로("1bp = 0.01%" 안내 병기, 환산 산술 없음). */
+export const toleranceLabel = (value: string | number): string => `${value}bp`;
 
 export const gateTargetLabel = (row: Pick<GateResult, "gate_code" | "line_no" | "line_id">): string =>
   `${gateLabel(row.gate_code)}${row.line_id !== null ? ` · 라인 ${row.line_no ?? "?"}` : ""}`;
@@ -162,7 +166,16 @@ export function gateErrorMessage(error: unknown, fallback = "요청을 처리하
   if (error.status === 403) return "예외 승인·철회 권한이 없습니다(무역·관리자만 가능합니다).";
   if (error.status === 422) return GATE_ERROR_TEXT[VALIDATION_CODE] as string;
   if (error.status === 409) return "처리 중 충돌이 발생했습니다. '최신 내용 불러오기'로 확인한 뒤 다시 시도해 주세요.";
-  if (error.status === 404) return "수주를 찾을 수 없습니다. 목록에서 다시 확인해 주세요.";
+  if (error.status === 404) return "수주 또는 라인을 찾을 수 없습니다. 수주 목록에서 다시 확인해 주세요.";
+  return HANGUL.test(error.message) ? error.message : fallback;
+}
+
+/** 조회(GET) 실패 전용 문구 — 쓰기(예외 승인) 문구를 재사용하지 않는다. */
+export function gateLoadErrorMessage(error: unknown): string {
+  const fallback = "게이트 판정을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+  if (!(error instanceof ApiError)) return fallback;
+  if (error.status === 403) return "이 수주의 게이트 판정을 볼 권한이 없습니다.";
+  if (error.status === 404) return "수주를 찾을 수 없습니다. 수주 목록에서 다시 확인해 주세요.";
   return HANGUL.test(error.message) ? error.message : fallback;
 }
 

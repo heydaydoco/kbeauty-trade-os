@@ -102,6 +102,8 @@ export function ConfirmDialog({
   const titleId = useId();
   const descId = useId();
   const hintId = useId();
+  const problemId = useId();
+  const blockedId = useId();
   const [reason, setReason] = useState("");
   const firstRef = useRef<HTMLTextAreaElement | HTMLButtonElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -111,6 +113,13 @@ export function ConfirmDialog({
   // 길이는 코드포인트 기준(서버 문자 수와 맞춤 — 이모지 등 서로게이트 쌍이 2로 세어지지 않게).
   const reasonProblem =
     needsReason && reason !== "" && reasonValidator !== undefined ? reasonValidator(reason) : null;
+  // 비활성 확정 버튼의 사유 — 사유 입력이 부족·부적합할 때만(스크린리더가 왜 못 누르는지 알 수 있게).
+  // 부적합 사유는 화면의 오류 문구(problemId)를 그대로 가리키고, 길이 부족만 별도 안내(sr-only)를 둔다 — 같은 문구 중복 없음.
+  const reasonBlockedNote: string | null =
+    needsReason && reasonProblem === null && [...reason.trim()].length < reasonMinLength
+      ? `사유를 ${reasonMinLength}자 이상 입력해야 확정할 수 있습니다.`
+      : null;
+  const confirmDescribedBy = pending ? undefined : reasonProblem !== null ? problemId : reasonBlockedNote !== null ? blockedId : undefined;
   const blocked =
     pending ||
     confirmDisabled ||
@@ -145,13 +154,16 @@ export function ConfirmDialog({
                 value={reason}
                 maxLength={reasonMaxLength}
                 rows={3}
-                aria-describedby={reasonHint ? hintId : undefined}
+                aria-invalid={reasonProblem !== null}
+                aria-describedby={
+                  [reasonProblem ? problemId : null, reasonHint ? hintId : null].filter(Boolean).join(" ") || undefined
+                }
                 onChange={(event) => setReason(event.target.value)}
                 className="rounded border border-gray-300 px-3 py-2"
               />
             </label>
             {reasonProblem && (
-              <span role="alert" className="break-keep text-xs text-signal-red">
+              <span id={problemId} role="alert" className="break-keep text-xs text-signal-red">
                 {reasonProblem}
               </span>
             )}
@@ -176,6 +188,11 @@ export function ConfirmDialog({
             최신 내용 불러오기
           </button>
         )}
+        {reasonBlockedNote !== null && (
+          <span id={blockedId} className="sr-only">
+            {reasonBlockedNote}
+          </span>
+        )}
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
@@ -191,6 +208,7 @@ export function ConfirmDialog({
               if (!needsReason) firstRef.current = node;
             }}
             disabled={blocked}
+            aria-describedby={blocked ? confirmDescribedBy : undefined}
             onClick={() => onConfirm(reason.trim())}
             className={`cell-nowrap rounded px-4 py-2 text-sm text-white disabled:opacity-50 ${
               danger ? "bg-signal-red" : "bg-gray-900"

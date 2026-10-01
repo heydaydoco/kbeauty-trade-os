@@ -9,7 +9,7 @@
 // - 쓰기 성공 뒤 게이트·SO 상세를 무효화한다. SO version 기준(baseVersion)은 건드리지 않는다(override는 SO 행을 바꾸지 않는다).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { apiFetch } from "../lib/api";
 import { toKstDisplay } from "../lib/datetime";
@@ -19,6 +19,7 @@ import {
   PI_MODE_KEY,
   PRICE_TOLERANCE_KEY,
   gateErrorMessage,
+  gateLoadErrorMessage,
   gateLabel,
   gateTargetLabel,
   gatesKey,
@@ -31,6 +32,7 @@ import {
   resolutionLabel,
   salesOrderDetailKey,
   settlementLabel,
+  toleranceLabel,
   validateOverrideReason,
   type GateOverrideBody,
   type GateReport,
@@ -78,6 +80,12 @@ export function GatePanel({ soId, soStatus }: { soId: number; soStatus: string }
   });
 
   const [dialog, setDialog] = useState<DialogState | null>(null);
+  // 성공 알림(live region)과 포커스 이동 — 다이얼로그가 닫히고 버튼이 사라져도 포커스가 body로 빠지지 않게 요약 영역으로 옮긴다.
+  const [done, setDone] = useState<{ text: string; n: number } | null>(null);
+  const summaryRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (done !== null) summaryRef.current?.focus();
+  }, [done]);
   const grantKeys = useRef(new Map<string, string>());
   const revokeKeys = useRef(new Map<string, string>());
   const lock = useRef(false);
@@ -103,8 +111,9 @@ export function GatePanel({ soId, soStatus }: { soId: number; soStatus: string }
         lock.current = false;
       }
     },
-    onSuccess: () => {
+    onSuccess: (_result, input) => {
       setDialog(null);
+      setDone((prev) => ({ text: input.mode === "grant" ? "예외 승인을 기록했습니다." : "예외 승인을 철회했습니다.", n: (prev?.n ?? 0) + 1 }));
       grantKeys.current.clear();
       revokeKeys.current.clear();
       refresh();
@@ -157,11 +166,31 @@ export function GatePanel({ soId, soStatus }: { soId: number; soStatus: string }
         방금 조회한 참고 판정이며 확정 시 서버가 다시 평가합니다. 이 화면에서는 판정을 보고 예외 승인(override)만 다룹니다.
       </p>
 
-      {report.isPending && <p className="mt-3 text-sm text-gray-500">불러오는 중…</p>}
-      {report.error && !data && (
-        <p role="alert" className="mt-3 break-keep text-sm text-signal-red">
-          {gateErrorMessage(report.error, "게이트 판정을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")}
+      <p role="status" aria-label="처리 결과" className={done ? "mt-2 break-keep text-sm font-medium" : "sr-only"}>
+        {done?.text ?? ""}
+      </p>
+
+      {report.isPending && (
+        <p role="status" className="mt-3 text-sm text-gray-500">
+          불러오는 중…
         </p>
+      )}
+      {report.error && (
+        <div role="alert" className="mt-3 break-keep text-sm text-signal-red">
+          <p>
+            {data
+              ? `최신 판정을 불러오지 못했습니다. 아래는 마지막으로 받은 값이라 낡았을 수 있습니다. ${gateLoadErrorMessage(report.error)}`
+              : gateLoadErrorMessage(report.error)}
+          </p>
+          <button
+            type="button"
+            onClick={() => void report.refetch()}
+            disabled={report.isFetching}
+            className="cell-nowrap mt-2 rounded border border-signal-red px-3 py-1 disabled:opacity-50"
+          >
+            다시 시도
+          </button>
+        </div>
       )}
       {data !== undefined && gates === null && (
         <p className="mt-3 break-keep text-sm text-gray-500">게이트 판정을 불러오지 못했습니다.</p>
@@ -169,7 +198,7 @@ export function GatePanel({ soId, soStatus }: { soId: number; soStatus: string }
 
       {data !== undefined && gates !== null && (
         <>
-          <ClearanceSummary report={data} />
+          <ClearanceSummary report={data} summaryRef={summaryRef} />
           {data.note && <p className="mt-2 break-keep text-xs text-gray-500">{data.note}</p>}
           {data.readiness_scope_note && <p className="break-keep text-xs text-gray-500">{data.readiness_scope_note}</p>}
 
@@ -209,6 +238,7 @@ export function GatePanel({ soId, soStatus }: { soId: number; soStatus: string }
                       roleWrite={roleWrite}
                       isAdmin={isAdmin}
                       myId={me?.id ?? null}
+                      me={me?.roles ?? []}
                       onGrant={() => openDialog({ mode: "grant", row })}
                       onRevoke={() => openDialog({ mode: "revoke", row })}
                     />
@@ -247,10 +277,16 @@ export function GatePanel({ soId, soStatus }: { soId: number; soStatus: string }
   );
 }
 
-function ClearanceSummary({ report }: { report: GateReport }) {
+function ClearanceSummary({ report, summaryRef }: { report: GateReport; summaryRef: React.RefObject<HTMLDivElement | null> }) {
   const { clearance, approval } = report;
   return (
-    <div role="status" aria-label="게이트 요약" className="mt-3 rounded border border-gray-200 bg-gray-50 p-3 text-sm">
+    <div
+      ref={summaryRef}
+      tabIndex={-1}
+      role="status"
+      aria-label="게이트 요약"
+      className="mt-3 rounded border border-gray-200 bg-gray-50 p-3 text-sm focus:outline focus:outline-2 focus:outline-gray-900"
+    >
       <p className="break-keep font-medium">
         {clearance.cleared
           ? "서버 판정(참고): 모든 게이트가 해소된 상태입니다."
@@ -280,6 +316,7 @@ function GateRow({
   roleWrite,
   isAdmin,
   myId,
+  me,
   onGrant,
   onRevoke,
 }: {
@@ -289,10 +326,13 @@ function GateRow({
   roleWrite: boolean;
   isAdmin: boolean;
   myId: number | null;
+  me: string[];
   onGrant: () => void;
   onRevoke: () => void;
 }) {
   const target = gateTargetLabel(row);
+  // 서버가 can_override=false를 줬는데 내 역할이 허용 역할이면 사유는 철회 이력(재부여는 ADMIN만)이다 — 서버 규칙(regrant_allowed)과 같은 단일 출처의 결과를 문구로만 옮긴다.
+  const myRoleCanOverride = me.some((role) => row.override_roles.includes(role));
   const policies = report.policies ?? {};
   const unresolved = row.settlement === "UNRESOLVED";
   const canRevoke = open && roleWrite && row.override !== null && (isAdmin || row.override.granted_by_id === myId);
@@ -316,22 +356,22 @@ function GateRow({
           {settlementLabel(row.settlement)}
         </span>
       </td>
-      <td className="break-keep px-3 py-2">
+      <td className="min-w-48 break-keep px-3 py-2">
         <p>{row.message_ko}</p>
         {row.gate_code === "PI_DEPOSIT" && policies[PI_MODE_KEY] !== undefined && (
           <PolicyLine
             label="PI 입금 게이트 모드"
             value={piModeLabel(policies[PI_MODE_KEY].value)}
             unset={policies[PI_MODE_KEY].source === POLICY_UNSET}
-            unsetNote="미설정 — 기본값(차단)이 적용 중입니다. 정책 설정에서 저장하세요."
+            unsetNote={`미설정 — 기본값(${piModeLabel(policies[PI_MODE_KEY].value)})이 적용 중입니다. 정책 설정에서 저장하세요.`}
           />
         )}
         {row.gate_code === "PRICE_DEVIATION" && policies[PRICE_TOLERANCE_KEY] !== undefined && (
           <PolicyLine
             label="가격 편차 허용치"
-            value={`${policies[PRICE_TOLERANCE_KEY].value} bp`}
+            value={`${toleranceLabel(policies[PRICE_TOLERANCE_KEY].value)}(1bp = 0.01%)`}
             unset={policies[PRICE_TOLERANCE_KEY].source === POLICY_UNSET}
-            unsetNote="미설정 — 기본값(0bp)이 적용 중이라 편차가 있으면 차단됩니다. 정책 설정에서 저장하세요."
+            unsetNote={`미설정 — 기본값(${toleranceLabel(policies[PRICE_TOLERANCE_KEY].value)})이 적용 중입니다. 정책 설정에서 저장하세요.`}
           />
         )}
         {row.gate_code === "CREDIT" && (
@@ -360,7 +400,7 @@ function GateRow({
           <button
             type="button"
             onClick={onGrant}
-            aria-label={`${target} 예외 승인`}
+            aria-label={`${target} 예외 승인(override)`}
             className="cell-nowrap rounded border border-gray-900 px-3 py-1 text-sm"
           >
             예외 승인(override)
@@ -381,9 +421,11 @@ function GateRow({
         )}
         {open && roleWrite && !row.can_override && unresolved && row.resolution === "OVERRIDE" && (
           <span className="block max-w-40 break-keep text-xs text-gray-500">
-            {row.override_roles.length > 0
-              ? `${row.override_roles.map(roleLabel).join("·")} 역할만 예외 승인할 수 있습니다.`
-              : "예외 승인할 수 없는 상태입니다."}
+            {myRoleCanOverride
+              ? "철회된 항목은 관리자만 다시 예외 승인할 수 있습니다."
+              : row.override_roles.length > 0
+                ? `${row.override_roles.map(roleLabel).join("·")} 역할만 예외 승인할 수 있습니다.`
+                : "예외 승인할 수 없는 상태입니다."}
           </span>
         )}
       </td>

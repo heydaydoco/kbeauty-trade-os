@@ -542,7 +542,7 @@ describe("SO 상세 — 게이트 패널(PR-11b)", () => {
 
   it("접수 SO에서 can_override 항목에 버튼이 보이고 다이얼로그가 열린다", async () => {
     open(soDetail(), [["/v1/sales-orders/9/gates", "GET", () => jsonResponse(report([PRICE_BLOCK]))]]);
-    fireEvent.click(await screen.findByRole("button", { name: "가격 편차 · 라인 1 예외 승인" }));
+    fireEvent.click(await screen.findByRole("button", { name: "가격 편차 · 라인 1 예외 승인(override)" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("예외 승인(override)을 부여할까요?");
   });
 
@@ -551,7 +551,7 @@ describe("SO 상세 — 게이트 패널(PR-11b)", () => {
       ["/v1/sales-orders/9/gates", "GET", () => jsonResponse(report([PRICE_BLOCK]))],
       ["/v1/sales-orders/9/gate-overrides", "POST", () => jsonResponse({ id: 1 }, 201)],
     ]);
-    fireEvent.click(await screen.findByRole("button", { name: "가격 편차 · 라인 1 예외 승인" }));
+    fireEvent.click(await screen.findByRole("button", { name: "가격 편차 · 라인 1 예외 승인(override)" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "바이어와 합의한 가격입니다" } });
     const detailGets = () => calls.filter((c) => c.method === "GET" && c.url.endsWith("/v1/sales-orders/9")).length;

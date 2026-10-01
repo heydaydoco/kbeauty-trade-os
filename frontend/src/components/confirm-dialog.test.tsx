@@ -65,4 +65,33 @@ describe("ConfirmDialog", () => {
     fireEvent.change(screen.getByLabelText("사유"), { target: { value: "가나" } });
     expect(confirm).toBeEnabled();
   });
+
+  it("사유 접근성: 부적합 사유는 aria-invalid·aria-describedby로 연결되고, 비활성 확정 버튼은 사유 안내와 연결된다", () => {
+    render(
+      <ConfirmDialog
+        title="제목"
+        description="설명"
+        confirmLabel="확정"
+        reasonLabel="사유"
+        reasonMinLength={3}
+        reasonHint="힌트 문구"
+        reasonValidator={(r) => (r.includes("!") ? "느낌표는 쓸 수 없습니다." : null)}
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+      />,
+    );
+    const box = screen.getByRole("textbox");
+    const confirmButton = screen.getByRole("button", { name: "확정" });
+    expect(box).toHaveAttribute("aria-invalid", "false");
+    expect(box).toHaveAccessibleDescription("힌트 문구");
+    expect(confirmButton).toHaveAccessibleDescription("사유를 3자 이상 입력해야 확정할 수 있습니다.");
+    fireEvent.change(box, { target: { value: "가나다!" } });
+    expect(box).toHaveAttribute("aria-invalid", "true");
+    expect(box).toHaveAccessibleDescription("느낌표는 쓸 수 없습니다. 힌트 문구");
+    expect(confirmButton).toBeDisabled();
+    expect(confirmButton).toHaveAccessibleDescription("느낌표는 쓸 수 없습니다.");
+    fireEvent.change(box, { target: { value: "가나다" } });
+    expect(confirmButton).toBeEnabled();
+    expect(confirmButton).not.toHaveAttribute("aria-describedby");
+  });
 });
