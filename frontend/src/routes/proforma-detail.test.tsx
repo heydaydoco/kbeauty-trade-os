@@ -3,7 +3,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
-import { PAYMENT_SUMMARY } from "../test/payment-fixtures";
+import { PAYMENT_SUMMARY, paymentRow } from "../test/payment-fixtures";
 import { PI_LOG, piDetail } from "../test/pi-fixtures";
 import { stubFetch } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
@@ -332,5 +332,51 @@ describe("PI 상세 — meta(FREE 열)·낙관 잠금", () => {
       const patch = calls.find((c) => c.method === "PATCH");
       expect(patch?.body).toMatchObject({ version: 3 });
     });
+  });
+  it("입금 기록으로 PI version이 올라도 '다른 곳에서 수정' 배너가 뜨지 않고 기준 version이 따라간다(내 쓰기)", async () => {
+    const { calls } = open(piDetail(), [
+      [
+        "/v1/proforma-invoices/5/payments",
+        "POST",
+        () => {
+          server.pi = piDetail({ version: 3, status: "PARTIALLY_PAID" });
+          return jsonResponse({ payment: paymentRow(), summary: PAYMENT_SUMMARY, warnings: [] }, 201);
+        },
+      ],
+    ]);
+    await screen.findByRole("form", { name: "입금 기록" });
+    fireEvent.change(screen.getByLabelText(/입금액/), { target: { value: "10.00" } });
+    fireEvent.change(screen.getByLabelText(/입금 확인 근거/), { target: { value: "REF" } });
+    fireEvent.click(screen.getByRole("button", { name: "입금 기록" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "입금 기록 확정" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("일부입금").length).toBeGreaterThan(0));
+    expect(screen.queryByText(/다른 곳에서 이 PI가 수정되었습니다/)).not.toBeInTheDocument();
+  });
+
+  it("이미 다른 곳에서 수정돼 어긋난 상태에서 입금해도 기준 version을 덮어쓰지 않는다(409가 막게 둔다)", async () => {
+    open(piDetail(), [
+      [
+        "/v1/proforma-invoices/5/payments",
+        "POST",
+        () => {
+          server.pi = piDetail({ version: 4, status: "PARTIALLY_PAID" });
+          return jsonResponse({ payment: paymentRow(), summary: PAYMENT_SUMMARY, warnings: [] }, 201);
+        },
+      ],
+    ]);
+    await screen.findByRole("form", { name: "입금 기록" });
+    server.pi = piDetail({ version: 3 }); // 남의 수정
+    window.dispatchEvent(new Event("visibilitychange"));
+    await screen.findByText(/다른 곳에서 이 PI가 수정되었습니다/);
+    fireEvent.change(screen.getByLabelText(/입금액/), { target: { value: "10.00" } });
+    fireEvent.change(screen.getByLabelText(/입금 확인 근거/), { target: { value: "REF" } });
+    fireEvent.click(screen.getByRole("button", { name: "입금 기록" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "입금 기록 확정" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("일부입금").length).toBeGreaterThan(0));
+    expect(screen.getByText(/다른 곳에서 이 PI가 수정되었습니다/)).toBeInTheDocument(); // 배너 유지
   });
 });
