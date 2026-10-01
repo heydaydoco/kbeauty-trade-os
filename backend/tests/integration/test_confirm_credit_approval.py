@@ -438,7 +438,8 @@ def test_a_raw_price_change_that_skips_the_edit_hook_is_still_caught_by_the_dige
     so = _over()
     with logged_in(TRADE) as client:
         approval_id = _approved(so, client)
-        set_line(so["id"], 1, unit_price=1100, list_price=1100)  # 총액 5,500 — digest 달라짐
+        # 총액은 5,000 그대로(초과분·상한 불변) — **digest만** 달라지는 변조라 digest 대조 제거가 곧바로 드러난다
+        set_line(so["id"], 1, unit_price=1250, quantity=4, list_price=1250)
         response = confirm(client, so["id"])
     _blocked_credit(response)
     _assert_not_confirmed(so["id"])
@@ -456,7 +457,7 @@ def test_a_stale_approval_that_clearance_still_sees_is_voided_at_consumption_and
     so = _over()
     with logged_in(TRADE) as client:
         approval_id = _approved(so, client)
-        set_line(so["id"], 1, unit_price=1100, list_price=1100)
+        set_line(so["id"], 1, unit_price=1250, quantity=4, list_price=1250)  # 총액 5,000 불변·digest만 변함
         fake = ApprovalRef(
             id=approval_id,
             approval_type="SO_CREDIT_EXCEEDED",
