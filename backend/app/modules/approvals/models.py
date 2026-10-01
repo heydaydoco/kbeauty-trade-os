@@ -282,7 +282,10 @@ class ApprovalEvent(PkMixin, Base):
         value_in("to_status", _ALL_STATUSES, name="to_status_valid"),
         # 상태 기계를 DB가 한 번 더 강제한다 — machine.ALLOWED에서 생성(이중 정의 방지).
         CheckConstraint(
-            f"(from_status IS NULL AND to_status = 'REQUESTED') OR ({ALLOWED_PAIRS_SQL})",
+            # 탄생(from NULL)은 REQUESTED로만. `from_status IS NOT NULL` 가드가 필수다 — 없으면 from이 NULL일 때 두 번째 항이 NULL이 되어
+            # CHECK가 통과해 버린다(SQL의 NULL = 위반 아님): 이력에 NULL→APPROVED 같은 탄생 행이 들어가는 구멍이 생긴다.
+            f"(from_status IS NULL AND to_status = 'REQUESTED')"
+            f" OR (from_status IS NOT NULL AND ({ALLOWED_PAIRS_SQL}))",
             name="pair_allowed",
         ),
         CheckConstraint(

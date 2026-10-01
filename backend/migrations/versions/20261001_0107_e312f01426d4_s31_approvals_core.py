@@ -400,7 +400,7 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=True),
         sa.Column("reason_code", sa.String(length=20), nullable=True),
         sa.CheckConstraint(
-            "(from_status IS NULL AND to_status = 'REQUESTED') OR ((from_status = 'APPROVED' AND to_status = 'CONSUMED') OR (from_status = 'APPROVED' AND to_status = 'VOIDED') OR (from_status = 'APPROVED' AND to_status = 'WITHDRAWN') OR (from_status = 'REQUESTED' AND to_status = 'APPROVED') OR (from_status = 'REQUESTED' AND to_status = 'REJECTED') OR (from_status = 'REQUESTED' AND to_status = 'VOIDED') OR (from_status = 'REQUESTED' AND to_status = 'WITHDRAWN'))",
+            "(from_status IS NULL AND to_status = 'REQUESTED') OR (from_status IS NOT NULL AND ((from_status = 'APPROVED' AND to_status = 'CONSUMED') OR (from_status = 'APPROVED' AND to_status = 'VOIDED') OR (from_status = 'APPROVED' AND to_status = 'WITHDRAWN') OR (from_status = 'REQUESTED' AND to_status = 'APPROVED') OR (from_status = 'REQUESTED' AND to_status = 'REJECTED') OR (from_status = 'REQUESTED' AND to_status = 'VOIDED') OR (from_status = 'REQUESTED' AND to_status = 'WITHDRAWN')))",
             name=op.f("ck_approval_events_pair_allowed"),
         ),
         sa.CheckConstraint(
