@@ -247,26 +247,49 @@ def passed_gates(outcomes: Iterable[GateOutcome]) -> list[str]:
 # ── override 조회·권한 ───────────────────────────────────────────────────────
 
 
+def _latest_rows(session: Session, subject_type: str, subject_id: int) -> list[GateOverride]:
+    """`(gate_code, line_id, basis_hash)`별 최신 행(max id) — 부여·철회 상태의 단일 질의."""
+    return list(
+        session.execute(
+            select(GateOverride)
+            .where(GateOverride.subject_type == subject_type, GateOverride.subject_id == subject_id)
+            .distinct(GateOverride.gate_code, GateOverride.line_id, GateOverride.basis_hash)
+            .order_by(
+                GateOverride.gate_code,
+                GateOverride.line_id,
+                GateOverride.basis_hash,
+                GateOverride.id.desc(),
+            )
+        ).scalars()
+    )
+
+
 def effective_overrides(
     session: Session, subject_type: str, subject_id: int
 ) -> dict[OverrideKey, int]:
     """유효한 override — `(gate_code, line_id, basis_hash)`별 최신 행(max id)이 GRANT인 것 → 그 행 id."""
-    rows = session.execute(
-        select(GateOverride)
-        .where(GateOverride.subject_type == subject_type, GateOverride.subject_id == subject_id)
-        .distinct(GateOverride.gate_code, GateOverride.line_id, GateOverride.basis_hash)
-        .order_by(
-            GateOverride.gate_code,
-            GateOverride.line_id,
-            GateOverride.basis_hash,
-            GateOverride.id.desc(),
-        )
-    ).scalars()
     return {
         (row.gate_code, row.line_id, row.basis_hash): row.id
-        for row in rows
+        for row in _latest_rows(session, subject_type, subject_id)
         if row.action == ACTION_GRANT
     }
+
+
+def revoked_overrides(session: Session, subject_type: str, subject_id: int) -> set[OverrideKey]:
+    """최신 행이 철회(REVOKE)인 판정 키 — 재부여 권한(`regrant_allowed`) 판정용(표시의 can_override)."""
+    return {
+        (row.gate_code, row.line_id, row.basis_hash)
+        for row in _latest_rows(session, subject_type, subject_id)
+        if row.action != ACTION_GRANT
+    }
+
+
+def regrant_allowed(previously_revoked: bool, roles: Collection[RoleCode]) -> bool:
+    """철회된 판정의 재부여 규칙(단일 정의) — 철회 이력이 있으면 ADMIN만(상급 철회를 하위 역할이 되돌리지 못한다, 자율 확정).
+
+    `grant_override`(서버 검증)와 `GET /gates`의 `can_override`(표시)가 같은 함수를 쓴다 — 규칙 드리프트 방지.
+    """
+    return not previously_revoked or RoleCode.ADMIN in roles
 
 
 def latest_override(
@@ -456,7 +479,7 @@ def grant_override(
             ErrorCode.GATES_OVERRIDE_ALREADY_GRANTED,
             log_context={"gate_code": gate_code, "line_id": line_id},
         )
-    if latest is not None and RoleCode.ADMIN not in actor_roles:
+    if not regrant_allowed(latest is not None, actor_roles):
         # 최신 행이 REVOKE — 철회된 판정의 재부여는 ADMIN만(상급 철회를 하위 역할이 되돌리지 못한다, 자율 확정)
         raise AppError(ErrorCode.GATES_OVERRIDE_NOT_ALLOWED, log_context={"gate_code": gate_code})
     cleaned = clean_reason(reason)

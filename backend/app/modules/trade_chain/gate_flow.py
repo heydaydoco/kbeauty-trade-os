@@ -158,6 +158,7 @@ def gate_report_body(
     open_for_override = so.status == OVERRIDE_OPEN_STATUS
     show_credit = bool(roles & CREDIT_VISIBLE_ROLES)
     show_detail = bool(roles & DETAIL_VISIBLE_ROLES)
+    revoked = gates_service.revoked_overrides(session, SUBJECT_SALES_ORDER, so.id)
     gates: list[dict[str, Any]] = []
     for item, state in bundle.clearance.settlements:
         override_id = bundle.overrides.get((item.gate_code, item.line_id, item.basis_hash))
@@ -184,6 +185,9 @@ def gate_report_body(
                     and state is Settlement.UNRESOLVED
                     and gates_service.is_overridable(item)
                     and gates_service.authorized_role(item.gate_code, roles) is not None
+                    and gates_service.regrant_allowed(
+                        (item.gate_code, item.line_id, item.basis_hash) in revoked, roles
+                    )
                 ),
                 "override": (
                     {
