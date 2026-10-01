@@ -188,13 +188,20 @@ describe("로컬 '마지막 확인' 상태는 재조회·편집 때 비운다(�
     await waitFor(() => expect(screen.getByRole("region", { name: "승인 요청" })).not.toHaveTextContent("승인을 요청했습니다"));
   });
 
-  it("'최신 내용 불러오기' 버튼(다이얼로그 409)도 로컬 상태를 비운다", async () => {
-    mount([[CONFIRM_URL, "POST", () => apiError("COMMON.CONCURRENCY.VERSION_CONFLICT", 409)]]);
-    const dialog = await openConfirm();
+  it("다이얼로그의 '최신 내용 불러오기'(409)가 로컬 차단 결과·승인 대기를 비우고 상위 onReload를 부른다", async () => {
+    let conflict = false;
+    const view = mount([[CONFIRM_URL, "POST", () => (conflict ? apiError("COMMON.CONCURRENCY.VERSION_CONFLICT", 409) : blockedResponse({ pending_approval_id: 61, pending_approval_status: "REQUESTED" }))]]);
+    fireEvent.click(dialogConfirm(await openConfirm()));
+    await blockedRegion();
+    conflict = true;
+    fireEvent.click(await confirmButton());
+    const dialog = await screen.findByRole("dialog");
     fireEvent.click(dialogConfirm(dialog));
     await within(dialog).findByRole("alert");
     fireEvent.click(within(dialog).getByRole("button", { name: "최신 내용 불러오기" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(view.onReload).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("region", { name: "확정 차단 결과" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("link", { name: "승인 #61 보기" })).not.toBeInTheDocument();
   });
 
   it("카드의 승인 링크는 서버 GET의 사용 가능 승인이 로컬 값보다 우선한다", async () => {
@@ -379,6 +386,10 @@ describe("문구·조사·접근성(검토 4·9·10·11)", () => {
     expect(withJosa("승인 #65", "은/는")).toBe("승인 #65는");
     expect(withJosa("SO-2026-0007", "을/를")).toBe("SO-2026-0007을");
     expect(withJosa("SO-2026-0009", "을/를")).toBe("SO-2026-0009를");
+    expect(withJosa("승인 #68", "을/를")).toBe("승인 #68을");
+    expect(withJosa("승인 #66", "이/가")).toBe("승인 #66이");
+    expect(withJosa("승인 #67", "이/가")).toBe("승인 #67이");
+    expect(withJosa("승인 #69", "이/가")).toBe("승인 #69가");
     expect(josaOf("견적", "이/가")).toBe("이");
     expect(josaOf("수주", "이/가")).toBe("가");
     expect(josaOf("ABC", "이/가")).toBe("가");
