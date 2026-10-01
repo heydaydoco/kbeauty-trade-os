@@ -102,7 +102,7 @@
 | G-01 | **QT·PI·SO·PO 핵심 화면(목록·상세·라인 편집·발행/확정/취소 다이얼로그·참조 생성 흐름·PO 미리보기)** — A는 프런트 절이 없고, B는 "전이 UI"만, D는 보드·인테이크·GatePanel, E는 ConfirmPanel 등 패널만 다룸. DoD "재입력 화면 없음"의 실체가 비어 있음 | PR-5~8이 각 전표의 화면을 소유(§3.3). 한국어 규약(break-keep·nowrap 헤더·가운데 숫자·`SearchSelect`·서버 문자열 금액·프런트 산술 0) 공통 |
 | G-02 | `bank_accounts` 관리 화면(ADMIN) — A/A8은 API만 | PR-6에 포함 |
 | G-03 | `document_flow` 화면(§14 ⑦)·상태이력 타임라인 컴포넌트(B/B6 `GET …/status-log`의 소비처) | PR-5에서 타임라인, PR-7에서 문서 흐름 패널 |
-| G-04 | `gate_overrides`의 이벤트·감사 — E/E6은 WARN override에 audit+outbox를 두었으나 X-26으로 삭제되면서 override 부여·철회를 ADMIN이 알림 규칙으로 감시할 수단이 사라짐 | outbox `gates.override.granted`·`gates.override.revoked`(payload=id·gate_code·subject id뿐, 사유·금액 금지) 신설(PR-11). `gate_overrides` 자체가 불변 증적이라 audit 이중 기록은 두지 않음 |
+| G-04 | `gate_overrides`의 이벤트·감사 — E/E6은 WARN override에 audit+outbox를 두었으나 X-26으로 삭제되면서 override 부여·철회를 ADMIN이 알림 규칙으로 감시할 수단이 사라짐 | outbox `gates.override.granted`·`gates.override.revoked`(payload=id·gate_code·subject id뿐, 사유·금액 금지) 신설(PR-11). `gate_overrides` 자체가 불변 증적이라 audit 이중 기록은 두지 않음 **[PR-11a 구현 편차 2026-10-01: 지시 문면에 따라 audit도 남긴다 — detail=id·게이트·대상 id·라인·허용 역할뿐(사유·금액 없음). ADR-0069 ⑤(b)]** |
 | G-05 | 알림 이동 매핑 — C/C7은 `entity_type='approvals'`→`/approvals`만 언급. A/A14의 검산 알림(`quotations` 등 4종), 신규 알림 entity_type 전건의 프런트 이동 매핑 필요 | PR-9에서 `alerts.tsx` 매핑을 일반화(entity_type→라우트 표)하고 PR-5/6/7/8이 자기 항목 추가 |
 | G-06 | 테스트 팩토리·픽스처(역할별 사용자 5종·결재선·대결·BUYER 거래처+여신한도·SKU+판가·시장+준비도 요건) — C/X2가 "F 소유"로만 언급, F에는 항목 없음 | PR-2가 `tests/factories/trade.py` 골격을 만들고 각 PR이 확장(소유=F) |
 | G-07 | DESIGN §14 화면 배정 문장 — C/X4는 승인함·대결, D는 오더 보드·인테이크, E는 정책·입금 패널·거래처 폼 | PR-1에서 §14에 화면 6개 일괄 배정(승인함·대결·결재선·인테이크·오더 보드·정책 설정·은행 계좌·전표 4종) |

@@ -87,6 +87,9 @@ USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
         "payments",
         "recorded_by_id",
     ): "ACTOR_LOG",  # PR-10a — 입금 기록자(불변 원장의 행위자 — 이관으로 바뀌지 않는다)
+    # PR-11a — 게이트 증적(불변): 평가자·override 부여자는 누가 했는가의 이력이다(이관으로 바뀌지 않는다).
+    ("gate_evaluations", "evaluated_by_id"): "ACTOR_LOG",
+    ("gate_overrides", "granted_by_id"): "ACTOR_LOG",
     ("approval_events", "actor_user_id"): "ACTOR_LOG",
     ("approval_events", "on_behalf_of_user_id"): "ACTOR_LOG",
     (

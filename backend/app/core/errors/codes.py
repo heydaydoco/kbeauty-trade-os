@@ -206,6 +206,20 @@ class ErrorCode(StrEnum):
     APPROVALS_DELEGATION_OVERLAP = "APPROVALS.DELEGATION.OVERLAP"
     APPROVALS_DELEGATION_NOT_ACTIVE = "APPROVALS.DELEGATION.NOT_ACTIVE"
 
+    # 게이트 override (S3-1 PR-11a / ADR-0069)
+    #: 이 역할로는 해당 게이트의 override를 부여·철회할 수 없다(가격·MOQ=무역·관리자, 준비도·PI=관리자).
+    GATES_OVERRIDE_NOT_ALLOWED = "GATES.OVERRIDE.NOT_ALLOWED"
+    #: override 대상이 아니다 — 해소 수단이 없는 결과(품번 매핑·중복 PO·여신)·이미 통과·경고뿐인 결과·철회할 부여 없음.
+    GATES_OVERRIDE_NOT_APPLICABLE = "GATES.OVERRIDE.NOT_APPLICABLE"
+    #: 사람이 본 판정이 낡았다(판정 해시 불일치) — 입력이 바뀌었으니 다시 확인해야 한다.
+    GATES_OVERRIDE_STALE = "GATES.OVERRIDE.STALE"
+    #: 이미 유효한 부여가 있다(같은 판정 해시) — 중복 부여 금지.
+    GATES_OVERRIDE_ALREADY_GRANTED = "GATES.OVERRIDE.ALREADY_GRANTED"
+    #: 철회할 유효한 부여가 없다(없거나 이미 철회됨).
+    GATES_OVERRIDE_NOT_GRANTED = "GATES.OVERRIDE.NOT_GRANTED"
+    #: 접수(RECEIVED) 상태가 아닌 수주에는 부여·철회할 수 없다.
+    GATES_OVERRIDE_ORDER_NOT_OPEN = "GATES.OVERRIDE.ORDER_NOT_OPEN"
+
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"
     IDEMPOTENCY_KEY_REQUIRED = "COMMON.IDEMPOTENCY.KEY_REQUIRED"
 

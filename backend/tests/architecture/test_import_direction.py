@@ -25,7 +25,7 @@ L1 = {"quotations", "proforma_invoices", "bank_accounts", "sales_orders", "purch
 L2 = {"trade_chain", "credit", "payments"}
 S3_DOMAIN = L0 | L1 | L2
 #: 전표 도메인과 무관해야 하는 S3 공용 모듈(전표를 임포트하면 안 된다).
-S3_PLATFORM = {"policies", "approvals"}
+S3_PLATFORM = {"policies", "approvals", "gates"}
 
 #: L2 안에서도 오케스트레이터(trade_chain)를 거꾸로 임포트하면 안 되는 모듈(trade_chain이 이들을 부른다).
 L2_NO_CHAIN = {"credit", "payments", "order_intake"}

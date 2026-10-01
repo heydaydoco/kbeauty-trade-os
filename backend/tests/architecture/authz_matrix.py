@@ -225,6 +225,29 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         C: DENY,
         V: DENY,
     },
+    # S3-1 PR-11a — 게이트: 판정 조회는 전 역할(여신 수치는 응답 본문에서 무역·관리자만 — test_gate_api), override 부여·철회는 라우트 상한이 무역(관리자 상시 통과)이고
+    # 게이트별 역할(가격·MOQ=무역·관리자, 준비도·PI=관리자)은 **서비스가 판정**한다(SERVICE_GATED — 라우트 프로브는 상한만 본다, 서비스 판정은 test_gate_override_api).
+    ("GET", "/api/v1/sales-orders/{so_id}/gates"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("POST", "/api/v1/sales-orders/{so_id}/gate-overrides"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/sales-orders/{so_id}/gate-overrides/revoke"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
     # S3-1 PR-8a — PO. **조회는 전 역할**이되 VIEWER는 원가·통화 필드가 없는 응답(200, ADR-0024 필드 부재 — 본문 분기는 test_po_cost_masking·G 그룹),
     # 생성(=발행=발주 확정)·미리보기·전이(OC·취소)·메타는 무역(관리자 상시 통과) — PO 주체=TRADE(설계 F8). 나머지 역할은 전부 403.
     ("GET", "/api/v1/purchase-orders"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},

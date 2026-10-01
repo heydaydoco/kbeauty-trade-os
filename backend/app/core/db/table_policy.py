@@ -34,6 +34,10 @@ IMMUTABLE_TABLES: frozenset[str] = frozenset(
         "approval_events",
         # S3-1 PR-10a — 입금 원장(ADR-0068·§17.5 확장). 부호 있는 INSERT-only 원장이고 정정은 반대 부호의 신규 행(역기록, ADR-05)이다.
         "payments",
+        # S3-1 PR-11a — 게이트 증적 2표(ADR-0069·§17.5 확장). 확정 시도 스냅샷과 통제된 예외(override)는 INSERT-only이고
+        # 정정은 새 행이다(override 철회 = REVOKE 행 추가).
+        "gate_evaluations",
+        "gate_overrides",
     }
 )
 
