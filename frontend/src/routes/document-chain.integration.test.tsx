@@ -6,6 +6,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
+import { PAYMENT_SUMMARY } from "../test/payment-fixtures";
 import { PI_LOG, bankAccount, piDetail, piPreview } from "../test/pi-fixtures";
 import { LOG, detail, stubFetch } from "../test/qt-fixtures";
 import { TRADER, jsonResponse, page, renderWithProviders } from "../test/render";
@@ -76,6 +77,7 @@ describe("DoD ① — QT → PI → SO 관통(재입력 없음)", () => {
         },
       ],
       ["/v1/sales-orders/9", "GET", () => jsonResponse(soDetail())],
+      ["/v1/proforma-invoices/5/payments", "GET", () => jsonResponse({ ...page([]), summary: PAYMENT_SUMMARY })],
       ["/v1/proforma-invoices/5", "GET", () => jsonResponse(piDetail())],
       ["/v1/quotations/7", "GET", () => jsonResponse(qt)],
       ["/v1/system/currencies", "GET", () => jsonResponse(page([{ code: "USD", minor_units: 2 }]))],

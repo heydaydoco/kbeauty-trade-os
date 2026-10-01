@@ -20,6 +20,7 @@ import {
   paymentTermsText,
   show,
 } from "../components/proforma-facts";
+import { PiPaymentsPanel } from "../components/pi-payments-panel";
 import { StatusTimeline } from "../components/status-timeline";
 import { ApiError, apiFetch } from "../lib/api";
 import { errorMessage, isVersionConflict } from "../lib/api-errors";
@@ -109,6 +110,17 @@ function ProformaDetailView() {
     });
   }
 
+  // 입금·역기록은 PI 상태를 수렴시켜 서버 version이 오른다. 내 쓰기로 오른 것을 '다른 곳에서 수정'으로 오인하지 않게,
+  // 쓰기 직전에 화면이 최신이었을 때만(=stale 아님) 기준 version을 새 값으로 옮긴다.
+  // 이미 어긋나 있었다면(다른 사람이 먼저 수정) 기준을 그대로 두어 409가 덮어쓰기를 막게 한다.
+  const staleNow = useRef(false);
+  function onPaymentWritten() {
+    const wasFresh = !staleNow.current;
+    void detail.refetch().then((result) => {
+      if (wasFresh && result.data) setBaseVersion(result.data.version);
+    });
+  }
+
   const cancel = useMutation({
     mutationFn: (input: { version: number; reason: string }) =>
       apiFetch<ProformaDetail>(`/v1/proforma-invoices/${id}/transitions`, {
@@ -165,6 +177,7 @@ function ProformaDetailView() {
   const pi = detail.data;
   const base = baseVersion ?? pi.version;
   const stale = pi.version !== base;
+  staleNow.current = stale;
 
   return (
     <section>
@@ -357,6 +370,18 @@ function ProformaDetailView() {
             </table>
           </div>
         </section>
+
+        <PiPaymentsPanel
+          key={`payments-${pi.id}`}
+          pi={{
+            id: pi.id,
+            currency: pi.currency,
+            minor_units: pi.minor_units,
+            status: pi.status,
+            payment_type: pi.payment_terms.payment_type,
+          }}
+          onWritten={onPaymentWritten}
+        />
 
         <DocumentFlowPanel kind="PROFORMA_INVOICE" id={pi.id} />
 

@@ -3,6 +3,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
+import { PAYMENT_SUMMARY } from "../test/payment-fixtures";
 import { PI_LOG, piDetail } from "../test/pi-fixtures";
 import { stubFetch } from "../test/qt-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
@@ -19,6 +20,8 @@ afterEach(() => {
 
 const REFS: Array<[string, string, () => Response]> = [
   ["/v1/proforma-invoices/5/status-log", "GET", () => jsonResponse(PI_LOG)],
+  // 입금 패널(10b) — 상세 핸들러(/v1/proforma-invoices/5)가 접두 일치로 가로채지 않게 먼저 둔다.
+  ["/v1/proforma-invoices/5/payments", "GET", () => jsonResponse({ ...page([]), summary: PAYMENT_SUMMARY })],
   ["/v1/users/lookup", "GET", () => jsonResponse(page([{ id: 1, display_name: "무역 담당" }]))],
 ];
 
@@ -44,7 +47,7 @@ describe("PI 상세 — 표시와 상태별 버튼", () => {
     expect(await screen.findByRole("heading", { name: /PI-2026-0001/ })).toBeInTheDocument();
     expect(screen.getByText("선수금 T/T · 선수금 30% · 잔금 B/L일 기준 30일")).toBeInTheDocument();
     expect(screen.getByText("75.00 USD")).toBeInTheDocument();
-    expect(screen.getByText("22.50 USD")).toBeInTheDocument(); // 선수금 청구액(서버 계산)
+    expect(screen.getAllByText("22.50 USD").length).toBeGreaterThan(0); // 선수금 청구액(서버 계산 — 입금 패널 요약에도 보인다)
     expect(screen.getByText("52.50 USD")).toBeInTheDocument();
     expect(screen.getByText("Shinhan Bank")).toBeInTheDocument();
     expect(screen.getByText("110-123-456789")).toBeInTheDocument();
