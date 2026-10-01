@@ -151,6 +151,10 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "approvals",
         "approval_lines",
         "delegations",
+        # S3-1 PR-13a — 오더 인테이크(ADR-0071). 편집(PENDING)·상태 전이·담당 이관이 앱 계정의 정상 UPDATE라 권한 회수가 불가능하다.
+        # 불변 열(extracted_snapshot·거래처·통화 등)은 ORM before_update 가드+AST 스캔+CHECK가 지킨다(트리거 미채택, ADR-0028·0040). 라인은 제자리 UPDATE·제외(soft delete).
+        "order_intakes",
+        "order_intake_lines",
     }
 )
 

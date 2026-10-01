@@ -22,7 +22,7 @@ pytestmark = pytest.mark.group_k
 
 L0 = {"trade_docs"}
 L1 = {"quotations", "proforma_invoices", "bank_accounts", "sales_orders", "purchase_orders"}
-L2 = {"trade_chain", "credit", "payments"}
+L2 = {"trade_chain", "credit", "payments", "order_intake"}
 S3_DOMAIN = L0 | L1 | L2
 #: 전표 도메인과 무관해야 하는 S3 공용 모듈(전표를 임포트하면 안 된다).
 S3_PLATFORM = {"policies", "approvals", "gates"}

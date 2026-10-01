@@ -2,7 +2,7 @@
 
 전부 **사람 1클릭 + `Idempotency-Key` 필수**이고 무역(관리자 상시 통과)이 한다. 동결 액션(`issue`)은 범용
 `/transitions`로 못 넘는다(스키마 `to` Literal에서 동결 엣지·자동 엣지·RESERVED를 구조적으로 제외 — 우회 표면 제거).
-이 라우터가 `issue_quotation`·`confirm_sales_order`·`request_credit_approval`의 **유일한 호출처**다(자동 확정·자동 승인 요청 경로 부재 — test_no_auto_confirm_code_path_exists).
+이 라우터가 `issue_quotation`·`confirm_sales_order`·`confirm_intake`·`request_credit_approval`의 **유일한 호출처**다(자동 확정·자동 승인 요청 경로 부재 — test_no_auto_confirm_code_path_exists).
 """
 
 from __future__ import annotations
@@ -16,6 +16,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
 from app.modules.gates.schemas import GateOverrideOut, GateOverrideRequest, GateReportOut
 from app.modules.identity.models import RoleCode
+from app.modules.order_intake.schemas import (
+    IntakeConfirmOut,
+    IntakeGateReportOut,
+    IntakeVersionRequest,
+)
 from app.modules.payments.schemas import (
     PaymentReceiptRequest,
     PaymentReversalRequest,
@@ -35,6 +40,7 @@ from app.modules.trade_chain import (
     confirm,
     document_flow,
     gate_flow,
+    intake_flow,
     lifecycle,
     payment_flow,
     reference,
@@ -476,6 +482,43 @@ def revoke_sales_order_gate_override(
     )
     response.status_code = status_code
     return GateOverrideOut.model_validate(body)
+
+
+# ── 오더 인테이크 확정·게이트 (S3-1 PR-13a) ─────────────────────────────────────────────
+
+intake_router = APIRouter(prefix="/order-intakes", tags=["trade-chain"])
+
+
+@intake_router.post(
+    "/{intake_id}/confirm",
+    summary="오더 인테이크 접수 확정 (사람 1클릭 — SO(접수) 생성·인테이크 CONFIRMED를 한 트랜잭션에서. 품번 미매핑 422·매핑 변경 409·중복 바이어 PO 409, 관리자도 우회 불가)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def confirm_order_intake(
+    intake_id: Annotated[int, Path(ge=1)],
+    payload: IntakeVersionRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> IntakeConfirmOut:
+    status_code, body = intake_flow.confirm_intake(
+        actor=current, idempotency_key=key, intake_id=intake_id, version=payload.version
+    )
+    response.status_code = status_code
+    return IntakeConfirmOut.model_validate(body)
+
+
+@intake_router.get(
+    "/{intake_id}/gates",
+    summary="오더 인테이크 게이트 평가 (검토 시점 정보 — 잠금·저장 없음. 접수 확정을 막는 것은 품번 매핑·중복 PO뿐, 전 역할 열람)",
+)
+def get_order_intake_gates(
+    intake_id: Annotated[int, Path(ge=1)], current: CurrentUser
+) -> IntakeGateReportOut:
+    return IntakeGateReportOut.model_validate(
+        intake_flow.get_intake_gates(intake_id=intake_id, roles=current.roles)
+    )
 
 
 # ── PO 전이(공급사 확인·취소) ──────────────────────────────────────────────────

@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.modules.certifications.models import Certification
+from app.modules.order_intake.models import OrderIntake
 from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.purchase_orders.models import PurchaseOrder
 from app.modules.quotations.models import Quotation
@@ -52,11 +53,12 @@ ASSIGNMENT_TARGETS: tuple[AssignmentTarget, ...] = (
     # S2-2 — §2 "담당 건(전표·인증·태스크·알림)"의 인증 명시분.
     AssignmentTarget("certifications", Certification, Certification.assignee_id),
     # S3-1 — 전표 담당자(§2 "담당 건(전표…)"). 동결 후에도 FREE 열이라 이관이 통과한다(ADR-0053).
-    # order_intakes는 PR-13이 자기 행을 더한다.
+    # 오더 인테이크(PR-13a) — 담당자는 이관 단위다(PENDING 건만 의미가 있으나 종결 건도 담당 이력 표시를 위해 대상에 둔다). 일괄 UPDATE는 version을 올리지 않는다.
     AssignmentTarget("quotations", Quotation, Quotation.assignee_id),
     AssignmentTarget("proforma_invoices", ProformaInvoice, ProformaInvoice.assignee_id),
     AssignmentTarget("sales_orders", SalesOrder, SalesOrder.assignee_id),
     AssignmentTarget("purchase_orders", PurchaseOrder, PurchaseOrder.assignee_id),
+    AssignmentTarget("order_intakes", OrderIntake, OrderIntake.assignee_id),
 )
 
 
@@ -74,6 +76,10 @@ USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
     ("quotation_status_log", "actor_user_id"): "ACTOR_LOG",
     ("proforma_invoice_status_log", "actor_user_id"): "ACTOR_LOG",
     ("sales_order_status_log", "actor_user_id"): "ACTOR_LOG",
+    (
+        "order_intakes",
+        "decided_by_id",
+    ): "ACTOR_LOG",  # PR-13a — 확정·거부 결정자(이력 — 이관으로 바뀌지 않는다)
     ("purchase_order_status_log", "actor_user_id"): "ACTOR_LOG",
     ("import_staging", "confirmed_by_id"): "ACTOR_LOG",
     # S3-1 PR-9a — 승인 4표(ADR-0061). 승인 대기 건은 **역할 기반**이라 이관 대상이 아니다(requested_by·decided_by는 이력이고,

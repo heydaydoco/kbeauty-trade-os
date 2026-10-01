@@ -224,6 +224,20 @@ class ErrorCode(StrEnum):
     #: 미해소 게이트가 있어 확정할 수 없다 — 응답 detail의 `blocked_gates[]`가 게이트별 결과·해소 방식·사유 코드를 싣는다(승인 필요·평가 불능·PI 입금 부족·가격 편차 등 전부 이 코드 하나).
     TRADE_CHAIN_CONFIRM_GATE_BLOCKED = "TRADE_CHAIN.CONFIRM.GATE_BLOCKED"
 
+    # 오더 인테이크 (S3-1 PR-13a / ADR-0071) — 중복 바이어 PO는 `TRADE_DOCS.DOCUMENT.DUPLICATE_BUYER_PO`(PENDING 인테이크·SO 공용, 통합 X-40)를 쓴다.
+    #: 대기(PENDING) 상태가 아닌 인테이크는 수정·거부·확정할 수 없다(확정·거부는 종결 — 탈출 없음).
+    ORDER_INTAKE_STATE_NOT_PENDING = "ORDER_INTAKE.STATE.NOT_PENDING"
+    #: 접수 확정에 쓸 수 없는 라인이 있다 — 바이어 품번 미매핑·삭제된 SKU·바이어 유형 상실(품번 매핑을 등록·수정한 뒤 다시 확인).
+    ORDER_INTAKE_LINE_UNMAPPED_ITEMS = "ORDER_INTAKE.LINE.UNMAPPED_ITEMS"
+    #: 검토한 뒤 품번 매핑이 바뀌었다 — 다시 해석(resolve)해 검토한 뒤 확정해야 한다.
+    ORDER_INTAKE_LINE_STALE_MAPPING = "ORDER_INTAKE.LINE.STALE_MAPPING"
+    #: 같은 SKU의 유상 라인이 둘 이상이다(수주 라인은 SKU당 유상 1줄) — 라인 번호 목록을 detail로 준다.
+    ORDER_INTAKE_LINE_DUPLICATE_SKU = "ORDER_INTAKE.LINE.DUPLICATE_SKU"
+    #: 인테이크 라인 수 상한(200) 초과 또는 라인 없음.
+    ORDER_INTAKE_LINE_LIMIT_EXCEEDED = "ORDER_INTAKE.LINE.LIMIT_EXCEEDED"
+    #: 접수 확정의 하드 게이트를 평가하지 못했다(평가 불능은 통과가 아니다 — fail-closed).
+    ORDER_INTAKE_GATE_UNRESOLVED = "ORDER_INTAKE.GATE.UNRESOLVED"
+
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"
     IDEMPOTENCY_KEY_REQUIRED = "COMMON.IDEMPOTENCY.KEY_REQUIRED"
 
