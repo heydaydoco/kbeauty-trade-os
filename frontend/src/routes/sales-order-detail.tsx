@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { DocumentFlowPanel } from "../components/document-flow-panel";
+import { GatePanel } from "../components/gate-panel";
 import { DocField, EMPTY, incotermText, paymentTermsText, show } from "../components/proforma-facts";
 import { SearchSelect } from "../components/search-select";
 import { StatusTimeline } from "../components/status-timeline";
@@ -307,6 +308,8 @@ function SalesOrderDetailView() {
             invalidateAll();
           }}
         />
+
+        <GatePanel soId={so.id} soStatus={so.status} />
 
         <DocumentFlowPanel kind="SALES_ORDER" id={so.id} />
 
