@@ -258,10 +258,10 @@ describe("PiPaymentsPanel — 알려진 함정", () => {
     await openConfirm({ amount: "10.00", on: "2026-09-30", reference: "KEEP" });
     const before = gets(calls).length;
     act(() => {
-      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("visibilitychange"));
       window.dispatchEvent(new Event("focus"));
     });
-    await waitFor(() => expect(gets(calls).length).toBeGreaterThanOrEqual(before));
+    await waitFor(() => expect(gets(calls).length).toBeGreaterThan(before)); // 재조회가 실제로 일어났다
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByLabelText(/입금 확인 근거/)).toHaveValue("KEEP");
   });
@@ -343,7 +343,7 @@ describe("PiPaymentsPanel — 오류 한국어화", () => {
     ["PAYMENTS.PAYMENT.NOT_REVERSIBLE", 409, /역기록 행은 다시 역기록할 수 없습니다/],
     ["TRADE_DOCS.PAYMENT.PI_NOT_OPEN", 409, /취소되었거나 만료된 PI/],
     ["COMMON.VALIDATION.INVALID_FIELD", 422, /입력값이 올바르지 않습니다/],
-    ["SOMETHING.UNKNOWN.CODE", 409, /다른 곳에서 먼저 처리되었습니다/],
+    ["SOMETHING.UNKNOWN.CODE", 409, /처리 중 충돌이 발생했습니다\. 새로고침 후 다시 시도하세요/],
   ];
   it.each(cases)("%s → 한국어 문구, 영문 코드·detail 비노출", async (code, status, expected) => {
     open([

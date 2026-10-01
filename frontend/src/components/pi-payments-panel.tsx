@@ -9,7 +9,7 @@
 // - 확정 SO 경고(CONFIRMED_SO_ADVANCE_UNMET): 역기록은 막히지 않고 SO는 자동 취소되지 않는다 — 사람이 후속 조치.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { apiFetch } from "../lib/api";
 import { todayKst, toKstDisplay } from "../lib/datetime";
@@ -19,9 +19,12 @@ import {
   PI_PAYMENT_OPEN_STATUSES,
   isForbidden,
   isRecoverableConflict,
+  newPaymentKey,
   paymentErrorMessage,
   piPaymentsKey,
-  validateReceipt,
+  receiptFieldErrors,
+  type ReceiptFieldErrors,
+  validateReversalReason,
   type PaymentPageData,
   type PaymentRow,
   type PaymentWriteResult,
@@ -49,13 +52,14 @@ interface ReceiptBody {
 }
 
 const inputClass = "rounded border border-gray-300 px-3 py-2 text-sm";
+const REVERSE_BLOCKED = "취소되었거나 만료된 PI의 입금은 역기록할 수 없습니다.";
 const NOT_ADVANCE_NOTICE = "선수금 입금은 선수금 T/T 전표만 기록합니다(잔금 입금은 후속 기능).";
 
 /** 같은 본문 → 같은 키. 본문이 달라지면 새 키(다른 요청이므로). */
 function keyFor(map: Map<string, string>, serialized: string): string {
   const found = map.get(serialized);
   if (found !== undefined) return found;
-  const created = crypto.randomUUID();
+  const created = newPaymentKey();
   map.set(serialized, created);
   return created;
 }
@@ -74,7 +78,8 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
   const [amount, setAmount] = useState("");
   const [receivedOn, setReceivedOn] = useState(() => todayKst());
   const [reference, setReference] = useState("");
-  const [problems, setProblems] = useState<string[]>([]);
+  const [problems, setProblems] = useState<ReceiptFieldErrors>({});
+  const ids = useId();
   const [confirmBody, setConfirmBody] = useState<ReceiptBody | null>(null);
   const [reversing, setReversing] = useState<PaymentRow | null>(null);
   const [warningSos, setWarningSos] = useState<number[] | null>(null);
@@ -86,15 +91,23 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
   const onWrittenRef = useRef(onWritten);
   onWrittenRef.current = onWritten;
 
-  function afterWrite() {
+  /** `notify`: 쓰기 성공 때만 상위(PI 상세)에 알린다 — 단순 재조회(reload)는 알리지 않는다. */
+  function afterWrite(notify: boolean) {
     void client.invalidateQueries({ queryKey: piPaymentsKey(pi.id) });
     // PI 상세·목록·상태 이력(prefix)과 문서 흐름 — 입금은 PI 상태를 수렴시킨다.
     void client.invalidateQueries({ queryKey: PROFORMAS_QUERY_KEY });
     void client.invalidateQueries({ queryKey: DOCUMENT_FLOW_QUERY_KEY });
-    onWrittenRef.current?.();
+    if (notify) onWrittenRef.current?.();
+  }
+
+  /** 실패(네트워크 0·5xx·422 초과 등) 뒤에는 입금 목록·요약을 다시 읽는다 — 응답 유실 후 재입력으로 인한 중복 위험과 남은 선수금 표시를 바로잡는다. */
+  function refreshAfterFailure(error: unknown) {
+    if (!isForbidden(error)) void client.invalidateQueries({ queryKey: piPaymentsKey(pi.id) });
   }
 
   const receipt = useMutation({
+    // 오프라인이어도 요청을 보내 본다 — 기본(online)은 요청이 paused로 멈춰 다이얼로그가 갇힌다.
+    networkMode: "always",
     // ★ 잠금 해제는 finally — 요청 중 reset()·언마운트에도 풀린다(mutate onSettled는 그때 호출되지 않는다).
     mutationFn: async (input: { body: ReceiptBody; key: string }) => {
       try {
@@ -111,12 +124,13 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
       setConfirmBody(null);
       setAmount("");
       setReference("");
-      setProblems([]);
+      setProblems({});
       receiptKeys.current.clear();
       setWarningSos(firstWarning(result));
-      afterWrite();
+      afterWrite(true);
     },
     onError: (error) => {
+      refreshAfterFailure(error);
       if (isForbidden(error)) {
         setForbidden(true);
         setConfirmBody(null);
@@ -125,6 +139,7 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
   });
 
   const reversal = useMutation({
+    networkMode: "always",
     mutationFn: async (input: { paymentId: number; reason: string; key: string }) => {
       try {
         return await apiFetch<PaymentWriteResult>(`/v1/payments/${input.paymentId}/reversal`, {
@@ -140,9 +155,10 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
       setReversing(null);
       reversalKeys.current.clear();
       setWarningSos(firstWarning(result));
-      afterWrite();
+      afterWrite(true);
     },
     onError: (error) => {
+      refreshAfterFailure(error);
       if (isForbidden(error)) {
         setForbidden(true);
         setReversing(null);
@@ -152,18 +168,17 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
 
   function submitReceipt(body: ReceiptBody) {
     if (receiptLock.current) return;
+    // 키를 먼저 만든다 — 키 생성이 던져도 잠금이 서지 않아 고착되지 않는다.
+    const key = keyFor(receiptKeys.current, JSON.stringify(body));
     receiptLock.current = true;
-    receipt.mutate({ body, key: keyFor(receiptKeys.current, JSON.stringify(body)) });
+    receipt.mutate({ body, key });
   }
 
   function submitReversal(payment: PaymentRow, reason: string) {
     if (reversalLock.current) return;
+    const key = keyFor(reversalKeys.current, JSON.stringify([payment.id, reason]));
     reversalLock.current = true;
-    reversal.mutate({
-      paymentId: payment.id,
-      reason,
-      key: keyFor(reversalKeys.current, JSON.stringify([payment.id, reason])),
-    });
+    reversal.mutate({ paymentId: payment.id, reason, key });
   }
 
   /** 충돌(409) 안내의 '최신 내용 불러오기' — 다이얼로그를 닫고 입금 목록·PI를 다시 읽는다. */
@@ -172,14 +187,15 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
     reversal.reset();
     setConfirmBody(null);
     setReversing(null);
-    afterWrite();
+    afterWrite(false);
   }
 
   // PI·목록이 바뀌어 더는 입금 가능한 상태가 아니면 열린 확인창을 닫는다(옛 화면으로 쓰지 않게).
   const piOpen = PI_PAYMENT_OPEN_STATUSES.includes(summary?.pi_status ?? pi.status);
+  // 요청 중에는 닫지 않는다(응답을 못 본 채 닫으면 결과를 모른다) — 끝난 뒤에 닫힌다.
   useEffect(() => {
-    if (!piOpen) setConfirmBody(null);
-  }, [piOpen]);
+    if (!piOpen && !receipt.isPending && !receipt.error) setConfirmBody(null);
+  }, [piOpen, receipt.isPending, receipt.error]);
 
   const paymentType = summary?.payment_type ?? pi.payment_type;
   const isAdvance = paymentType === "TT_ADVANCE";
@@ -187,9 +203,9 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
 
   function onSubmitForm(event: React.FormEvent) {
     event.preventDefault();
-    const found = validateReceipt({ amount, receivedOn, reference }, pi.minor_units, todayKst());
+    const found = receiptFieldErrors({ amount, receivedOn, reference }, pi.minor_units, todayKst());
     setProblems(found);
-    if (found.length > 0) return;
+    if (Object.keys(found).length > 0) return;
     receipt.reset();
     setConfirmBody({
       received_amount: amount.trim(),
@@ -268,47 +284,66 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
         >
           <h3 className="font-semibold">입금 기록</h3>
           <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-gray-600">입금액</span>
+            <div className="flex min-w-0 flex-col gap-1 text-sm">
+              <label htmlFor={`${ids}-amount`} className="text-gray-600">
+                입금액
+              </label>
               <span className="flex items-center gap-2">
                 <input
+                  id={`${ids}-amount`}
                   value={amount}
                   inputMode="decimal"
                   autoComplete="off"
+                  aria-invalid={problems.amount !== undefined}
+                  aria-describedby={describe(`${ids}-amount-help`, problems.amount !== undefined, `${ids}-errors`)}
                   onChange={(event) => setAmount(event.target.value)}
-                  className={`${inputClass} num w-full`}
+                  className={`${inputClass} num min-w-0 w-full`}
                 />
                 <span className="cell-nowrap font-medium" aria-label="통화(PI 통화로 고정)">
                   {pi.currency}
                 </span>
               </span>
-              <span className="break-keep text-xs text-gray-500">통화는 PI 통화로 고정됩니다(환산 입금 불가).</span>
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-gray-600">입금일 (KST)</span>
+              <span id={`${ids}-amount-help`} className="break-keep text-xs text-gray-500">
+                통화는 PI 통화로 고정됩니다(환산 입금 불가).
+              </span>
+            </div>
+            <div className="flex min-w-0 flex-col gap-1 text-sm">
+              <label htmlFor={`${ids}-on`} className="text-gray-600">
+                입금일 (KST)
+              </label>
               <input
+                id={`${ids}-on`}
                 type="date"
                 value={receivedOn}
                 max={todayKst()}
+                aria-invalid={problems.receivedOn !== undefined}
+                aria-describedby={problems.receivedOn !== undefined ? `${ids}-errors` : undefined}
                 onChange={(event) => setReceivedOn(event.target.value)}
                 className={inputClass}
               />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-gray-600">입금 확인 근거 (필수)</span>
+            </div>
+            <div className="flex min-w-0 flex-col gap-1 text-sm">
+              <label htmlFor={`${ids}-ref`} className="text-gray-600">
+                입금 확인 근거 (필수)
+              </label>
               <input
+                id={`${ids}-ref`}
                 value={reference}
                 maxLength={100}
                 autoComplete="off"
+                aria-invalid={problems.reference !== undefined}
+                aria-describedby={describe(`${ids}-ref-help`, problems.reference !== undefined, `${ids}-errors`)}
                 onChange={(event) => setReference(event.target.value)}
                 className={inputClass}
               />
-              <span className="break-keep text-xs text-gray-500">은행 거래 참조번호나 확인 메모를 적습니다.</span>
-            </label>
+              <span id={`${ids}-ref-help`} className="break-keep text-xs text-gray-500">
+                은행 거래 참조번호나 확인 메모를 적습니다.
+              </span>
+            </div>
           </div>
-          {problems.length > 0 && (
-            <ul role="alert" className="mt-3 list-disc break-keep pl-5 text-sm text-signal-red">
-              {problems.map((problem) => (
+          {Object.keys(problems).length > 0 && (
+            <ul id={`${ids}-errors`} role="alert" className="mt-3 list-disc break-keep pl-5 text-sm text-signal-red">
+              {Object.values(problems).map((problem) => (
                 <li key={problem}>{problem}</li>
               ))}
             </ul>
@@ -344,14 +379,15 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
           emptyHint="기록된 입금이 없습니다."
         >
           <table className="w-full text-sm">
+            <caption className="sr-only">입금 내역 (입금과 역기록)</caption>
             <thead className="bg-gray-50 text-left text-gray-600">
               <tr>
-                <th className="cell-nowrap px-3 py-2 text-center">구분</th>
-                <th className="cell-nowrap px-3 py-2 text-center">금액</th>
-                <th className="cell-nowrap px-3 py-2 text-center">입금일</th>
-                <th className="cell-nowrap px-3 py-2">입금 확인 근거·사유</th>
-                <th className="cell-nowrap px-3 py-2 text-center">기록일시</th>
-                {canWrite && <th className="cell-nowrap px-3 py-2 text-center">처리</th>}
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">구분</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">금액</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">입금일</th>
+                <th scope="col" className="cell-nowrap px-3 py-2">입금 확인 근거·사유</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">기록일시</th>
+                {canWrite && <th scope="col" className="cell-nowrap px-3 py-2 text-center">처리</th>}
               </tr>
             </thead>
             <tbody>
@@ -418,6 +454,7 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
           reasonLabel="역기록 사유 (필수, 2자 이상)"
           reasonMinLength={2}
           reasonMaxLength={300}
+          reasonValidator={validateReversalReason}
           description={
             <div className="grid gap-2">
               <p>
@@ -431,7 +468,7 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
             </div>
           }
           pending={reversal.isPending}
-          error={reversal.error ? paymentErrorMessage(reversal.error) : null}
+          error={reversal.error ? paymentErrorMessage(reversal.error, "reversal") : null}
           onReload={isRecoverableConflict(reversal.error) ? reload : undefined}
           onCancel={() => {
             if (reversal.isPending) return;
@@ -445,8 +482,12 @@ export function PiPaymentsPanel({ pi, onWritten }: { pi: PaymentPanelPi; onWritt
   );
 }
 
+function describe(help: string, invalid: boolean, errors: string): string {
+  return invalid ? `${help} ${errors}` : help;
+}
+
 function firstWarning(result: PaymentWriteResult): number[] | null {
-  const found = result.warnings.find((warning) => warning.code === "CONFIRMED_SO_ADVANCE_UNMET");
+  const found = (result.warnings ?? []).find((warning) => warning.code === "CONFIRMED_SO_ADVANCE_UNMET");
   return found ? found.sales_order_ids : null;
 }
 
@@ -510,12 +551,18 @@ function PaymentRowView({
               type="button"
               onClick={onReverse}
               disabled={!piOpen}
-              title={piOpen ? undefined : "취소되었거나 만료된 PI의 입금은 역기록할 수 없습니다."}
+              title={piOpen ? undefined : REVERSE_BLOCKED}
+              aria-describedby={piOpen ? undefined : `reverse-blocked-${row.id}`}
               aria-label={`입금 #${row.id} 역기록`}
               className="cell-nowrap rounded border border-signal-red px-3 py-1 text-sm text-signal-red disabled:opacity-50"
             >
               역기록
             </button>
+          )}
+          {canReverse && !piOpen && (
+            <span id={`reverse-blocked-${row.id}`} className="sr-only">
+              {REVERSE_BLOCKED}
+            </span>
           )}
         </td>
       )}

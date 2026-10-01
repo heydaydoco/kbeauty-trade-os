@@ -78,17 +78,48 @@ export const PAYMENT_ERROR_TEXT: Record<string, string> = {
 
 const HANGUL = /[가-힣]/;
 
+export const REVERSAL_VALIDATION_TEXT =
+  "역기록 사유를 확인해 주세요(2~300자, 줄바꿈·탭 같은 제어문자는 쓸 수 없습니다).";
+
 /** 영문 내부 코드·detail은 노출하지 않는다 — 코드 사전 → 상태별 일반 문구 → 서버 한국어 message → 기본 문구 순. */
-export function paymentErrorMessage(error: unknown, fallback = "요청을 처리하지 못했습니다."): string {
+export function paymentErrorMessage(
+  error: unknown,
+  kind: "receipt" | "reversal" = "receipt",
+  fallback = "요청을 처리하지 못했습니다.",
+): string {
   if (!(error instanceof ApiError)) return fallback;
   const mapped = PAYMENT_ERROR_TEXT[error.code];
-  if (mapped !== undefined) return mapped;
-  if (error.status === 403) return "입금 기록·역기록 권한이 없습니다(무역·관리자만 가능합니다).";
-  if (error.status === 422) return PAYMENT_ERROR_TEXT[VALIDATION_CODE] as string;
-  if (error.status === 409) {
-    return "다른 곳에서 먼저 처리되었습니다. '최신 내용 불러오기'로 입금 목록을 새로 고친 뒤 다시 시도해 주세요.";
+  if (mapped !== undefined) {
+    return kind === "reversal" && error.code === VALIDATION_CODE ? REVERSAL_VALIDATION_TEXT : mapped;
   }
+  if (error.status === 403) return "입금 기록·역기록 권한이 없습니다(무역·관리자만 가능합니다).";
+  if (error.status === 422) return kind === "reversal" ? REVERSAL_VALIDATION_TEXT : (PAYMENT_ERROR_TEXT[VALIDATION_CODE] as string);
+  if (error.status === 409) return "처리 중 충돌이 발생했습니다. 새로고침 후 다시 시도하세요.";
   return HANGUL.test(error.message) ? error.message : fallback;
+}
+
+/** 멱등 키 — crypto.randomUUID가 없거나 던지는 환경(비보안 컨텍스트 등)에서도 키를 만든다. */
+export function newPaymentKey(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  } catch {
+    // 폴백으로
+  }
+  const rand = () => Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+  return `pay-${Date.now().toString(16)}-${rand()}-${rand()}`;
+}
+
+// eslint-disable-next-line no-control-regex
+const REASON_CONTROL = /[\u0000-\u001f\u007f]/;
+
+/** 역기록 사유 사전 검증(서버가 최종) — 제어문자 거부, 길이는 코드포인트 기준. 문제 없으면 null. */
+export function validateReversalReason(reason: string): string | null {
+  const trimmed = reason.trim();
+  if (REASON_CONTROL.test(reason)) return "사유에 줄바꿈·탭 같은 제어문자는 쓸 수 없습니다.";
+  const length = [...trimmed].length;
+  if (length < 2) return "사유는 2자 이상 입력해 주세요.";
+  if (length > 300) return "사유는 300자 이내로 입력해 주세요.";
+  return null;
 }
 
 /** 409 충돌(이미 역기록·동시 처리 등) — 재조회 안내 버튼을 보인다. */
@@ -106,28 +137,30 @@ export interface ReceiptInput {
   reference: string;
 }
 
+export type ReceiptFieldErrors = Partial<Record<keyof ReceiptInput, string>>;
+
 /** 입력 형식 검사(서버가 최종) — 금액은 통화 자릿수 이내의 양수 십진 문자열. 산술 없이 문자열 규칙만 쓴다. */
-export function validateReceipt(input: ReceiptInput, minorUnits: number, today: string): string[] {
-  const problems: string[] = [];
+export function receiptFieldErrors(input: ReceiptInput, minorUnits: number, today: string): ReceiptFieldErrors {
+  const errors: ReceiptFieldErrors = {};
   const amount = input.amount.trim();
   const pattern = minorUnits === 0 ? /^\d+$/ : new RegExp(`^\\d+(\\.\\d{1,${minorUnits}})?$`);
   if (!pattern.test(amount)) {
-    problems.push(
+    errors.amount =
       minorUnits === 0
         ? "금액은 소수점 없는 숫자로 입력해 주세요."
-        : `금액은 소수점 ${minorUnits}자리 이내의 숫자로 입력해 주세요(예: 12.34).`,
-    );
+        : `금액은 소수점 ${minorUnits}자리 이내의 숫자로 입력해 주세요(예: 12.34).`;
   } else if (/^0+(\.0*)?$/.test(amount)) {
-    problems.push("금액은 0보다 커야 합니다.");
+    errors.amount = "금액은 0보다 커야 합니다.";
   }
-  if (input.receivedOn === "") {
-    problems.push("입금일을 입력해 주세요.");
-  } else if (input.receivedOn > today) {
-    problems.push("입금일은 오늘(KST) 이후일 수 없습니다.");
-  }
+  if (input.receivedOn === "") errors.receivedOn = "입금일을 입력해 주세요.";
+  else if (input.receivedOn > today) errors.receivedOn = "입금일은 오늘(KST) 이후일 수 없습니다.";
   const reference = input.reference.trim();
-  if (reference === "") problems.push("입금 확인 근거(은행 거래 참조·확인 메모)는 필수입니다.");
-  else if (reference.length > 100) problems.push("입금 확인 근거는 100자 이내로 입력해 주세요.");
-  else if (CONTROL.test(reference)) problems.push("입금 확인 근거에 줄바꿈·탭 같은 제어문자는 쓸 수 없습니다.");
-  return problems;
+  if (reference === "") errors.reference = "입금 확인 근거(은행 거래 참조·확인 메모)는 필수입니다.";
+  else if ([...reference].length > 100) errors.reference = "입금 확인 근거는 100자 이내로 입력해 주세요.";
+  else if (CONTROL.test(input.reference)) errors.reference = "입금 확인 근거에 줄바꿈·탭 같은 제어문자는 쓸 수 없습니다.";
+  return errors;
+}
+
+export function validateReceipt(input: ReceiptInput, minorUnits: number, today: string): string[] {
+  return Object.values(receiptFieldErrors(input, minorUnits, today));
 }

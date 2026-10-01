@@ -99,6 +99,7 @@ function ProformaDetailView() {
 
   function reload() {
     setNotice(null);
+    setSelfWrote(false);
     cancel.reset();
     setCancelling(false);
     setCreatingSo(false);
@@ -110,15 +111,13 @@ function ProformaDetailView() {
     });
   }
 
-  // 입금·역기록은 PI 상태를 수렴시켜 서버 version이 오른다. 내 쓰기로 오른 것을 '다른 곳에서 수정'으로 오인하지 않게,
-  // 쓰기 직전에 화면이 최신이었을 때만(=stale 아님) 기준 version을 새 값으로 옮긴다.
-  // 이미 어긋나 있었다면(다른 사람이 먼저 수정) 기준을 그대로 두어 409가 덮어쓰기를 막게 한다.
-  const staleNow = useRef(false);
+  // 입금·역기록은 PI 상태를 수렴시켜 서버 version을 올린다. 쓰기 응답에 PI version이 없어 "내 쓰기로 정확히 오른 것"을
+  // 증명할 수 없으므로 기준 version(baseVersion)을 자동으로 옮기지 않는다 — 남의 수정을 덮어쓰는 것보다 오경보(배너+재조회)가 안전하다.
+  // 사용자가 '최신 내용 불러오기'로 확인하면 기준이 맞춰진다. (10a 계약 보강 후보: 쓰기 응답에 PI version 포함)
+  const [selfWrote, setSelfWrote] = useState(false);
   function onPaymentWritten() {
-    const wasFresh = !staleNow.current;
-    void detail.refetch().then((result) => {
-      if (wasFresh && result.data) setBaseVersion(result.data.version);
-    });
+    setSelfWrote(true);
+    void detail.refetch();
   }
 
   const cancel = useMutation({
@@ -177,7 +176,6 @@ function ProformaDetailView() {
   const pi = detail.data;
   const base = baseVersion ?? pi.version;
   const stale = pi.version !== base;
-  staleNow.current = stale;
 
   return (
     <section>
@@ -264,8 +262,9 @@ function ProformaDetailView() {
       {stale && (
         <div role="status" className="mt-4 rounded border border-gray-400 p-3 text-sm">
           <p className="break-keep">
-            다른 곳에서 이 PI가 수정되었습니다. 아래 내용은 최신이지만 메모 편집 폼은 이전 내용입니다. 저장하면 충돌(409)로
-            거절됩니다.
+            {selfWrote
+              ? "방금 입금 기록으로 PI 상태가 갱신되었습니다. 아래 내용은 최신이지만 메모 편집 폼은 이전 기준입니다. '최신 내용 불러오기'를 눌러 맞춘 뒤 취소·SO 만들기·메모 저장을 하세요."
+              : "다른 곳에서 이 PI가 수정되었습니다. 아래 내용은 최신이지만 메모 편집 폼은 이전 내용입니다. 저장하면 충돌(409)로 거절됩니다."}
           </p>
           <button
             type="button"
