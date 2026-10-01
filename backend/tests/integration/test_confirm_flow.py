@@ -265,15 +265,18 @@ def test_several_unresolved_gates_are_all_reported_in_one_response() -> None:
     _assert_untouched(so["id"])
 
 
-def test_a_blocked_attempt_is_recorded_each_time_and_a_later_success_adds_the_single_confirmed_row() -> (
+def test_repeated_identical_blocked_attempts_share_one_evidence_row_and_a_later_success_adds_the_confirmed_row() -> (
     None
 ):
-    """차단 시도마다 BLOCKED 증거 1행 — 해소 후 성공하면 CONFIRMED 1행이 더해진다(SO당 1행 유니크)"""
+    """같은 입력의 미해소 시도는 BLOCKED 증거를 **재사용**한다(N회 → 1행, 응답의 `evaluation_id`도 같다) — 해소 후 성공하면 CONFIRMED 1행이 더해진다(SO당 1행 유니크)"""
     so_id = _price_block()
     with logged_in(TRADE) as client:
-        assert confirm(client, so_id).status_code == 409
-        assert confirm(client, so_id).status_code == 409
-        assert len(evaluations(so_id, "BLOCKED")) == 2
+        first = confirm(client, so_id)
+        assert first.status_code == 409
+        for _ in range(3):
+            assert confirm(client, so_id).status_code == 409
+        assert len(evaluations(so_id, "BLOCKED")) == 1
+        assert error_of(first)["detail"]["evaluation_id"] == evaluations(so_id, "BLOCKED")[0]["id"]
         report = gates_of(client, so_id)
         item = find(report, "PRICE_DEVIATION", line_ids(so_id)[0])
         override = client.post(
@@ -282,7 +285,20 @@ def test_a_blocked_attempt_is_recorded_each_time_and_a_later_success_adds_the_si
         assert override.status_code == 201, override.text
         ok = confirm(client, so_id)
     assert ok.status_code == 200, ok.text
-    assert len(evaluations(so_id, "BLOCKED")) == 2 and len(evaluations(so_id, "CONFIRMED")) == 1
+    assert len(evaluations(so_id, "BLOCKED")) == 1 and len(evaluations(so_id, "CONFIRMED")) == 1
+
+
+def test_a_changed_input_after_a_blocked_attempt_adds_a_new_evidence_row() -> None:
+    """입력이 바뀐 뒤의 미해소 시도는 새 증거 행이다(재사용은 같은 입력·같은 결과일 때만) — 가격 편차 단가 변경으로 판정 해시가 달라진다"""
+    so_id = _price_block()
+    with logged_in(TRADE) as client:
+        assert confirm(client, so_id).status_code == 409
+        set_line(so_id, 1, unit_price=1200, list_price=1000)
+        assert confirm(client, so_id).status_code == 409
+        assert confirm(client, so_id).status_code == 409
+    first, second = evaluations(so_id, "BLOCKED")
+    assert first["input_digest"] != second["input_digest"]
+    assert first["results"]["evaluation_digest"] != second["results"]["evaluation_digest"]
 
 
 def test_an_override_resolves_a_price_gate_and_the_override_is_named_in_the_evidence() -> None:
@@ -529,11 +545,14 @@ def test_the_evidence_digest_changes_with_gate_inputs_the_approval_digest_does_n
         for sku in so["sku_ids"]:
             set_moq(sku, 200)  # MOQ 기준값만 바뀜 — 라인·환율·거래처는 그대로
         assert confirm(client, so["id"]).status_code == 409
-    first, second, third = evaluations(so["id"], "BLOCKED")
-    assert first["results"]["evaluation_digest"] == second["results"]["evaluation_digest"]
+    first, third = evaluations(
+        so["id"], "BLOCKED"
+    )  # 같은 입력의 두 번째 시도는 첫 증거를 재사용했다
     assert first["results"]["evaluation_digest"] != third["results"]["evaluation_digest"]
     assert len(third["results"]["evaluation_digest"]) == 64
-    assert first["input_digest"] == second["input_digest"] == third["input_digest"]
+    assert (
+        first["input_digest"] == third["input_digest"]
+    )  # 승인 결속 digest는 MOQ 변경을 덮지 않는다
 
 
 def test_the_confirmation_query_count_does_not_grow_with_the_number_of_lines() -> None:
@@ -553,3 +572,99 @@ def make_actor() -> Any:
     from tests.factories.approvals import make_user
 
     return make_user(TRADE)
+
+
+# ══ 멱등 키 규약 — (SO id, version)당 1개 ═══════════════════════════════════════════════
+
+
+def test_the_idempotency_key_is_per_order_and_version_so_a_data_fix_needs_a_new_key() -> None:
+    """확정 지문은 `{so_id, version}`이라 **키는 (SO, version) 조합당 1개**다 — BLOCKED(키 미소비) → 데이터 수정으로 version 상승 → **같은 키 재시도는 409 `COMMON.IDEMPOTENCY.KEY_CONFLICT`**,
+    새 키로 새 version을 보내면 성공한다. (같은 version에서 승인만 받은 뒤 같은 키 재시도는 성공한다 — `test_the_blocked_attempt_keeps_the_idempotency_key_usable…`)"""
+    so_id = _price_block()
+    key = idem()
+    with logged_in(TRADE) as client:
+        version = so_version(so_id)
+        assert confirm(client, so_id, version=version, headers=key).status_code == 409
+        set_line(
+            so_id, 1, unit_price=1000, list_price=1000
+        )  # 데이터 수정 → 헤더 version 상승, 가격 편차 해소
+        assert so_version(so_id) == version + 1
+        stale_key = confirm(client, so_id, headers=key)
+        assert stale_key.status_code == 409
+        assert code_of(stale_key) == "COMMON.IDEMPOTENCY.KEY_CONFLICT"
+        assert so_row(so_id)["status"] == "RECEIVED"
+        fresh = confirm(client, so_id, headers=idem())
+    assert fresh.status_code == 200, fresh.text
+
+
+# ══ 확정 증거 연결 키 ═════════════════════════════════════════════════════════════════════
+
+
+def test_the_order_detail_links_the_confirmation_evidence_after_confirmation() -> None:
+    """SO 상세의 `confirm_evaluation_id` — 접수는 None, 확정 뒤에는 CONFIRMED 증거 id(확정 응답의 `evaluation_id`와 같다) · 확정 응답 본문의 SO 상세에도 실린다"""
+    so = ready_so()
+    with logged_in(TRADE) as client:
+        assert client.get(f"{SO}/{so['id']}").json()["confirm_evaluation_id"] is None
+        response = confirm(client, so["id"])
+        detail = client.get(f"{SO}/{so['id']}").json()
+    body = response.json()
+    assert body["sales_order"]["confirm_evaluation_id"] == body["evaluation_id"]
+    assert detail["confirm_evaluation_id"] == body["evaluation_id"]
+    assert evaluations(so["id"], "CONFIRMED")[0]["id"] == body["evaluation_id"]
+
+
+def test_a_confirmation_by_an_admin_freezes_the_order_for_edits_too() -> None:
+    """관리자가 확정해도 동결은 같다 — 확정 후 관리자의 헤더·라인 편집은 409 FROZEN(관리자 예외 없음), 메모(FREE)만 허용"""
+    so = ready_so()
+    with logged_in(ADMIN) as client:
+        assert confirm(client, so["id"]).status_code == 200
+        (line,) = line_ids(so["id"])
+        header = client.patch(
+            f"{SO}/{so['id']}", json={"version": so_version(so["id"]), "fx_rate": "1400"}
+        )
+        edit = client.patch(
+            f"{SO}/{so['id']}/lines/{line}", json={"version": so_version(so["id"]), "quantity": 9}
+        )
+        meta = client.patch(
+            f"{SO}/{so['id']}/meta",
+            json={"version": so_version(so["id"]), "internal_note": "확정 후 메모"},
+        )
+    assert (header.status_code, edit.status_code) == (409, 409)
+    assert {header.json()["error"]["code"], edit.json()["error"]["code"]} == {
+        "TRADE_DOCS.DOCUMENT.FROZEN"
+    }
+    assert meta.status_code == 200
+
+
+# ══ 선수금 입금 충분 — PI 판정 PASS ═══════════════════════════════════════════════════════
+
+
+def test_a_sufficient_advance_payment_records_the_pi_gate_as_pass() -> None:
+    """선수금 T/T 참조 수주에 PI 선수금(30% = 30.00 USD)이 입금되면 BLOCK 모드(기본)에서도 통과 — `pi_gate_verdict=PASS`(SUFFICIENT 사유 매핑)"""
+    from tests.factories.confirm import chain_so
+    from tests.factories.payments import pay
+
+    with logged_in(TRADE) as client:
+        _qt, pi, so = chain_so(client, pi_mode=None)
+        assert confirm(client, so["id"]).status_code == 409  # 입금 전에는 차단(PI_DEPOSIT)
+        assert pay(client, pi["id"], "30.00").status_code == 201
+        response = confirm(client, so["id"])
+    assert response.status_code == 200, response.text
+    assert response.json()["sales_order"]["pi_gate_verdict"] == "PASS"
+    assert evaluations(so["id"], "CONFIRMED")[0]["results"]["pi_gate_verdict"] == "PASS"
+
+
+def test_a_zero_required_advance_records_the_pi_gate_as_pass() -> None:
+    """선수금 청구액이 반올림으로 0이면(요구액 0 — `ZERO_REQUIRED`) 입금 없이도 통과 — `pi_gate_verdict=PASS`"""
+    from tests.factories.confirm import chain_so
+
+    with logged_in(TRADE) as client:
+        _qt, pi, so = chain_so(client, pi_mode=None, price=10, quantity=1)
+        with owner_engine.begin() as connection:
+            connection.execute(
+                text("UPDATE proforma_invoices SET advance_pct_bp = 1 WHERE id = :i"),
+                {"i": pi["id"]},
+            )
+        response = confirm(client, so["id"])
+    assert response.status_code == 200, response.text
+    assert response.json()["sales_order"]["pi_gate_verdict"] == "PASS"

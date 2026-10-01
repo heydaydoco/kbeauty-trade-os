@@ -185,3 +185,35 @@ def request_service(
         so_id=so_id,
         version=version if version is not None else so_version(so_id),
     )
+
+
+def chain_so(
+    client: TestClient,
+    *,
+    limit: int | None = None,
+    price: int = 1000,
+    quantity: int = 10,
+    pi_mode: str | None = "OFF",
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """PI 참조 수주(QT→PI→SO 사슬) — 확정 가능 상태(준비도 GREEN). `pi_mode`=None이면 PI 게이트 정책을 건드리지 않는다(미설정=BLOCK). (QT, PI, SO)."""
+    from tests.factories.gates import set_policy, set_readiness
+    from tests.factories.trade import (
+        create_buyer,
+        create_pi_via_api,
+        create_priced_sku,
+        create_so_from_pi_via_api,
+        issued_quotation,
+    )
+
+    buyer = create_buyer()
+    sku = create_priced_sku(amount=price)
+    qt = issued_quotation(client, buyer, [sku], quantity=quantity)
+    pi = create_pi_via_api(client, qt)
+    so = create_so_from_pi_via_api(client, pi)
+    set_readiness(sku, "GREEN")
+    if pi_mode is not None:
+        set_policy("pi_advance_gate_mode", pi_mode)
+    if limit is not None:
+        set_credit_limit(buyer, limit)
+    so["buyer"] = buyer
+    return qt, pi, so

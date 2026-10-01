@@ -245,6 +245,63 @@ def test_a_failing_provider_makes_the_evaluation_unevaluable_not_a_pass() -> Non
     assert ReasonCode.RECEIVABLE_PROVIDER_ERROR.value in result.reason_codes
 
 
+class _FakeOrig(Exception):
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__("db")
+        self.sqlstate = sqlstate
+
+
+@pytest.mark.parametrize("sqlstate", ["55P03", "40P01"])
+def test_a_lock_timeout_or_deadlock_in_the_provider_propagates_instead_of_becoming_unevaluable(
+    sqlstate: str,
+) -> None:
+    """provider 구간의 잠금 대기 초과(55P03)·교착(40P01)은 평가 불능(UNEVALUABLE)으로 삼키지 않고 전파한다 — 409 LOCK_BUSY로 번역돼 같은 요청을 재시도할 수 있다(게이트 평가 틀과 같은 규율)"""
+    from sqlalchemy.exc import OperationalError
+
+    class Busy:
+        def outstanding(
+            self, session: object, partner_id: int, limit_currency: str
+        ) -> ReceivableTerm:
+            raise OperationalError("stmt", {}, _FakeOrig(sqlstate))  # type: ignore[arg-type]
+
+    providers.register_receivable_provider(Busy())
+    buyer = _buyer()
+    with pytest.raises(OperationalError):
+        evaluate(raw_open_so(buyer, status="RECEIVED", total=1))
+
+
+def test_a_non_lock_database_error_in_the_provider_is_still_unevaluable() -> None:
+    """양방향 — 잠금 경합이 아닌 DB 오류(예: 57014 문장 시간 초과)는 그대로 UNEVALUABLE(통과 아님)이다"""
+    from sqlalchemy.exc import OperationalError
+
+    class Slow:
+        def outstanding(
+            self, session: object, partner_id: int, limit_currency: str
+        ) -> ReceivableTerm:
+            raise OperationalError("stmt", {}, _FakeOrig("57014"))  # type: ignore[arg-type]
+
+    providers.register_receivable_provider(Slow())
+    result = evaluate(raw_open_so(_buyer(), status="RECEIVED", total=1))
+    assert result.verdict is CreditVerdict.UNEVALUABLE
+    assert ReasonCode.RECEIVABLE_PROVIDER_ERROR.value in result.reason_codes
+
+
+def test_the_open_exposure_predicate_can_use_the_partial_index() -> None:
+    """노출 산정 술어(`open_orders_stmt`)가 부분 인덱스 `ix_sales_orders_open_exposure`의 술어와 맞물린다 — 시퀀셜 스캔을 끈 읽기 전용 EXPLAIN에서 그 인덱스가 선택된다(술어가 어긋나면 계획에 안 나온다)"""
+    from sqlalchemy.dialects import postgresql
+
+    sql = str(
+        open_orders_stmt(1).compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    with owner_engine.connect() as connection:
+        connection.execute(text("SET LOCAL enable_seqscan = off"))
+        plan = "\n".join(r[0] for r in connection.execute(text(f"EXPLAIN {sql}")))
+        connection.rollback()
+    assert "ix_sales_orders_open_exposure" in plan, plan
+
+
 # ── 잠금 변형·증적 ───────────────────────────────────────────────────────────
 
 

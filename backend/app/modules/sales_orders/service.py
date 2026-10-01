@@ -45,6 +45,7 @@ from app.core.money import minor_units
 from app.core.time import today_kst, utcnow
 from app.modules.approvals import service as approvals_service
 from app.modules.approvals.machine import ApprovalType, VoidReasonCode
+from app.modules.gates.models import EVALUATION_CONFIRMED, SUBJECT_SALES_ORDER, GateEvaluation
 from app.modules.identity.models import User
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.markets import service as markets
@@ -349,6 +350,20 @@ def _summary_body(row: SalesOrder, qt_number: str | None, pi_number: str | None)
     }
 
 
+def _confirm_evaluation_id(session: Session, row: SalesOrder) -> int | None:
+    """확정 증거 스냅샷(`gate_evaluations` CONFIRMED 행 — SO당 1행) id — 확정 전이면 None. 화면이 override·WARN 상세 증적을 이 id로 연결한다(id만이라 마스킹 비대상)."""
+    if row.confirmed_at is None:
+        return None
+    found = session.execute(
+        select(GateEvaluation.id).where(
+            GateEvaluation.subject_type == SUBJECT_SALES_ORDER,
+            GateEvaluation.subject_id == row.id,
+            GateEvaluation.outcome == EVALUATION_CONFIRMED,
+        )
+    ).scalar_one_or_none()
+    return int(found) if found is not None else None
+
+
 def detail_body(session: Session, row: SalesOrder) -> dict[str, Any]:
     lines = list(
         session.execute(
@@ -385,6 +400,7 @@ def detail_body(session: Session, row: SalesOrder) -> dict[str, Any]:
                 "year": row.incoterm_year,
             },
             "internal_note": row.internal_note,
+            "confirm_evaluation_id": _confirm_evaluation_id(session, row),
             "last_line_no": row.last_line_no,
             "is_reference": row.qt_id is not None,
             "lines": [
@@ -1268,9 +1284,6 @@ def update_line(
             if raw["quantity"] is None:
                 raise invalid("quantity", "수량을 비울 수 없습니다.")
             new_quantity = validate_quantity(raw["quantity"])
-            source_line = line.pi_line_id or line.qt_line_id
-            if source_line is not None and new_quantity > line.quantity:
-                _require_source_capacity(session, header, source_line, new_quantity - line.quantity)
         repriced: tuple[int, str, bool, str | None] | None = None
         if {"unit_price", "is_free", "price_reason"} & raw.keys():
             repriced = reprice(
@@ -1298,6 +1311,10 @@ def update_line(
                 actor_id=actor.id,
                 reason_code=VoidReasonCode.TARGET_CHANGED,
             )
+        # 원천 라인 잠금((8) — 참조 수주의 수량 증가는 원천 잔량 안에서)은 승인 무효화((7))보다 **뒤**다 — 전역 LOCK_ORDER(approvals → lines).
+        source_line = line.pi_line_id or line.qt_line_id
+        if source_line is not None and new_quantity > line.quantity:
+            _require_source_capacity(session, header, source_line, new_quantity - line.quantity)
         line.quantity = new_quantity
         if repriced is not None:
             unit, basis, free, reason = repriced

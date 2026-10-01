@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 
 import pytest
 
@@ -106,8 +107,8 @@ def test_the_confirmation_runs_its_steps_in_the_documented_order() -> None:
     ]
     firsts = [min(lines[name]) for name in order]
     assert firsts == sorted(firsts), dict(zip(order, firsts, strict=True))
-    # 증거 기록은 두 번 이상 — 차단 시도(BLOCKED)와 성공(CONFIRMED). 성공 증거는 전이 뒤다.
-    assert len(lines["record_evaluation"]) >= 3
+    # 증거 기록: 성공(CONFIRMED)은 전이 뒤 직접 기록하고, 차단 시도(BLOCKED)는 합산 헬퍼 `_record_blocked`를 두 곳(미해소·소비 시점 거부)에서 부른다
+    assert len(lines["_record_blocked"]) == 2
     assert max(lines["record_evaluation"]) > min(lines["record_transition"])
 
 
@@ -140,15 +141,25 @@ def test_the_consume_result_is_inspected_and_never_ignored() -> None:
 
 
 def test_the_approval_is_consumed_only_when_the_clearance_is_cleared() -> None:
-    """소비는 `clr.cleared` 분기의 else 쪽에서만 호출된다 — 미해소 시도에서는 소비하지 않는다(승인은 해소가 확정된 뒤의 마지막 부작용)"""
+    """소비는 `if not clr.cleared:` 분기(항상 `break`로 끝난다) **뒤**에서만 호출된다 — 미해소 시도에서는 소비하지 않는다(승인은 해소가 확정된 뒤의 마지막 부작용)"""
     body = _function(app_sources()[CONFIRM], "confirm_sales_order")
+    loop = next(n for n in ast.walk(body) if isinstance(n, ast.For))
     branch = next(
-        n for n in ast.walk(body) if isinstance(n, ast.If) and "cleared" in ast.unparse(n.test)
+        n for n in loop.body if isinstance(n, ast.If) and "cleared" in ast.unparse(n.test)
     )
-    assert "consume_approval" not in {c for stmt in branch.body for c in _call_lines(stmt)}, (
-        "미해소 분기에서 승인을 소비한다"
+    assert "consume_approval" not in {c for stmt in branch.body for c in _call_lines(stmt)}
+    assert isinstance(branch.body[-1], ast.Break), (
+        "미해소 분기가 break로 끝나지 않으면 소비 코드로 흘러간다"
     )
-    assert "consume_approval" in {c for stmt in branch.orelse for c in _call_lines(stmt)}
+    assert min(_call_lines(loop)["consume_approval"]) > branch.end_lineno  # type: ignore[operator]
+
+
+def test_the_re_evaluation_is_bounded_to_one_extra_pass() -> None:
+    """경합 재평가는 최대 1회 — `MAX_EVALUATIONS`가 2이고 루프는 그 상수로만 돈다(무한 재평가·재시도 폭주 금지)"""
+    assert confirm.MAX_EVALUATIONS == 2
+    body = _function(app_sources()[CONFIRM], "confirm_sales_order")
+    loop = next(n for n in ast.walk(body) if isinstance(n, ast.For))
+    assert "MAX_EVALUATIONS" in ast.unparse(loop.iter)
 
 
 # ── SO를 CONFIRMED로 만드는 길은 하나 ──────────────────────────────────────────────────────
@@ -174,18 +185,74 @@ def test_only_the_confirm_channel_names_confirmed_when_transitioning_an_order() 
     assert found == {CONFIRM}
 
 
+_EVIDENCE_COLUMNS = frozenset({"credit_verdict", "credit_approval_id", "pi_gate_verdict"})
+_WRITE_CALLS = frozenset({"values", "update", "insert", "execute", "bulk_update_mappings", "merge"})
+_SQL_WRITE = re.compile(r"\b(UPDATE|INSERT\s+INTO)\b", re.IGNORECASE)
+
+
+def _dict_keys(node: ast.AST) -> set[str]:
+    keys: set[str] = set()
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Dict):
+            keys |= {
+                k.value
+                for k in inner.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            }
+    return keys
+
+
+def evidence_write_lines(tree: ast.Module) -> list[int]:
+    """증적 3열을 **쓰는** 코드의 줄 번호 — 속성 대입(튜플 언패킹·증분 포함)·생성자/`values()` 키워드·`.values({"col": …})`/`execute(…, {…})` 딕셔너리·`setattr(…, "col", …)`·
+    `UPDATE|INSERT` 원시 SQL 문자열. 읽기(`row.credit_verdict`)·응답 딕셔너리는 쓰기가 아니다."""
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, ast.AugAssign | ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if any(
+                isinstance(t, ast.Attribute) and t.attr in _EVIDENCE_COLUMNS
+                for t in ast.walk(target)
+            ):
+                lines.append(node.lineno)
+        if isinstance(node, ast.Call):
+            name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else ""
+            )
+            if any(kw.arg in _EVIDENCE_COLUMNS for kw in node.keywords):
+                lines.append(node.lineno)
+            if (
+                name == "setattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in _EVIDENCE_COLUMNS
+            ):
+                lines.append(node.lineno)
+            if name in _WRITE_CALLS and any(
+                _dict_keys(arg) & _EVIDENCE_COLUMNS
+                for arg in [*node.args, *(kw.value for kw in node.keywords)]
+            ):
+                lines.append(node.lineno)
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _SQL_WRITE.search(node.value)
+            and any(col in node.value for col in _EVIDENCE_COLUMNS)
+        ):
+            lines.append(node.lineno)
+    return sorted(set(lines))
+
+
 def test_the_evidence_columns_are_written_only_by_the_confirm_channel() -> None:
-    """확정 증적 3열(`credit_verdict`·`credit_approval_id`·`pi_gate_verdict`)을 대입하거나 생성자에 넘기는 코드는 확정 통로뿐이다 — 마이그레이션·모델 정의 외에 다른 쓰기 경로가 없다(PATCH 스키마에도 필드 없음)"""
-    columns = {"credit_verdict", "credit_approval_id", "pi_gate_verdict"}
-    writers: set[str] = set()
-    for rel, tree in app_sources().items():
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Attribute) and target.attr in columns:
-                        writers.add(rel)
-            if isinstance(node, ast.Call) and any(kw.arg in columns for kw in node.keywords):
-                writers.add(rel)
+    """확정 증적 3열을 쓰는 코드(속성 대입·키워드·딕셔너리 `values`·`setattr`·원시 SQL 문자열)는 확정 통로뿐이다 — 마이그레이션·모델 정의 외에 다른 쓰기 경로가 없다(PATCH 스키마에도 필드 없음)"""
+    writers = {rel for rel, tree in app_sources().items() if evidence_write_lines(tree)}
     assert writers == {CONFIRM}
     from app.modules.sales_orders.schemas import (
         SalesOrderMetaUpdateRequest,
@@ -193,7 +260,53 @@ def test_the_evidence_columns_are_written_only_by_the_confirm_channel() -> None:
     )
 
     for schema in (SalesOrderUpdateRequest, SalesOrderMetaUpdateRequest):
-        assert not columns & set(schema.model_fields)
+        assert not _EVIDENCE_COLUMNS & set(schema.model_fields)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "so.credit_verdict = 'APPROVED'\n",
+        "so.pi_gate_verdict, other = 'PASS', 1\n",
+        "so.credit_approval_id += 1\n",
+        "SalesOrder(credit_verdict='APPROVED')\n",
+        "session.execute(update(SalesOrder).values({'credit_verdict': 'APPROVED'}))\n",
+        "session.execute(update(SalesOrder).values(**{'pi_gate_verdict': 'PASS'}))\n",
+        "setattr(so, 'credit_verdict', 'APPROVED')\n",
+        "session.execute(text(\"UPDATE sales_orders SET credit_verdict = 'APPROVED'\"))\n",
+        "session.execute(text('INSERT INTO sales_orders (credit_approval_id) VALUES (1)'))\n",
+    ],
+    ids=[
+        "속성",
+        "튜플",
+        "증분",
+        "생성자",
+        "values딕셔너리",
+        "values언패킹",
+        "setattr",
+        "원시UPDATE",
+        "원시INSERT",
+    ],
+)
+def test_the_evidence_write_scanner_flags_every_write_shape(source: str) -> None:
+    """자기검사 — 쓰기 형태 9종을 전부 잡는다(위반 코퍼스)"""
+    assert evidence_write_lines(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "value = so.credit_verdict\n",
+        "body = {'credit_verdict': row.credit_verdict}\n",
+        "session.execute(select(SalesOrder.credit_verdict))\n",
+        "session.execute(text('SELECT credit_verdict FROM sales_orders'))\n",
+        "setattr(so, 'status', 'X')\n",
+    ],
+    ids=["읽기", "응답딕셔너리", "select", "원시SELECT", "다른setattr"],
+)
+def test_the_evidence_write_scanner_stays_quiet_for_reads(source: str) -> None:
+    """자기검사 — 읽기·응답 딕셔너리·SELECT는 쓰기로 오탐하지 않는다(정상 코드)"""
+    assert evidence_write_lines(ast.parse(source)) == []
 
 
 def test_converge_parent_and_the_allocation_port_are_reached_from_the_confirm_channel() -> None:

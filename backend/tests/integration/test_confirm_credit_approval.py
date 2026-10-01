@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
 from app.modules.approvals import service as approvals_service
 from app.modules.approvals.service import ApprovalRef
@@ -576,3 +577,128 @@ def test_consume_requires_a_real_actor_and_the_service_rejects_a_viewer_confirme
         confirm_service(viewer, so["id"])
     assert approvals_service  # 모듈 임포트 유지(소비 접점 확인용)
     _assert_not_confirmed(so["id"])
+
+
+# ══ 우회 시도 audit 합산·낡은 승인 표지 ═══════════════════════════════════════════════════════
+
+
+def test_repeated_bypass_attempts_collapse_into_one_audit_row_per_actor_and_state() -> None:
+    """같은 (행위자·SO·상태 표지)의 우회 시도는 audit **1행**으로 합산된다(`_deny`와 같은 규율 — 반복 호출이 audit를 무한 소모하지 못한다) · 다른 행위자는 새 행 ·
+    상태가 바뀌면(결재 요청 생성) 새 행이다"""
+    so = _over()
+    with logged_in(ADMIN) as admin, logged_in(TRADE) as trade:
+        for _ in range(4):
+            assert confirm(admin, so["id"]).status_code == 409
+        rows = audit_actions("approvals.approval.bypass_blocked")
+        assert len(rows) == 1 and rows[0]["detail"]["pending_request"] is False
+        assert confirm(trade, so["id"]).status_code == 409  # 다른 행위자
+        assert len(audit_actions("approvals.approval.bypass_blocked")) == 2
+        approval_id = int(_request(trade, so["id"])["id"])  # 상태 변화 — 결재 대기
+        for _ in range(3):
+            assert confirm(admin, so["id"]).status_code == 409
+        rows = audit_actions("approvals.approval.bypass_blocked")
+    assert len(rows) == 3
+    assert [r["detail"]["pending_request"] for r in rows] == [False, False, True]
+    assert rows[-1]["entity_id"] == approval_id
+
+
+def test_a_stale_approved_approval_is_marked_apart_from_a_pending_request() -> None:
+    """APPROVED인데 낡아(digest 변경) 소비 불가한 승인은 audit 표지 `stale_approved=true`(`pending_request=false`)로 구분된다 — REQUESTED 대기와 같은 취급이 아니다.
+    차단 응답의 `pending_approval_status`도 APPROVED로 구분돼 화면이 '재요청'을 안내할 수 있다"""
+    so = _over()
+    with logged_in(TRADE) as client:
+        approval_id = _approved(so, client)
+        set_line(
+            so["id"], 1, unit_price=1250, quantity=4, list_price=1250
+        )  # 총액 5,000 불변 — digest만 변경
+        response = confirm(client, so["id"])
+    detail = _blocked_credit(response)
+    assert detail["pending_approval_id"] == approval_id
+    assert detail["pending_approval_status"] == "APPROVED"
+    (row,) = audit_actions("approvals.approval.bypass_blocked")
+    assert row["detail"]["stale_approved"] is True and row["detail"]["pending_request"] is False
+
+
+# ══ 평가 뒤 노출 감소 경합 — 같은 트랜잭션에서 1회 재평가 ═══════════════════════════════════════
+
+
+def _approved_with_other_confirmed() -> tuple[dict[str, Any], dict[str, Any], int]:
+    """한도 3,000: 같은 거래처의 다른 SO(2,000)를 먼저 확정해 노출 2,000 → 이 SO(2,000)는 초과분 1,000으로 승인(상한 1,000)을 받는다 → (이 SO, 다른 SO, 승인 id)."""
+    ensure_approval_line()
+    other = ready_so(limit=LIMIT, price=1000, quantity=2)
+    with logged_in(TRADE) as client:
+        assert confirm(client, other["id"]).status_code == 200
+        so = ready_so_for(other["buyer"], price=1000, quantity=2)
+        approval_id = _approved(so, client)
+    return so, other, approval_id
+
+
+def test_an_exposure_drop_between_evaluation_and_consumption_re_evaluates_once_and_confirms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """평가(권위) 직후·소비 직전에 같은 거래처의 **다른 SO가 취소**(취소 경로는 거래처를 잠그지 않는다)되어 승인이 불필요해진 경합 — 확정은 `VERSION_CONFLICT`로 터지지 않고 **같은 트랜잭션에서
+    권위 평가를 1회 재실행**해 정상 확정된다(WITHIN_LIMIT·남은 승인은 VOID NOT_REQUIRED) — 평가 호출은 정확히 2회"""
+    from app.core.db.session import owner_engine
+    from app.modules.trade_chain import gate_flow
+
+    so, other, approval_id = _approved_with_other_confirmed()
+    real = gate_flow.evaluate_sales_order
+    calls = {"n": 0}
+
+    def racing(*args: Any, **kwargs: Any) -> Any:
+        bundle = real(*args, **kwargs)
+        calls["n"] += 1
+        if (
+            calls["n"] == 1
+        ):  # 첫 평가가 끝난 직후 다른 SO가 취소된다(별도 커밋 — 거래처 잠금과 무관)
+            with owner_engine.begin() as connection:
+                connection.execute(
+                    text("UPDATE sales_orders SET status = 'CANCELLED' WHERE id = :i"),
+                    {"i": other["id"]},
+                )
+        return bundle
+
+    monkeypatch.setattr(gate_flow, "evaluate_sales_order", racing)
+    with logged_in(TRADE) as client:
+        response = confirm(client, so["id"])
+    assert response.status_code == 200, response.text
+    assert calls["n"] == 2
+    body = response.json()["sales_order"]
+    assert body["credit_verdict"] == "WITHIN_LIMIT" and body["credit_approval_id"] is None
+    assert approval_row(approval_id)["status"] == "VOIDED"
+    assert events_of(approval_id)[-1]["reason_code"] == "NOT_REQUIRED"
+
+
+def test_a_persistent_settlement_mismatch_is_a_dedicated_409_that_names_the_cause_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """재평가 뒤에도 정산과 소비 결과가 어긋나면(소비가 계속 NOT_REQUIRED를 돌려주는 모의) **전용 409**로 중단한다 — 문구가 원인(거래처의 다른 수주 변경)을 알리고, 전체 롤백이라
+    SO·증적·승인(APPROVED 그대로)이 무변이며 평가는 최대 2회뿐이다(무한 재시도 없음)"""
+    from app.modules.approvals.machine import ConsumeOutcome
+    from app.modules.approvals.service import ConsumeResult
+    from app.modules.trade_chain import confirm as confirm_module
+    from app.modules.trade_chain import gate_flow
+
+    so, _other, approval_id = _approved_with_other_confirmed()
+    real = gate_flow.evaluate_sales_order
+    calls = {"n": 0}
+
+    def counting(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gate_flow, "evaluate_sales_order", counting)
+    monkeypatch.setattr(
+        confirm_module.approvals_service,
+        "consume_approval",
+        lambda *a, **k: ConsumeResult(ConsumeOutcome.NOT_REQUIRED),
+    )
+    with logged_in(TRADE) as client:
+        response = confirm(client, so["id"])
+    assert response.status_code == 409
+    assert code_of(response) == "COMMON.CONCURRENCY.VERSION_CONFLICT"
+    assert "다른 수주" in response.json()["error"]["message"]
+    assert calls["n"] == 2
+    _assert_not_confirmed(so["id"])
+    assert approval_row(approval_id)["status"] == "APPROVED"
+    assert evaluations(so["id"]) == []

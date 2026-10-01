@@ -16,8 +16,11 @@
         → `AllocationPort.on_confirmed`(예외면 전체 롤백 — 소비도 되돌아간다) → ⑧ `idempotency.complete(200)`.
 ■ **미해소 시도에서는 승인을 소비하지 않는다**(소비는 해소가 확정된 뒤 마지막 부작용) · **거부 응답은 멱등 결과로 기록하지 않는다**(성공만 `complete` — 승인을 받은 뒤 같은 키로 재확정할 수 있어야 한다).
   커밋된 BLOCKED 경로의 claim 행은 결과 없는 선점으로 남고, 같은 키 재시도가 이어받는다(`idempotency.claim`).
-■ SO 증적 3열은 DB CHECK(`confirmed_at` ⇔ 판정 값, 승인 판정 ⇔ 승인 id)가 구조적으로 요구한다 — 게이트를 통과하지 않은 확정을 DB가 거부한다. 판정 값은 `clearance` 정산 결과
-  (`Settlement`)와 결과 코드에서 **매핑만** 하고 통과를 다시 판정하지 않는다(통과 판정 복제 금지). 정산과 소비 결과가 어긋나면(잠금 하에서는 불가능) fail-closed로 전체 롤백한다.
+■ SO 증적 3열 — DB CHECK는 **부분 채움·허용 값 집합 밖·승인 판정과 승인 id의 불일치만** 거부한다(`confirmed_at` ⇔ 두 판정 값, `APPROVED` ⇔ 승인 id, 1승인=1SO 유니크). 승인 **대상**이 맞는지·승인이 CONSUMED인지·확정 뒤 증적 값을 고치는 UPDATE는
+  DB가 막지 못한다 — 앱 규율(쓰기 통로 1곳 AST 스캔·SYSTEM 열 분류)이 맡는다(트리거 미채택 ADR-0028·0040; 확정 후 증적 3열 UPDATE 차단 트리거는 부채 후보). 판정 값은 `clearance` 정산 결과
+  (`Settlement`)와 결과 코드에서 **매핑만** 하고 통과를 다시 판정하지 않는다(통과 판정 복제 금지). 정산과 소비 결과가 어긋나면 fail-closed다: **거래처 잠금은 다른 SO의 취소·편집을 막지 않으므로**(취소 경로는 거래처를 잠그지 않는다 — 전역 순서의 부분수열)
+  평가 뒤 소비 전에 노출이 줄어 승인이 불필요해질 수 있다 — 이 경우(NOT_REQUIRED인데 정산은 APPROVED)만 같은 트랜잭션에서 권위 평가를 **1회 재실행**하고, 그래도 어긋나면 전용 409로 전체 롤백한다.
+■ 반복 시도 합산: 같은 입력·같은 미해소 결과의 BLOCKED 시도는 직전 증거 행을 **재사용**한다(새 행 미삽입 — 불변 표 규칙과 충돌 없음). 입력이 바뀌면(증거용 digest·승인 ref) 새 행이다. 우회 시도 audit도 (행위자·대상·승인 행·상태 표지) 단위로 합산한다.
 """
 
 from __future__ import annotations
@@ -43,7 +46,12 @@ from app.modules.credit import (
 )
 from app.modules.credit.locking import lock_buyer_for_credit
 from app.modules.gates import service as gates_service
-from app.modules.gates.models import EVALUATION_BLOCKED, EVALUATION_CONFIRMED, SUBJECT_SALES_ORDER
+from app.modules.gates.models import (
+    EVALUATION_BLOCKED,
+    EVALUATION_CONFIRMED,
+    SUBJECT_SALES_ORDER,
+    GateEvaluation,
+)
 from app.modules.gates.service import Clearance, Settlement
 from app.modules.gates.types import GateCode
 from app.modules.idempotency import service as idempotency
@@ -90,10 +98,18 @@ _PI_VERDICT_BY_REASON: dict[str, str] = {
 }
 
 
+#: 권위 평가 최대 횟수 — 평가 뒤 소비 전에 같은 거래처의 다른 SO가 취소·편집돼 승인이 불필요해진 경합에서 1회 재평가한다(2회째도 어긋나면 중단).
+MAX_EVALUATIONS = 2
+
+INCONSISTENT_MESSAGE = "확정하는 동안 거래처의 다른 수주가 변경되어 다시 평가해야 합니다. 화면을 새로고침한 뒤 다시 시도해 주세요. 입력한 내용은 저장되지 않았습니다."
+
+
 def _inconsistent(so_id: int, what: str) -> AppError:
-    """정산·소비 결과가 어긋났다 — 잠금 하에서는 일어날 수 없는 상태라 확정하지 않고 전체 롤백한다(fail-closed, 새로고침 안내)."""
+    """정산·소비 결과가 어긋났다 — 확정하지 않고 전체 롤백한다(fail-closed). 거래처 잠금은 다른 SO의 취소·편집을 막지 못하므로(전역 순서의 부분수열) 평가 뒤 상태가 바뀔 수 있고,
+    그 원인을 사용자가 알 수 있게 전용 문구를 싣는다(409 version 충돌 코드 — 새로고침 후 재시도)."""
     return AppError(
         ErrorCode.CONCURRENCY_VERSION_CONFLICT,
+        message_override=INCONSISTENT_MESSAGE,
         log_context={"sales_order_id": so_id, "op": "confirm", "inconsistent": what},
     )
 
@@ -224,6 +240,55 @@ def _blocked_detail(
     }
 
 
+def _require_same_approval(consumed_id: int | None, settled_id: int | None, so_id: int) -> None:
+    """정산이 본 승인 id = 소비한 승인 id여야 한다(같은 잠금 하의 평가·소비라 보통 같다) — 다르면 확정하지 않는다."""
+    if consumed_id != settled_id:
+        raise _inconsistent(so_id, "approval_id")
+
+
+def _credit_settled_by_approval(clr: Clearance, so_id: int) -> bool:
+    """CREDIT이 승인으로 해소된 정산인가 — 소비 결과가 NOT_REQUIRED와 맞물려 재평가 여부를 정한다."""
+    _, state = _settled(clr, GateCode.CREDIT, so_id)
+    return state is Settlement.APPROVED
+
+
+def _record_blocked(
+    session: Any,
+    *,
+    so_id: int,
+    actor_id: int,
+    clr: Clearance,
+    bundle: gate_flow.GateBundle,
+    approval_id: int | None,
+) -> GateEvaluation:
+    """BLOCKED 증거 — 직전 행이 같은 입력·같은 결과의 BLOCKED면 **재사용**한다(반복 시도가 증거 표를 무한히 늘리지 못한다). 아니면 새 행(INSERT-only)."""
+    results = _evidence_results(clr, bundle, approval_id)
+    last: GateEvaluation | None = session.execute(
+        select(GateEvaluation)
+        .where(
+            GateEvaluation.subject_type == SUBJECT_SALES_ORDER, GateEvaluation.subject_id == so_id
+        )
+        .order_by(GateEvaluation.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if (
+        last is not None
+        and last.outcome == EVALUATION_BLOCKED
+        and last.input_digest == bundle.input_digest
+        and last.results == results
+    ):
+        return last
+    return gates_service.record_evaluation(
+        session,
+        subject_type=SUBJECT_SALES_ORDER,
+        subject_id=so_id,
+        outcome_kind=EVALUATION_BLOCKED,
+        results=results,
+        input_digest=bundle.input_digest,
+        actor_user_id=actor_id,
+    )
+
+
 def confirm_sales_order(
     *, actor: AuthenticatedUser, idempotency_key: str, so_id: int, version: int
 ) -> tuple[int, dict[str, Any]]:
@@ -266,33 +331,33 @@ def confirm_sales_order(
         if missing:
             raise AppError(ErrorCode.TRADE_DOCS_DOCUMENT_INCOMPLETE, detail=missing)
 
-        bundle = gate_flow.evaluate_sales_order(session, so_id, authoritative=True)
-        clr = bundle.clearance
-        if not clr.cleared:
-            if clr.needs_approval:  # 승인 필요·승인 없음 — ADMIN 포함 우회 시도를 audit에 남긴다(BLOCKED 증거와 같은 커밋)
-                approvals_service.note_bypass_attempt(
+        for attempt in range(MAX_EVALUATIONS):
+            bundle = gate_flow.evaluate_sales_order(session, so_id, authoritative=True)
+            clr = bundle.clearance
+            if not clr.cleared:
+                if clr.needs_approval:  # 승인 필요·승인 없음 — ADMIN 포함 우회 시도를 audit에 남긴다(BLOCKED 증거와 같은 커밋)
+                    approvals_service.note_bypass_attempt(
+                        session,
+                        actor_user_id=actor.id,
+                        approval_type=ApprovalType.SO_CREDIT_EXCEEDED.value,
+                        target_id=so_id,
+                    )
+                evidence = _record_blocked(
                     session,
-                    actor_user_id=actor.id,
-                    approval_type=ApprovalType.SO_CREDIT_EXCEEDED.value,
-                    target_id=so_id,
+                    so_id=so_id,
+                    actor_id=actor.id,
+                    clr=clr,
+                    bundle=bundle,
+                    approval_id=bundle.approval_id,
                 )
-            evidence = gates_service.record_evaluation(
-                session,
-                subject_type=SUBJECT_SALES_ORDER,
-                subject_id=so_id,
-                outcome_kind=EVALUATION_BLOCKED,
-                results=_evidence_results(clr, bundle, bundle.approval_id),
-                input_digest=bundle.input_digest,
-                actor_user_id=actor.id,
-            )
-            deferred = AppError(
-                ErrorCode.TRADE_CHAIN_CONFIRM_GATE_BLOCKED,
-                detail=_blocked_detail(
-                    session, so, bundle, roles=actor.roles, evaluation_id=evidence.id
-                ),
-                log_context={"sales_order_id": so_id, "unresolved": len(clr.unresolved)},
-            )
-        else:
+                deferred = AppError(
+                    ErrorCode.TRADE_CHAIN_CONFIRM_GATE_BLOCKED,
+                    detail=_blocked_detail(
+                        session, so, bundle, roles=actor.roles, evaluation_id=evidence.id
+                    ),
+                    log_context={"sales_order_id": so_id, "unresolved": len(clr.unresolved)},
+                )
+                break
             consumed = approvals_service.consume_approval(
                 session,
                 approval_type=ApprovalType.SO_CREDIT_EXCEEDED.value,
@@ -300,69 +365,73 @@ def confirm_sales_order(
                 actor_user_id=actor.id,
             )
             if consumed.outcome is ConsumeOutcome.BLOCKED:
-                # 소비 시점 경합(승인 상태·입력이 정산 뒤 바뀜 — 잠금 하에서는 드물다): VOID·audit이 살아남도록 커밋한 뒤 그 에러를 raise
-                gates_service.record_evaluation(
+                # 소비 시점 경합(승인 상태·입력이 정산 뒤 바뀜): VOID·audit이 살아남도록 커밋한 뒤 그 에러를 raise
+                _record_blocked(
                     session,
-                    subject_type=SUBJECT_SALES_ORDER,
-                    subject_id=so_id,
-                    outcome_kind=EVALUATION_BLOCKED,
-                    results=_evidence_results(clr, bundle, consumed.approval_id),
-                    input_digest=bundle.input_digest,
-                    actor_user_id=actor.id,
+                    so_id=so_id,
+                    actor_id=actor.id,
+                    clr=clr,
+                    bundle=bundle,
+                    approval_id=consumed.approval_id,
                 )
                 assert consumed.error is not None
                 deferred = consumed.error
-            else:
-                credit_verdict = credit_verdict_of(
-                    clr, consumed=consumed.outcome is ConsumeOutcome.CONSUMED, so_id=so_id
-                )
-                if (
-                    consumed.approval_id != bundle.approval_id
-                ):  # 정산이 본 승인 = 소비한 승인(잠금 하에서는 항상 같다)
-                    raise _inconsistent(so_id, "approval_id")
-                pi_verdict = pi_gate_verdict_of(clr, so_id)
-                # 증적 3열은 확정 시각과 **같은 flush**에 들어가야 CHECK를 지킨다 — 대입 후 `record_transition`까지 질의가 끼지 않게 한다.
-                with session.no_autoflush:
-                    so.credit_verdict = credit_verdict
-                    so.credit_approval_id = consumed.approval_id
-                    so.pi_gate_verdict = pi_verdict
-                    record_transition(
-                        session,
-                        so,
-                        "CONFIRMED",
-                        actor_user_id=actor.id,
-                        reason=None,
-                        automatic=False,
-                        approval_id=consumed.approval_id,
-                        via_freeze_action=True,
-                    )
-                evidence = gates_service.record_evaluation(
+                break
+            if (
+                consumed.outcome is ConsumeOutcome.NOT_REQUIRED
+                and _credit_settled_by_approval(clr, so_id)
+                and attempt + 1 < MAX_EVALUATIONS
+            ):
+                # 평가 뒤 다른 SO의 취소·편집으로 노출이 줄어 승인이 불필요해졌다(소비가 승인을 VOID 정리) — 같은 트랜잭션에서 권위 평가를 한 번 더 한다.
+                continue
+            credit_verdict = credit_verdict_of(
+                clr, consumed=consumed.outcome is ConsumeOutcome.CONSUMED, so_id=so_id
+            )
+            _require_same_approval(consumed.approval_id, bundle.approval_id, so_id)
+            pi_verdict = pi_gate_verdict_of(clr, so_id)
+            # 증적 3열은 확정 시각과 **같은 flush**에 들어가야 CHECK를 지킨다 — 대입 후 `record_transition`까지 질의가 끼지 않게 한다.
+            with session.no_autoflush:
+                so.credit_verdict = credit_verdict
+                so.credit_approval_id = consumed.approval_id
+                so.pi_gate_verdict = pi_verdict
+                record_transition(
                     session,
-                    subject_type=SUBJECT_SALES_ORDER,
-                    subject_id=so_id,
-                    outcome_kind=EVALUATION_CONFIRMED,
-                    results={
-                        **_evidence_results(clr, bundle, consumed.approval_id),
-                        "credit_verdict": credit_verdict,
-                        "pi_gate_verdict": pi_verdict,
-                    },
-                    input_digest=bundle.input_digest,
+                    so,
+                    "CONFIRMED",
                     actor_user_id=actor.id,
+                    reason=None,
+                    automatic=False,
+                    approval_id=consumed.approval_id,
+                    via_freeze_action=True,
                 )
-                converge_parent(session, KIND, so, actor_user_id=actor.id)  # QT → CONVERTED
-                allocation = get_allocation_port().on_confirmed(session, so)  # 예외 = 전체 롤백
-                report = gate_flow.gate_report_body(session, so, bundle, roles=actor.roles)
-                body = SalesOrderConfirmOut.model_validate(
-                    {
-                        "sales_order": sales_orders.detail_body(session, so),
-                        "gates": report["gates"],
-                        "allocation": {"status": allocation.status.value, "note": allocation.note},
-                        "evaluation_id": evidence.id,
-                    }
-                ).model_dump(mode="json")
-                assert claim.record is not None
-                idempotency.complete(session, claim.record, status_code=200, body=body)
-                result = (200, body)
+            evidence = gates_service.record_evaluation(
+                session,
+                subject_type=SUBJECT_SALES_ORDER,
+                subject_id=so_id,
+                outcome_kind=EVALUATION_CONFIRMED,
+                results={
+                    **_evidence_results(clr, bundle, consumed.approval_id),
+                    "credit_verdict": credit_verdict,
+                    "pi_gate_verdict": pi_verdict,
+                },
+                input_digest=bundle.input_digest,
+                actor_user_id=actor.id,
+            )
+            converge_parent(session, KIND, so, actor_user_id=actor.id)  # QT → CONVERTED
+            allocation = get_allocation_port().on_confirmed(session, so)  # 예외 = 전체 롤백
+            report = gate_flow.gate_report_body(session, so, bundle, roles=actor.roles)
+            body = SalesOrderConfirmOut.model_validate(
+                {
+                    "sales_order": sales_orders.detail_body(session, so),
+                    "gates": report["gates"],
+                    "allocation": {"status": allocation.status.value, "note": allocation.note},
+                    "evaluation_id": evidence.id,
+                }
+            ).model_dump(mode="json")
+            assert claim.record is not None
+            idempotency.complete(session, claim.record, status_code=200, body=body)
+            result = (200, body)
+            break
     if deferred is not None:
         raise deferred  # UoW가 커밋된 뒤 — BLOCKED 증거·우회 시도 audit·소비 시점 VOID가 살아남는다(실패도 커밋)
     assert result is not None

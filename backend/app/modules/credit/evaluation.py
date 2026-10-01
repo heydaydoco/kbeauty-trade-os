@@ -26,6 +26,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.errors.exceptions import NotFoundError
+from app.core.errors.handlers import LOCK_BUSY_SQLSTATES
 from app.core.time import utcnow
 from app.modules.credit import providers
 from app.modules.credit.exposure import open_order_amount, open_orders_stmt
@@ -185,7 +186,10 @@ def _evaluate(
         with session.begin_nested():
             term = providers.get_receivable_provider().outstanding(session, partner.id, currency)
         reflected, receivable_amount = term.reflected, term.amount
-    except PROVIDER_FAILURES:
+    except PROVIDER_FAILURES as exc:
+        # 잠금 대기 초과(55P03)·교착(40P01)은 평가 불능으로 삼키지 않고 전파한다(409 LOCK_BUSY — 게이트 평가 틀과 같은 규율). 그 밖의 provider 오류만 UNEVALUABLE.
+        if getattr(getattr(exc, "orig", None), "sqlstate", None) in LOCK_BUSY_SQLSTATES:
+            raise
         provider_failed = True
 
     if this_amount is None:

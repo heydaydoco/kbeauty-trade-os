@@ -357,6 +357,10 @@ _ORDER_NAMES = {
     "proforma_invoices": "proforma_invoices",
     "sales_orders": "sales_orders",
     "approvals": "approvals",
+    # 라인 표는 전역 순서 (8) `lines` — 원천 라인 잠금(참조 수주의 수량 증가)도 여기 속한다
+    "quotation_lines": "lines",
+    "proforma_invoice_lines": "lines",
+    "sales_order_lines": "lines",
 }
 _LOCK_CLAUSE = re.compile(r"\bFOR (?:NO KEY )?(?:UPDATE|SHARE|KEY SHARE)\b", re.IGNORECASE)
 _FROM = re.compile(r"\bFROM\s+(\w+)", re.IGNORECASE)
@@ -499,3 +503,33 @@ def test_confirm_decide_and_payment_in_all_interleavings_never_deadlock() -> Non
             assert row["status"] == "RECEIVED" and status in ("REQUESTED", "APPROVED")
         assert len(approvals_of(so["id"])) == 1
     assert 0 <= confirmed <= 30  # 결정이 확정보다 먼저/나중인 양쪽이 모두 정상 결과다
+
+
+def test_a_reference_order_quantity_increase_voids_the_approval_before_locking_source_lines() -> (
+    None
+):
+    """참조 수주의 수량 증가(라인 수정)는 SO → **approvals(승인 무효화)** → 원천 라인(PI 라인 `FOR UPDATE`) 순으로 잠근다 — 전역 LOCK_ORDER (5)→(7)→(8). 승인 무효화가
+    원천 라인 잠금보다 뒤였던 역순(8→7)을 고친 회귀 시험(실측 SQL 순서)"""
+    ensure_approval_line()
+    with logged_in(TRADE) as client:
+        _, _, so = _chain_so(client, limit=3_000)
+        (line,) = client.get(f"/api/v1/sales-orders/{so['id']}").json()["lines"]
+        version = scalar("SELECT version FROM sales_orders WHERE id = :i", i=so["id"])
+        down = client.patch(
+            f"/api/v1/sales-orders/{so['id']}/lines/{line['id']}",
+            json={"version": version, "quantity": 5},
+        )
+        assert down.status_code == 200, down.text
+        _, requested = request_service(_trade(), so["id"])  # 열린 승인 1건
+        version = scalar("SELECT version FROM sales_orders WHERE id = :i", i=so["id"])
+        seen = _first_lock_sequence(
+            lambda: client.patch(
+                f"/api/v1/sales-orders/{so['id']}/lines/{line['id']}",
+                json={"version": version, "quantity": 6},
+            )
+        )
+    assert approval_row(requested["id"])["status"] == "VOIDED"
+    assert seen[:3] == ["sales_orders", "approvals", "lines"], seen
+    assert [LOCK_ORDER.index(n) for n in seen if n in LOCK_ORDER] == sorted(
+        LOCK_ORDER.index(n) for n in seen if n in LOCK_ORDER
+    )

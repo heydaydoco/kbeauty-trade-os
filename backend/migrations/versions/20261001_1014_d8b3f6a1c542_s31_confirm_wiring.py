@@ -5,7 +5,7 @@
 생성 시각(UTC): 2026-10-01 10:14:43.563177+00:00
 
 S3-1 PR-12a 확정 배선 — M10 ALTER (ADR-0070 / design-E E4 / design-integrated X-11·X-49 · §2.1):
-  `sales_orders` + 확정 증적 3열(`credit_verdict`·`credit_approval_id`·`pi_gate_verdict`) — SO 행 자체가 "게이트를 통과했다"는 사실을 증명하고 DB CHECK가 게이트 없는 확정을 거부한다.
+  `sales_orders` + 확정 증적 3열(`credit_verdict`·`credit_approval_id`·`pi_gate_verdict`) — SO 행 자체가 "게이트를 통과했다"는 사실을 증명하고 DB CHECK가 증적 부분 채움·값 집합 밖·승인 판정/승인 id 불일치를 거부한다(위조 값·승인 대상 일치·확정 후 변경은 앱 규율 몫 — 트리거 미채택).
     CHECK 5종: 값 집합 2 + `(confirmed_at IS NULL) = (credit_verdict IS NULL)`·`(confirmed_at IS NULL) = (pi_gate_verdict IS NULL)`
     + `((credit_verdict = 'APPROVED') IS TRUE) = (credit_approval_id IS NOT NULL)`(NULL이 비교를 통과하는 함정을 `IS TRUE`로 회피).
     `credit_approval_id` FK approvals RESTRICT + 부분 유니크 `uq_sales_orders_credit_approval_id`(1승인=1SO) + 여신 노출 조회 축 `ix_sales_orders_open_exposure`.
@@ -16,7 +16,7 @@ S3-1 PR-12a 확정 배선 — M10 ALTER (ADR-0070 / design-E E4 / design-integra
   ■ additive만 — 기존 열·제약을 바꾸지 않는다. **시드 0**. 표가 비어 있어 백필이 없다(확정 SO가 이미 있으면 CHECK가 실패하므로 사전 검사가 이유를 알려 주고 중단한다 —
     확정 통로가 없던 PR-7a~PR-11 동안 정상 경로로는 확정 SO가 생길 수 없다).
   ■ **CHECK는 autogenerate가 못 보므로 손으로 부른다**(op.create_check_constraint + op.f() 최종 이름). 정의문 테스트(tests/integration/test_sales_order_constraints.py)가 고정한다.
-  ■ 제약·인덱스 이름 63자 이내(최장 `ck_sales_orders_credit_approval_iff_approved` 43자·`uq_sales_order_status_log_approval_id` 36자).
+  ■ 제약·인덱스 이름 63자 이내(최장 `ck_sales_order_status_log_approval_only_on_confirm` 50자 — 63자 한도 안, 정의문 테스트가 전수 확인).
   ■ downgrade는 인덱스 → 제약 → FK → 열 역순 drop(데이터는 증적 열이라 함께 사라진다 — 운영 데이터가 생긴 뒤에는 되돌리지 않는다).
 """
 
