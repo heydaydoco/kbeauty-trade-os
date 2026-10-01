@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time import today_kst
 from app.modules.proforma_invoices.models import ProformaInvoice
+from app.modules.purchase_orders.models import PurchaseOrder
 from app.modules.quotations.models import Quotation
 from app.modules.sales_orders.models import SalesOrder
 from app.modules.trade_docs.chain import has_live_children, has_live_confirmed_children
@@ -26,11 +27,12 @@ from app.modules.trade_docs.expiry import is_lapsed
 from app.modules.trade_docs.locking import lock_document
 from app.modules.trade_docs.transition import record_transition
 
-#: 전표 종류 → 모델. 각 전표 PR이 자기 모델을 등록한다(PO는 PR-8).
+#: 전표 종류 → 모델. 각 전표 PR이 자기 모델을 등록한다(PO는 PR-8a — 조상이 없어 lock_chain은 자기 행만 잠근다).
 DOC_MODELS: dict[DocKind, Any] = {
     DocKind.QUOTATION: Quotation,
     DocKind.PROFORMA_INVOICE: ProformaInvoice,
     DocKind.SALES_ORDER: SalesOrder,
+    DocKind.PURCHASE_ORDER: PurchaseOrder,
 }
 
 #: 조상 사슬 — (조상 종류, 자식 행의 FK 열) 위→아래 순서.

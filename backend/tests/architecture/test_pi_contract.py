@@ -120,7 +120,7 @@ def test_pi_field_policy_pins() -> None:
 
 
 def test_the_pi_state_check_is_now_enabled_and_agrees_with_the_machine() -> None:
-    """지연 프레임 켜짐 — PI(PR-6a)·SO(PR-7a) 상태 CHECK 3자 대사(StrEnum·machine·DB)가 skip이 아니라 실제로 도는 테이블이 존재한다(PO는 PR-8)"""
+    """지연 프레임 켜짐 — PI(PR-6a)·SO(PR-7a) 상태 CHECK 3자 대사(StrEnum·machine·DB)가 skip이 아니라 실제로 도는 테이블이 존재한다(PO는 PR-8a가 켰다)"""
     with owner_engine.connect() as connection:
         exists = {
             table: connection.execute(
@@ -129,8 +129,9 @@ def test_the_pi_state_check_is_now_enabled_and_agrees_with_the_machine() -> None
             is not None
             for table in DOC_TABLES.values()
         }
-    assert exists["quotations"] and exists["proforma_invoices"] and exists["sales_orders"]
-    assert not exists["purchase_orders"]  # PR-8이 켠다
+    assert all(exists.values()), (
+        exists
+    )  # 4종 전부 — PO는 PR-8a(M06)가 켰다(StrEnum·machine·DB CHECK 3자 대사 skip 0)
 
 
 def test_bank_account_number_is_in_no_unique_key() -> None:

@@ -22,7 +22,14 @@ from tests.support.astscan import app_sources, module_of, parse_source, referenc
 pytestmark = pytest.mark.group_k
 
 #: 전표 도메인 모듈 — 각 전표 PR이 자기 모듈을 여기 더한다(스캔 대상 확장).
-DOC_MODULES = {"trade_docs", "quotations", "proforma_invoices", "sales_orders", "trade_chain"}
+DOC_MODULES = {
+    "trade_docs",
+    "quotations",
+    "proforma_invoices",
+    "sales_orders",
+    "purchase_orders",
+    "trade_chain",
+}
 DOC_MODEL_NAMES = {
     "Quotation",
     "QuotationLine",
@@ -30,8 +37,15 @@ DOC_MODEL_NAMES = {
     "ProformaInvoiceLine",
     "SalesOrder",
     "SalesOrderLine",
+    "PurchaseOrder",
+    "PurchaseOrderLine",
 }
-STATUS_LOG_NAMES = {"QuotationStatusLog", "ProformaInvoiceStatusLog", "SalesOrderStatusLog"}
+STATUS_LOG_NAMES = {
+    "QuotationStatusLog",
+    "ProformaInvoiceStatusLog",
+    "SalesOrderStatusLog",
+    "PurchaseOrderStatusLog",
+}
 PREFIX_LITERALS = {"QT", "PI", "SO", "PO"}
 
 TRANSITION = "modules/trade_docs/transition.py"
@@ -41,6 +55,7 @@ NUMBERING = "modules/numbering/service.py"
 QT_SERVICE = "modules/quotations/service.py"
 PI_SERVICE = "modules/proforma_invoices/service.py"
 SO_SERVICE = "modules/sales_orders/service.py"
+PO_SERVICE = "modules/purchase_orders/service.py"
 
 
 def _flatten(target: ast.expr) -> list[ast.expr]:
@@ -137,6 +152,9 @@ ALLOWED_SITES: frozenset[tuple[str, str, str]] = frozenset(
         (SO_SERVICE, "create_received_sales_order", "total_amount"),
         (SO_SERVICE, "create_received_sales_order", "doc_number"),
         (SO_SERVICE, "create_received_sales_order", UNKNOWN),
+        # PO 생성 착지 — 헤더 열을 **명시 키워드**로 넣는다(`**dict` 전개 없음 — UNKNOWN 항목이 없다)
+        (PO_SERVICE, "insert_issued", "total_cost"),
+        (PO_SERVICE, "insert_issued", "doc_number"),
         # 헤더 편집: setattr(row, name, value)의 name은 _header_columns가 만든 화이트리스트 cols의 키(아래 자기검사가 확인)
         (QT_SERVICE, "update_quotation", UNKNOWN),
         (QT_SERVICE, "update_meta", UNKNOWN),
@@ -281,6 +299,9 @@ _SQL_DOC_TABLES = (
     "sales_orders",
     "sales_order_lines",
     "sales_order_status_log",
+    "purchase_orders",
+    "purchase_order_lines",
+    "purchase_order_status_log",
     "bank_accounts",
 )
 #: `UPDATE [ONLY] [public.]["]table` · `INSERT INTO …` · `DELETE FROM …` (대소문자·개행 무시). f-string은 값 자리를 `{}`로 접어 본다.
@@ -426,16 +447,25 @@ def test_the_dynamic_write_allowlist_entries_are_bounded_by_whitelists() -> None
 
 
 def test_totals_and_numbers_have_a_single_creator_per_document() -> None:
-    """생성자의 total_amount=·doc_number=는 전표별 생성 착지 한 곳씩(QT insert_draft·PI insert_issued·SO create_received_sales_order) · 헤더 합계는 recompute_total의 setattr로만 오른다"""
+    """생성자의 total_amount=·total_cost=·doc_number=는 전표별 생성 착지 한 곳씩(QT insert_draft·PI insert_issued·SO create_received_sales_order·PO insert_issued) · 헤더 합계는 recompute_total의 setattr로만 오른다"""
     sites = all_protected_sites()
     creators = {
         (QT_SERVICE, "insert_draft"),
         (PI_SERVICE, "insert_issued"),
         (SO_SERVICE, "create_received_sales_order"),
     }
-    for column in ("total_amount", "doc_number"):
-        assert {k[:2] for k in sites if k[2] == column} == creators, column
-        for creator in creators:
+    po_creator = (
+        PO_SERVICE,
+        "insert_issued",
+    )  # PO는 원가 열 이름(total_cost)을 쓴다 — 번호·합계 생성 착지도 한 곳
+    expected = {
+        "total_amount": creators,
+        "total_cost": {po_creator},
+        "doc_number": creators | {po_creator},
+    }
+    for column, landings in expected.items():
+        assert {k[:2] for k in sites if k[2] == column} == landings, column
+        for creator in landings:
             assert len(sites[(*creator, column)]) == 1
     editing = app_sources()["modules/trade_docs/editing.py"]
     assert any(
@@ -460,7 +490,7 @@ def test_document_headers_are_never_soft_deleted_and_doc_number_is_never_reassig
         for rel, tree in _doc_module_sources().items()
         if keyword_calls(tree, "doc_number", DOC_MODEL_NAMES)
     ]
-    assert sorted(users) == sorted([QT_SERVICE, PI_SERVICE, SO_SERVICE])
+    assert sorted(users) == sorted([QT_SERVICE, PI_SERVICE, SO_SERVICE, PO_SERVICE])
 
 
 def test_document_numbers_are_issued_only_through_the_kernel_wrapper() -> None:

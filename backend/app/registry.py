@@ -27,6 +27,7 @@ from app.modules.partners import models as partners_models
 from app.modules.platform import models as platform_models
 from app.modules.policies import models as policies_models
 from app.modules.proforma_invoices import models as proforma_invoices_models
+from app.modules.purchase_orders import models as purchase_orders_models
 from app.modules.quotations import models as quotations_models
 from app.modules.requirements import models as requirements_models
 from app.modules.sales_orders import models as sales_orders_models
@@ -54,6 +55,7 @@ __all__ = [
     "platform_models",
     "policies_models",
     "proforma_invoices_models",
+    "purchase_orders_models",
     "quotations_models",
     "requirements_models",
     "sales_orders_models",

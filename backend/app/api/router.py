@@ -22,6 +22,7 @@ from app.modules.partners import router as partners_router
 from app.modules.platform import router as platform_router
 from app.modules.policies import router as policies_router
 from app.modules.proforma_invoices import router as proforma_invoices_router
+from app.modules.purchase_orders import router as purchase_orders_router
 from app.modules.quotations import router as quotations_router
 from app.modules.readiness import router as readiness_router
 from app.modules.requirements import router as requirements_router
@@ -44,9 +45,11 @@ api_router.include_router(quotations_router.router)
 api_router.include_router(trade_chain_router.router)
 api_router.include_router(trade_chain_router.pi_router)
 api_router.include_router(trade_chain_router.so_router)
+api_router.include_router(trade_chain_router.po_router)
 api_router.include_router(trade_chain_router.flow_router)
 api_router.include_router(sales_orders_router.router)
 api_router.include_router(proforma_invoices_router.router)
+api_router.include_router(purchase_orders_router.router)
 api_router.include_router(bank_accounts_router.router)
 api_router.include_router(catalog_router.brands_router)
 api_router.include_router(catalog_router.item_profiles_router)

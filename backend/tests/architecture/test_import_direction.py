@@ -1,7 +1,7 @@
 """K. 모듈 계층 임포트 방향 — 단일 DAG (S3-1 ADR-0052 / design-integrated §2.8 · X-20·X-48).
 
     L0  trade_docs                                  : 상수·상태 기계·통로·FIELD_POLICY·잠금·사슬 레지스트리·잔량·검산
-    L1  quotations·proforma_invoices·bank_accounts·sales_orders (+ PO) : 모델·스키마·CRUD·라인 편집만
+    L1  quotations·proforma_invoices·bank_accounts·sales_orders·purchase_orders : 모델·스키마·CRUD·라인 편집만
     L2  trade_chain (+ credit·payments·order_*)     : 모든 전이 오케스트레이션·수렴·잠금
     허용 간선: L1→L0 / L2→L1·L0. 금지: L0→L1·L2 / L1→L2 / L1→다른 L1 / 플랫폼 공용(정책 등)→전표.
 
@@ -18,7 +18,7 @@ from tests.support.astscan import app_sources, imported_modules, module_of, pars
 pytestmark = pytest.mark.group_k
 
 L0 = {"trade_docs"}
-L1 = {"quotations", "proforma_invoices", "bank_accounts", "sales_orders"}
+L1 = {"quotations", "proforma_invoices", "bank_accounts", "sales_orders", "purchase_orders"}
 L2 = {"trade_chain"}
 S3_DOMAIN = L0 | L1 | L2
 #: 전표 도메인과 무관해야 하는 S3 공용 모듈(전표를 임포트하면 안 된다).

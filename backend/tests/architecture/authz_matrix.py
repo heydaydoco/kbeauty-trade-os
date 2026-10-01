@@ -30,6 +30,7 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/bank-accounts",
     "/api/v1/sales-orders",
     "/api/v1/document-flow",
+    "/api/v1/purchase-orders",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -190,6 +191,40 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         V: DENY,
     },
     ("POST", "/api/v1/sales-orders/{so_id}/transitions"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    # S3-1 PR-8a — PO. **조회는 전 역할**이되 VIEWER는 원가·통화 필드가 없는 응답(200, ADR-0024 필드 부재 — 본문 분기는 test_po_cost_masking·G 그룹),
+    # 생성(=발행=발주 확정)·미리보기·전이(OC·취소)·메타는 무역(관리자 상시 통과) — PO 주체=TRADE(설계 F8). 나머지 역할은 전부 403.
+    ("GET", "/api/v1/purchase-orders"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/purchase-orders/export.csv"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("GET", "/api/v1/purchase-orders/{po_id}"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/purchase-orders/{po_id}/status-log"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("POST", "/api/v1/purchase-orders"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("POST", "/api/v1/purchase-orders/preview"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("PATCH", "/api/v1/purchase-orders/{po_id}/meta"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/purchase-orders/{po_id}/transitions"): {
         A: ALLOW,
         T: ALLOW,
         L: DENY,
