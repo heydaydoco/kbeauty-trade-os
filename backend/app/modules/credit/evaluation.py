@@ -22,6 +22,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.errors.exceptions import NotFoundError
@@ -46,6 +47,16 @@ class ReasonCode(StrEnum):
     RECEIVABLE_PROVIDER_ERROR = "RECEIVABLE_PROVIDER_ERROR"
     NO_INCREMENT = "NO_INCREMENT"
 
+
+#: provider 실패로 취급하는 예외(평가 불능) — 그 밖의 예외는 버그라 전파한다.
+PROVIDER_FAILURES: tuple[type[Exception], ...] = (
+    SQLAlchemyError,
+    ValueError,
+    RuntimeError,
+    LookupError,
+    ArithmeticError,
+    OSError,
+)
 
 #: 미환산 SO를 응답에 실을 최대 건수(문서번호·통화만).
 UNCONVERTED_MAX = 5
@@ -169,9 +180,12 @@ def _evaluate(
     reflected = False
     provider_failed = False
     try:
-        term = providers.get_receivable_provider().outstanding(session, partner.id, currency)
+        # SAVEPOINT 안에서 — provider의 DB 오류가 호출 트랜잭션을 aborted 상태로 만들지 않는다(이후 쿼리·감사 기록이 계속 가능).
+        # 예외는 좁게 잡는다: DB·값·조회 오류만 평가 불능, 프로그래밍 오류(TypeError 등)는 그대로 올려 500으로 드러낸다.
+        with session.begin_nested():
+            term = providers.get_receivable_provider().outstanding(session, partner.id, currency)
         reflected, receivable_amount = term.reflected, term.amount
-    except Exception:
+    except PROVIDER_FAILURES:
         provider_failed = True
 
     if this_amount is None:

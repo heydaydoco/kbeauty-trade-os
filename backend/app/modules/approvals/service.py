@@ -61,9 +61,9 @@ from app.modules.approvals.machine import (
 )
 from app.modules.approvals.models import Approval, ApprovalEvent
 from app.modules.approvals.registry import TargetSnapshot, TargetSpec, get_target_spec
-from app.modules.approvals.views import approval_body
+from app.modules.approvals.views import _may_view, approval_body
 from app.modules.audit import service as audit
-from app.modules.audit.models import AuditAction
+from app.modules.audit.models import AuditAction, AuditLog
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.models import RoleCode
 from app.modules.identity.service import AuthenticatedUser, active_roles_of
@@ -266,7 +266,10 @@ def _active_approval(
         Approval.status.in_(_ACTIVE_VALUES),
     )
     if lock:
-        statement = statement.with_for_update().execution_options(populate_existing=True)
+        statement = statement.with_for_update()
+    statement = statement.execution_options(
+        populate_existing=True
+    )  # 세션 캐시의 옛 상태를 쓰지 않는다(읽기·잠금 공통)
     return session.execute(statement).scalar_one_or_none()
 
 
@@ -314,8 +317,10 @@ def request_approval(
     if existing is not None:
         same = (
             existing.snapshot_digest == snapshot.digest
-            and existing.basis_amount == snapshot.amount
             and existing.basis_currency == snapshot.currency
+            # 같은 digest에서 현재 초과분이 승인 상한 이하면 기존 승인을 유지한다(노출이 줄었다고 타인이 멀쩡한 승인을 VOID하지 못하게 —
+            # 상한 초과 때만 새 요청). 정확한 재검증은 결정·소비 시점이 한다.
+            and snapshot.amount <= existing.basis_amount
         )
         if same:
             return RequestResult(existing, created=False)
@@ -373,15 +378,32 @@ def _deny(
     code: ErrorCode,
     blocked: str,
 ) -> AppError:
-    """거부된 결정 시도를 audit에 남기고(커밋은 호출부 UoW) 던질 에러를 돌려준다 — 막힌 시도야말로 남아야 하는 기록이다."""
-    audit.record(
-        session,
-        action=AuditAction.APPROVAL_DECISION_DENIED,
-        actor_user_id=actor.id,
-        entity_type="approvals",
-        entity_id=approval.id,
-        detail={"approval_id": approval.id, "verb": verb.value, "blocked": blocked},
-    )
+    """거부된 결정 시도를 audit에 남기고(커밋은 호출부 UoW) 던질 에러를 돌려준다 — 막힌 시도야말로 남아야 하는 기록이다.
+
+    같은 (행위자·승인·동사·사유)의 거부는 **한 건으로 합산**한다(재시도·반복 호출이 audit를 소모하지 못한다). 승인과 무관한(열람 불가) 사용자의
+    호출은 여기까지 오지 않고 404로 끝난다 — audit를 소모할 수 있는 것은 그 승인의 당사자(기안자·결재 자격자·ADMIN)뿐이다.
+    """
+    already = session.execute(
+        select(AuditLog.id)
+        .where(
+            AuditLog.action == AuditAction.APPROVAL_DECISION_DENIED,
+            AuditLog.actor_user_id == actor.id,
+            AuditLog.entity_type == "approvals",
+            AuditLog.entity_id == approval.id,
+            AuditLog.detail["verb"].astext == verb.value,
+            AuditLog.detail["blocked"].astext == blocked,
+        )
+        .limit(1)
+    ).first()
+    if already is None:
+        audit.record(
+            session,
+            action=AuditAction.APPROVAL_DECISION_DENIED,
+            actor_user_id=actor.id,
+            entity_type="approvals",
+            entity_id=approval.id,
+            detail={"approval_id": approval.id, "verb": verb.value, "blocked": blocked},
+        )
     return AppError(code, log_context={"approval_id": approval.id, "actor_id": actor.id})
 
 
@@ -442,6 +464,52 @@ def decide_approval(
     return result
 
 
+def _check_authority(
+    session: Session, approval: Approval, actor: AuthenticatedUser, verb: DecisionVerb
+) -> tuple[AppError | None, Authority | None]:
+    """결정·회수 자격 판정 — `(거부 에러, 대결 정보)`. 잠금 전(무잠금 조회)과 잠금 후(재확인) **두 번** 같은 함수로 부른다."""
+    if verb is DecisionVerb.WITHDRAW:
+        if _withdraw_denied(session, approval, actor):
+            return (
+                _deny(
+                    session,
+                    approval,
+                    actor=actor,
+                    verb=verb,
+                    code=ErrorCode.APPROVALS_DECISION_NOT_APPROVER,
+                    blocked="WITHDRAW_NOT_ALLOWED",
+                ),
+                None,
+            )
+        return None, None
+    authority = decision_authority(session, actor_id=actor.id, approval=approval)
+    if authority.kind is AuthorityKind.DENIED_SELF:
+        return (
+            _deny(
+                session,
+                approval,
+                actor=actor,
+                verb=verb,
+                code=ErrorCode.APPROVALS_DECISION_SELF_APPROVAL,
+                blocked="SELF_APPROVAL",
+            ),
+            None,
+        )
+    if not authority.can_decide:
+        return (
+            _deny(
+                session,
+                approval,
+                actor=actor,
+                verb=verb,
+                code=ErrorCode.APPROVALS_DECISION_NOT_APPROVER,
+                blocked="NOT_APPROVER",
+            ),
+            None,
+        )
+    return None, authority
+
+
 def _decide(
     session: Session,
     *,
@@ -454,6 +522,15 @@ def _decide(
     peek = session.get(Approval, approval_id)  # 무잠금 조회 — 대상 id를 얻는 용도
     if peek is None:
         raise NotFoundError(log_context={"approval_id": approval_id})
+    # ★ 권한을 **잠금·평가보다 먼저** 무잠금으로 판정한다 — 무권한 호출이 거래처·SO·approvals 잠금을 잡거나 노출을 재계산하게 하지 않는다(잠금 경합·DoS 표면 제거).
+    #   그 승인과 무관한(열람 불가) 사용자에게는 **존재 여부도 밝히지 않는다**(없는 id와 같은 404 — 상태·version 정보 비노출, IDOR 규칙 `_may_view` 일치).
+    #   잠금 뒤에는 TOCTOU 방어로 DB에서 한 번 더 판정한다(아래).
+    roles = active_roles_of(session, actor.id)
+    if roles is None or not _may_view(session, peek, actor, roles):
+        raise NotFoundError(log_context={"approval_id": approval_id})
+    early_denial, _ = _check_authority(session, peek, actor, verb)
+    if early_denial is not None:
+        return None, early_denial
     approval_type, target_id = peek.approval_type, peek.target_id
     spec = _spec_for(approval_type)
 
@@ -475,6 +552,13 @@ def _decide(
         .execution_options(populate_existing=True)
     ).scalar_one()
 
+    # 잠금 뒤 자격 재확인(TOCTOU) — **상태·version 409보다 먼저**라 자격을 잃은 사용자에게 현재 상태가 새지 않는다.
+    denial, authority = _check_authority(session, approval, actor, verb)
+    if denial is not None:
+        return None, denial
+    on_behalf_of = authority.on_behalf_of_id if authority is not None else None
+    delegation_id = authority.delegation_id if authority is not None else None
+
     to = VERB_TO[verb]
     current = ApprovalStatus(approval.status)
     if (current, to) not in HUMAN:
@@ -484,41 +568,6 @@ def _decide(
         )
     if approval.version != version:
         raise VersionConflictError(log_context={"approval_id": approval_id})
-
-    on_behalf_of: int | None = None
-    delegation_id: int | None = None
-    if verb is DecisionVerb.WITHDRAW:
-        if _withdraw_denied(session, approval, actor):
-            return None, _deny(
-                session,
-                approval,
-                actor=actor,
-                verb=verb,
-                code=ErrorCode.APPROVALS_DECISION_NOT_APPROVER,
-                blocked="WITHDRAW_NOT_ALLOWED",
-            )
-    else:
-        authority: Authority = decision_authority(session, actor_id=actor.id, approval=approval)
-        if authority.kind is AuthorityKind.DENIED_SELF:
-            return None, _deny(
-                session,
-                approval,
-                actor=actor,
-                verb=verb,
-                code=ErrorCode.APPROVALS_DECISION_SELF_APPROVAL,
-                blocked="SELF_APPROVAL",
-            )
-        if not authority.can_decide:
-            return None, _deny(
-                session,
-                approval,
-                actor=actor,
-                verb=verb,
-                code=ErrorCode.APPROVALS_DECISION_NOT_APPROVER,
-                blocked="NOT_APPROVER",
-            )
-        if authority.kind is AuthorityKind.DELEGATED:
-            on_behalf_of, delegation_id = authority.on_behalf_of_id, authority.delegation_id
 
     if to in REASON_REQUIRED_TO and _clean_reason(reason) is None:
         raise AppError(ErrorCode.APPROVALS_TRANSITION_REASON_REQUIRED)

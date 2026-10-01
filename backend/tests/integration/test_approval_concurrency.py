@@ -107,7 +107,12 @@ def test_a_deactivated_approver_loses_authority_even_mid_decision() -> None:
     locked, deactivated = threading.Event(), threading.Event()
     real = service.decision_authority
 
+    calls = {"n": 0}
+
     def gated(session: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:  # 잠금 전 무잠금 판정 — 통과시킨다(권한은 잠금 뒤 DB에서 한 번 더 본다)
+            return real(session, **kwargs)
         locked.set()
         assert deactivated.wait(timeout=10)
         return real(session, **kwargs)

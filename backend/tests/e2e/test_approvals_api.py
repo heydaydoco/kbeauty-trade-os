@@ -360,7 +360,7 @@ def test_detail_and_events_are_visible_only_to_related_people() -> None:
 
 
 def test_a_user_cannot_decide_an_approval_they_are_not_eligible_for() -> None:
-    """무관한 역할(CERT)은 결정 라우트를 통과해도 서비스가 403 NOT_APPROVER로 막는다"""
+    """무관한 역할(CERT)은 결정 라우트를 통과해도 서비스가 404로 막는다(존재 여부·상태 비노출)"""
     approval_id, _, _ = _pending()
     outsider = make_user(RoleCode.CERT)
     with client_for(outsider) as client:
@@ -369,8 +369,16 @@ def test_a_user_cannot_decide_an_approval_they_are_not_eligible_for() -> None:
             json={"verb": "APPROVE", "version": 1},
             headers=idem(),
         )
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "APPROVALS.DECISION.NOT_APPROVER"
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "COMMON.RESOURCE.NOT_FOUND"
+        assert response.json()["error"]["detail"] == {}
+        missing = client.post(
+            f"{APPROVALS}/999999/decisions", json={"verb": "APPROVE", "version": 1}, headers=idem()
+        )
+        assert missing.status_code == 404 and missing.json()["error"] == {
+            **response.json()["error"],
+            "request_id": missing.json()["error"]["request_id"],
+        }  # 없는 id와 구별되지 않는다
 
 
 def test_reject_needs_a_reason_over_http_and_withdraw_by_the_requester() -> None:

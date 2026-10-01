@@ -17,6 +17,7 @@ S3-1 PR-9a 승인 코어 스키마 — M07 (ADR-0060·0061 / design-integrated �
   ■ CHECK는 create_table 안에 op.f() 최종 이름이다(alembic check가 CHECK를 못 보므로 정의문 테스트
     tests/integration/test_approval_constraints.py가 pg_get_constraintdef·pg_get_indexdef로 고정한다).
   ■ **시드 0** — 전부 ActorMixin(users FK) 소유 표라 마이그레이션 시드 금지(함정 ⑩). 결재선은 ADMIN 화면/API로만 공급한다.
+  ■ 컬럼 허용 목록은 **이 파일에 리터럴로 고정**한다(앱 상수 임포트 금지 — 상수를 나중에 바꿔도 재생이 깨지지 않는다). 상수와 DB 권한의 일치는 테스트가 검증한다.
   ■ GRANT/REVOKE는 autogenerate가 못 보므로 손으로 부른다: approval_events=revoke_mutations(IMMUTABLE),
     approvals·approval_lines·delegations=restrict_update_columns(COLUMN_UPDATE_ALLOWLIST와 짝). 순서 주의: 테이블 단위 UPDATE를
     먼저 회수한 뒤 컬럼 GRANT(테이블 권한이 남으면 컬럼 제한은 조용히 무효다 — 실측 테스트가 has_column_privilege로 고정).
@@ -31,11 +32,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-from app.core.db.table_policy import (
-    COLUMN_UPDATE_ALLOWLIST,
-    restrict_update_columns,
-    revoke_mutations,
-)
+from app.core.db.table_policy import restrict_update_columns, revoke_mutations
 
 revision: str = "e312f01426d4"
 down_revision: str | None = "a4c0e7fd37db"
@@ -101,7 +98,13 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_approval_lines")),
     )
-    restrict_update_columns(op, "approval_lines", COLUMN_UPDATE_ALLOWLIST["approval_lines"])
+    restrict_update_columns(
+        op,
+        "approval_lines",
+        frozenset(
+            {"approver_role", "note", "deleted_at", "version", "updated_at", "updated_by_id"}
+        ),
+    )
     op.create_index(
         "uq_approval_lines_threshold_active",
         "approval_lines",
@@ -187,7 +190,11 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_delegations")),
     )
-    restrict_update_columns(op, "delegations", COLUMN_UPDATE_ALLOWLIST["delegations"])
+    restrict_update_columns(
+        op,
+        "delegations",
+        frozenset({"revoked_at", "revoked_by_id", "version", "updated_at", "updated_by_id"}),
+    )
     op.create_index(
         "ix_delegations_delegate",
         "delegations",
@@ -361,7 +368,24 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_approvals")),
     )
-    restrict_update_columns(op, "approvals", COLUMN_UPDATE_ALLOWLIST["approvals"])
+    restrict_update_columns(
+        op,
+        "approvals",
+        frozenset(
+            {
+                "status",
+                "decided_by_id",
+                "decided_on_behalf_of_id",
+                "decided_delegation_id",
+                "decided_at",
+                "consumed_at",
+                "consumed_by_id",
+                "version",
+                "updated_at",
+                "updated_by_id",
+            }
+        ),
+    )
     op.create_index(
         "ix_approvals_inbox",
         "approvals",

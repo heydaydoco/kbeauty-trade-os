@@ -140,7 +140,7 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "purchase_order_lines",
         # S3-1 PR-9a — 승인 3표(ADR-0060·0061). 앱 계정의 UPDATE가 정상 업무라 MUTABLE이되 **컬럼 단위로 좁혀** 불변을 DB가
         # 강제한다(아래 COLUMN_UPDATE_ALLOWLIST — 트리거 미채택, ADR-0028·0040 계보): approvals는 상태·결정·소비 컬럼만,
-        # approval_lines는 역할·메모·soft delete만, delegations는 종료(revoke) 컬럼만. DELETE·TRUNCATE는 통째로 회수한다.
+        # approval_lines는 역할·메모·soft delete만, delegations는 종료(revoke) 컬럼만. 허용 목록은 **호출하는 마이그레이션이 리터럴로 넘긴다**(앱 상수 임포트 금지). DELETE·TRUNCATE는 통째로 회수한다.
         # 변경 이력의 불변은 approval_events(IMMUTABLE)가 맡는다.
         "approvals",
         "approval_lines",
@@ -209,7 +209,7 @@ def restrict_update_columns(op: Any, table: str, allowed_columns: frozenset[str]
 
         restrict_update_columns(op, "approvals", COLUMN_UPDATE_ALLOWLIST["approvals"])
 
-    DELETE·TRUNCATE는 통째로 회수한다(승인·결재선 행은 지우지 않는다 — 정정은 새 행).
+    허용 목록은 **호출하는 마이그레이션이 리터럴로 넘긴다**(앱 상수 임포트 금지). DELETE·TRUNCATE는 통째로 회수한다(승인·결재선 행은 지우지 않는다 — 정정은 새 행).
     ★ 순서가 중요하다: 테이블 단위 UPDATE를 먼저 회수해야 컬럼 GRANT가 의미를 갖는다
       (테이블 단위 권한이 남아 있으면 컬럼 제한은 조용히 무효다). GRANT/REVOKE는
       autogenerate가 못 보므로 손으로 부르고, 실측 테스트가 권한 상태를 고정한다.
@@ -218,11 +218,8 @@ def restrict_update_columns(op: Any, table: str, allowed_columns: frozenset[str]
         raise ValueError("허용 컬럼이 비어 있습니다 — 불변이면 revoke_mutations를 쓰세요.")
     if table in IMMUTABLE_TABLES:
         raise ValueError(f"{table!r}은 IMMUTABLE입니다. 컬럼 허용 대상이 아닙니다.")
-    if COLUMN_UPDATE_ALLOWLIST.get(table) != allowed_columns:
-        raise ValueError(
-            f"{table!r}의 허용 컬럼이 COLUMN_UPDATE_ALLOWLIST와 다릅니다. "
-            "app/core/db/table_policy.py에 먼저 등록하세요."
-        )
+    # ★ 앱 상수(COLUMN_UPDATE_ALLOWLIST)와의 일치는 여기서 검사하지 않는다 — 마이그레이션은 **자기 시점의 컬럼 목록을 리터럴로 고정**해 부르고(상수를 나중에
+    #   바꿔도 옛 마이그레이션 재생이 깨지지 않게), "현재 상수 == 최신 마이그레이션이 만든 DB 권한"은 아키텍처·통합 테스트가 검증한다(ADR-0060 부기).
     columns = ", ".join(f'"{name}"' for name in sorted(allowed_columns))
     op.execute(f'REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public."{table}" FROM kbos_app')
     op.execute(f'GRANT UPDATE ({columns}) ON TABLE public."{table}" TO kbos_app')

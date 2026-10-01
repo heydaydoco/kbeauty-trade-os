@@ -29,6 +29,10 @@ class ReceivableTerm:
             raise ValueError(
                 "미수 항은 reflected=True일 때만 금액을 가진다(0으로 대신하지 않는다)."
             )
+        if self.amount is not None and self.amount < 0:
+            raise ValueError(
+                "미수 금액은 음수일 수 없다(노출을 줄이는 방향의 오염 — 평가 불능으로 처리)."
+            )
 
 
 class ReceivableExposureProvider(Protocol):

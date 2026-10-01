@@ -164,12 +164,12 @@ def test_a_delegated_decision_records_both_people_and_the_delegation(
 
 
 def test_no_delegation_means_no_authority_and_an_expired_one_does_not_count() -> None:
-    """대결이 없거나 기간이 지났으면 TRADE 자격이 없는 사용자는 결정할 수 없다(403 NOT_APPROVER)"""
+    """대결이 없거나 기간이 지났으면 TRADE 자격이 없는 사용자는 결정할 수 없다(열람 불가라 404 — 존재 여부 비노출)"""
     approval_id, _, delegator = _setup()
     outsider = make_user(RoleCode.LOGISTICS)
     with pytest.raises(AppError) as caught:
         decide(approval_id, outsider, "APPROVE")
-    assert caught.value.code == ErrorCode.APPROVALS_DECISION_NOT_APPROVER
+    assert caught.value.code == ErrorCode.RESOURCE_NOT_FOUND
     add_delegation(
         delegator, outsider, today_kst() - timedelta(days=9), today_kst() - timedelta(days=1)
     )
@@ -279,7 +279,7 @@ def test_an_admin_delegation_covers_only_the_delegated_role_not_admin_power() ->
     add_delegation(admin, delegate, today_kst(), today_kst() + timedelta(days=3), role="TRADE")
     with pytest.raises(AppError) as caught:
         decide(approval.id, delegate, "APPROVE")
-    assert caught.value.code == ErrorCode.APPROVALS_DECISION_NOT_APPROVER
+    assert caught.value.code == ErrorCode.RESOURCE_NOT_FOUND
     add_delegation(admin, delegate, today_kst(), today_kst() + timedelta(days=3), role="ADMIN")
     assert decide(approval.id, delegate, "APPROVE")["status"] == "APPROVED"
 
@@ -350,7 +350,7 @@ def test_delegate_equal_to_requester_is_blocked_at_decision_time() -> None:
     add_delegation(requester, other, today_kst(), today_kst() + timedelta(days=3))
     with pytest.raises(AppError) as caught2:
         decide(approval.id, other, "APPROVE")
-    assert caught2.value.code == ErrorCode.APPROVALS_DECISION_NOT_APPROVER
+    assert caught2.value.code == ErrorCode.RESOURCE_NOT_FOUND
     assert approval_row(approval.id)["status"] == "REQUESTED"
 
 

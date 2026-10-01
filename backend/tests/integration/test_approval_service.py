@@ -187,7 +187,7 @@ def test_an_admin_requester_can_be_approved_by_another_admin() -> None:
     ids=["LOGISTICS", "CERT", "VIEWER", "역할없음"],
 )
 def test_a_user_without_the_required_role_cannot_decide(roles: tuple[RoleCode, ...]) -> None:
-    """결재 역할(TRADE)이 없는 사용자는 결정할 수 없다(403 NOT_APPROVER) — 상태 불변·거부 audit"""
+    """결재 역할(TRADE)·대결이 없는 사용자는 결정할 수 없다 — 그 승인을 볼 수 없는 사용자에게는 **존재 여부도 밝히지 않는 404**(없는 id와 같음), 상태 불변·audit 소모 없음"""
     so = credit_so()
     add_line(0, role="TRADE")
     make_user(RoleCode.TRADE)
@@ -195,9 +195,10 @@ def test_a_user_without_the_required_role_cannot_decide(roles: tuple[RoleCode, .
     outsider = make_user(*roles)
     with pytest.raises(AppError) as caught:
         decide(approval.id, outsider, "APPROVE")
-    assert _code(caught) == ErrorCode.APPROVALS_DECISION_NOT_APPROVER
+    assert _code(caught) == ErrorCode.RESOURCE_NOT_FOUND and caught.value.status_code == 404
+    assert caught.value.detail == {}  # 상태·version 정보 비노출
     assert approval_row(approval.id)["status"] == "REQUESTED"
-    assert audit_actions("approvals.decision.denied")[-1]["detail"]["blocked"] == "NOT_APPROVER"
+    assert audit_actions("approvals.decision.denied") == []
 
 
 def test_an_admin_is_eligible_for_any_role_but_a_peer_role_is_not() -> None:

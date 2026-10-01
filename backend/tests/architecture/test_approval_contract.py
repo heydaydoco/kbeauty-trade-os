@@ -616,3 +616,204 @@ def test_the_after_evaluate_hook_is_a_noop_in_production_and_nobody_assigns_it()
     assert body == [], "no-op이어야 한다(docstring 외 문장 없음)"
     for rel, source_tree in app_sources().items():
         assert not _attribute_assignments(source_tree, {"_after_evaluate_hook"}), rel
+
+
+# ── 승인 위조 통로 차단 (적대 검토 반영: 모델 임포트·생성·대입·원시 UPDATE 전수) ──────────────────────────────
+
+#: 승인 모델 임포트 예외 — 앱 루트 `registry.py`(Alembic 메타데이터용 임포트뿐, 생성 호출은 아래 별도 검사로 0건 강제). 늘리려면 사유와 함께 여기에만 추가한다.
+APPROVAL_MODEL_IMPORT_ALLOWLIST: frozenset[str] = frozenset(
+    {"registry.py"}
+)  # 메타데이터 등록(모델 클래스 생성·사용 없음)
+#: 승인 결정·소비 컬럼 — 승인 패키지 밖의 어떤 대입도 위조 시도다.
+DECISION_COLUMNS = frozenset(
+    {
+        "decided_by_id",
+        "decided_at",
+        "decided_on_behalf_of_id",
+        "decided_delegation_id",
+        "consumed_at",
+        "consumed_by_id",
+    }
+)
+MODEL_NAMES = frozenset({"Approval", "ApprovalEvent"})
+
+
+def _imports_approval_models(tree: ast.Module) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module.endswith("approvals.models"):
+                return True
+            if node.module.endswith("modules.approvals") and any(
+                a.name == "models" for a in node.names
+            ):
+                return True
+        elif isinstance(node, ast.Import) and any(
+            a.name.endswith("approvals.models") for a in node.names
+        ):
+            return True
+    return False
+
+
+def _constructs_approval_models(tree: ast.Module) -> list[int]:
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = (
+                func.id
+                if isinstance(func, ast.Name)
+                else func.attr
+                if isinstance(func, ast.Attribute)
+                else None
+            )
+            if name in MODEL_NAMES:
+                lines.append(node.lineno)
+    return lines
+
+
+def _flatten_targets(target: ast.expr) -> list[ast.expr]:
+    if isinstance(target, ast.Tuple | ast.List):
+        return [leaf for element in target.elts for leaf in _flatten_targets(element)]
+    if isinstance(target, ast.Starred):
+        return _flatten_targets(target.value)
+    return [target]
+
+
+def _assigned_attributes(tree: ast.Module) -> list[tuple[str, int, str]]:
+    """(속성, 줄, 대입 대상 변수명) — 튜플 언패킹·augassign·`setattr(x, '<이름>', …)`까지 포함한다."""
+    found: list[tuple[str, int, str]] = []
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = [leaf for t in node.targets for leaf in _flatten_targets(t)]
+        elif isinstance(node, ast.AugAssign | ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if isinstance(target, ast.Attribute):
+                owner = target.value.id if isinstance(target.value, ast.Name) else ""
+                found.append((target.attr, node.lineno, owner))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "setattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            owner = node.args[0].id if isinstance(node.args[0], ast.Name) else ""
+            found.append((node.args[1].value, node.lineno, owner))
+    return found
+
+
+def _outside_approvals() -> dict[str, ast.Module]:
+    return {
+        rel: tree for rel, tree in app_sources().items() if not rel.startswith(APPROVALS_PREFIX)
+    }
+
+
+def test_nobody_outside_the_approvals_package_imports_or_constructs_approval_rows() -> None:
+    """승인 모델(`approvals.models`)은 승인 패키지 밖에서 임포트도·`Approval(`/`ApprovalEvent(` 생성도 못 한다 — 승인 행은 서비스 통로로만 태어난다"""
+    offenders = [
+        rel
+        for rel, tree in _outside_approvals().items()
+        if rel not in APPROVAL_MODEL_IMPORT_ALLOWLIST
+        and (_imports_approval_models(tree) or _constructs_approval_models(tree))
+    ]
+    assert offenders == []
+
+
+def test_the_model_scan_catches_a_violation_corpus() -> None:
+    """모델 스캔 자기검사 — 직접·모듈 경유·별칭 임포트와 생성 호출을 모두 잡고, 무관한 코드는 통과시킨다"""
+    for source in (
+        "from app.modules.approvals.models import Approval",
+        "import app.modules.approvals.models as m",
+        "from app.modules.approvals import models",
+    ):
+        assert _imports_approval_models(parse_source(source)), source
+    assert _constructs_approval_models(parse_source("x = Approval(status='APPROVED')")) == [1]
+    assert _constructs_approval_models(parse_source("x = models.ApprovalEvent(approval_id=1)")) == [
+        1
+    ]
+    assert not _imports_approval_models(parse_source("from app.modules.approvals.schemas import X"))
+    assert _constructs_approval_models(parse_source("x = SalesOrder(id=1)")) == []
+
+
+def test_no_one_outside_the_approvals_package_assigns_decision_columns_or_an_approval_status() -> (
+    None
+):
+    """승인 패키지 밖에서는 결정·소비 컬럼 대입이 0건이고, `approval….status` 대입·`setattr(approval, 'status', …)`·튜플 언패킹 대입도 0건이다"""
+    offenders: list[str] = []
+    for rel, tree in _outside_approvals().items():
+        for attr, line, owner in _assigned_attributes(tree):
+            if attr in DECISION_COLUMNS or (attr == "status" and "approval" in owner.lower()):
+                offenders.append(f"{rel}:{line}:{owner}.{attr}")
+    assert offenders == []
+
+
+def test_the_assignment_scan_catches_a_violation_corpus() -> None:
+    """대입 스캔 자기검사 — 일반 대입·튜플 언패킹·augassign·setattr을 모두 잡는다"""
+    corpus = parse_source(
+        "approval.status = 'APPROVED'\n"
+        "a.decided_by_id, a.decided_at = 1, 2\n"
+        "[x.consumed_at, *rest] = [1, 2]\n"
+        "setattr(approval, 'status', 'CONSUMED')\n"
+        "row.consumed_by_id += 1\n"
+    )
+    found = {(attr, owner) for attr, _line, owner in _assigned_attributes(corpus)}
+    assert {
+        ("status", "approval"),
+        ("decided_by_id", "a"),
+        ("decided_at", "a"),
+        ("consumed_at", "x"),
+        ("consumed_by_id", "row"),
+    } <= found
+
+
+RAW_UPDATE_PATTERN = re.compile(
+    r"(update\(\s*(\w+\.)*(Approval|ApprovalLine|Delegation)\b"
+    r"|(Approval|ApprovalLine|Delegation)\.__table__\.update"
+    r"|UPDATE\s+(ONLY\s+)?(public\s*\.\s*)?[\"']?(approvals|approval_lines|delegations)[\"']?(\s|$)"
+    r"|query\(\s*(\w+\.)*(Approval|ApprovalLine|Delegation)\b[^)]*\)\s*\.\s*update"
+    r"|\.update\(\s*\{\s*[\"']?status)",
+    re.IGNORECASE,
+)
+
+
+def test_the_broadened_raw_update_scan_finds_nothing_in_the_app_and_catches_every_spelling() -> (
+    None
+):
+    """원시 UPDATE 전수 — 모듈 한정 `update(m.Approval)`, `UPDATE public.approvals`, `UPDATE "approvals"`, `session.query(Approval).update(...)`까지 앱 전체에 0건"""
+    from tests.support.astscan import APP_DIR
+
+    offenders = [
+        str(path.relative_to(APP_DIR))
+        for path in sorted(APP_DIR.rglob("*.py"))
+        if "__pycache__" not in path.parts
+        and RAW_UPDATE_PATTERN.search(path.read_text(encoding="utf-8"))
+    ]
+    assert offenders == []
+    for sample in (
+        "update(models.Approval).values(status='x')",
+        "UPDATE public.approvals SET status = 'x'",
+        'UPDATE "approvals" SET status = 1',
+        "session.query(Approval).filter(a).update({'status': 'x'})",
+        "session.query(m.Approval).update(values)",
+        "Approval.__table__.update()",
+        "UPDATE delegations SET revoked_at = now()",
+    ):
+        assert RAW_UPDATE_PATTERN.search(sample), sample
+    assert not RAW_UPDATE_PATTERN.search("select(Approval).where(Approval.id == 1)")
+
+
+def test_status_scan_in_the_package_also_sees_tuple_unpacking_and_setattr() -> None:
+    """패키지 안에서도 `status`(및 결정·소비 컬럼) 대입은 `_record_transition` 단 1곳이다 — 튜플 언패킹·setattr 우회까지 포함"""
+    hits = [
+        (rel, attr, _enclosing_function(tree, line))
+        for rel, tree in _approval_sources().items()
+        for attr, line, _owner in _assigned_attributes(tree)
+        if attr == "status" or attr in DECISION_COLUMNS
+    ]
+    assert hits, "스캔이 공회전하고 있다"
+    assert {(rel, fn) for rel, _attr, fn in hits} <= {
+        ("modules/approvals/service.py", "_record_transition")
+    }, hits
