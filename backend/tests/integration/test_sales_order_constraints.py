@@ -72,8 +72,14 @@ def base() -> dict[str, Any]:
         "incoterm_year": None,
         "fx_rate": None,
         "fx_rate_date": None,
+        "credit_verdict": None,
+        "credit_approval_id": None,
+        "pi_gate_verdict": None,
     }
 
+
+#: M10 확정 증적 — 확정 시각이 있는 행은 두 판정 값이 함께 있어야 한다(CHECK `*_iff_confirmed`).
+EVIDENCE: dict[str, Any] = {"credit_verdict": "NOT_MANAGED", "pi_gate_verdict": "NOT_APPLICABLE"}
 
 #: 동결(확정)에 필요한 서류 값 전부 — 확정 시각을 넣는 케이스가 덮어쓴다.
 FROZEN_TERMS: dict[str, Any] = {
@@ -92,7 +98,8 @@ _COLUMNS = (
     "doc_number, doc_date, status, currency, assignee_id, buyer_partner_id, buyer_name,"
     " dest_market_code, qt_id, pi_id, buyer_po_no, buyer_po_no_key, confirmed_at, payment_type,"
     " advance_pct_bp, balance_anchor, balance_days, incoterm_code, incoterm_place, incoterm_year,"
-    " fx_rate, fx_rate_date, copied_from_id, total_amount, last_line_no"
+    " fx_rate, fx_rate_date, copied_from_id, total_amount, last_line_no, credit_verdict,"
+    " credit_approval_id, pi_gate_verdict"
 )
 
 
@@ -164,7 +171,7 @@ _CHECK_CASES: list[tuple[str, dict[str, Any], str]] = [
     # 동결 완결성 — 확정 시각이 있으면 서류 필수 값이 모두 있어야 한다
     (
         "confirmed_without_terms",
-        {"status": "CONFIRMED", "confirmed_at": "2026-09-02T00:00:00+00:00"},
+        {"status": "CONFIRMED", "confirmed_at": "2026-09-02T00:00:00+00:00", **EVIDENCE},
         "ck_sales_orders_frozen_complete",
     ),
     (
@@ -172,6 +179,7 @@ _CHECK_CASES: list[tuple[str, dict[str, Any], str]] = [
         {
             "status": "CONFIRMED",
             "confirmed_at": "2026-09-02T00:00:00+00:00",
+            **EVIDENCE,
             **{**FROZEN_TERMS, "fx_rate": None, "fx_rate_date": None},
         },
         "ck_sales_orders_frozen_complete",
@@ -193,6 +201,7 @@ def test_a_valid_received_so_inserts_and_confirmed_states_need_a_complete_freeze
                 "doc_number": "SO-2026-0002",
                 "status": "CONFIRMED",
                 "confirmed_at": "2026-09-02T00:00:00+00:00",
+                **EVIDENCE,
             },
         )
         for number, status, confirmed in (
@@ -203,6 +212,7 @@ def test_a_valid_received_so_inserts_and_confirmed_states_need_a_complete_freeze
             values = {**base, "doc_number": number, "status": status, "confirmed_at": confirmed}
             if confirmed:
                 values.update(FROZEN_TERMS)
+                values.update(EVIDENCE)
             _insert(connection, **values)
 
 
@@ -229,6 +239,7 @@ def test_a_confirmed_so_cannot_be_rewound_to_received(base: dict[str, Any]) -> N
             **{
                 **base,
                 **FROZEN_TERMS,
+                **EVIDENCE,
                 "status": "CONFIRMED",
                 "confirmed_at": "2026-09-02T00:00:00+00:00",
             },

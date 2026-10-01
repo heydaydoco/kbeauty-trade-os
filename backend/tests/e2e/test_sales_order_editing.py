@@ -652,7 +652,7 @@ def test_cancelling_a_confirmed_so_returns_the_quotation_from_converted(trade: T
     qt = issued_quotation(trade)
     so = create_so_from_qt_via_api(trade, qt)
     _exec(
-        "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now() WHERE id = :i",
+        "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now(), credit_verdict = 'NOT_MANAGED', pi_gate_verdict = 'NOT_APPLICABLE' WHERE id = :i",
         i=so["id"],
     )
     with unit_of_work() as uow:
@@ -675,7 +675,7 @@ def test_cancelling_a_confirmed_so_returns_the_quotation_from_converted(trade: T
     qt2 = issued_quotation(trade)
     so2 = create_so_from_qt_via_api(trade, qt2)
     _exec(
-        "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now() WHERE id = :i",
+        "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now(), credit_verdict = 'NOT_MANAGED', pi_gate_verdict = 'NOT_APPLICABLE' WHERE id = :i",
         i=so2["id"],
     )
     with unit_of_work() as uow:
@@ -919,7 +919,7 @@ def test_frozen_so_returns_frozen_before_revealing_a_duplicate_po(trade: TestCli
         )
         if status == "CONFIRMED":
             _exec(
-                "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now() WHERE id = :i",
+                "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now(), credit_verdict = 'NOT_MANAGED', pi_gate_verdict = 'NOT_APPLICABLE' WHERE id = :i",
                 i=other["id"],
             )
         else:

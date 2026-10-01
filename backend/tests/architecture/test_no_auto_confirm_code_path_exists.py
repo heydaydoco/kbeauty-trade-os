@@ -69,6 +69,8 @@ REGISTRY: tuple[Entry, ...] = (
                 "modules/trade_docs/transition.py",
                 "modules/trade_chain/lifecycle.py",
                 "modules/trade_chain/chain_ops.py",
+                # PR-12a — SO 확정(동결 액션 엣지 RECEIVED→CONFIRMED)의 유일한 호출처
+                "modules/trade_chain/confirm.py",
                 # PR-6a — 자동 전이 2종: 입금 수렴(테스트 호출, PR-10이 배선)·만료 스윕(잡 본체, 두 엣지뿐)
                 "modules/trade_chain/payment_status.py",
                 "modules/trade_chain/expiry_sweep.py",
@@ -277,8 +279,172 @@ REGISTRY: tuple[Entry, ...] = (
         forbid_module_import=False,  # 정의 모듈이 요청·소비·무효도 품는다 — 언급 검사로 충분(임포트 경계는 test_approval_contract가 따로 고정)
         notes="**사람 결정 통로(승인·반려·회수)** — 라우터 1곳+실 사용자 행위자 필수. 호출처 집합 = DECIDE_CALLERS(P7 Slack 어댑터가 더할 때 ADR 동반)",
     ),
-    # request_approval·consume_approval·void_for_target·note_bypass_attempt: **호출자가 생기는 PR-12가 엔트리를 더한다** — 호출처가 없는 지금 등록하면 "죽은 등록 금지" 자기검사가
-    # 실패한다. PR-9a~PR-11 동안의 부재는 test_approval_contract(`test_no_domain_module_calls_the_system_channels_yet`·소비 접점 PENDING 장부)가 고정한다.
+    # S3-1 PR-12a — 확정·승인 요청·승인 시스템 통로 4종(호출자가 생긴 이 PR이 엔트리를 더한다). 확정은 **사람 1클릭**이다: 호출처는 라우터 1곳뿐이고, 스케줄러·CLI·임포트·이관·알림·아웃박스·시드·
+    # 인테이크·보드(벌크 확정은 PR-15가 같은 함수를 건별 독립 트랜잭션으로 부르며 그 PR이 ADR과 함께 이 엔트리를 갱신한다)·승인·게이트·여신·입금 어디서도 부르거나 임포트하지 않는다.
+    Entry(
+        name="confirm_sales_order",
+        defined_in="app.modules.trade_chain.confirm",
+        allowed_files=frozenset(
+            {"modules/trade_chain/confirm.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "identity",
+                "idempotency",
+                "readiness",
+                "policies",
+                "order_intake",
+                "order_board",
+                "approvals",
+                "gates",
+                "credit",
+                "payments",
+                "sales_orders",
+                "quotations",
+                "proforma_invoices",
+                "purchase_orders",
+            }
+        ),
+        notes="**SO 확정 = 게이트·승인 소비·동결**(§15 L3 4금 — 자동 확정 금지) — 라우터 1곳+행위자 필수+멱등 키. `force`·`skip`·`bypass`·ADMIN 분기 없음. 스케줄러·CLI·임포트·인테이크·보드 경로에서 import·언급 0",
+    ),
+    Entry(
+        name="request_credit_approval",
+        defined_in="app.modules.trade_chain.approval_requests",
+        allowed_files=frozenset(
+            {"modules/trade_chain/approval_requests.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "identity",
+                "idempotency",
+                "order_intake",
+                "order_board",
+                "approvals",
+                "gates",
+                "credit",
+                "payments",
+                "sales_orders",
+            }
+        ),
+        notes="**여신 초과 승인 요청 = 사람의 명시 동작**(확정 시도의 부작용이 아니다) — 라우터 1곳+행위자 필수+멱등 키. 자동 요청 생성 경로 0",
+    ),
+    Entry(
+        name="consume_approval",
+        defined_in="app.modules.approvals.service",
+        allowed_files=frozenset({"modules/approvals/service.py", "modules/trade_chain/confirm.py"}),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "order_intake",
+                "order_board",
+                "sales_orders",
+                "gates",
+                "credit",
+                "payments",
+            }
+        ),
+        requires_actor=False,  # `actor_user_id`(실 사용자 id, None 불가 — test_approval_contract가 고정)
+        forbid_module_import=False,  # 정의 모듈이 요청·결정·무효도 품는다 — 언급 검사로 충분
+        notes="**승인 1회 소비**(APPROVED→CONSUMED) — 소비 호출처는 확정 통로 1곳뿐(소비 접점 스캔의 짝). 승인을 부여하지 않고 좁히기만 한다",
+    ),
+    Entry(
+        name="request_approval",
+        defined_in="app.modules.approvals.service",
+        allowed_files=frozenset(
+            {"modules/approvals/service.py", "modules/trade_chain/approval_requests.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "order_intake",
+                "order_board",
+                "sales_orders",
+                "gates",
+                "credit",
+                "payments",
+            }
+        ),
+        forbid_module_import=False,
+        notes="승인 요청 생성 — 승인 요청 엔드포인트 모듈 1곳만(자동 요청 생성 경로 0 — 확정 서비스·잡·이벤트 핸들러에서 호출하지 않는다)",
+    ),
+    Entry(
+        name="void_for_target",
+        defined_in="app.modules.approvals.service",
+        allowed_files=frozenset(
+            {"modules/approvals/service.py", "modules/sales_orders/service.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "order_intake",
+                "order_board",
+                "gates",
+                "credit",
+                "payments",
+            }
+        ),
+        requires_actor=False,
+        forbid_module_import=False,
+        notes="열린 승인 무효화(SO 편집·취소 훅) — SO 서비스의 훅 함수 1곳(`void_open_approval_on_input_change`)만 부른다. 승인을 부여하지 않고 좁히기만 한다",
+    ),
+    Entry(
+        name="note_bypass_attempt",
+        defined_in="app.modules.approvals.service",
+        allowed_files=frozenset({"modules/approvals/service.py", "modules/trade_chain/confirm.py"}),
+        forbidden_modules=frozenset(
+            {"platform", "imports", "handover", "notifications", "seeds", "order_board"}
+        ),
+        requires_actor=False,
+        forbid_module_import=False,
+        notes="승인 필요·승인 없음 상태의 확정 시도(우회 시도)를 audit에 남긴다 — 확정 통로 1곳",
+    ),
     # PR-11a — 게이트 override(사람 결정 통로): 부여·철회는 라우터 1곳+실 사용자 행위자 필수. 스케줄러·CLI·임포트·이관·알림·인테이크·보드 어디서도 호출·임포트하지 않는다(자동·벌크 부여 경로 0).
     Entry(
         name="grant_gate_override",

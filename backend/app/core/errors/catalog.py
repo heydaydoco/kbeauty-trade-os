@@ -381,6 +381,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "접수 상태가 아닌 수주는 예외 통과를 부여하거나 철회할 수 없습니다. 수주의 현재 상태를 확인해 주세요.",
     ),
+    ErrorCode.TRADE_CHAIN_CONFIRM_GATE_BLOCKED: ErrorSpec(
+        409,
+        "해소되지 않은 게이트가 있어 수주를 확정할 수 없습니다. 아래 항목(승인 필요·입금 확인·가격·최소수량·준비도 등)을 해소한 뒤 다시 확정해 주세요.",
+    ),
     ErrorCode.IDEMPOTENCY_KEY_CONFLICT: ErrorSpec(
         409,
         "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",

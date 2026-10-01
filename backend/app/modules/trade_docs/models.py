@@ -130,16 +130,31 @@ class ProformaInvoiceStatusLog(StatusLogColumns, PkMixin, Base):
 
 
 class SalesOrderStatusLog(StatusLogColumns, PkMixin, Base):
-    """SO 상태 변경 이력 — 불변. `approval_id`(확정 행이 소비한 승인 참조)는 승인 코어 뒤 확정 배선 마이그레이션(M10)이 더한다."""
+    """SO 상태 변경 이력 — 불변. `approval_id`는 확정 행이 소비한 승인 참조다(승인 코어 뒤 확정 배선 마이그레이션 M10이 더했다 — X-49)."""
 
     __tablename__ = "sales_order_status_log"
 
     sales_order_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=False
     )
+    #: 이 전이(RECEIVED→CONFIRMED)가 소비한 여신 초과 승인 — 승인 없이 확정된 행·그 밖의 전이는 NULL. 1승인=1이력행(부분 유니크).
+    approval_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("approvals.id", ondelete="RESTRICT"), nullable=True
+    )
 
     __table_args__ = (
         *status_log_checks(DocKind.SALES_ORDER),
+        # 승인 참조는 확정 전이 행에만 — 다른 전이가 승인을 소비했다고 기록할 수 없다.
+        CheckConstraint(
+            "approval_id IS NULL OR (from_status = 'RECEIVED' AND to_status = 'CONFIRMED')",
+            name="approval_only_on_confirm",
+        ),
+        Index(
+            "uq_sales_order_status_log_approval_id",
+            "approval_id",
+            unique=True,
+            postgresql_where=text("approval_id IS NOT NULL"),
+        ),
         Index(
             "uq_sales_order_status_log_sales_order_id_birth",
             "sales_order_id",

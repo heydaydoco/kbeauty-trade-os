@@ -72,6 +72,10 @@ def _transition(so_id: int, to: str, **kwargs: Any) -> str:
     with unit_of_work() as uow:
         row = uow.session.get(SalesOrder, so_id)
         assert row is not None
+        if kwargs.get("via_freeze_action") and row.status == "RECEIVED":
+            # M10 — 동결 시각은 확정 증적(여신·PI 판정)과 같은 flush에 쓰여야 CHECK를 지킨다(실제 확정 통로는 `confirm_sales_order`가 채운다).
+            row.credit_verdict = "NOT_MANAGED"
+            row.pi_gate_verdict = "NOT_APPLICABLE"
         return record_transition(uow.session, row, to, **kwargs)
 
 
@@ -173,7 +177,7 @@ def test_cancel_and_hold_require_a_reason(to: str) -> None:
 
 
 def test_the_freeze_action_sets_confirmed_at_and_needs_a_complete_document() -> None:
-    """동결 액션(RECEIVED→CONFIRMED)은 같은 flush에 confirmed_at을 채운다 · 결제조건·환율이 빈 SO는 동결 완결성 CHECK가 거부한다(서비스 선검사는 PR-12)"""
+    """동결 액션(RECEIVED→CONFIRMED)은 같은 flush에 confirmed_at을 채운다 · 결제조건·환율이 빈 SO는 동결 완결성 CHECK가 거부한다(서비스 선검사는 `confirm_sales_order` — PR-12a)"""
     actor = create_user("so-freeze@example.com", roles=(RoleCode.TRADE,))
     ok = raw_so("RECEIVED")
     assert (

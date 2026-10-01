@@ -9,7 +9,10 @@
 ■ **중복 바이어 PO 0건은 DB 부분 유니크가 보증한다** — `(buyer_partner_id, buyer_po_no_key)` 살아 있고 취소 아닌 행 한정.
   취소 SO는 번호를 점유하지 않는다(정정 = 취소+신규 — ADR-05). PI→SO도 활성 1:1 부분 유니크다.
 ■ 라인은 Version 믹스인이 없고 헤더 version이 직렬화한다. 출처 열(`qt_line_id`·`pi_line_id`)은 한 줄에 하나만(`num_nonnulls <= 1`).
-■ 확정 증적 3열·`credit_*`·`approval_id`는 승인 코어 뒤 "확정 배선" 마이그레이션(M10, PR-12)이 더한다 — 여기엔 없다.
+■ 확정 증적 3열(`credit_verdict`·`credit_approval_id`·`pi_gate_verdict`)은 승인 코어 뒤 "확정 배선" 마이그레이션(M10, PR-12a)이 더했다 —
+  **SO 행 자체가 "게이트를 통과했다"는 사실을 증명**하고 DB CHECK가 게이트 없는 확정을 구조적으로 거부한다(`confirmed_at` ⇔ 두 판정 값, 승인 판정 ⇔ 승인 id).
+  상세 증적(비PASS 결과·사용한 override·정책 출처)의 원천은 `gate_evaluations`의 CONFIRMED 행 하나다(통합 X-11 — SO에는 3열만).
+  1승인=1SO는 `uq_sales_orders_credit_approval_id`(부분 유니크)가 DB에서 보장한다(승인 코어의 CONSUMED 종결과 이중 방어).
 """
 
 from __future__ import annotations
@@ -52,6 +55,33 @@ from app.modules.trade_docs.mixins import (
 
 _DEAD = ", ".join(f"'{s}'" for s in DEAD_STATUSES)
 
+#: 확정 증적 — 여신 판정 저장값 3종(EXCEEDED·UNEVALUABLE은 확정에 도달할 수 없어 저장 불가). DB CHECK와 확정 통로가 같은 집합을 쓴다.
+CREDIT_VERDICT_WITHIN_LIMIT = "WITHIN_LIMIT"
+CREDIT_VERDICT_NOT_MANAGED = "NOT_MANAGED"
+CREDIT_VERDICT_APPROVED = "APPROVED"
+CREDIT_VERDICTS: tuple[str, ...] = (
+    CREDIT_VERDICT_WITHIN_LIMIT,
+    CREDIT_VERDICT_NOT_MANAGED,
+    CREDIT_VERDICT_APPROVED,
+)
+#: 확정 증적 — PI 입금 게이트 판정 저장값 5종(통과 4 + 사유 override 통과 1). 미충족 BLOCK은 확정에 도달할 수 없어 저장 불가.
+PI_GATE_PASS = "PASS"
+PI_GATE_NOT_APPLICABLE = "NOT_APPLICABLE"
+PI_GATE_WARN = "WARN"
+PI_GATE_OVERRIDDEN = "OVERRIDDEN"
+PI_GATE_SKIPPED_OFF = "SKIPPED_OFF"
+PI_GATE_VERDICTS: tuple[str, ...] = (
+    PI_GATE_PASS,
+    PI_GATE_NOT_APPLICABLE,
+    PI_GATE_WARN,
+    PI_GATE_OVERRIDDEN,
+    PI_GATE_SKIPPED_OFF,
+)
+
+
+def _in_list(values: tuple[str, ...]) -> str:
+    return ", ".join(f"'{v}'" for v in values)
+
 
 class SalesOrder(
     SalesHeaderMixin, PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base
@@ -74,6 +104,12 @@ class SalesOrder(
     buyer_po_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     #: 동결(확정) 시각 — 확정 전이 통로(PR-12)만 대입한다. SYSTEM.
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: 확정 증적(SYSTEM — 확정 트랜잭션에서만 채워지고 이후 불변): 여신 판정·소비한 승인·PI 입금 게이트 판정. 접수 SO는 전부 NULL.
+    credit_verdict: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    credit_approval_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("approvals.id", ondelete="RESTRICT"), nullable=True
+    )
+    pi_gate_verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     __table_args__ = (
         *header_common_checks(DocKind.SALES_ORDER),
@@ -84,6 +120,27 @@ class SalesOrder(
             " 'COMPLETED') AND confirmed_at IS NOT NULL)"
             " OR status IN ('ON_HOLD', 'CANCELLED')",
             name="confirmed_at_consistent",
+        ),
+        # 확정 증적(M10) — 게이트 통과 기록 없이 `confirmed_at`만 채우는 원시 UPDATE·잘못된 신규 경로를 DB가 거부한다(§17.5 "CHECK 가능한 불변식은 CHECK").
+        # `(… IS NULL) = (… IS NULL)`·`IS TRUE` 형태로 NULL이 비교를 통과하는 함정을 피한다.
+        CheckConstraint(
+            f"credit_verdict IS NULL OR credit_verdict IN ({_in_list(CREDIT_VERDICTS)})",
+            name="credit_verdict_valid",
+        ),
+        CheckConstraint(
+            f"pi_gate_verdict IS NULL OR pi_gate_verdict IN ({_in_list(PI_GATE_VERDICTS)})",
+            name="pi_gate_verdict_valid",
+        ),
+        CheckConstraint(
+            "(confirmed_at IS NULL) = (credit_verdict IS NULL)", name="credit_verdict_iff_confirmed"
+        ),
+        CheckConstraint(
+            "(confirmed_at IS NULL) = (pi_gate_verdict IS NULL)",
+            name="pi_gate_verdict_iff_confirmed",
+        ),
+        CheckConstraint(
+            f"((credit_verdict = '{CREDIT_VERDICT_APPROVED}') IS TRUE) = (credit_approval_id IS NOT NULL)",
+            name="credit_approval_iff_approved",
         ),
         CheckConstraint("btrim(buyer_name) <> ''", name="buyer_name_not_blank"),
         CheckConstraint("pi_id IS NULL OR qt_id IS NOT NULL", name="pi_requires_qt"),
@@ -126,6 +183,22 @@ class SalesOrder(
             unique=True,
             postgresql_where=text(
                 f"deleted_at IS NULL AND copied_from_id IS NOT NULL AND status NOT IN ({_DEAD})"
+            ),
+        ),
+        # 1승인=1SO — 같은 승인으로 다른 SO를 확정하는 재사용을 DB가 거부한다(승인 코어의 CONSUMED 종결과 이중 방어).
+        Index(
+            "uq_sales_orders_credit_approval_id",
+            "credit_approval_id",
+            unique=True,
+            postgresql_where=text("credit_approval_id IS NOT NULL"),
+        ),
+        # 여신 노출 산정(`credit.exposure.open_orders_stmt`)의 조회 축 — 거래처별 미결 확정 SO.
+        Index(
+            "ix_sales_orders_open_exposure",
+            "buyer_partner_id",
+            postgresql_where=text(
+                "confirmed_at IS NOT NULL AND deleted_at IS NULL"
+                " AND status NOT IN ('COMPLETED', 'CANCELLED')"
             ),
         ),
         Index("ix_sales_orders_qt_id", "qt_id"),

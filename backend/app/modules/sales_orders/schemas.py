@@ -177,6 +177,10 @@ class SalesOrderSummary(BaseModel):
     assignee_id: int
     copied_from_id: int | None
     confirmed_at: datetime | None
+    #: 확정 증적 — 접수 SO는 None. 여신 판정(WITHIN_LIMIT·NOT_MANAGED·APPROVED)·소비한 승인 id·PI 입금 게이트 판정(PASS·NOT_APPLICABLE·WARN·OVERRIDDEN·SKIPPED_OFF).
+    credit_verdict: str | None
+    credit_approval_id: int | None
+    pi_gate_verdict: str | None
     version: int
     created_at: datetime
 

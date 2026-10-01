@@ -37,6 +37,8 @@ SCANNED_MODULES = {"gates", "payments"}
 SCANNED_FILES = {
     "modules/trade_chain/gate_evaluators.py",
     "modules/trade_chain/gate_flow.py",
+    # PR-12a — 확정 통로도 통과 판정을 복제하지 않는다(`clearance`의 정산 `Settlement`·결과 코드 매핑만 쓴다)
+    "modules/trade_chain/confirm.py",
 }
 
 
@@ -316,12 +318,12 @@ def test_the_override_request_schema_is_strict() -> None:
 
 # ── ⑦ 증거 스냅샷 기록은 확정 통로 전 호출처가 없다 ───────────────────────────────
 
-#: `record_evaluation` 호출처 장부 — **PR-12가 확정 통로(`trade_chain/confirm.py`)를 더하며 이 집합과 짝으로 갱신한다**. 조회·override 경로는 증거 스냅샷을 쓰지 않는다(조회 부작용 금지).
-RECORD_EVALUATION_CALLERS: set[str] = set()
+#: `record_evaluation` 호출처 장부 — 확정 통로(`trade_chain/confirm.py`, PR-12a) 하나뿐이다. 조회·override 경로는 증거 스냅샷을 쓰지 않는다(조회 부작용 금지).
+RECORD_EVALUATION_CALLERS: set[str] = {"modules/trade_chain/confirm.py"}
 
 
-def test_record_evaluation_has_no_caller_before_the_confirm_wiring() -> None:
-    """PR-11a 시점에 `gates.service.record_evaluation`을 부르는 코드가 없다(확정 시도만 기록한다 — PR-12). 조회·override 오케스트레이터가 증거를 쓰는 회귀를 막는다"""
+def test_record_evaluation_is_called_only_from_the_confirm_channel() -> None:
+    """`gates.service.record_evaluation`의 호출처는 확정 통로(`confirm.py`) 하나뿐이다(확정 시도만 기록한다). 조회·override 오케스트레이터가 증거를 쓰는 회귀를 막는다"""
     callers = {
         rel for rel, tree in app_sources().items() if "record_evaluation" in called_names(tree)
     }

@@ -14,9 +14,8 @@
 잠금 순서: 멱등 → 바이어(KEY SHARE) → QT(id 오름차순) → 라인 → 채번(마지막).
 ■ SO 전이(보류·재개·취소) — `lock_chain`(QT→PI→SO)+version 대조 후 `record_transition`. **재개 목표는 `confirmed_at`이 원천**이다(NULL=직전 RECEIVED,
   NOT NULL=직전 CONFIRMED — 목표가 어긋나면 409 RESUME_TARGET_MISMATCH, 재개는 게이트를 다시 평가하지 않는다). 취소는 순서를 고정한다:
-  잠금 → 상태 검사(RECEIVED·CONFIRMED·ON_HOLD) → 살아 있는 후속 검사(역순 취소) → [열린 승인 철회 — 승인 코어(PR-9)·소비 훅(PR-12)이 이 자리에
-  들어온다] → `AllocationPort.on_cancelled` → `record_transition(CANCELLED)` → 부모 QT 수렴(`converge_parent`). 어느 단계든 실패하면 전체 롤백이다.
-  **확정(`confirm`)은 이 파일에 없다**(PR-12) — RECEIVED→CONFIRMED는 동결 액션 엣지라 이 통로로 못 넘는다.
+  잠금 → 상태 검사(RECEIVED·CONFIRMED·ON_HOLD) → 살아 있는 후속 검사(역순 취소) → 열린 승인 무효화(`void_for_target` 훅 — PR-12a) → `AllocationPort.on_cancelled` → `record_transition(CANCELLED)` → 부모 QT 수렴(`converge_parent`). 어느 단계든 실패하면 전체 롤백이다.
+  **확정은 이 파일에 없다**(`trade_chain/confirm.py` — PR-12a) — RECEIVED→CONFIRMED는 동결 액션 엣지라 이 통로로 못 넘는다.
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, VersionConflictError
 from app.core.time import today_kst
+from app.modules.approvals.machine import VoidReasonCode
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.partners import service as partners
@@ -357,7 +357,11 @@ def _cancel_sales_order(
         raise AppError(
             ErrorCode.TRADE_DOCS_CANCEL_SUCCESSOR_ALIVE, detail={"successors": successors}
         )
-    # (승인 코어 PR-9·소비 훅 PR-12) 열린 승인 요청 철회 — 이미 결정된(소비된) 승인은 건드리지 않는다.
+    # 열린(요청됨·승인됨) 여신 초과 승인 무효화(TARGET_CANCELLED) — 이미 소비된 승인은 CONSUMED 종결이라 건드리지 않는다.
+    # 잠금 순서: 사슬(QT→PI→SO)을 이미 잡았다 → approvals (7). 전표 취소가 실패하면 이 무효화도 같은 트랜잭션이라 함께 롤백된다.
+    sales_orders.void_open_approval_on_input_change(
+        session, so_id=row.id, actor_id=actor.id, reason_code=VoidReasonCode.TARGET_CANCELLED
+    )
     get_allocation_port().on_cancelled(session, row)  # P3 기본: NOT_IMPLEMENTED — 예외면 전체 롤백
     record_transition(
         session, row, "CANCELLED", actor_user_id=actor.id, reason=reason, automatic=False

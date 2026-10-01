@@ -51,3 +51,5 @@ class StatusLogOut(BaseModel):
     actor_user_id: int | None
     actor_name: str | None
     automatic: bool
+    #: 확정 전이가 소비한 승인(SO 상태이력만 — 그 밖의 전표·전이는 None).
+    approval_id: int | None = None

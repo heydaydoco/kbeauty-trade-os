@@ -71,7 +71,10 @@ def test_so_field_policy_pins() -> None:
         assert classify("sales_orders", column) is ColumnClass.CONTENT, column
     assert columns_of("sales_orders", ColumnClass.FREE) == {"internal_note", "assignee_id"}
     assert columns_of("sales_order_lines", ColumnClass.FREE) == frozenset()
-    for column in ("confirmed_at", "status", "doc_number", "version"):
+    for column in (
+        "confirmed_at", "status", "doc_number", "version",
+        "credit_verdict", "credit_approval_id", "pi_gate_verdict",
+    ):  # fmt: skip
         assert classify("sales_orders", column) is ColumnClass.SYSTEM, column
     for column in ("qt_line_id", "pi_line_id", "so_id"):
         assert classify("sales_order_lines", column) is ColumnClass.ORIGIN, column
@@ -99,6 +102,15 @@ def test_so_request_schemas_forbid_extra_fields_and_carry_no_server_owned_names(
         "qt_id",
         "pi_id",
         "content_rev",
+        # M10 확정 증적·우회 표식 — 요청 본문으로 확정 판정·승인·게이트를 지정하거나 건너뛸 수 없다(PR-12a)
+        "credit_verdict",
+        "credit_approval_id",
+        "pi_gate_verdict",
+        "approval_id",
+        "force",
+        "skip",
+        "bypass",
+        "override",
     }
     checked: set[type] = set()
     for module in (so_schemas, chain_router):
@@ -112,14 +124,18 @@ def test_so_request_schemas_forbid_extra_fields_and_carry_no_server_owned_names(
                     set(obj.model_fields) & forbidden,
                 )
                 checked.add(obj)
-    # 참조 생성·편집·메타 편집·참조 라인·라인 추가·라인 수정·전이 7종
-    assert len(checked) == 7
+    # 참조 생성·편집·메타 편집·참조 라인·라인 추가·라인 수정·전이 7종 + 확정·승인 요청 2종(PR-12a — 라우터 네임스페이스로 재노출된 `trade_chain/schemas`)
+    assert len(checked) == 9
+    assert {c.__name__ for c in checked} >= {
+        "SalesOrderConfirmRequest",
+        "SalesOrderApprovalRequest",
+    }
     assert chain_router.SalesOrderTransitionRequest.model_config.get("extra") == "forbid"
     assert not set(chain_router.SalesOrderTransitionRequest.model_fields) & forbidden
 
 
-def test_so_routes_are_bounded_no_create_no_document_delete_no_confirm() -> None:
-    """SO 표면 고정 — 직접 POST /sales-orders 없음(생성은 참조 생성·인테이크 확정 착지뿐)·문서 DELETE 없음(라인 제외만)·**확정 경로 없음(PR-12)**·게이트 3경로(PR-11a)"""
+def test_so_routes_are_bounded_no_create_no_document_delete() -> None:
+    """SO 표면 고정 — 직접 POST /sales-orders 없음(생성은 참조 생성·인테이크 확정 착지뿐)·문서 DELETE 없음(라인 제외만)·게이트 3경로(PR-11a)·**확정·승인 요청 2경로(PR-12a)**"""
     from app.main import app
 
     routes = {
@@ -130,8 +146,12 @@ def test_so_routes_are_bounded_no_create_no_document_delete_no_confirm() -> None
     }
     assert ("POST", "/api/v1/sales-orders") not in routes
     assert {m for m, p in routes if p == "/api/v1/sales-orders/{so_id}"} == {"GET", "PATCH"}
-    assert not [p for _, p in routes if "confirm" in p or "approv" in p]
-    # PR-11a: 게이트 판정 조회·override 부여·철회 3경로만 있다 — 확정·승인 요청 경로는 PR-12
+    # PR-12a: 확정(`/confirm`)·여신 초과 승인 요청(`/approval-requests`) — 확정 통로는 이 1경로뿐이다(상태 대입 `PATCH`·범용 전이로는 못 넘는다)
+    assert {p for _, p in routes if "confirm" in p or "approv" in p} == {
+        "/api/v1/sales-orders/{so_id}/confirm",
+        "/api/v1/sales-orders/{so_id}/approval-requests",
+    }
+    # PR-11a: 게이트 판정 조회·override 부여·철회 3경로
     assert {p for _, p in routes if "gate" in p} == {
         "/api/v1/sales-orders/{so_id}/gates",
         "/api/v1/sales-orders/{so_id}/gate-overrides",
@@ -148,6 +168,8 @@ def test_so_routes_are_bounded_no_create_no_document_delete_no_confirm() -> None
         ("PATCH", "/api/v1/sales-orders/{so_id}/lines/{line_id}"),
         ("DELETE", "/api/v1/sales-orders/{so_id}/lines/{line_id}"),
         ("POST", "/api/v1/sales-orders/{so_id}/transitions"),
+        ("POST", "/api/v1/sales-orders/{so_id}/confirm"),
+        ("POST", "/api/v1/sales-orders/{so_id}/approval-requests"),
         ("GET", "/api/v1/sales-orders/{so_id}/gates"),
         ("POST", "/api/v1/sales-orders/{so_id}/gate-overrides"),
         ("POST", "/api/v1/sales-orders/{so_id}/gate-overrides/revoke"),
@@ -164,6 +186,8 @@ def test_so_routes_require_a_trade_role_and_creation_and_transition_an_idempoten
         "create_sales_order_from_quotation",
         "create_sales_order_from_proforma_invoice",
         "transition_sales_order",
+        "confirm_sales_order",
+        "request_sales_order_credit_approval",
     ):
         function = next(
             n for n in ast.walk(chain_router) if isinstance(n, ast.FunctionDef) and n.name == name

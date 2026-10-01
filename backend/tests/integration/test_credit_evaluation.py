@@ -169,7 +169,9 @@ def test_splitting_an_order_does_not_escape_the_limit() -> None:
     assert evaluate(first).verdict is CreditVerdict.WITHIN_LIMIT
     with unit_of_work() as uow:  # 첫 번째 확정(확정 통로의 흉내)
         uow.session.execute(
-            text("UPDATE sales_orders SET status='CONFIRMED', confirmed_at = now() WHERE id = :i"),
+            text(
+                "UPDATE sales_orders SET status='CONFIRMED', confirmed_at = now(), credit_verdict = 'NOT_MANAGED', pi_gate_verdict = 'NOT_APPLICABLE' WHERE id = :i"
+            ),
             {"i": first},
         )
     second = evaluate(raw_open_so(buyer, status="RECEIVED", total=60_000))

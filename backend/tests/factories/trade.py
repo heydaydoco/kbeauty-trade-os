@@ -621,6 +621,11 @@ def create_direct_so(
     return body
 
 
+#: 원시 SQL로 "확정된" SO를 만드는 픽스처가 함께 채워야 하는 증적(M10 CHECK) — `SET status='CONFIRMED', confirmed_at=now()` 뒤에 붙인다.
+CONFIRMED_EVIDENCE = {"credit_verdict": "NOT_MANAGED", "pi_gate_verdict": "NOT_APPLICABLE"}
+CONFIRMED_EVIDENCE_SQL = "credit_verdict = 'NOT_MANAGED', pi_gate_verdict = 'NOT_APPLICABLE'"
+
+
 def raw_so(
     status: str = "RECEIVED",
     *,
@@ -689,6 +694,9 @@ def raw_so(
         "buyer_po_no": buyer_po_no,
         "buyer_po_no_key": buyer_po_no_key,
         "confirmed_at": "2026-09-02T00:00:00+00:00" if confirmed else None,
+        # M10 — 확정 증적 3열은 확정 시각과 함께만 존재한다(DB CHECK). 원시 SQL 픽스처는 "여신 미관리·PI 비활성" 증적을 단다.
+        "credit_verdict": CONFIRMED_EVIDENCE["credit_verdict"] if confirmed else None,
+        "pi_gate_verdict": CONFIRMED_EVIDENCE["pi_gate_verdict"] if confirmed else None,
         **(_FROZEN_VALUES if complete else {}),
     }
     values.pop("buyer_address", None)

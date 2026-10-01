@@ -220,6 +220,10 @@ class ErrorCode(StrEnum):
     #: 접수(RECEIVED) 상태가 아닌 수주에는 부여·철회할 수 없다.
     GATES_OVERRIDE_ORDER_NOT_OPEN = "GATES.OVERRIDE.ORDER_NOT_OPEN"
 
+    # 수주 확정 (S3-1 PR-12a / ADR-0070)
+    #: 미해소 게이트가 있어 확정할 수 없다 — 응답 detail의 `blocked_gates[]`가 게이트별 결과·해소 방식·사유 코드를 싣는다(승인 필요·평가 불능·PI 입금 부족·가격 편차 등 전부 이 코드 하나).
+    TRADE_CHAIN_CONFIRM_GATE_BLOCKED = "TRADE_CHAIN.CONFIRM.GATE_BLOCKED"
+
     IDEMPOTENCY_KEY_CONFLICT = "COMMON.IDEMPOTENCY.KEY_CONFLICT"
     IDEMPOTENCY_KEY_REQUIRED = "COMMON.IDEMPOTENCY.KEY_REQUIRED"
 

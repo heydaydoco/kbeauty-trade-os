@@ -44,13 +44,15 @@ def test_the_scan_is_not_vacuous() -> None:
 
 
 def test_every_existing_status_log_table_has_a_registered_model_and_the_expected_shape() -> None:
-    """이력 표 ↔ STATUS_LOG_MODELS 1:1, 열은 공통 7 + 문서 FK(SO의 approval_id는 M10[PR-12]이 더한다), 감사·버전·soft delete 열 없음"""
+    """이력 표 ↔ STATUS_LOG_MODELS 1:1, 열은 공통 7 + 문서 FK(SO만 approval_id가 더 있다[M10 — PR-12a]), 감사·버전·soft delete 열 없음"""
     kinds = _existing_kinds()
     assert set(STATUS_LOG_MODELS) == set(kinds)
     for kind in kinds:
         table = Base.metadata.tables[STATUS_LOG_TABLES[kind]]
         expected = COMMON_COLUMNS | {STATUS_LOG_FK[kind]}
-        # SO의 `approval_id`(확정 행이 소비한 승인 참조)는 승인 코어 뒤 확정 배선 마이그레이션 M10(PR-12)이 ADD한다 — PR-7a에는 없다(X-49).
+        if kind is DocKind.SALES_ORDER:
+            # SO의 `approval_id`(확정 행이 소비한 승인 참조)는 승인 코어 뒤 확정 배선 마이그레이션 M10(PR-12a)이 ADD했다(X-49) — 다른 3종에는 없다.
+            expected = expected | {"approval_id"}
         assert set(table.c.keys()) == expected, kind
         assert not (
             {"version", "deleted_at", "created_by_id", "updated_by_id", "updated_at"}

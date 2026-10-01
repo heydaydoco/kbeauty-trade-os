@@ -43,6 +43,8 @@ from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.money import minor_units
 from app.core.time import today_kst, utcnow
+from app.modules.approvals import service as approvals_service
+from app.modules.approvals.machine import ApprovalType, VoidReasonCode
 from app.modules.identity.models import User
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.markets import service as markets
@@ -338,6 +340,10 @@ def _summary_body(row: SalesOrder, qt_number: str | None, pi_number: str | None)
         "assignee_id": row.assignee_id,
         "copied_from_id": row.copied_from_id,
         "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
+        # 확정 증적(M10) — 접수 SO는 전부 None. 상세 증적(비PASS 결과·사용한 override)은 `gate_evaluations` CONFIRMED 행이 원천이다.
+        "credit_verdict": row.credit_verdict,
+        "credit_approval_id": row.credit_approval_id,
+        "pi_gate_verdict": row.pi_gate_verdict,
         "version": row.version,
         "created_at": row.created_at.isoformat(),
     }
@@ -797,6 +803,7 @@ def list_status_log(*, so_id: int, offset: int, limit: int) -> tuple[list[dict[s
                 "actor_user_id": log.actor_user_id,
                 "actor_name": name,
                 "automatic": log.automatic,
+                "approval_id": log.approval_id,
             }
             for log, name in rows
         ], total
@@ -925,6 +932,28 @@ def _content_changes(row: SalesOrder, cols: dict[str, Any]) -> list[str]:
     )
 
 
+#: 승인 결속 digest(`digest.gate_input_digest`)의 입력 중 SO 헤더에서 편집할 수 있는 열 — 거래처·통화는 ORIGIN이라 편집 경로가 없다.
+#: 라인은 SKU·수량·단가·무상 표지가 입력이다(라인 추가·제외는 항상 입력 변경). 여기 없는 열(메모·담당자·PO번호·납기 등)을 고쳐도 승인은 유지된다.
+GATE_INPUT_HEADER_COLUMNS = frozenset({"fx_rate", "fx_rate_date"})
+
+
+def void_open_approval_on_input_change(
+    session: Session, *, so_id: int, actor_id: int, reason_code: VoidReasonCode
+) -> int:
+    """**편집·취소 경로의 즉시 청소 훅**(eager) — 이 SO의 열린(요청됨·승인됨) 여신 초과 승인을 같은 트랜잭션에서 무효화한다. 없으면 0.
+
+    호출자는 SO 행을 이미 `FOR UPDATE`로 잡았다(전역 잠금 순서 (5) → approvals (7)). 승인 코어의 지연 검증(결정·소비 시점 digest·통화·상한 재검증)이 훅이 빠진 경로의 백스톱이다 —
+    eager(결재함 위생·재요청 유도)+lazy(안전망) 둘 다 둔다. 승인을 **부여하지 않고 좁히기만** 한다.
+    """
+    return approvals_service.void_for_target(
+        session,
+        approval_type=ApprovalType.SO_CREDIT_EXCEEDED.value,
+        target_id=so_id,
+        actor_user_id=actor_id,
+        reason_code=reason_code,
+    )
+
+
 def update_sales_order(
     *, actor: AuthenticatedUser, so_id: int, payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -957,6 +986,11 @@ def update_sales_order(
         changed = _content_changes(row, cols)
         if changed:
             editing.assert_editable(KIND, row.status, fields=changed)
+        if GATE_INPUT_HEADER_COLUMNS & set(changed):
+            # 환율 변경은 여신 환산·노출을 바꾼다 — 열린 승인을 같은 트랜잭션에서 무효화한다(승인 후 불변).
+            void_open_approval_on_input_change(
+                session, so_id=row.id, actor_id=actor.id, reason_code=VoidReasonCode.TARGET_CHANGED
+            )
         # ★ `begin_nested()`는 진입 시 세션을 먼저 flush한다 — 변경을 **SAVEPOINT 안에서** 대입해야 유니크 경합 위반이 번역 경로로 들어온다
         #   (밖에서 대입하면 진입 flush의 IntegrityError가 세션을 깨뜨려 PendingRollbackError 500이 된다).
         with guarded_flush(
@@ -1161,6 +1195,10 @@ def add_line(*, actor: AuthenticatedUser, so_id: int, payload: dict[str, Any]) -
         editing.require_line_capacity(
             editing.count_live_lines(session, KIND, header.id, SalesOrderLine)
         )
+        # 라인 추가는 항상 게이트 입력(노출)을 바꾼다 — 열린 승인 무효화(검증이 뒤에서 실패하면 트랜잭션 전체가 롤백된다).
+        void_open_approval_on_input_change(
+            session, so_id=header.id, actor_id=actor.id, reason_code=VoidReasonCode.TARGET_CHANGED
+        )
         raw = {k: v for k, v in payload.items() if k != "version"}
         sku = require_sellable_sku(session, raw["sku_id"], KIND)  # 단종은 저장 허용(확정 시 재검사)
         is_free = bool(raw.get("is_free", False))
@@ -1225,6 +1263,7 @@ def update_line(
         editing.assert_editable(KIND, header.status)
         line = _require_line(session, header, line_id)
         raw = {k: v for k, v in payload.items() if k != "version"}
+        new_quantity = line.quantity
         if "quantity" in raw:
             if raw["quantity"] is None:
                 raise invalid("quantity", "수량을 비울 수 없습니다.")
@@ -1232,21 +1271,36 @@ def update_line(
             source_line = line.pi_line_id or line.qt_line_id
             if source_line is not None and new_quantity > line.quantity:
                 _require_source_capacity(session, header, source_line, new_quantity - line.quantity)
-            line.quantity = new_quantity
+        repriced: tuple[int, str, bool, str | None] | None = None
         if {"unit_price", "is_free", "price_reason"} & raw.keys():
-            unit, basis, free, reason = reprice(
+            repriced = reprice(
                 line,
                 header.currency,
                 unit_price=raw.get("unit_price"),
                 is_free=raw.get("is_free"),
                 price_reason=raw.get("price_reason"),
             )
-            if free != line.is_free and _duplicate_exists(
-                session, header.id, line.sku_id, free, exclude_line_id=line.id
+            if repriced[2] != line.is_free and _duplicate_exists(
+                session, header.id, line.sku_id, repriced[2], exclude_line_id=line.id
             ):
                 raise AppError(
                     ErrorCode.TRADE_DOCS_LINE_SKU_DUPLICATE, detail={"sku_id": line.sku_code}
                 )
+        # 게이트 입력(수량·단가·무상 표지)이 실제로 바뀔 때만 열린 승인을 무효화한다(납기·품번·사유 수정은 승인을 건드리지 않는다).
+        inputs_change = new_quantity != line.quantity or (
+            repriced is not None
+            and (repriced[0], repriced[2]) != (line.unit_price_amount, line.is_free)
+        )
+        if inputs_change:
+            void_open_approval_on_input_change(
+                session,
+                so_id=header.id,
+                actor_id=actor.id,
+                reason_code=VoidReasonCode.TARGET_CHANGED,
+            )
+        line.quantity = new_quantity
+        if repriced is not None:
+            unit, basis, free, reason = repriced
             line.unit_price_amount, line.price_basis = unit, basis
             line.is_free, line.price_reason = free, reason
         if "buyer_item_code" in raw:
@@ -1276,6 +1330,9 @@ def remove_line(
         header = lock_document(session, SalesOrder, so_id, expected_version=version)
         editing.assert_editable(KIND, header.status)
         line = _require_line(session, header, line_id)
+        void_open_approval_on_input_change(
+            session, so_id=header.id, actor_id=actor.id, reason_code=VoidReasonCode.TARGET_CHANGED
+        )
         line.deleted_at = utcnow()
         line.updated_by_id = actor.id
         return _finish_line_change(session, actor, header, None)
