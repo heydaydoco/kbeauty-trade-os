@@ -381,6 +381,47 @@ describe("GatePanel — override 부여 다이얼로그", () => {
   });
 });
 
+describe("GatePanel — 방어", () => {
+  it("실패(5xx) 뒤 게이트 판정을 다시 읽는다(옛 판정을 들고 있지 않게)", async () => {
+    const { calls } = open([[GRANT, "POST", () => err("COMMON.SERVER.INTERNAL", 500, "서버 오류")]]);
+    const dialog = await openGrant();
+    typeReason(dialog, "바이어와 합의한 가격입니다");
+    const before = gets(calls).length;
+    fireEvent.click(confirm(dialog));
+    await within(dialog).findByRole("alert");
+    await waitFor(() => expect(gets(calls).length).toBeGreaterThan(before));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+  });
+
+  it("오프라인 상태여도 요청을 보내 본다(paused로 다이얼로그가 갇히지 않는다)", async () => {
+    const { calls } = open([[GRANT, "POST", created]]);
+    const dialog = await openGrant();
+    typeReason(dialog, "바이어와 합의한 가격입니다");
+    act(() => {
+      window.dispatchEvent(new Event("offline"));
+    });
+    fireEvent.click(confirm(dialog));
+    await waitFor(() => expect(posts(calls)).toHaveLength(1));
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+  });
+
+  it("crypto.randomUUID가 던져도 폴백 키로 요청한다", async () => {
+    const { calls } = open([[GRANT, "POST", created]]);
+    const dialog = await openGrant();
+    typeReason(dialog, "바이어와 합의한 가격입니다");
+    vi.stubGlobal("crypto", {
+      randomUUID: () => {
+        throw new Error("비보안 컨텍스트");
+      },
+    });
+    fireEvent.click(confirm(dialog));
+    await waitFor(() => expect(posts(calls)).toHaveLength(1));
+    expect(posts(calls)[0]?.headers["Idempotency-Key"]).toMatch(/^gate-/);
+  });
+});
+
 describe("GatePanel — 오류 한국어화(영문 코드·detail 비노출)", () => {
   async function submitWith(response: () => Response, extra: { me?: unknown } = {}) {
     const stub = open([[GRANT, "POST", response]], extra);
