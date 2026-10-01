@@ -11,7 +11,7 @@
 ■ 라인은 Version 믹스인이 없고 헤더 version이 직렬화한다. 출처 열(`qt_line_id`·`pi_line_id`)은 한 줄에 하나만(`num_nonnulls <= 1`).
 ■ 확정 증적 3열(`credit_verdict`·`credit_approval_id`·`pi_gate_verdict`)은 승인 코어 뒤 "확정 배선" 마이그레이션(M10, PR-12a)이 더했다 —
   SO 행이 "게이트를 통과했다"는 사실을 **기록**한다. DB CHECK는 부분 채움·허용 값 집합 밖·승인 판정과 승인 id의 불일치만 거부한다(`confirmed_at` ⇔ 두 판정 값, 승인 판정 ⇔ 승인 id) —
-  승인 대상이 맞는지·승인이 CONSUMED인지·확정 뒤 증적 값 변경은 DB가 못 막고 앱 규율(쓰기 통로 1곳 AST 스캔·SYSTEM 열 분류)이 맡는다(트리거 미채택 ADR-0028·0040; 확정 후 UPDATE 차단 트리거는 부채 후보).
+  승인 대상이 맞는지·승인이 CONSUMED인지·확정 뒤 증적 값 변경은 DB가 못 막고 앱 규율(쓰기 통로 1곳 AST 스캔·SYSTEM 열 분류)이 맡는다(트리거 미채택 ADR-0028·0040; 확정 후 값 변경 차단 트리거는 부채 후보).
   상세 증적(비PASS 결과·사용한 override·정책 출처)의 원천은 `gate_evaluations`의 CONFIRMED 행 하나다(통합 X-11 — SO에는 3열만).
   1승인=1SO는 `uq_sales_orders_credit_approval_id`(부분 유니크)가 DB에서 보장한다(승인 코어의 CONSUMED 종결과 이중 방어).
 """
