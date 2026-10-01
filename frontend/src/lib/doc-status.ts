@@ -23,6 +23,7 @@ export function statusBadgeClass(code: string): string {
     case "PARTIALLY_PAID":
     case "PAID":
     case "CONFIRMED":
+    case "SUPPLIER_CONFIRMED":
       return "border-gray-900 bg-gray-900 text-white";
     case "CANCELLED":
     case "EXPIRED":
@@ -125,10 +126,47 @@ export const canCreateSalesOrderFromQuotation = (qtStatus: string): boolean =>
 export const canCreateSalesOrderFromProforma = (piStatus: string): boolean =>
   piStatus === "ISSUED" || piStatus === "PARTIALLY_PAID" || piStatus === "PAID";
 
+// ── PO(구매 발주) — 서버 machine: 생성=발행(초안 없음), 사람 엣지는 공급사 확인(OC)·취소뿐(입고 후반 3값은 S4-1) ──
+
+const PURCHASE_ORDER_STATUS: Record<string, string> = {
+  ISSUED: "발행",
+  SUPPLIER_CONFIRMED: "공급사 확인",
+  PARTIALLY_RECEIVED: "부분입고",
+  FULLY_RECEIVED: "입고완료",
+  CLOSED: "종결",
+  CANCELLED: "취소",
+};
+
+export const purchaseOrderStatusLabel = (code: string): string => PURCHASE_ORDER_STATUS[code] ?? code;
+
+/** 공급사 확인(OC)은 발행 상태에서만(서버 엣지 ISSUED→SUPPLIER_CONFIRMED). */
+export const canConfirmPurchaseOrder = (status: string): boolean => status === "ISSUED";
+/** 취소는 발행·공급사 확인에서만(서버 엣지 ISSUED·SUPPLIER_CONFIRMED→CANCELLED). */
+export const canCancelPurchaseOrder = (status: string): boolean =>
+  status === "ISSUED" || status === "SUPPLIER_CONFIRMED";
+/** 내부 메모는 취소 뒤에도 고칠 수 있다 — 원가를 잘못 적은 채 취소한 경우의 사후 정정 경로(ADR-0057 수용된 사실). */
+export const canEditPurchaseOrderNote = (_status: string): boolean => true;
+/** 담당자는 취소된 발주에서 닫는다(죽은 전표의 담당 이관은 의미가 없다). */
+export const canEditPurchaseOrderAssignee = (status: string): boolean => status !== "CANCELLED";
+/** OC 일자·참조는 공급사 확인 상태에서만 고칠 수 있다(서버 422와 같은 규칙). */
+export const canEditPurchaseOrderOc = (status: string): boolean => status === "SUPPLIER_CONFIRMED";
+
+export const PO_KIND_LABEL: Record<string, string> = {
+  PURCHASE: "구매 발주",
+  OEM_PRODUCTION: "OEM 생산 발주",
+};
+
+/** PO 전용 잔금 기산점(입고 확정일)까지 포함 — 판매 전표의 선택지(BALANCE_ANCHOR_LABEL)에는 섞지 않는다. */
+export const PO_BALANCE_ANCHOR_LABEL: Record<string, string> = {
+  ...BALANCE_ANCHOR_LABEL,
+  RECEIPT_DATE: "입고 확정일",
+};
+
 /** 문서 흐름 노드의 종류별 상태 라벨. */
 export function docStatusLabel(kind: string, status: string): string {
   if (kind === "QUOTATION") return quotationStatusLabel(status);
   if (kind === "PROFORMA_INVOICE") return proformaStatusLabel(status);
   if (kind === "SALES_ORDER") return salesOrderStatusLabel(status);
+  if (kind === "PURCHASE_ORDER") return purchaseOrderStatusLabel(status);
   return status;
 }

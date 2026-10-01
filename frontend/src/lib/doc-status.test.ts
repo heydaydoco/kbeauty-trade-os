@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  BALANCE_ANCHOR_LABEL,
+  PO_BALANCE_ANCHOR_LABEL,
+  canCancelPurchaseOrder,
+  canConfirmPurchaseOrder,
+  canEditPurchaseOrderAssignee,
+  canEditPurchaseOrderNote,
+  canEditPurchaseOrderOc,
+  purchaseOrderStatusLabel,
   canCancelQuotation,
   canEditQuotation,
   canIssueQuotation,
@@ -116,6 +124,41 @@ describe("SO 상태별 가능 동작 (서버 전이표와 같아야 한다)", ()
     expect(docStatusLabel("QUOTATION", "ISSUED")).toBe("발행");
     expect(docStatusLabel("PROFORMA_INVOICE", "PAID")).toBe("입금완료");
     expect(docStatusLabel("SALES_ORDER", "RECEIVED")).toBe("접수");
-    expect(docStatusLabel("PURCHASE_ORDER", "ISSUED")).toBe("ISSUED");
+    expect(docStatusLabel("PURCHASE_ORDER", "SUPPLIER_CONFIRMED")).toBe("공급사 확인");
+    expect(docStatusLabel("UNKNOWN_KIND", "ISSUED")).toBe("ISSUED");
+  });
+});
+
+describe("PO 상태별 가능 동작 (서버 전이표와 같아야 한다)", () => {
+  it.each([
+    ["ISSUED", true, true],
+    ["SUPPLIER_CONFIRMED", false, true],
+    ["PARTIALLY_RECEIVED", false, false],
+    ["FULLY_RECEIVED", false, false],
+    ["CLOSED", false, false],
+    ["CANCELLED", false, false],
+  ])("%s → 공급사 확인 가능=%s · 취소 가능=%s", (status, confirm, cancel) => {
+    expect(canConfirmPurchaseOrder(status)).toBe(confirm);
+    expect(canCancelPurchaseOrder(status)).toBe(cancel);
+  });
+
+  it("취소된 발주도 내부 메모는 열려 있고(원가 오기 정정) 담당자는 닫힌다, OC 열은 공급사 확인 상태에서만 열린다", () => {
+    expect(canEditPurchaseOrderNote("CANCELLED")).toBe(true);
+    expect(canEditPurchaseOrderAssignee("ISSUED")).toBe(true);
+    expect(canEditPurchaseOrderAssignee("CANCELLED")).toBe(false);
+    expect(canEditPurchaseOrderOc("SUPPLIER_CONFIRMED")).toBe(true);
+    expect(canEditPurchaseOrderOc("ISSUED")).toBe(false);
+  });
+
+  it("PO 라벨·배지: 6값 라벨, 모르는 값은 그대로", () => {
+    expect(purchaseOrderStatusLabel("ISSUED")).toBe("발행");
+    expect(purchaseOrderStatusLabel("PARTIALLY_RECEIVED")).toBe("부분입고");
+    expect(purchaseOrderStatusLabel("X")).toBe("X");
+    expect(statusBadgeClass("SUPPLIER_CONFIRMED")).toBe(statusBadgeClass("ISSUED"));
+  });
+
+  it("입고 확정일 기산점은 PO 전용 표에만 있다(판매 전표 선택지에 섞이지 않는다)", () => {
+    expect(PO_BALANCE_ANCHOR_LABEL.RECEIPT_DATE).toBe("입고 확정일");
+    expect(BALANCE_ANCHOR_LABEL).not.toHaveProperty("RECEIPT_DATE");
   });
 });

@@ -21,6 +21,7 @@ const NAV = [
   { to: "/quotations", label: "견적" },
   { to: "/proforma-invoices", label: "PI" },
   { to: "/sales-orders", label: "수주" },
+  { to: "/purchase-orders", label: "발주" },
   { to: "/documents", label: "문서보관소" },
   { to: "/imports", label: "엑셀 임포트" },
   { to: "/brands", label: "브랜드" },

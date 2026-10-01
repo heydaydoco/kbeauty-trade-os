@@ -66,6 +66,8 @@ interface ConfirmDialogProps {
   /** 지정하면 사유 입력칸을 보이고 1자 이상을 요구한다. */
   reasonLabel?: string;
   reasonMaxLength?: number;
+  /** 사유 입력칸 바로 아래 안내(예: 자유 텍스트에 원가를 적지 말라는 경고 — ADR-0057). */
+  reasonHint?: ReactNode;
   pending?: boolean;
   error?: string | null;
   /** 낙관 잠금 충돌(409)일 때 다이얼로그 안에 '최신 내용 불러오기'를 둔다 — 누르면 호출(보통 닫고 재조회). */
@@ -81,6 +83,7 @@ export function ConfirmDialog({
   danger = false,
   reasonLabel,
   reasonMaxLength = 500,
+  reasonHint,
   pending = false,
   error = null,
   onReload,
@@ -89,6 +92,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const titleId = useId();
   const descId = useId();
+  const hintId = useId();
   const [reason, setReason] = useState("");
   const firstRef = useRef<HTMLTextAreaElement | HTMLButtonElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -115,19 +119,27 @@ export function ConfirmDialog({
           {description}
         </div>
         {needsReason && (
-          <label className="mt-4 flex flex-col gap-1 text-sm">
-            <span className="text-gray-600">{reasonLabel}</span>
-            <textarea
-              ref={(node) => {
-                firstRef.current = node;
-              }}
-              value={reason}
-              maxLength={reasonMaxLength}
-              rows={3}
-              onChange={(event) => setReason(event.target.value)}
-              className="rounded border border-gray-300 px-3 py-2"
-            />
-          </label>
+          <div className="mt-4 flex flex-col gap-1 text-sm">
+            <label className="flex flex-col gap-1">
+              <span className="text-gray-600">{reasonLabel}</span>
+              <textarea
+                ref={(node) => {
+                  firstRef.current = node;
+                }}
+                value={reason}
+                maxLength={reasonMaxLength}
+                rows={3}
+                aria-describedby={reasonHint ? hintId : undefined}
+                onChange={(event) => setReason(event.target.value)}
+                className="rounded border border-gray-300 px-3 py-2"
+              />
+            </label>
+            {reasonHint && (
+              <span id={hintId} className="break-keep text-xs text-gray-500">
+                {reasonHint}
+              </span>
+            )}
+          </div>
         )}
         {error && (
           <p role="alert" className="mt-3 break-keep text-sm text-signal-red">
