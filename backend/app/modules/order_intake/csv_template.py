@@ -31,10 +31,8 @@ CSV_HEADER: Final[tuple[str, ...]] = (
     COL_UNIT_PRICE,
     COL_DELIVERY,
 )
-#: 앞 5열 — 같은 PO 그룹 안에서 전 행이 같아야 하는 헤더 값.
+#: 앞 5열 — 같은 PO 그룹 안에서 전 행이 같아야 하는 헤더 값(나머지 4열은 라인 값).
 HEADER_COLUMNS: Final[tuple[str, ...]] = CSV_HEADER[:5]
-#: 뒤 4열 — 라인 값.
-LINE_COLUMNS: Final[tuple[str, ...]] = CSV_HEADER[5:]
 
 #: 문자열 타입 열 — 수식 이스케이프 역변환(`unescape_formula_cell`)을 적용한다. 수량·단가·날짜 열은 비대상(음수가 텍스트로 변하면 안 된다 — 거부 대상이다).
 STRING_COLUMNS: Final[frozenset[str]] = frozenset(
