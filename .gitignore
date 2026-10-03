@@ -25,7 +25,13 @@ venv/
 .ruff_cache/
 .mypy_cache/
 .coverage
+.coverage.*
 coverage.xml
+# CI 샤드 산출물(ADR-0072) — 로컬에서 KBOS_TEST_SHARD로 돌렸을 때 남는다
+shard-report-*.json
+junit-shard-*.xml
+backend/shard-data/
+backend/shard-durations.json
 htmlcov/
 
 # ── Node ──
