@@ -39,12 +39,19 @@ def trade_actor(user_id: int | None = None) -> AuthenticatedUser:
 def world(*, lines: int = 1, price: int = 1000, currency: str = "USD") -> dict[str, Any]:
     """품번 매핑이 전부 걸린 세계 — 바이어 1·판가 SKU `lines`개·바이어 품번(BC-n) 매핑·시장 US."""
     create_market("US")
-    buyer = create_buyer()
+    buyer_code = unique("BUY")
+    buyer = create_buyer(code=buyer_code)
     sku_ids = [create_priced_sku(amount=price, currency=currency) for _ in range(lines)]
     codes = [unique("BC") for _ in sku_ids]
     for sku_id, code in zip(sku_ids, codes, strict=True):
         map_buyer_item_code(buyer, sku_id, code)
-    return {"buyer": buyer, "sku_ids": sku_ids, "codes": codes, "currency": currency}
+    return {
+        "buyer": buyer,
+        "buyer_code": buyer_code,
+        "sku_ids": sku_ids,
+        "codes": codes,
+        "currency": currency,
+    }
 
 
 def line_body(
@@ -124,3 +131,78 @@ def land(w: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     )
     assert status == 201
     return body
+
+
+# ── CSV 입구 (PR-14a) ─────────────────────────────────────────────────────────
+
+IMPORT_CSV = f"{INTAKES}/import-csv"
+TEMPLATE_CSV = f"{INTAKES}/template.csv"
+
+
+def csv_header() -> list[str]:
+    from app.modules.order_intake.csv_template import CSV_HEADER
+
+    return list(CSV_HEADER)
+
+
+def past(days: int = 1) -> str:
+    return (today_kst() - timedelta(days=days)).isoformat()
+
+
+def csv_row(
+    w: dict[str, Any],
+    *,
+    po: str,
+    code: str | None = None,
+    qty: str = "5",
+    price: str = "10.00",
+    po_date: str | None = None,
+    delivery: str | None = None,
+    buyer_code: str | None = None,
+    currency: str | None = None,
+    market: str = "US",
+) -> list[str]:
+    """9열 한 행 — 헤더 순서(바이어코드·PO번호·PO일자·통화·시장·품번·수량·단가·납기)."""
+    return [
+        buyer_code if buyer_code is not None else w["buyer_code"],
+        po,
+        po_date if po_date is not None else past(),
+        currency if currency is not None else w["currency"],
+        market,
+        code if code is not None else w["codes"][0],
+        qty,
+        price,
+        delivery if delivery is not None else future(),
+    ]
+
+
+def csv_bytes(
+    rows_: list[list[str]], *, header: list[str] | None = None, encoding: str = "utf-8-sig"
+) -> bytes:
+    import csv as _csv
+    import io
+
+    buffer = io.StringIO()
+    writer = _csv.writer(buffer)
+    writer.writerow(header if header is not None else csv_header())
+    writer.writerows(rows_)
+    return buffer.getvalue().encode(encoding)
+
+
+def upload_csv(
+    client: TestClient,
+    content: bytes,
+    *,
+    key: str | None = None,
+    filename: str = "po.csv",
+) -> Any:
+    return client.post(
+        IMPORT_CSV,
+        files={"file": (filename, content, "text/csv")},
+        headers={"Idempotency-Key": key or unique("csv")},
+    )
+
+
+def error_rows(response: Any) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = response.json()["error"]["detail"]["errors"]
+    return errors

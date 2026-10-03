@@ -526,7 +526,7 @@ def test_every_write_schema_forbids_extras_and_has_no_bypass_fields() -> None:
 
 
 def test_the_http_surface_has_no_delete_and_only_expected_write_routes() -> None:
-    """`/order-intakes`의 쓰기 라우트는 POST 등록·PATCH 편집·POST resolve/reject/confirm 5개뿐이고 DELETE는 없다(폐기=거부, 행 영구 보존)"""
+    """`/order-intakes`의 쓰기 라우트는 POST 등록·CSV 업로드·PATCH 편집·POST resolve/reject/confirm 6개뿐이고 DELETE는 없다(폐기=거부, 행 영구 보존)"""
     from app.main import app
 
     ops = {
@@ -538,13 +538,14 @@ def test_the_http_surface_has_no_delete_and_only_expected_write_routes() -> None
     writes = {op for op in ops if op[0] != "GET"}
     assert writes == {
         ("POST", "/api/v1/order-intakes"),
+        ("POST", "/api/v1/order-intakes/import-csv"),
         ("PATCH", "/api/v1/order-intakes/{intake_id}"),
         ("POST", "/api/v1/order-intakes/{intake_id}/resolve"),
         ("POST", "/api/v1/order-intakes/{intake_id}/reject"),
         ("POST", "/api/v1/order-intakes/{intake_id}/confirm"),
     }
     assert not any(m == "DELETE" for m, _p in ops)
-    assert len({op for op in ops if op[0] == "GET"}) == 3  # 목록·상세·게이트
+    assert len({op for op in ops if op[0] == "GET"}) == 4  # 목록·상세·게이트·CSV 양식
 
 
 # ── 등재 (K) ─────────────────────────────────────────────────────────────────
@@ -564,7 +565,7 @@ def test_tables_are_registered_in_table_policy_registry_and_handover() -> None:
 
 
 def test_the_intake_error_codes_are_cataloged_with_the_designed_statuses() -> None:
-    """인테이크 에러코드 6종이 3세그먼트·카탈로그(한국어+조치)·설계 상태 코드로 등재돼 있다(중복 PO는 공용 TRADE_DOCS 코드)"""
+    """인테이크 에러코드 10종(13a 6+CSV 입구 FILE.* 4)이 3세그먼트·카탈로그(한국어+조치)·설계 상태 코드로 등재돼 있다(중복 PO는 공용 TRADE_DOCS 코드)"""
     from app.core.errors.catalog import spec_for
     from app.core.errors.codes import ErrorCode
 
@@ -575,9 +576,92 @@ def test_the_intake_error_codes_are_cataloged_with_the_designed_statuses() -> No
         "ORDER_INTAKE.LINE.DUPLICATE_SKU": 422,
         "ORDER_INTAKE.LINE.LIMIT_EXCEEDED": 422,
         "ORDER_INTAKE.GATE.UNRESOLVED": 409,
+        "ORDER_INTAKE.FILE.DUPLICATE": 409,
+        "ORDER_INTAKE.FILE.INVALID_ROWS": 422,
+        "ORDER_INTAKE.FILE.TOO_MANY_GROUPS": 422,
+        "ORDER_INTAKE.FILE.UNSUPPORTED_FORMAT": 422,
     }
     live = {
         str(c): spec_for(c).status_code for c in ErrorCode if str(c).startswith("ORDER_INTAKE.")
     }
     assert live == expected
     assert spec_for(ErrorCode.TRADE_DOCS_DOCUMENT_DUPLICATE_BUYER_PO).status_code == 409
+
+
+# ── CSV 입구 (PR-14a · K·G) ─────────────────────────────────────────────────────
+
+CSV_FILES = {
+    "modules/order_intake/csv_import.py",
+    "modules/order_intake/csv_parse.py",
+    "modules/order_intake/csv_template.py",
+}
+
+
+def test_the_csv_parser_is_a_pure_module_without_database_access() -> None:
+    """`csv_parse`·`csv_template`은 DB·세션·SQLAlchemy를 임포트하지 않는 순수 모듈이다(파싱은 트랜잭션 밖 — DB 없이 시험·재사용 가능). 서버 마스터 검증은 `csv_import`만 한다"""
+    for rel in ("modules/order_intake/csv_parse.py", "modules/order_intake/csv_template.py"):
+        tree = app_sources()[rel]
+        names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names.add(node.module)
+            elif isinstance(node, ast.Import):
+                names |= {alias.name for alias in node.names}
+        assert not {n for n in names if n.startswith(("sqlalchemy", "app.core.db"))}, (rel, names)
+        assert "app.modules.order_intake.service" not in names, rel
+    assert "sqlalchemy" in {
+        n.module
+        for n in ast.walk(app_sources()["modules/order_intake/csv_import.py"])
+        if isinstance(n, ast.ImportFrom) and n.module
+    }  # 양성 대조 — 스캔이 공회전하지 않는다
+
+
+def test_the_template_header_is_one_constant_shared_by_download_and_upload() -> None:
+    """양식 헤더는 `csv_template.CSV_HEADER` 한 곳 — 다운로드(`template_header()`)와 업로드 파서(`parse_csv(header=…)`)가 같은 상수를 쓴다(양식 왕복이 한쪽 수정으로 깨지지 않는다)"""
+    from app.modules.order_intake import csv_import, csv_template
+
+    assert csv_import.template_header() is csv_template.CSV_HEADER
+    assert len(csv_template.CSV_HEADER) == 9 and len(set(csv_template.CSV_HEADER)) == 9
+    assert csv_template.HEADER_COLUMNS + csv_template.LINE_COLUMNS == csv_template.CSV_HEADER
+    assert set(csv_template.CSV_HEADER) >= csv_template.STRING_COLUMNS
+    source = ast.unparse(app_sources()["modules/order_intake/csv_import.py"])
+    assert "header=tpl.CSV_HEADER" in source and "string_columns=tpl.STRING_COLUMNS" in source
+    assert "csv_import.template_header()" in ast.unparse(
+        app_sources()["modules/order_intake/router.py"]
+    )
+
+
+def test_the_csv_entry_lands_only_through_register_intake_and_reuses_the_shared_upload_channel() -> (
+    None
+):
+    """CSV 입구는 `register_intake`로만 착지하고(`OrderIntake` 직접 생성·상태 전이·확정 호출 0), 업로드 크기·확장자·디코딩·헤더 검증은 `imports` 모듈의 공개 통로를 그대로 쓴다(복제 없음)"""
+    tree = app_sources()["modules/order_intake/csv_import.py"]
+    called = {
+        n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+    }
+    assert "register_intake" in called
+    assert not called & {
+        "OrderIntake",
+        "apply_intake_transition",
+        "confirm_intake",
+        "create_received_sales_order",
+        "update",
+        "delete",
+        "insert",
+    }
+    assert {"read_limited", "validate_extension", "decode_upload", "parse_csv"} <= called
+    for rel in CSV_FILES:
+        text = ast.unparse(app_sources()[rel])
+        assert "float(" not in text and "Decimal(" not in text, (
+            rel
+        )  # 금액은 정수 최소단위(공용 통로)
+
+
+def test_the_csv_route_precedes_the_id_route_in_declaration_order() -> None:
+    """`/order-intakes/template.csv`는 `/{intake_id}`보다 먼저 선언돼야 한다(뒤에 두면 'template.csv'가 id로 읽혀 422)"""
+    from app.modules.order_intake.router import router
+
+    paths = [getattr(r, "path", "") for r in router.routes if "GET" in getattr(r, "methods", set())]
+    assert paths.index("/order-intakes/template.csv") < paths.index("/order-intakes/{intake_id}")
