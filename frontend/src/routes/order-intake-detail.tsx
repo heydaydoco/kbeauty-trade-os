@@ -7,6 +7,9 @@
 //   확정·거부 뒤에는 자동으로 옮기지 않는다(처리 맥락 안내 후 불러오기).
 // - 금액은 서버 문자열(단가·합계)만 표시한다. 프런트 산술 0. 조회는 전 역할, 쓰기 버튼은 무역·관리자(서버가 최종).
 // - 거부 사유(자유 텍스트)와 점유 문서 번호는 서버가 줄 때(무역·관리자)만 보인다.
+// - 화면 상태(기준 version·결과·키 Map·잠금·403 래치)는 인테이크마다 따로다 — 본문 컴포넌트를 인테이크 id로 key해 이동하면 통째로 새로 만든다.
+// - 403 래치는 화면에 하나(writeForbidden): 확정·거부·재해석·편집·품번 등록 어느 쪽 403이든 쓰기 입력을 모두 숨기고 안내로 포커스를 옮긴다.
+// - 쓰기 실패 뒤 재조회가 실패해도 전체 오류 화면으로 바꾸지 않는다(데이터가 있으면 인라인 경고+다시 시도 — 다이얼로그·입력·키가 사라지지 않게).
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -44,46 +47,65 @@ const show = (value: unknown): string => (value === null || value === undefined 
 export function OrderIntakeDetailPage() {
   const params = useParams();
   const id = Number(params.intakeId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return (
+      <section>
+        <p role="alert" className="text-signal-red">인테이크를 찾을 수 없습니다.</p>
+        <Link to="/orders/intakes" className="mt-3 inline-block text-sm underline">인테이크 목록으로</Link>
+      </section>
+    );
+  }
+  // 인테이크마다 화면 상태를 새로 — 같은 라우트 컴포넌트가 재사용되어도 이전 인테이크의 결과·키·잠금·래치가 남지 않는다.
+  return <IntakeDetailView key={id} id={id} />;
+}
+
+function IntakeDetailView({ id }: { id: number }) {
   const { me } = useSession();
   const client = useQueryClient();
   const [writeForbidden, setWriteForbidden] = useState(false);
-  // 쓰기 라우트 403(역할 박탈 등)을 한 번 받으면 같은 화면에서는 쓰기 입력을 숨긴다(래치 — '최신 내용 불러오기'·새로고침으로 해제).
+  // 쓰기 라우트 403(역할 박탈 등)을 한 번 받으면 같은 화면에서는 쓰기 입력을 모두 숨긴다(래치 — 새로고침·다른 인테이크로 이동하면 해제).
   const canWrite = hasRole(me, "TRADE") && !writeForbidden;
 
   const detail = useQuery({
     queryKey: orderIntakeDetailKey(id),
     queryFn: () => apiFetch<IntakeDetail>(`/v1/order-intakes/${id}`),
-    enabled: Number.isInteger(id) && id > 0,
     // 검토 화면은 항상 서버의 최신 상태를 기준으로 한다.
     staleTime: 0,
   });
-  const users = usePagedQuery<UserLookup>(["users", "lookup"], "/v1/users/lookup?size=200", canWrite);
+  const users = usePagedQuery<UserLookup>(["users", "lookup"], "/v1/users/lookup?size=200", hasRole(me, "TRADE"));
 
   // ★ 화면이 "마지막으로 본/내가 쓴" version — 창 포커스 재조회로 서버 version이 앞서가도 쓰기는 이 값으로 보낸다(서버 409가 막는다).
   const [baseVersion, setBaseVersion] = useState<number | null>(null);
   const [formKey, setFormKey] = useState(0);
   const [reloadToken, setReloadToken] = useState(0);
+  const [mappingToken, setMappingToken] = useState(0);
   const [justFinished, setJustFinished] = useState(false);
   const [announce, setAnnounce] = useState<{ text: string; n: number } | null>(null);
-  const say = (text: string) => setAnnounce((prev) => ({ text, n: (prev?.n ?? 0) + 1 }));
+
+  // 안내 영역으로 포커스 — 편집 저장(폼이 다시 시드되어 버튼이 사라짐)·품번 등록 성공·403 래치 뒤 포커스가 body로 빠지지 않게.
+  const noticeRef = useRef<HTMLParagraphElement | null>(null);
+  const forbiddenRef = useRef<HTMLParagraphElement | null>(null);
+  const [focusTarget, setFocusTarget] = useState<{ which: "notice" | "forbidden"; n: number } | null>(null);
+  useEffect(() => {
+    if (focusTarget === null) return;
+    (focusTarget.which === "notice" ? noticeRef : forbiddenRef).current?.focus();
+  }, [focusTarget]);
+  const focusOn = (which: "notice" | "forbidden") => setFocusTarget((prev) => ({ which, n: (prev?.n ?? 0) + 1 }));
+  const say = (text: string, focus = false) => {
+    setAnnounce((prev) => ({ text, n: (prev?.n ?? 0) + 1 }));
+    if (focus) focusOn("notice");
+  };
+
+  function latchForbidden() {
+    setWriteForbidden(true);
+    focusOn("forbidden");
+  }
 
   const loadedVersion = detail.data?.version;
   useEffect(() => {
     // 첫 조회 값이 기준이다. 이후 서버 version이 앞서가도 기준은 내 쓰기·불러오기로만 바뀐다.
     if (baseVersion === null && loadedVersion !== undefined) setBaseVersion(loadedVersion);
   }, [baseVersion, loadedVersion]);
-
-  // 다른 인테이크로 이동하면 화면 상태를 비운다(라우트가 같은 컴포넌트를 재사용한다).
-  const lastId = useRef(id);
-  useEffect(() => {
-    if (lastId.current === id) return;
-    lastId.current = id;
-    setBaseVersion(null);
-    setFormKey((v) => v + 1);
-    setReloadToken((v) => v + 1);
-    setJustFinished(false);
-    setAnnounce(null);
-  }, [id]);
 
   function invalidateRelated() {
     void client.invalidateQueries({ queryKey: orderIntakeGatesKey(id) });
@@ -96,7 +118,7 @@ export function OrderIntakeDetailPage() {
     setBaseVersion(next.version);
     setFormKey((v) => v + 1);
     invalidateRelated();
-    say("수정을 저장했습니다. 바뀐 라인은 품번을 다시 해석했습니다 — 라인의 매핑 상태를 확인하세요.");
+    say("수정을 저장했습니다. 바뀐 라인은 품번을 다시 해석했습니다 — 라인의 매핑 상태를 확인하세요.", true);
   }
 
   /** 품번 다시 확인 성공 — 응답(전 라인 재해석)이 화면 상태이므로 기준 version을 응답으로 옮긴다(입력 중인 폼은 지우지 않는다). */
@@ -106,27 +128,20 @@ export function OrderIntakeDetailPage() {
 
   function reload() {
     setJustFinished(false);
-    setWriteForbidden(false);
     setAnnounce(null);
-    // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다).
+    // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다). 재조회가 실패하면 기준을 옮기지 않는다.
     void detail.refetch().then((result) => {
-      if (result.data) setBaseVersion(result.data.version);
+      if (result.isError || !result.data) return;
+      setBaseVersion(result.data.version);
       setFormKey((v) => v + 1);
       setReloadToken((v) => v + 1);
     });
     invalidateRelated();
   }
 
-  if (!Number.isInteger(id) || id <= 0) {
-    return (
-      <section>
-        <p role="alert" className="text-signal-red">인테이크를 찾을 수 없습니다.</p>
-        <Link to="/orders/intakes" className="mt-3 inline-block text-sm underline">인테이크 목록으로</Link>
-      </section>
-    );
-  }
   if (detail.isPending) return <p className="p-5 text-gray-500">불러오는 중…</p>;
-  if (detail.error || !detail.data) {
+  // 전체 오류 화면은 보여 줄 데이터가 없을 때만 — 재조회 실패는 아래 인라인 경고로(다이얼로그·입력이 사라지지 않게).
+  if (!detail.data) {
     return (
       <section>
         <p role="alert" className="break-keep text-signal-red">
@@ -154,9 +169,10 @@ export function OrderIntakeDetailPage() {
         ← 인테이크 목록
       </Link>
       <header className="mt-2 flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h1 className="flex flex-wrap items-center gap-3 text-2xl font-bold">
-            <span className="cell-nowrap">PO {intake.buyer_po_no}</span>
+            {/* 바이어 PO번호는 길 수 있다(최대 200자) — 좁은 화면에서 가로로 넘치지 않게 끊어 준다. */}
+            <span className="break-all">PO {intake.buyer_po_no}</span>
             <IntakeStatusBadge status={intake.status} />
           </h1>
           <p className="mt-1 break-keep text-sm text-gray-500">
@@ -165,16 +181,37 @@ export function OrderIntakeDetailPage() {
         </div>
       </header>
 
-      <p role="status" aria-label="화면 안내" className={announce ? "mt-3 break-keep text-sm font-medium" : "sr-only"}>
+      <p
+        ref={noticeRef}
+        tabIndex={-1}
+        role="status"
+        aria-label="화면 안내"
+        className={announce ? "mt-3 break-keep text-sm font-medium focus:outline focus:outline-2 focus:outline-gray-900" : "sr-only"}
+      >
         <span key={announce?.n ?? 0}>{announce?.text ?? ""}</span>
       </p>
+
+      {writeForbidden && (
+        <p ref={forbiddenRef} tabIndex={-1} role="alert" className="mt-3 break-keep rounded border border-signal-red p-3 text-sm focus:outline focus:outline-2 focus:outline-gray-900">
+          이 작업을 할 권한이 없습니다(수정·품번 등록·재해석·확정·거부는 무역·관리자만). 이 화면에서는 조회만 할 수 있습니다 — 권한이 바뀌었다면 페이지를 새로 고쳐 주세요.
+        </p>
+      )}
+
+      {detail.isError && (
+        <div role="alert" className="mt-3 rounded border border-signal-red p-3 text-sm">
+          <p className="break-keep">최신 상태를 불러오지 못했습니다. 아래는 마지막으로 받은 내용입니다. {intakeLoadErrorMessage(detail.error)}</p>
+          <button type="button" onClick={() => void detail.refetch()} className="cell-nowrap mt-2 rounded border border-gray-300 px-3 py-1">
+            다시 시도
+          </button>
+        </div>
+      )}
 
       {stale && (
         <div role="status" className="mt-4 rounded border border-gray-400 p-3 text-sm">
           <p className="break-keep">
             {justFinished
               ? "방금 이 화면에서 처리되어 화면이 갱신되었습니다. 처리 결과를 확인한 뒤 '최신 내용 불러오기'를 눌러 화면 기준을 새 상태로 맞춰 주세요."
-              : "다른 곳에서 이 인테이크가 수정되었습니다. 아래 표시는 최신이지만 편집 폼과 확정·거부는 이전 버전 기준이라, 그대로 처리하면 충돌(409)로 거절됩니다."}
+              : "다른 곳에서 이 인테이크가 수정되었습니다. 아래 표시는 최신이지만 편집 폼과 확정·거부는 이전 버전 기준이라, 그대로 처리하면 거절됩니다."}
           </p>
           <button type="button" onClick={reload} className="cell-nowrap mt-2 rounded border border-gray-400 px-3 py-1">
             최신 내용 불러오기
@@ -269,7 +306,7 @@ export function OrderIntakeDetailPage() {
               </thead>
               <tbody>
                 {intake.lines.map((line) => {
-                  const guide = pending ? mappingGuide(line.mapping_state) : null;
+                  const guide = pending ? mappingGuide(line.mapping_state, canWrite) : null;
                   return (
                     <tr key={line.id} className="border-t border-gray-100 align-top">
                       <td className="num cell-nowrap px-3 py-2">{line.line_no}</td>
@@ -304,7 +341,11 @@ export function OrderIntakeDetailPage() {
             <div className="mt-4 grid gap-3">
               <h3 className="font-semibold">품번 등록 — 미매핑 라인 {unmapped.length}개</h3>
               <p className="break-keep text-sm text-gray-700">
-                미매핑 라인이 있으면 서버가 접수 확정을 거부합니다. {canWrite ? "아래에서 바이어 품번을 SKU에 연결해 등록한 뒤 '품번 다시 확인'을 누르세요." : "무역 담당자가 품번을 등록해야 합니다."} 등록된 매핑은{" "}
+                미매핑 라인이 있으면 서버가 접수 확정을 거부합니다.{" "}
+                {canWrite
+                  ? "아래에서 바이어 품번을 SKU에 연결해 등록한 뒤 '품번 다시 확인'을 누르세요. 기존 매핑의 SKU가 삭제되어 미매핑이 된 경우에는 같은 품번을 새로 등록할 수 없으니 거래처 화면에서 그 매핑을 먼저 삭제하세요."
+                  : "무역 담당자가 품번을 등록해야 합니다."}{" "}
+                등록된 매핑은{" "}
                 <Link to="/partners" className="underline">거래처 화면의 품번 매핑</Link>에서 확인·삭제할 수 있고, SKU는{" "}
                 <Link to="/skus" className="underline">SKU 목록</Link>에서 찾을 수 있습니다.
               </p>
@@ -315,9 +356,11 @@ export function OrderIntakeDetailPage() {
                     partnerId={intake.buyer_partner_id}
                     lineNo={line.line_no}
                     buyerItemCode={line.buyer_item_code}
-                    onRegistered={(lineNo) =>
-                      say(`라인 ${lineNo}의 바이어 품번 매핑을 등록했습니다. '품번 다시 확인'을 눌러 이 인테이크에 반영하세요(자동으로 반영되지 않습니다).`)
-                    }
+                    onRegistered={(lineNo) => {
+                      setMappingToken((v) => v + 1);
+                      say(`라인 ${lineNo}의 바이어 품번 매핑을 등록했습니다. '품번 다시 확인'을 눌러 이 인테이크에 반영하세요(자동으로 반영되지 않습니다).`, true);
+                    }}
+                    onForbidden={latchForbidden}
                   />
                 ))}
             </div>
@@ -337,11 +380,13 @@ export function OrderIntakeDetailPage() {
           canWrite={canWrite}
           onReload={reload}
           reloadToken={reloadToken}
+          mappingToken={mappingToken}
           onResolved={afterResolve}
           onFinished={() => setJustFinished(true)}
+          onForbidden={latchForbidden}
         />
 
-        {editable && <IntakeEditForm key={`${intake.id}-${formKey}`} intake={intake} version={base} onSaved={afterEdit} onForbidden={() => setWriteForbidden(true)} onReload={reload} />}
+        {editable && <IntakeEditForm key={`${intake.id}-${formKey}`} intake={intake} version={base} onSaved={afterEdit} onForbidden={latchForbidden} onReload={reload} />}
       </div>
     </section>
   );
@@ -355,7 +400,7 @@ function OriginalView({ intake }: { intake: IntakeDetail }) {
     <div className="mt-2 grid gap-2">
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
         <dt className="cell-nowrap text-gray-600">바이어 PO번호</dt>
-        <dd>{show(header.buyer_po_no)}</dd>
+        <dd className="break-all">{show(header.buyer_po_no)}</dd>
         <dt className="cell-nowrap text-gray-600">바이어 PO 일자</dt>
         <dd className="num">{show(header.buyer_po_date)}</dd>
         <dt className="cell-nowrap text-gray-600">통화</dt>

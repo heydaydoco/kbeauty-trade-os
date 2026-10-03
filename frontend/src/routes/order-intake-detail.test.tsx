@@ -59,12 +59,15 @@ function open(extra: GateHandler[] = [], opts: Opts = {}) {
 const posts = (calls: GateCall[], path: string) => calls.filter((c) => c.method === "POST" && c.url === `/api${path}`);
 const patches = (calls: GateCall[]) => calls.filter((c) => c.method === "PATCH" && c.url === `/api${ID}`);
 const gateGets = (calls: GateCall[]) => calls.filter((c) => c.method === "GET" && c.url === `/api${GATES}`);
+const detailGets = (calls: GateCall[]) => calls.filter((c) => c.method === "GET" && c.url === `/api${ID}`);
 const refetchViaFocus = () =>
   act(() => {
     window.dispatchEvent(new Event("visibilitychange"));
     window.dispatchEvent(new Event("focus"));
   });
 
+/** 게이트 요약의 판정 글자(strong) — 부분 일치('통과'⊂'통과하지 못함')로 공회전하지 않게 정확히 집는다. */
+const verdict = async () => (await screen.findByText(/서버 사전 점검/)).querySelector("strong") as HTMLElement;
 const ready = async () => await screen.findByRole("heading", { name: /PO PO-2026-001/ });
 const openConfirm = async () => {
   await ready();
@@ -190,7 +193,7 @@ describe("표시 — 서버 값 그대로", () => {
 describe("게이트 요약 — 서버 값 그대로(intake_confirmable은 사전 점검일 뿐)", () => {
   it("intake_confirmable=true — '통과'이되 확정 가능 보장이 아님을 밝힌다", async () => {
     open();
-    expect(await screen.findByText(/서버 사전 점검/)).toHaveTextContent("통과");
+    expect(await verdict()).toHaveTextContent(/^통과$/);
     expect(screen.getByText(/확정 가능 보장이 아닙니다/)).toBeInTheDocument();
     expect(screen.getByText("품번 매핑")).toBeInTheDocument();
     expect(screen.getByText("품번 매핑이 확인되었습니다.")).toBeInTheDocument();
@@ -199,12 +202,12 @@ describe("게이트 요약 — 서버 값 그대로(intake_confirmable은 사전
 
   it("intake_confirmable=false — 게이트 행이 모두 통과여도 서버 값을 따른다(프런트 재계산 금지)", async () => {
     open([], { gates: intakeGateReport({ intake_confirmable: false, gates: [intakeGate()] }) });
-    expect(await screen.findByText(/서버 사전 점검/)).toHaveTextContent("통과하지 못함");
+    expect(await verdict()).toHaveTextContent(/^통과하지 못함$/);
   });
 
   it("intake_confirmable=true — 차단 결과 행이 있어도 서버 값을 따른다", async () => {
     open([], { gates: intakeGateReport({ intake_confirmable: true, gates: [intakeGate({ level: "BLOCK", blocks_intake_confirm: true, settlement: "UNRESOLVED", message_ko: "서버 메시지" })] }) });
-    expect(await screen.findByText(/서버 사전 점검/)).toHaveTextContent("통과");
+    expect(await verdict()).toHaveTextContent(/^통과$/);
     expect(screen.getByText("확정을 막는 항목")).toBeInTheDocument();
     expect(screen.getByText("차단")).toBeInTheDocument();
     expect(screen.getByText("미해소")).toBeInTheDocument();
@@ -269,7 +272,7 @@ describe("접수 확정 — 항상 서버가 최종 판정", () => {
     expect(call?.headers["Idempotency-Key"]).toBe("key-1");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(within(region).getByRole("link", { name: "SO-2026-0077" })).toHaveAttribute("href", "/sales-orders/77");
-    expect(screen.getByRole("status", { name: "처리 결과" })).toHaveTextContent("수주 SO-2026-0077이(가) 접수 상태로 만들어졌습니다");
+    expect(screen.getByRole("status", { name: "처리 결과" })).toHaveTextContent("접수를 확정했습니다. 수주 SO-2026-0077이 접수 상태로 만들어졌습니다.");
     await waitFor(() => expect(region).toHaveFocus());
     const keys = invalidate.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown }).queryKey));
     expect(keys).toEqual(expect.arrayContaining([JSON.stringify(["order-intakes"]), JSON.stringify(["sales-orders"]), JSON.stringify(["document-flow"])]));
@@ -426,22 +429,32 @@ describe("접수 확정 오류 — 한국어 안내(영문 코드·서버 원문
     expect(dialog()).not.toHaveTextContent("ENGLISH RAW");
   });
 
-  it("확정 시점 납기 경과·시장 비활성 422 — 인테이크 라인 번호·필드를 한국어로(SO 순번 아님)", async () => {
-    const { dialog } = await failWith(apiError("COMMON.VALIDATION.INVALID_FIELD", 422, "x", { "line_3.requested_delivery_date": "요청납기는 오늘(KST)보다 앞설 수 없습니다.", dest_market_code: "비활성 시장입니다." }));
+  it("확정 시점 납기 경과 422 — 인테이크 라인 번호·필드를 한국어로(SO 순번 아님)", async () => {
+    const { dialog } = await failWith(apiError("COMMON.VALIDATION.INVALID_FIELD", 422, "x", { "line_3.requested_delivery_date": "요청납기는 오늘(KST)보다 앞설 수 없습니다." }));
     await waitFor(() => expect(dialog()).toHaveTextContent("라인 3 요청납기: 요청납기는 오늘(KST)보다 앞설 수 없습니다."));
-    expect(dialog()).toHaveTextContent("도착 시장: 비활성 시장입니다.");
+  });
+
+  it("시장 미등록·삭제 422(MARKETS.MARKET.NOT_REGISTERED) — 서버 detail의 위치·안내를 한국어로", async () => {
+    const { dialog } = await failWith(
+      apiError("MARKETS.MARKET.NOT_REGISTERED", 422, "ENGLISH RAW", { dest_market_code: "등록되지 않은 시장입니다: US. 시장 관리에서 먼저 등록해 주세요." }),
+    );
+    await waitFor(() => expect(dialog()).toHaveTextContent("도착 시장: 등록되지 않은 시장입니다: US."));
+    expect(dialog()).not.toHaveTextContent("ENGLISH RAW");
   });
 
   it("실패 뒤 매핑 상태·게이트를 서버에서 다시 읽는다(화면이 옛 판정을 들고 있지 않게)", async () => {
     const { stub } = await failWith(apiError("ORDER_INTAKE.LINE.UNMAPPED_ITEMS", 422, "x", { lines: [] }));
-    await waitFor(() => expect(gateGets(stub.calls).length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(gateGets(stub.calls)).toHaveLength(2));
+    await waitFor(() => expect(detailGets(stub.calls)).toHaveLength(2));
   });
 
   it("라우트 403 — 다이얼로그를 닫고 쓰기 버튼을 숨기고 안내로 포커스를 옮긴다(래치)", async () => {
     await failWith(apiError("AUTH.FORBIDDEN", 403));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "접수 확정" })).not.toBeInTheDocument();
-    const note = screen.getByText(/무역·관리자만 할 수 있습니다. 이 화면에서는 조회만/);
+    // 화면 단일 래치 — 편집 폼도 함께 숨긴다.
+    expect(screen.queryByRole("form", { name: "인테이크 편집" })).not.toBeInTheDocument();
+    const note = screen.getByText(/이 작업을 할 권한이 없습니다/);
     await waitFor(() => expect(note).toHaveFocus());
   });
 
@@ -657,9 +670,11 @@ describe("편집 PATCH — 헤더+라인 전체 교체", () => {
     fireEvent.change(form.getByLabelText("라인 1 수량"), { target: { value: "5" } }); // 수정(id 유지)
     fireEvent.click(form.getByRole("button", { name: "라인 2 삭제" })); // 제외
     fireEvent.click(form.getByRole("button", { name: "라인 추가" })); // 신규
-    fireEvent.change(form.getByLabelText("라인 3 바이어 품번"), { target: { value: "N-4" } });
-    fireEvent.change(form.getByLabelText("라인 3 수량"), { target: { value: "4" } });
-    fireEvent.change(form.getByLabelText("라인 3 단가"), { target: { value: "4.5" } });
+    // 새 라인은 위치(3번째)가 아니라 '신규 1' — 남은 기존 라인은 서버 번호(라인 1·라인 3)를 유지한다.
+    expect(form.getByLabelText("라인 3 바이어 품번")).toHaveValue("C-3");
+    fireEvent.change(form.getByLabelText("신규 1 바이어 품번"), { target: { value: "N-4" } });
+    fireEvent.change(form.getByLabelText("신규 1 수량"), { target: { value: "4" } });
+    fireEvent.change(form.getByLabelText("신규 1 단가"), { target: { value: "4.5" } });
     fireEvent.click(form.getByRole("button", { name: "수정 저장" }));
     await waitFor(() => expect(patches(stub.calls)).toHaveLength(1));
     expect(patches(stub.calls)[0]?.body).toEqual({

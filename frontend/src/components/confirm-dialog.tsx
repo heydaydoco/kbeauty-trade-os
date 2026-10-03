@@ -72,6 +72,8 @@ interface ConfirmDialogProps {
   reasonValidator?: (reason: string) => string | null;
   /** 사유 입력칸 바로 아래 안내(예: 자유 텍스트에 원가를 적지 말라는 경고 — ADR-0057). */
   reasonHint?: ReactNode;
+  /** 비활성 확정 버튼의 사유 안내에 들어갈 동작(기본 "확정할") — 예: 거부 다이얼로그는 "거부할". */
+  reasonAction?: string;
   pending?: boolean;
   /** 확인 버튼을 막는 외부 조건(예: 표시에 필요한 정보를 못 불러옴) — 사유는 description에 밝힌다. */
   confirmDisabled?: boolean;
@@ -92,6 +94,7 @@ export function ConfirmDialog({
   reasonMinLength = 1,
   reasonValidator,
   reasonHint,
+  reasonAction = "확정할",
   pending = false,
   confirmDisabled = false,
   error = null,
@@ -117,7 +120,7 @@ export function ConfirmDialog({
   // 부적합 사유는 화면의 오류 문구(problemId)를 그대로 가리키고, 길이 부족만 별도 안내(sr-only)를 둔다 — 같은 문구 중복 없음.
   const reasonBlockedNote: string | null =
     needsReason && reasonProblem === null && [...reason.trim()].length < reasonMinLength
-      ? `사유를 ${reasonMinLength}자 이상 입력해야 확정할 수 있습니다.`
+      ? `사유를 ${reasonMinLength}자 이상 입력해야 ${reasonAction} 수 있습니다.`
       : null;
   const confirmDescribedBy = pending ? undefined : reasonProblem !== null ? problemId : reasonBlockedNote !== null ? blockedId : undefined;
   const blocked =

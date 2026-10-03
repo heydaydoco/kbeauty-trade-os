@@ -118,9 +118,19 @@ describe("인테이크 목록", () => {
     expect(screen.queryByText("재해석 필요")).not.toBeInTheDocument();
   });
 
-  it("빈 목록·필터 빈 결과·서버 오류를 구분해서 보인다", async () => {
-    open([]);
+  it("빈 목록과 필터 빈 결과를 다른 문구로 보인다", async () => {
+    stubGateFetch(TRADER, [
+      ["/v1/order-intakes", "GET", () => jsonResponse(page([]))],
+      ["/v1/order-intakes?status=REJECTED", "GET", () => jsonResponse(page([]))],
+      USERS,
+      ALERTS,
+      INBOX,
+    ]);
+    renderWithProviders(<AppRoutes />, { route: "/orders/intakes" });
     expect(await screen.findByText("아직 접수된 오더 인테이크가 없습니다.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("상태"), { target: { value: "REJECTED" } });
+    expect(await screen.findByText("조건에 맞는 인테이크가 없습니다. 필터를 바꿔 보세요.")).toBeInTheDocument();
+    expect(screen.queryByText("아직 접수된 오더 인테이크가 없습니다.")).not.toBeInTheDocument();
   });
 
   it("서버 오류는 한국어 message를 그대로 보인다(빈 목록과 다름)", async () => {

@@ -4,10 +4,13 @@
 // - ★ 프런트는 확정 가능 여부를 다시 판정하지 않는다. 확정 버튼은 대기 상태+쓰기 역할이면 `intake_confirmable`이 false여도 항상 서버를 부른다 —
 //   서버의 422(UNMAPPED_ITEMS·DUPLICATE_SKU·확정 시점 납기 경과 등)·409(STALE_MAPPING·중복 PO·NOT_PENDING·복제 원본 자격 상실 등)를 한국어로 안내한다.
 // - 멱등 키: 확정·품번 재해석은 (인테이크 id, version)당 1개 — 본문 `{id, version}` 기준 Map으로 재사용(같은 version 재시도=같은 키, version이 오르면 새 키), 성공하면 비운다.
+//   재해석 키는 '최신 내용 불러오기'·품번 등록 성공(`mappingToken`) 때도 비운다 — 매핑이 바뀐 뒤 옛 응답을 재생받지 않게.
 //   거부는 본문(version+사유)당 1개. 더블클릭 잠금(ref)은 mutationFn의 finally에서 푼다. 요청 중 Esc/닫기는 무시한다. `networkMode:"always"`.
 // - 다이얼로그는 컴포넌트 상태다 — 창 포커스 재조회로 데이터가 바뀌어도 닫히거나 입력(사유)이 지워지지 않는다.
 // - 확정·거부 뒤 기준 version(상위 `version`)은 자동으로 옮기지 않는다 — '최신 내용 불러오기'(상위 onReload)로만. 재해석 결과는 화면에 그대로 보이므로 상위가 응답 version으로 옮긴다.
 // - 성공 뒤 결과 영역으로 포커스를 옮기고 role=status live region으로 알린다.
+// - 상위는 인테이크마다 이 패널을 key로 새로 만든다(결과·키 Map·잠금이 다른 인테이크로 새지 않게). 화면을 떠난 뒤 도착한 응답은 상위 콜백·화면 상태를 건드리지 않는다.
+// - 403(라우트 역할 게이트)은 상위 화면 단일 래치(onForbidden)로 올린다 — 이 패널은 `canWrite`(래치 반영)만 본다.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -23,13 +26,13 @@ import {
   isWriteForbidden,
   orderIntakeDetailKey,
   orderIntakeGatesKey,
+  withJosaText,
   type IntakeConfirmOut,
   type IntakeDetail,
 } from "../lib/order-intake";
 import { ConfirmDialog } from "./confirm-dialog";
 
 type DialogKind = "confirm" | "reject";
-type FocusWhich = "result" | "note";
 
 export function IntakeReviewPanel({
   intake,
@@ -37,37 +40,50 @@ export function IntakeReviewPanel({
   canWrite,
   onReload,
   reloadToken = 0,
+  mappingToken = 0,
   onResolved,
   onFinished,
+  onForbidden,
 }: {
   intake: IntakeDetail;
   /** 쓰기에 싣는 기준 version(화면이 본 값). */
   version: number;
+  /** 쓰기 역할이며 화면 403 래치가 서지 않았다. */
   canWrite: boolean;
   onReload: () => void;
-  /** 상위가 '최신 내용 불러오기'를 할 때마다 올린다 — 로컬 오류·403 래치를 비운다. */
+  /** 상위가 '최신 내용 불러오기'를 할 때마다 올린다 — 다이얼로그·오류·결과·재해석 키를 비운다. */
   reloadToken?: number;
-  /** 품번 다시 확인 성공 — 상위가 응답을 화면 상태·기준 version으로 반영한다. */
-  onResolved: (next: IntakeDetail, prevVersion: number) => void;
+  /** 품번 매핑이 등록될 때마다 올린다 — 재해석 키를 비운다(같은 version이라도 다시 해석해야 하므로). */
+  mappingToken?: number;
+  /** 품번 다시 확인 성공 — 상위가 응답을 기준 version으로 반영한다. */
+  onResolved: (next: IntakeDetail) => void;
   /** 확정·거부가 이 화면에서 끝났다(상위 stale 배너를 처리 맥락으로). */
   onFinished: () => void;
+  /** 라우트 403 — 상위 화면의 쓰기 래치(안내로 포커스). */
+  onForbidden: () => void;
 }) {
   const client = useQueryClient();
-  const [forbidden, setForbidden] = useState(false);
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const [confirmed, setConfirmed] = useState<IntakeConfirmOut | null>(null);
   const [rejected, setRejected] = useState(false);
   const [announce, setAnnounce] = useState<{ text: string; n: number } | null>(null);
   const pending = intake.status === "PENDING";
 
-  const resultRef = useRef<HTMLDivElement | null>(null);
-  const noteRef = useRef<HTMLParagraphElement | null>(null);
-  const [focusTarget, setFocusTarget] = useState<{ which: FocusWhich; n: number } | null>(null);
+  // 화면을 떠난 뒤(언마운트) 도착한 응답은 상위 콜백·화면 상태를 건드리지 않는다.
+  const mounted = useRef(true);
   useEffect(() => {
-    if (focusTarget === null) return;
-    ({ result: resultRef, note: noteRef })[focusTarget.which].current?.focus();
-  }, [focusTarget]);
-  const focusOn = (which: FocusWhich) => setFocusTarget((prev) => ({ which, n: (prev?.n ?? 0) + 1 }));
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const resultRef = useRef<HTMLDivElement | null>(null);
+  const [focusTick, setFocusTick] = useState(0);
+  useEffect(() => {
+    if (focusTick > 0) resultRef.current?.focus();
+  }, [focusTick]);
+  const focusResult = () => setFocusTick((n) => n + 1);
   const say = (text: string) => setAnnounce((prev) => ({ text, n: (prev?.n ?? 0) + 1 }));
 
   const confirmKeys = useRef(new Map<string, string>());
@@ -77,27 +93,34 @@ export function IntakeReviewPanel({
   const resolveLock = useRef(false);
   const rejectLock = useRef(false);
 
-  const seen = useRef({ version, token: reloadToken });
+  const seen = useRef({ token: reloadToken, mapping: mappingToken });
   useEffect(() => {
     const prev = seen.current;
-    if (prev.version === version && prev.token === reloadToken) return;
-    const reloaded = prev.token !== reloadToken;
-    seen.current = { version, token: reloadToken };
-    setForbidden(false);
-    // '최신 내용 불러오기'(상위 reload)로 기준이 바뀌면 낡은 기준에서 연 다이얼로그·오류 안내를 닫는다.
-    if (reloaded) {
+    if (prev.token === reloadToken && prev.mapping === mappingToken) return;
+    seen.current = { token: reloadToken, mapping: mappingToken };
+    resolveKeys.current.clear();
+    if (prev.token !== reloadToken) {
+      // '최신 내용 불러오기'로 기준이 바뀌면 낡은 기준에서 연 다이얼로그·오류·결과 안내를 비운다.
       confirm.reset();
       reject.reset();
       resolve.reset();
       setDialog(null);
+      setConfirmed(null);
+      setRejected(false);
+      setAnnounce(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version, reloadToken]);
+  }, [reloadToken, mappingToken]);
 
-  /** 쓰기 뒤에 서버가 다시 계산하는 값을 새로 읽는다 — 상세는 기준 version을 옮기지 않고 데이터만 갱신된다. */
+  /** 쓰기 실패 뒤 서버가 다시 계산하는 값을 새로 읽는다 — 상세는 기준 version을 옮기지 않고 데이터만 갱신된다. */
   function refreshAfterFailure() {
     void client.invalidateQueries({ queryKey: orderIntakeGatesKey(intake.id) });
     void client.invalidateQueries({ queryKey: orderIntakeDetailKey(intake.id) });
+  }
+
+  function forbidden() {
+    setDialog(null);
+    onForbidden();
   }
 
   const resolve = useMutation({
@@ -115,15 +138,20 @@ export function IntakeReviewPanel({
     },
     onSuccess: (next, input) => {
       resolveKeys.current.clear();
-      client.setQueryData(orderIntakeDetailKey(intake.id), next);
+      // 캐시가 이미 더 새 version이면(그사이 다른 쓰기·재조회) 옛 응답으로 덮지 않고 다시 읽는다.
+      const cached = client.getQueryData<IntakeDetail>(orderIntakeDetailKey(intake.id));
+      if (cached !== undefined && cached.version > next.version) void client.invalidateQueries({ queryKey: orderIntakeDetailKey(intake.id) });
+      else client.setQueryData(orderIntakeDetailKey(intake.id), next);
       void client.invalidateQueries({ queryKey: orderIntakeGatesKey(intake.id) });
       void client.invalidateQueries({ queryKey: [...ORDER_INTAKES_QUERY_KEY, "list"] });
-      onResolved(next, input.version);
+      if (!mounted.current) return;
+      onResolved(next);
       // 서버는 바뀐 것이 있을 때만 version을 올린다 — 올랐는지만 본다(어느 라인이 어떻게 바뀌었는지는 아래 라인 표가 서버 값으로 보여 준다).
       say(next.version === input.version ? "품번을 다시 확인했습니다. 바뀐 해석이 없습니다." : "품번을 다시 확인했습니다. 바뀐 해석을 반영했으니 라인의 매핑 상태를 검토하세요.");
     },
     onError: (error) => {
-      if (isWriteForbidden(error)) setForbidden(true);
+      if (!mounted.current) return;
+      if (isWriteForbidden(error)) forbidden();
       else refreshAfterFailure();
     },
   });
@@ -142,23 +170,23 @@ export function IntakeReviewPanel({
       }
     },
     onSuccess: (out) => {
-      setDialog(null);
-      setConfirmed(out);
       confirmKeys.current.clear();
       client.setQueryData(orderIntakeDetailKey(intake.id), out.intake);
-      say(`접수를 확정했습니다. 수주 ${out.doc_number}이(가) 접수 상태로 만들어졌습니다.`);
-      focusOn("result");
-      onFinished();
       // 확정은 인테이크(목록·상세·게이트)·수주(목록)·문서 흐름을 바꾼다.
       void client.invalidateQueries({ queryKey: ORDER_INTAKES_QUERY_KEY });
       void client.invalidateQueries({ queryKey: SALES_ORDERS_QUERY_KEY });
       void client.invalidateQueries({ queryKey: DOCUMENT_FLOW_QUERY_KEY });
+      if (!mounted.current) return;
+      setDialog(null);
+      setConfirmed(out);
+      say(`접수를 확정했습니다. ${withJosaText(`수주 ${out.doc_number}`, "이/가")} 접수 상태로 만들어졌습니다.`);
+      focusResult();
+      onFinished();
     },
     onError: (error) => {
+      if (!mounted.current) return;
       if (isWriteForbidden(error)) {
-        setForbidden(true);
-        setDialog(null);
-        focusOn("note");
+        forbidden();
         return;
       }
       // 실패(422·409)는 다이얼로그 안에 한국어로 안내하고, 서버가 다시 계산하는 매핑 상태·게이트를 새로 읽는다.
@@ -180,20 +208,20 @@ export function IntakeReviewPanel({
       }
     },
     onSuccess: (next) => {
-      setDialog(null);
-      setRejected(true);
       rejectKeys.current.clear();
       client.setQueryData(orderIntakeDetailKey(intake.id), next);
-      say("인테이크를 거부했습니다. 사유와 함께 보존됩니다.");
-      focusOn("result");
-      onFinished();
       void client.invalidateQueries({ queryKey: ORDER_INTAKES_QUERY_KEY });
+      if (!mounted.current) return;
+      setDialog(null);
+      setRejected(true);
+      say("인테이크를 거부했습니다. 사유와 함께 보존됩니다.");
+      focusResult();
+      onFinished();
     },
     onError: (error) => {
+      if (!mounted.current) return;
       if (isWriteForbidden(error)) {
-        setForbidden(true);
-        setDialog(null);
-        focusOn("note");
+        forbidden();
         return;
       }
       refreshAfterFailure();
@@ -222,13 +250,9 @@ export function IntakeReviewPanel({
     reject.mutate({ version, reason, key });
   }
 
-  /** 충돌 안내의 '최신 내용 불러오기' — 다이얼로그·오류를 비우고 상위가 기준 version·상세를 다시 읽게 한다. */
+  /** 충돌 안내의 '최신 내용 불러오기' — 상위가 기준 version·상세를 다시 읽고 reloadToken을 올리면 위 효과가 다이얼로그·오류를 비운다. */
   function reload() {
-    confirm.reset();
-    reject.reset();
-    resolve.reset();
     setDialog(null);
-    setForbidden(false);
     onReload();
   }
 
@@ -238,7 +262,6 @@ export function IntakeReviewPanel({
     setDialog(kind);
   }
 
-  const write = canWrite && !forbidden;
   // 남이 처리해 대기가 아니게 되어도 요청 중·오류 표시 중에는 다이얼로그를 닫지 않는다 — 입력·오류 안내가 사라지지 않게(서버가 최종).
   const confirmOpen = dialog === "confirm" && (pending || confirm.isPending || confirm.isError);
   const rejectOpen = dialog === "reject" && (pending || reject.isPending || reject.isError);
@@ -261,10 +284,10 @@ export function IntakeReviewPanel({
           <p className="break-keep font-medium">접수를 확정했습니다.</p>
           <p className="mt-1 break-keep">
             수주{" "}
-            <Link to={`/sales-orders/${confirmed.sales_order_id}`} className="underline">
+            <Link to={`/sales-orders/${confirmed.sales_order_id}`} className="break-all underline">
               {confirmed.doc_number}
             </Link>
-            이(가) 접수 상태로 만들어졌습니다. 이 인테이크는 종결되어 더 고칠 수 없습니다. 이어서 수주 상세에서 게이트를 확인하고 수주를 확정하세요.
+            {withJosaText(confirmed.doc_number, "이/가").slice(confirmed.doc_number.length)} 접수 상태로 만들어졌습니다. 이 인테이크는 종결되어 더 고칠 수 없습니다. 이어서 수주 상세에서 게이트를 확인하고 수주를 확정하세요.
           </p>
         </div>
       )}
@@ -274,7 +297,7 @@ export function IntakeReviewPanel({
         </div>
       )}
 
-      {showActions && write && (
+      {showActions && canWrite && (
         <div className="mt-3 grid gap-3">
           <p className="break-keep text-sm text-gray-700">
             확정하면 수주(접수 상태)가 만들어지고 이 인테이크는 종결됩니다. 확정 가능 여부는 서버가 확정할 때 최종 판정합니다(위 게이트 요약은 참고용 사전 점검입니다).
@@ -308,8 +331,8 @@ export function IntakeReviewPanel({
         </div>
       )}
 
-      {showActions && !write && (
-        <p ref={noteRef} tabIndex={-1} role="note" className="mt-3 break-keep text-sm text-gray-600 focus:outline focus:outline-2 focus:outline-gray-900">
+      {showActions && !canWrite && (
+        <p role="note" className="mt-3 break-keep text-sm text-gray-600">
           수정·품번 재해석·확정·거부는 무역·관리자만 할 수 있습니다. 이 화면에서는 조회만 할 수 있습니다.
         </p>
       )}
@@ -370,6 +393,7 @@ export function IntakeReviewPanel({
           reasonMinLength={5}
           reasonMaxLength={1000}
           reasonValidator={validateOverrideReason}
+          reasonAction="거부할"
           pending={reject.isPending}
           error={reject.error ? intakeErrorMessage(reject.error, "reject") : null}
           onReload={isIntakeRecoverable(reject.error) ? reload : undefined}

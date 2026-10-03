@@ -71,7 +71,7 @@ export function AppShell() {
       <header className="border-b border-gray-200">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 p-4">
           <span className="cell-nowrap font-bold">K-Beauty Trade OS</span>
-          <nav className="flex gap-4 text-sm">
+          <nav className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
             {[
               ...NAV,
               ...(canApprove ? APPROVAL_NAV : []),

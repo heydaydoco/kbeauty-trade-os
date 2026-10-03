@@ -6,7 +6,7 @@
 
 import { ApiError } from "./api";
 import { salesOrderStatusLabel } from "./doc-status";
-import { withJosa } from "./confirm";
+import { josaOf } from "./confirm";
 
 export const ORDER_INTAKES_QUERY_KEY = ["order-intakes"] as const;
 export const orderIntakeDetailKey = (id: number) => [...ORDER_INTAKES_QUERY_KEY, "detail", id] as const;
@@ -187,13 +187,17 @@ export function mappingBadgeClass(state: string): string {
   }
 }
 
-/** 해소 안내 — 서버 mapping_state를 문구로만 옮긴다(해소 가능 여부를 계산하지 않는다). */
-export function mappingGuide(state: string): string | null {
+/** 해소 안내 — 서버 mapping_state를 문구로만 옮긴다(해소 가능 여부를 계산하지 않는다). 읽기 전용 역할에게는 직접 할 수 없는 조작을 안내하지 않는다. */
+export function mappingGuide(state: string, canWrite: boolean): string | null {
   switch (state) {
     case "UNMAPPED":
-      return "이 바이어 품번에 연결된 SKU가 없거나 삭제되었습니다. 아래 '품번 등록'에서 SKU를 연결한 뒤 '품번 다시 확인'을 누르세요.";
+      return canWrite
+        ? "이 바이어 품번에 연결된 SKU가 없거나 연결된 SKU가 삭제되었습니다. 아래 '품번 등록'에서 SKU를 연결한 뒤 '품번 다시 확인'을 누르세요(기존 매핑의 SKU가 삭제된 경우에는 거래처 화면에서 그 매핑을 먼저 삭제해야 새로 등록됩니다)."
+        : "이 바이어 품번에 연결된 SKU가 없거나 연결된 SKU가 삭제되었습니다. 무역 담당자가 품번 매핑을 정리한 뒤 다시 확인해야 접수할 수 있습니다.";
     case "STALE":
-      return "검토한 뒤 바이어 품번 매핑이 바뀌었습니다. 자동으로 따라가지 않습니다 — '품번 다시 확인'으로 새 해석을 반영하고 내용을 다시 검토하세요.";
+      return canWrite
+        ? "검토한 뒤 바이어 품번 매핑이 바뀌었습니다. 자동으로 따라가지 않습니다 — '품번 다시 확인'으로 새 해석을 반영하고 내용을 다시 검토하세요."
+        : "검토한 뒤 바이어 품번 매핑이 바뀌었습니다. 자동으로 따라가지 않으며, 무역 담당자가 품번을 다시 확인해야 합니다.";
     default:
       return null;
   }
@@ -205,12 +209,21 @@ export const skuStatusLabel = (status: string | null): string => (status === nul
 const SOURCE_KIND: Record<string, string> = { MANUAL: "수동 등록", CSV: "CSV 업로드" };
 export const sourceKindLabel = (kind: string): string => SOURCE_KIND[kind] ?? "확인 불가";
 
+/**
+ * 조사 붙이기 — 끝의 닫는 괄호·따옴표·공백은 건너뛰고 그 앞 글자의 받침으로 고른다("SO-1 (확정)" → "…(확정)이").
+ * 영문 등 판정할 수 없는 끝 글자는 받침 없음으로 본다(confirm.ts `josaOf` 규칙).
+ */
+export function withJosaText(text: string, kind: "을/를" | "이/가" | "은/는"): string {
+  const core = text.replace(/[)\]}'"’”\s]+$/u, "");
+  return `${text}${josaOf(core === "" ? text : core, kind)}`;
+}
+
 /** 점유 문서 안내 — 번호·상태는 서버가 줄 때만 쓴다(마스킹 역할은 null이라 번호 없이). */
 export function poOccupiedText(occ: PoOccupied): string {
   const who = occ.kind === "SALES_ORDER" ? "수주" : "다른 인테이크";
-  if (occ.doc_number === null) return `${who}가 같은 바이어 PO번호를 점유 중입니다(문서 번호는 무역·관리자만 확인할 수 있습니다).`;
+  if (occ.doc_number === null) return `${withJosaText(who, "이/가")} 같은 바이어 PO번호를 점유 중입니다(문서 번호는 무역·관리자만 확인할 수 있습니다).`;
   const status = occ.status === null ? "" : ` (${occ.kind === "SALES_ORDER" ? salesOrderStatusLabel(occ.status) : intakeStatusLabel(occ.status)})`;
-  return `${who} ${occ.doc_number}${status}가 같은 바이어 PO번호를 점유 중입니다.`;
+  return `${withJosaText(`${who} ${occ.doc_number}${status}`, "이/가")} 같은 바이어 PO번호를 점유 중입니다.`;
 }
 
 // ── 오류 문구 ────────────────────────────────────────────────────────────────
@@ -233,6 +246,7 @@ export const CODE = {
   COPY_NOT_ELIGIBLE: "TRADE_DOCS.COPY.SOURCE_NOT_ELIGIBLE",
   AMOUNT_OUT_OF_RANGE: "TRADE_DOCS.LINE.AMOUNT_OUT_OF_RANGE",
   VALIDATION: "COMMON.VALIDATION.INVALID_FIELD",
+  MARKET_NOT_REGISTERED: "MARKETS.MARKET.NOT_REGISTERED",
 } as const;
 
 export type IntakeOp = "create" | "edit" | "resolve" | "reject" | "confirm" | "item-code";
@@ -318,37 +332,84 @@ const FIELD_LABEL: Record<string, string> = {
   sku_id: "SKU",
 };
 
-/** 검증 오류 키 → 한국어 위치명. `lines[0].unit_price`(등록·수정)와 `line_3.requested_delivery_date`(확정 — 인테이크 라인 번호)를 읽는다. */
-export function fieldPathLabel(key: string): string {
-  const indexed = /^lines\[(\d+)\]\.(.+)$/.exec(key);
-  if (indexed) return `라인 ${Number(indexed[1]) + 1} ${FIELD_LABEL[indexed[2] as string] ?? "항목"}`;
+/** 라인 순번(요청 본문의 lines 배열 index) → 화면 라벨. 지정하지 않으면 "라인 index+1"(등록 화면 — 서버가 1..n을 부여). */
+export type LineLabelOf = (index: number) => string;
+const positionLabel: LineLabelOf = (index) => `라인 ${index + 1}`;
+
+/**
+ * 검증 오류 키 → 한국어 위치명.
+ * - `lines[0].unit_price`(서비스 검증 — 등록·수정) · `lines.0.unit_price`(요청 검증 봉투 `항목[].위치`): 요청 본문의 라인 순번 → `lineLabelOf`(수정 화면은 서버 라인 번호·'신규 n')
+ * - `line_3.requested_delivery_date`(확정 — 인테이크 라인 번호 그대로)
+ */
+export function fieldPathLabel(key: string, lineLabelOf: LineLabelOf = positionLabel): string {
+  const indexed = /^lines(?:\[(\d+)\]|\.(\d+))(?:\.(.+))?$/.exec(key);
+  if (indexed) {
+    const index = Number(indexed[1] ?? indexed[2]);
+    const field = indexed[3];
+    return `${lineLabelOf(index)} ${field === undefined ? "" : (FIELD_LABEL[field] ?? "항목")}`.trim();
+  }
   const byNo = /^line_(\d+)\.(.+)$/.exec(key);
   if (byNo) return `라인 ${byNo[1]} ${FIELD_LABEL[byNo[2] as string] ?? "항목"}`;
   return FIELD_LABEL[key] ?? "입력값";
 }
 
-/** 422 INVALID_FIELD detail({위치: 한국어 메시지}) → '위치: 메시지' 목록. 한글이 없는 값(영문 코드)은 위치만 안내한다. */
-export function validationProblems(detail: Record<string, unknown> | undefined): string[] {
-  return Object.entries(detail ?? {}).flatMap(([key, value]) => {
-    if (typeof value !== "string") return [];
-    return [HANGUL.test(value) ? `${fieldPathLabel(key)}: ${value}` : `${fieldPathLabel(key)}을(를) 확인해 주세요.`];
-  });
+/** Pydantic 사유의 접두("Value error, ")를 떼어 낸다 — 서버 검증기가 던진 한국어 문구만 남긴다. */
+const cleanReason = (reason: string): string => reason.replace(/^Value error,\s*/u, "").trim();
+
+/**
+ * 422 detail → '위치: 사유' 목록. 두 모양을 읽는다:
+ * ① 서비스 검증 `{위치키: 한국어 메시지}` ② 요청 검증 봉투(core/errors/handlers.py) `{"항목": [{"위치": "lines.0.unit_price", "사유": "..."}]}`.
+ * 한글이 없는 사유(Pydantic 영문 메시지·코드)는 원문을 노출하지 않고 위치만 안내한다.
+ */
+export function validationProblems(detail: Record<string, unknown> | undefined, lineLabelOf: LineLabelOf = positionLabel): string[] {
+  const out: string[] = [];
+  const add = (where: string, reason: string) =>
+    out.push(HANGUL.test(reason) ? `${where}: ${cleanReason(reason)}` : `${withJosaText(where, "을/를")} 확인해 주세요.`);
+  for (const [key, value] of Object.entries(detail ?? {})) {
+    if (key === "항목" && Array.isArray(value)) {
+      for (const item of value) {
+        if (!isRecord(item)) continue;
+        const where = typeof item["위치"] === "string" ? item["위치"] : "";
+        add(fieldPathLabel(where, lineLabelOf), typeof item["사유"] === "string" ? item["사유"] : "");
+      }
+      continue;
+    }
+    if (typeof value === "string") add(fieldPathLabel(key, lineLabelOf), value);
+  }
+  return out;
 }
 
 const STALE_ACTION = "'최신 내용 불러오기'";
+
+export interface IntakeErrorOptions {
+  fallback?: string;
+  /** 요청 본문 lines[index] → 화면 라벨(수정 화면은 서버 라인 번호·'신규 n'). */
+  lineLabelOf?: LineLabelOf;
+}
+
+const INVALID_GENERIC = "입력값이 올바르지 않습니다. 입력 내용을 확인한 뒤 다시 시도해 주세요.";
+
+/** 서버가 준 오류 번호(request_id)가 있으면 문의 안내에 붙인다 — 없는 번호를 말하지 않는다. */
+const contactAdmin = (error: ApiError): string =>
+  error.requestId ? `계속되면 관리자에게 문의해 주세요(오류 번호: ${error.requestId}).` : "계속되면 관리자에게 문의해 주세요.";
 
 /**
  * 인테이크 오류 → 한국어 문구. 영문 코드·detail 원문은 노출하지 않는다(라인 번호·품번·점유 문서번호·검증 위치만 한국어로 옮김).
  * 순서: 코드 사전 → 상태별 일반 문구 → 서버 한국어 message → 기본 문구.
  */
-export function intakeErrorMessage(error: unknown, op: IntakeOp, fallback?: string): string {
+export function intakeErrorMessage(error: unknown, op: IntakeOp, options: IntakeErrorOptions = {}): string {
   const noun = OP_NOUN[op];
-  const base = fallback ?? `${withJosa(noun, "을/를")} 처리하지 못했습니다.`;
+  const base = options.fallback ?? `${withJosaText(noun, "을/를")} 처리하지 못했습니다.`;
   if (!(error instanceof ApiError)) return base;
   if (isNetworkError(error)) {
-    return op === "create" || op === "item-code"
-      ? `연결이 끊겼습니다. ${withJosa(noun, "이/가")} 처리되었을 수 있으니 목록에서 확인한 뒤 필요하면 같은 버튼을 다시 누르세요(같은 요청이라 중복 처리되지 않습니다).`
-      : `연결이 끊겼습니다. ${withJosa(noun, "이/가")} 처리되었을 수 있으니 ${STALE_ACTION}로 상태를 확인한 뒤 필요하면 같은 버튼을 다시 누르세요(중복 처리되지 않습니다).`;
+    if (op === "create" || op === "item-code") {
+      return `연결이 끊겼습니다. ${withJosaText(noun, "이/가")} 처리되었을 수 있으니 목록에서 확인한 뒤 필요하면 같은 버튼을 다시 누르세요(같은 요청이라 중복 처리되지 않습니다).`;
+    }
+    if (op === "edit") {
+      // 수정(PATCH)은 멱등 키 계약이 없다 — 다시 누르기 전에 반영 여부부터 확인하게 한다(반영됐다면 version이 올라 충돌로 거절된다).
+      return `연결이 끊겼습니다. 수정이 반영되었을 수 있으니 먼저 ${STALE_ACTION}로 반영 여부를 확인해 주세요.`;
+    }
+    return `연결이 끊겼습니다. ${withJosaText(noun, "이/가")} 처리되었을 수 있으니 ${STALE_ACTION}로 상태를 확인한 뒤 필요하면 같은 버튼을 다시 누르세요(중복 처리되지 않습니다).`;
   }
   switch (error.code) {
     case CODE.VERSION_CONFLICT:
@@ -381,22 +442,28 @@ export function intakeErrorMessage(error: unknown, op: IntakeOp, fallback?: stri
     case CODE.LIMIT_EXCEEDED:
       return "라인은 1개 이상 200개 이하여야 합니다. 라인 수를 확인해 주세요.";
     case CODE.GATE_UNRESOLVED:
-      return "접수 확정에 필요한 확인 항목을 서버가 평가하지 못했습니다. 잠시 후 다시 시도하시고, 계속되면 오류 번호와 함께 관리자에게 문의해 주세요.";
+      return `접수 확정에 필요한 확인 항목을 서버가 평가하지 못했습니다. 잠시 후 다시 시도해 주세요. ${contactAdmin(error)}`;
     case CODE.COPY_NOT_ELIGIBLE:
-      return `복제 원본 수주가 더 이상 복제할 수 있는 상태가 아닙니다(취소된 같은 바이어의 수주만 원본이 될 수 있습니다). ${STALE_ACTION}로 확인하거나, 복제 없이 새로 등록해 주세요.`;
+      return op === "create"
+        ? "복제 원본 수주가 복제할 수 있는 상태가 아닙니다(취소된 같은 바이어의 수주만 원본이 될 수 있습니다). 원본 없이 등록하려면 '복제 없이 등록'을 누르세요 — 입력한 내용은 그대로 남습니다."
+        : `복제 원본 수주가 더 이상 복제할 수 있는 상태가 아닙니다(취소된 같은 바이어의 수주만 원본이 될 수 있습니다). ${STALE_ACTION}로 확인하고, 접수가 필요하면 이 인테이크를 거부한 뒤 복제 없이 새로 등록해 주세요.`;
     case CODE.AMOUNT_OUT_OF_RANGE:
       return "금액 또는 라인 수가 허용 범위를 넘었습니다. 수량·단가를 확인해 주세요.";
-    case CODE.VALIDATION: {
-      const problems = validationProblems(error.detail);
+    case CODE.MARKET_NOT_REGISTERED: {
+      const problems = validationProblems(error.detail, options.lineLabelOf);
       return problems.length > 0
-        ? `입력값을 확인해 주세요 — ${problems.join(" / ")}`
-        : "입력값이 올바르지 않습니다. 표시된 항목을 확인한 뒤 다시 시도해 주세요.";
+        ? `등록되지 않았거나 삭제된 시장입니다 — ${problems.join(" / ")}`
+        : "도착 시장이 등록되지 않았거나 삭제되었습니다. 시장 관리 화면에서 확인한 뒤 다시 시도해 주세요.";
+    }
+    case CODE.VALIDATION: {
+      const problems = validationProblems(error.detail, options.lineLabelOf);
+      return problems.length > 0 ? `입력값을 확인해 주세요 — ${problems.join(" / ")}` : INVALID_GENERIC;
     }
     default:
   }
-  if (error.status === 403) return `${withJosa(noun, "은/는")} 무역·관리자만 할 수 있습니다.`;
+  if (error.status === 403) return `${withJosaText(noun, "은/는")} 무역·관리자만 할 수 있습니다.`;
   if (error.status === 404) return "인테이크를 찾을 수 없습니다. 목록에서 다시 확인해 주세요.";
-  if (error.status === 422) return "입력값이 올바르지 않습니다. 표시된 항목을 확인한 뒤 다시 시도해 주세요.";
+  if (error.status === 422) return INVALID_GENERIC;
   if (error.status === 409) return `처리 중 충돌이 발생했습니다. ${STALE_ACTION}로 확인한 뒤 다시 시도해 주세요.`;
   return HANGUL.test(error.message) ? error.message : base;
 }
@@ -407,9 +474,9 @@ export const isIntakeRecoverable = (error: unknown): boolean =>
 
 /** 목록·상세 조회(GET) 실패 전용 문구 — 쓰기 문구를 재사용하지 않는다. */
 export function intakeLoadErrorMessage(error: unknown, what = "오더 인테이크"): string {
-  const fallback = `${what}를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.`;
+  const fallback = `${withJosaText(what, "을/를")} 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.`;
   if (!(error instanceof ApiError)) return fallback;
-  if (error.status === 403) return `${what}를 볼 권한이 없습니다.`;
+  if (error.status === 403) return `${withJosaText(what, "을/를")} 볼 권한이 없습니다.`;
   if (error.status === 404) return "인테이크를 찾을 수 없습니다. 목록에서 다시 확인해 주세요.";
   return HANGUL.test(error.message) ? error.message : fallback;
 }
@@ -427,6 +494,8 @@ export interface LineForm {
   key: number;
   /** 기존 라인 id — 있으면 제자리 수정, 없으면 신규. */
   id: number | null;
+  /** 서버 라인 번호(line_no) — 수정 화면의 기존 라인만. 위치가 아니라 이 번호로 라인을 가리킨다. */
+  lineNo: number | null;
   code: string;
   qty: string;
   price: string;
@@ -434,20 +503,45 @@ export interface LineForm {
 }
 
 let lineSeq = 0;
-export const newLineForm = (over: Partial<LineForm> = {}): LineForm => ({ key: ++lineSeq, id: null, code: "", qty: "", price: "", delivery: "", ...over });
+export const newLineForm = (over: Partial<LineForm> = {}): LineForm => ({ key: ++lineSeq, id: null, lineNo: null, code: "", qty: "", price: "", delivery: "", ...over });
 
-/** 라인 형식 검증 — 첫 문제의 문구(없으면 null). 금액은 문자열 그대로이며 산술하지 않는다. */
-export function validateLineForms(lines: LineForm[]): string | null {
-  if (lines.length === 0) return "라인을 1개 이상 추가해 주세요.";
-  if (lines.length > MAX_LINES) return `라인은 ${MAX_LINES}개 이하여야 합니다.`;
+/**
+ * 라인 표시 라벨 — 등록 화면은 위치(서버가 1..n을 부여), 수정 화면은 기존 라인=서버 line_no("라인 3"), 새 라인="신규 n".
+ * 라인 하나를 지워도 남은 라인의 이름이 바뀌지 않는다(오류 안내가 엉뚱한 라인을 가리키지 않게).
+ */
+export function lineLabels(lines: LineForm[], mode: "create" | "edit"): string[] {
+  let fresh = 0;
+  return lines.map((line, index) => {
+    if (mode === "create") return `라인 ${index + 1}`;
+    if (line.lineNo !== null) return `라인 ${line.lineNo}`;
+    fresh += 1;
+    return `신규 ${fresh}`;
+  });
+}
+
+export type LineField = "code" | "qty" | "price";
+export interface FormProblem {
+  message: string;
+  /** 문제 입력의 DOM id(포커스·aria-invalid 대상) — 없으면 폼 전체 문제. */
+  inputId: string | null;
+}
+
+/** 라인 입력의 DOM id — 편집기·검증·포커스가 같은 규칙을 쓴다. */
+export const lineInputId = (line: Pick<LineForm, "key">, field: LineField): string => `intake-line-${line.key}-${field}`;
+
+/** 라인 형식 검증 — **모든** 문제를 모은다(첫 문제만이 아니라). 금액은 문자열 그대로이며 산술하지 않는다. */
+export function validateLineForms(lines: LineForm[], labels: string[] = lineLabels(lines, "create")): FormProblem[] {
+  if (lines.length === 0) return [{ message: "라인을 1개 이상 추가해 주세요.", inputId: null }];
+  if (lines.length > MAX_LINES) return [{ message: `라인은 ${MAX_LINES}개 이하여야 합니다.`, inputId: null }];
+  const out: FormProblem[] = [];
   for (const [index, line] of lines.entries()) {
-    const label = `라인 ${index + 1}`;
-    if (line.code.trim() === "") return `${label}의 바이어 품번을 입력해 주세요.`;
+    const label = labels[index] ?? `라인 ${index + 1}`;
+    if (line.code.trim() === "") out.push({ message: `${label}의 바이어 품번을 입력해 주세요.`, inputId: lineInputId(line, "code") });
     const qty = line.qty.trim();
-    if (!/^[1-9][0-9]*$/.test(qty) || Number(qty) > MAX_QUANTITY) return `${label}의 수량은 1 이상의 정수로 입력해 주세요.`;
-    if (!DECIMAL.test(line.price.trim())) return `${label}의 단가는 숫자(예: 12.34)로 입력해 주세요.`;
+    if (!/^[1-9][0-9]*$/.test(qty) || Number(qty) > MAX_QUANTITY) out.push({ message: `${label}의 수량은 1 이상의 정수로 입력해 주세요.`, inputId: lineInputId(line, "qty") });
+    if (!DECIMAL.test(line.price.trim())) out.push({ message: `${label}의 단가는 숫자(예: 12.34)로 입력해 주세요.`, inputId: lineInputId(line, "price") });
   }
-  return null;
+  return out;
 }
 
 export function lineBodies(lines: LineForm[]): IntakeLineBody[] {

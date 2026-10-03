@@ -6,9 +6,12 @@
 //   무변경 저장은 막는다. 거래처·통화·상태는 바꿀 수 없다(필드 없음 — 잘못 골랐으면 거부 후 재등록).
 // - 형식 외 검증(단가 자릿수·0 초과·요청납기·같은 SKU 중복·중복 PO)은 서버가 판정하고 한국어 안내를 그대로 보인다.
 // - 더블클릭은 ref 잠금(mutationFn finally에서 해제). networkMode:"always".
+// - 라인 이름은 위치가 아니라 서버 라인 번호("라인 3")·새 라인은 "신규 n" — 라인을 지워도 남은 라인의 이름이 바뀌지 않고, 서버 422의 `lines[i]`도 보낸 i번째 행의 이름으로 옮긴다.
+// - 형식 문제는 모두 모아 보이고 첫 문제 입력으로 포커스(aria-invalid).
 
 import { useMutation } from "@tanstack/react-query";
 import { useRef, useState } from "react";
+import { FormProblemList, useFormProblems } from "./intake-form-problems";
 import { Link } from "react-router";
 import { apiFetch } from "../lib/api";
 import {
@@ -16,9 +19,11 @@ import {
   isIntakeRecoverable,
   isWriteForbidden,
   lineBodies,
+  lineLabels,
   newLineForm,
   parsePoOccupant,
   validateLineForms,
+  type FormProblem,
   type IntakeDetail,
   type IntakeEditLineBody,
   type LineForm,
@@ -28,6 +33,8 @@ import type { Market } from "../routes/markets";
 import { LineEditor } from "./intake-line-editor";
 
 const inputClass = "rounded border border-gray-300 px-3 py-2 text-sm";
+const PROBLEMS_ID = "intake-edit-problems";
+const PO_NO_ID = "intake-edit-po-no";
 
 interface UserLookup {
   id: number;
@@ -38,6 +45,7 @@ const seedLines = (intake: IntakeDetail): LineForm[] =>
   intake.lines.map((line) =>
     newLineForm({
       id: line.id,
+      lineNo: line.line_no,
       code: line.buyer_item_code,
       qty: String(line.quantity),
       price: line.unit_price_text,
@@ -80,8 +88,10 @@ export function IntakeEditForm({
   const [market, setMarket] = useState(seed.current.market);
   const [assignee, setAssignee] = useState(seed.current.assignee);
   const [lines, setLines] = useState<LineForm[]>(() => seed.current.lines.map((l) => ({ ...l })));
-  const [formError, setFormError] = useState<string | null>(null);
+  const form = useFormProblems();
   const lock = useRef(false);
+  // 마지막으로 보낸 본문의 라인 이름(서버 422 `lines[i]` → 보낸 i번째 행의 이름).
+  const sentLabels = useRef<string[]>([]);
 
   const save = useMutation({
     networkMode: "always",
@@ -108,22 +118,20 @@ export function IntakeEditForm({
   const linesChanged = !sameLines(s.lines, lines);
   const changed = Object.values(headerChanged).some(Boolean) || linesChanged;
 
+  const labels = lineLabels(lines, "edit");
+
   function submit() {
     if (lock.current) return;
     if (!changed) {
-      setFormError("바뀐 내용이 없습니다.");
+      form.show([{ message: "바뀐 내용이 없습니다.", inputId: null }]);
       return;
     }
-    if (poNo.trim() === "") {
-      setFormError("바이어 PO번호를 입력해 주세요.");
+    const problems: FormProblem[] = [];
+    if (poNo.trim() === "") problems.push({ message: "바이어 PO번호를 입력해 주세요.", inputId: PO_NO_ID });
+    if (linesChanged) problems.push(...validateLineForms(lines, labels));
+    if (problems.length > 0) {
+      form.show(problems);
       return;
-    }
-    if (linesChanged) {
-      const problem = validateLineForms(lines);
-      if (problem !== null) {
-        setFormError(problem);
-        return;
-      }
     }
     const body: Record<string, unknown> = { version };
     if (headerChanged.buyer_po_no) body.buyer_po_no = poNo.trim();
@@ -137,20 +145,23 @@ export function IntakeEditForm({
         return id === null ? line : { id, ...line };
       });
     }
-    setFormError(null);
+    sentLabels.current = labels;
+    form.clear();
     lock.current = true;
     save.mutate(body);
   }
 
   function touched() {
-    setFormError(null);
+    form.clear();
     save.reset();
   }
 
   const marketItems = markets.data?.items ?? [];
   const userItems = users.data?.items ?? [];
   const occupant = parsePoOccupant(save.error);
-  const serverError = save.error ? intakeErrorMessage(save.error, "edit") : null;
+  const serverError = save.error
+    ? intakeErrorMessage(save.error, "edit", { lineLabelOf: (index) => sentLabels.current[index] ?? `${index + 1}번째 라인` })
+    : null;
 
   return (
     <form
@@ -169,6 +180,9 @@ export function IntakeEditForm({
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-gray-600">바이어 PO번호</span>
           <input
+            id={PO_NO_ID}
+            aria-invalid={form.invalidIds.has(PO_NO_ID)}
+            aria-describedby={form.invalidIds.has(PO_NO_ID) ? PROBLEMS_ID : undefined}
             value={poNo}
             maxLength={200}
             onChange={(e) => {
@@ -234,25 +248,29 @@ export function IntakeEditForm({
 
       <LineEditor
         lines={lines}
+        labels={labels}
         onChange={(next) => {
           touched();
           setLines(next);
         }}
         disabled={save.isPending}
         currency={intake.currency}
+        invalidIds={form.invalidIds}
+        errorId={PROBLEMS_ID}
       />
 
-      {(formError || serverError) && (
+      <FormProblemList id={PROBLEMS_ID} problems={form.problems} />
+      {form.problems.length === 0 && serverError && (
         <div role="alert" className="break-keep text-sm text-signal-red">
-          <p>{formError ?? serverError}</p>
-          {formError === null && occupant?.intakeId != null && (
+          <p>{serverError}</p>
+          {occupant?.intakeId != null && (
             <p className="mt-1">
               <Link to={`/orders/intakes/${occupant.intakeId}`} className="underline">
                 점유 중인 인테이크 #{occupant.intakeId} 보기
               </Link>
             </p>
           )}
-          {formError === null && isIntakeRecoverable(save.error) && (
+          {isIntakeRecoverable(save.error) && (
             <button type="button" onClick={onReload} className="cell-nowrap mt-2 rounded border border-gray-300 px-3 py-1 text-gray-900">
               최신 내용 불러오기
             </button>
@@ -261,9 +279,19 @@ export function IntakeEditForm({
       )}
 
       <div>
-        <button type="submit" disabled={save.isPending || !changed} className="cell-nowrap rounded bg-gray-900 px-4 py-2 text-sm text-white disabled:opacity-50">
+        <button
+          type="submit"
+          disabled={save.isPending || !changed}
+          aria-describedby={!save.isPending && !changed ? "intake-edit-unchanged" : undefined}
+          className="cell-nowrap rounded bg-gray-900 px-4 py-2 text-sm text-white disabled:opacity-50"
+        >
           {save.isPending ? "저장 중…" : "수정 저장"}
         </button>
+        {!changed && (
+          <span id="intake-edit-unchanged" className="sr-only">
+            바뀐 내용이 없어 저장할 수 없습니다.
+          </span>
+        )}
       </div>
     </form>
   );

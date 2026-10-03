@@ -120,7 +120,9 @@ describe("등록 요청", () => {
       dest_market_code: "US",
       lines: [{ buyer_item_code: "ABC-1", quantity: 10, unit_price: "12.50", requested_delivery_date: "2099-12-31" }],
     });
-    expect(Object.keys(call?.body ?? {})).not.toEqual(expect.arrayContaining(["status", "sku_id", "buyer_po_no_key", "sales_order_id"]));
+    // 상태·SKU·PO 키·SO 백링크 필드는 하나하나 없어야 한다(서버가 산출 — 착지는 항상 대기).
+    for (const forbidden of ["status", "sku_id", "buyer_po_no_key", "sales_order_id"]) expect(call?.body).not.toHaveProperty(forbidden);
+    expect(call?.body?.lines).toEqual([expect.not.objectContaining({ sku_id: expect.anything() })]);
     expect(call?.headers["Idempotency-Key"]).toBe("key-1");
   });
 
@@ -223,16 +225,33 @@ describe("서버 오류 안내(한국어 — 영문 코드·원문 비노출)", 
     expect(await screen.findByRole("alert")).toHaveTextContent("라인 1 단가: 단가는 0보다 커야 합니다.");
   });
 
-  it("복제 원본 자격 없음 409·403·연결 끊김", async () => {
-    let next: () => Response = () => apiError("TRADE_DOCS.COPY.SOURCE_NOT_ELIGIBLE", 409);
+  it("요청 검증 422 봉투(`항목[].위치·사유`) — 위치는 한국어로, 영문 사유는 숨기고 위치만", async () => {
+    open([
+      [
+        "/v1/order-intakes",
+        "POST",
+        () => apiError("COMMON.VALIDATION.INVALID_FIELD", 422, "english", { 항목: [{ 위치: "lines.0.unit_price", 사유: "String should have at most 40 characters" }] }),
+      ],
+    ]);
+    await fillValid();
+    submit();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("라인 1 단가를 확인해 주세요.");
+    expect(alert).not.toHaveTextContent("String should");
+  });
+
+  it("403·연결 끊김(TypeError) — 한국어 안내", async () => {
+    let next: () => Response = () => apiError("AUTH.FORBIDDEN", 403);
     open([["/v1/order-intakes", "POST", () => next()]]);
     await fillValid();
     submit();
-    expect(await screen.findByRole("alert")).toHaveTextContent("복제 원본 수주가 더 이상");
-    next = () => apiError("AUTH.FORBIDDEN", 403);
+    expect(await screen.findByRole("alert")).toHaveTextContent("등록은 무역·관리자만 할 수 있습니다.");
+    next = () => {
+      throw new TypeError("Failed to fetch");
+    };
     fireEvent.change(screen.getByLabelText("라인 1 수량"), { target: { value: "12" } });
     submit();
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("등록은 무역·관리자만"));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("연결이 끊겼습니다. 등록이 처리되었을 수 있으니 목록에서 확인"));
   });
 
   it("입력을 고치면 이전 오류 안내가 사라진다", async () => {
@@ -255,6 +274,26 @@ describe("복제 재접수·읽기 전용", () => {
     expect(posts(stub.calls)[0]?.body?.copied_from_so_id).toBe(12);
   });
 
+  it("원본 자격 거절(409 COPY.SOURCE_NOT_ELIGIBLE) — 불러오기 지시 없이 '복제 없이 등록'으로 원본만 빼고 입력을 유지해 다시 보낸다", async () => {
+    let n = 0;
+    const stub = open([["/v1/order-intakes", "POST", () => (++n === 1 ? apiError("TRADE_DOCS.COPY.SOURCE_NOT_ELIGIBLE", 409, "english") : created())]], TRADER, "/orders/intakes/new?copied_from_so_id=12");
+    await fillValid();
+    submit();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("복제 원본 수주가 복제할 수 있는 상태가 아닙니다");
+    expect(alert).not.toHaveTextContent("최신 내용 불러오기");
+    expect(screen.queryByRole("button", { name: "최신 내용 불러오기" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "복제 없이 등록" }));
+    await screen.findByRole("heading", { name: /PO PO-2026-001/ });
+    const [first, second] = posts(stub.calls);
+    expect(first?.body?.copied_from_so_id).toBe(12);
+    expect(second?.body).not.toHaveProperty("copied_from_so_id");
+    // 원본만 빠지고 나머지 입력은 그대로.
+    expect(second?.body?.buyer_po_no).toBe("PO-2026-001");
+    expect(second?.body?.lines).toEqual(first?.body?.lines);
+    expect(second?.headers["Idempotency-Key"]).not.toBe(first?.headers["Idempotency-Key"]);
+  });
+
   it("값이 없거나 올바르지 않으면 필드·안내가 없고 본문에도 싣지 않는다(서버 검증 메시지로 안내)", async () => {
     const stub = open([["/v1/order-intakes", "POST", created]], TRADER, "/orders/intakes/new?copied_from_so_id=abc");
     await fillValid();
@@ -268,5 +307,45 @@ describe("복제 재접수·읽기 전용", () => {
     open([], VIEWER);
     expect(await screen.findByText(/인테이크 등록은 무역·관리자만 할 수 있습니다/)).toBeInTheDocument();
     expect(screen.queryByRole("form", { name: "오더 인테이크 등록" })).not.toBeInTheDocument();
+  });
+});
+
+describe("적대 검토 반영 — 형식 문제 모아 보기·이동 안전", () => {
+  it("형식 문제를 모두 모아 보이고, 문제 입력에 aria-invalid를 달고 첫 문제 입력으로 포커스를 옮긴다", async () => {
+    const stub = open();
+    await screen.findByRole("form", { name: "오더 인테이크 등록" });
+    fireEvent.focus(screen.getByRole("combobox", { name: "바이어" }));
+    fireEvent.click(await screen.findByRole("option", { name: "ABC Trading (P-3)" }));
+    fireEvent.change(screen.getByLabelText("라인 1 수량"), { target: { value: "0" } });
+    submit();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("통화를 선택해 주세요.");
+    expect(alert).toHaveTextContent("도착 시장을 선택해 주세요.");
+    expect(alert).toHaveTextContent("바이어 PO번호를 입력해 주세요.");
+    expect(alert).toHaveTextContent("라인 1의 바이어 품번을 입력해 주세요.");
+    expect(alert).toHaveTextContent("라인 1의 수량은 1 이상의 정수");
+    expect(alert).toHaveTextContent("라인 1의 단가는 숫자");
+    expect(screen.getByLabelText("통화 *")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("라인 1 수량")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("라인 1 수량")).toHaveAccessibleDescription(expect.stringContaining("라인 1의 수량은 1 이상의 정수"));
+    expect(screen.getByLabelText("바이어 PO 일자")).not.toHaveAttribute("aria-invalid", "true");
+    await waitFor(() => expect(screen.getByLabelText("통화 *")).toHaveFocus());
+    expect(posts(stub.calls)).toHaveLength(0);
+  });
+
+  it("요청 중 다른 화면으로 떠나면 응답이 성공해도 상세로 끌고 가지 않는다", async () => {
+    let release: (r: Response) => void = () => undefined;
+    const stub = open([["/v1/order-intakes", "POST", () => new Promise<Response>((resolve) => (release = resolve)) as unknown as Response]]);
+    await fillValid();
+    submit();
+    await waitFor(() => expect(posts(stub.calls)).toHaveLength(1));
+    fireEvent.click(screen.getByRole("link", { name: "← 인테이크 목록" }));
+    await screen.findByRole("heading", { name: "주문 접수 (오더 인테이크)" });
+    await act(async () => release(created()));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(screen.getByRole("heading", { name: "주문 접수 (오더 인테이크)" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /PO PO-2026-001/ })).not.toBeInTheDocument();
   });
 });
