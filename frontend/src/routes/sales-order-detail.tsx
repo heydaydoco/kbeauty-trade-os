@@ -19,7 +19,7 @@ import { SearchSelect } from "../components/search-select";
 import { StatusTimeline } from "../components/status-timeline";
 import { ApiError, apiFetch } from "../lib/api";
 import { isVersionConflict } from "../lib/api-errors";
-import { todayKst } from "../lib/datetime";
+import { todayKst, toKstDisplay } from "../lib/datetime";
 import {
   BALANCE_ANCHOR_LABEL,
   INCOTERM_CODES,
@@ -414,7 +414,7 @@ function HeaderReadOnly({ so }: { so: SalesOrderDetail }) {
         </DocField>
         <DocField label="결제조건">{paymentTermsText(so.payment_terms)}</DocField>
         <DocField label="인코텀즈">{incotermText(so.incoterm)}</DocField>
-        {so.confirmed_at !== null && <DocField label="확정 시각">{so.confirmed_at}</DocField>}
+        {so.confirmed_at !== null && <DocField label="확정 시각">{toKstDisplay(so.confirmed_at)}</DocField>}
       </dl>
     </section>
   );
