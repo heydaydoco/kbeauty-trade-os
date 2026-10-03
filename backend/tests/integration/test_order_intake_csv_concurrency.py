@@ -117,6 +117,42 @@ def test_files_listing_the_same_pos_in_opposite_orders_never_deadlock() -> None:
     assert scalar("SELECT count(*) FROM order_intakes") == 2
 
 
+def test_two_files_interleaved_mid_landing_in_opposite_orders_do_not_deadlock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """교착 방지의 결정적 시험 — 두 파일(PO-1·PO-2 / PO-2·PO-1)이 **첫 PO를 착지한 직후 서로를 기다리게** 끼워 넣어도 착지가 `(거래처, PO키)` 정렬 순이라 교착(40P01)이 없다:
+    두 트랜잭션이 같은 PO부터 잡으므로 뒤쪽은 앞쪽 커밋을 기다렸다가 409 DUPLICATE_BUYER_PO로 끝난다(정렬을 빼면 서로 다른 PO를 쥔 채 엇갈려 교착)"""
+    import contextlib
+    import threading
+
+    w = world(lines=1)
+    code = w["codes"][0]
+    real = intake_service.register_intake
+    barrier = threading.Barrier(2)
+    local = threading.local()
+
+    def interleaved(*args: Any, **kwargs: Any) -> Any:
+        row = real(*args, **kwargs)
+        if not getattr(local, "waited", False):
+            local.waited = True
+            # 상대가 첫 PO를 착지할 때까지 기다린다(상대가 내 잠금에 막혀 있으면 3초 뒤 진행).
+            with contextlib.suppress(threading.BrokenBarrierError):
+                barrier.wait(timeout=3)
+        return row
+
+    monkeypatch.setattr(csv_import.intake_service, "register_intake", interleaved)
+
+    def worker(i: int) -> tuple[int, dict[str, Any]]:
+        order = ("PO-1", "PO-2") if i == 0 else ("PO-2", "PO-1")
+        content = csv_bytes([csv_row(w, po=po, code=code, qty=str(i + 1)) for po in order])
+        return _upload(trade_actor(), content)
+
+    outcomes = run_concurrently(worker, workers=2)
+    assert _codes(outcomes) == sorted(["OK", DUP_PO])
+    assert scalar("SELECT count(*) FROM order_intakes") == 2
+    assert scalar("SELECT count(DISTINCT source_sha256) FROM order_intakes") == 1
+
+
 def test_the_db_file_unique_is_translated_to_the_file_duplicate_code() -> None:
     """사전 조회를 빠져나간 경합의 최종 방어 — (sha256, 그룹 키) PENDING 부분 유니크 위반은 500이 아니라 같은 코드 409 FILE.DUPLICATE로 번역된다(제약명 분기)"""
     from app.core.db.uow import unit_of_work
