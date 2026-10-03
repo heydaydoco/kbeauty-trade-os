@@ -324,7 +324,7 @@ describe("접수 확정 — 항상 서버가 최종 판정", () => {
     expect(posts(stub.calls, CONFIRM)).toHaveLength(2);
   });
 
-  it("멱등 키는 (인테이크 id, version)당 1개 — 같은 version 재시도=같은 키, version이 오르면 새 키, 성공하면 비운다", async () => {
+  it("멱등 키는 (인테이크 id, version)당 1개 — 같은 version 재시도=같은 키, version이 오르면 새 키", async () => {
     let call = 0;
     const stub = open([
       [
@@ -487,7 +487,7 @@ describe("거부", () => {
     expect(posts(stub.calls, REJECT)).toHaveLength(0);
   });
 
-  it("제어문자(줄바꿈·탭)·보이지 않는 글자는 거부 — 화면에 이유가 나온다", async () => {
+  it("제어문자(줄바꿈)·보이지 않는 글자(제로폭)는 거부 — 화면에 이유가 나온다", async () => {
     open();
     const dialog = await openReject();
     typeReason(dialog, "첫 줄\n둘째 줄 사유");
@@ -687,7 +687,7 @@ describe("편집 PATCH — 헤더+라인 전체 교체", () => {
     });
   });
 
-  it("형식 오류(수량·단가)는 서버를 부르기 전에 막는다 — 같은 SKU·0 단가·납기는 서버 판정", async () => {
+  it("형식 오류(수량)는 서버를 부르기 전에 막는다", async () => {
     const stub = open();
     await ready();
     const form = within(screen.getByRole("form", { name: "인테이크 편집" }));

@@ -215,10 +215,12 @@ describe("서버 오류 안내(한국어 — 영문 코드·원문 비노출)", 
     submit();
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("이미 다른 문서");
-    expect(alert).not.toHaveTextContent(/SO-|#\d/);
+    expect(alert).not.toHaveTextContent("이미 등록된 수주:");
+    expect(alert).not.toHaveTextContent("이미 등록된 대기 인테이크:");
+    expect(screen.queryByRole("link", { name: /점유 중인 인테이크/ })).not.toBeInTheDocument();
   });
 
-  it("검증 422 — 라인 위치와 서버 한국어 메시지(단가·납기)", async () => {
+  it("검증 422 — 라인 위치와 서버 한국어 메시지(단가)", async () => {
     open([["/v1/order-intakes", "POST", () => apiError("COMMON.VALIDATION.INVALID_FIELD", 422, "english", { "lines[0].unit_price": "단가는 0보다 커야 합니다." })]]);
     await fillValid();
     submit();

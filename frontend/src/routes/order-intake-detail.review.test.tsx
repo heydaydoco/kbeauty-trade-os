@@ -157,6 +157,28 @@ describe("인테이크 간 이동 — 검토 결과·키·잠금·래치가 다�
     expect(eight?.headers["Idempotency-Key"]).not.toBe(first?.headers["Idempotency-Key"]);
   });
 
+  it("확정 뒤 '최신 내용 불러오기' — 이 화면의 확정 결과 안내를 비우고 서버 상태(읽기 전용)로 맞춘다", async () => {
+    open([
+      [
+        url(21, "/confirm"),
+        "POST",
+        () => {
+          server[21] = intakeDetail({ status: "CONFIRMED", version: 3, sales_order_id: 77 });
+          return confirmed(21);
+        },
+      ],
+    ]);
+    await heading("PO-2026-001");
+    fireEvent.click(screen.getByRole("button", { name: "접수 확정" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "접수 확정" }));
+    await screen.findByRole("region", { name: "접수 확정 결과" });
+    fireEvent.click(await screen.findByRole("button", { name: "최신 내용 불러오기" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "접수 확정 결과" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("status", { name: "처리 결과" })).toHaveTextContent(/^$/);
+    expect(screen.getByText("이미 확정된 인테이크라 읽기 전용입니다.")).toBeInTheDocument();
+    expect(screen.queryByText(/방금 이 화면에서 처리되어/)).not.toBeInTheDocument();
+  });
+
   it("403 래치는 인테이크마다 — #21에서 403을 받아도 #8에서는 조치 버튼이 다시 보인다", async () => {
     open([[url(21, "/resolve"), "POST", () => apiError("AUTH.FORBIDDEN", 403)]]);
     await heading("PO-2026-001");
