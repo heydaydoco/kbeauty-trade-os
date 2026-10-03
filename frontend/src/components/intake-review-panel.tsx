@@ -81,8 +81,16 @@ export function IntakeReviewPanel({
   useEffect(() => {
     const prev = seen.current;
     if (prev.version === version && prev.token === reloadToken) return;
+    const reloaded = prev.token !== reloadToken;
     seen.current = { version, token: reloadToken };
     setForbidden(false);
+    // '최신 내용 불러오기'(상위 reload)로 기준이 바뀌면 낡은 기준에서 연 다이얼로그·오류 안내를 닫는다.
+    if (reloaded) {
+      confirm.reset();
+      reject.reset();
+      resolve.reset();
+      setDialog(null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, reloadToken]);
 
