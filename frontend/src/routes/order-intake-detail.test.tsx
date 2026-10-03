@@ -169,6 +169,32 @@ describe("표시 — 서버 값 그대로", () => {
     expect(within(details).getByText("ABC-1")).toBeInTheDocument();
   });
 
+  it("CSV 원본(PR-14a 스냅샷 — 행마다 header_cells·row_no·file·parser_version)도 깨지지 않고 셀 원문 그대로 보인다", async () => {
+    const csvOriginal = {
+      kind: "CSV",
+      parser_version: 1,
+      file: { original_filename: "po.csv", sha256: "a".repeat(64) },
+      header: { buyer_code: "B-01", buyer_po_no: "PO-2026-001", buyer_po_date: "2026-09-29", currency: "usd", dest_market_code: "US" },
+      lines: [
+        {
+          row_no: 2,
+          buyer_item_code: "ABC-1",
+          quantity: "1,000",
+          unit_price: "12.50",
+          requested_delivery_date: "2099-12-31",
+          header_cells: { buyer_code: "B-01", buyer_po_no: "PO-2026-001", buyer_po_date: "2026-09-29", currency: "usd", dest_market_code: "US" },
+        },
+      ],
+    };
+    open([], { detail: intakeDetail({ source_kind: "CSV", lines: [intakeLine({ source_row_no: 2 })], original: csvOriginal }) });
+    await ready();
+    expect(screen.getByText(/CSV 업로드/)).toBeInTheDocument();
+    const details = screen.getByText(/접수 원본 보기/).closest("details") as HTMLElement;
+    expect(within(details).getByText("1,000")).toBeInTheDocument();
+    expect(within(details).getByText("usd")).toBeInTheDocument();
+    expect(details).not.toHaveTextContent("[object Object]");
+  });
+
   it("복제 원본·확정 수주 링크, 거부 사유(서버가 줄 때만)", async () => {
     open([], { detail: intakeDetail({ status: "REJECTED", copied_from_so_id: 12, reject_reason: "중복 접수라 거부", decided_at: "2026-09-30T02:00:00Z" }) });
     await ready();
