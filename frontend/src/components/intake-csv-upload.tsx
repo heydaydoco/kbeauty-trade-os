@@ -54,6 +54,11 @@ export function IntakeCsvUploadPanel({ onForbidden }: { onForbidden?: () => void
   const [fileError, setFileError] = useState<string | null>(null);
   const [retry, setRetry] = useState<Attempt | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  /** 결과가 나온 시도의 파일명 — 결과 화면에 함께 보인다(입력칸은 비워질 수 있다). */
+  const [outcomeFile, setOutcomeFile] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
+  /** 동기 진입 가드 — 상태 갱신(isPending)은 다음 렌더에야 반영되므로 빠른 연속 클릭을 ref로 막는다. */
+  const inFlight = useRef(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [templateBusy, setTemplateBusy] = useState(false);
   const [forbidden, setForbidden] = useState(false);
@@ -64,7 +69,18 @@ export function IntakeCsvUploadPanel({ onForbidden }: { onForbidden?: () => void
       form.append("file", attempt.file, attempt.file.name);
       return apiUpload<CsvImportResult>(CSV_IMPORT_PATH, form, { idempotencyKey: attempt.key });
     },
+    // ★ 목록 무효화는 훅 옵션에서 — mutate 콜백과 달리 관찰자(이 패널)가 사라져도 실행된다.
+    onSuccess: () => client.invalidateQueries({ queryKey: ORDER_INTAKES_QUERY_KEY }),
   });
+  const busy = reading || upload.isPending;
+  // 읽기 실패 안내 뒤 입력칸 포커스 — 처리 중에는 입력칸이 비활성이라 렌더가 끝난 다음에 옮긴다.
+  const focusInputAfterBusy = useRef(false);
+  useEffect(() => {
+    if (!busy && focusInputAfterBusy.current) {
+      focusInputAfterBusy.current = false;
+      inputRef.current?.focus();
+    }
+  }, [busy]);
 
   // 결과가 바뀌면 결과 영역으로 포커스를 옮긴다(스크린리더가 결과부터 읽는다).
   useEffect(() => {
@@ -76,25 +92,42 @@ export function IntakeCsvUploadPanel({ onForbidden }: { onForbidden?: () => void
     onForbidden?.();
   }
 
+  /** 입력칸을 비운다 — 같은 경로의 (고친) 파일을 다시 골라도 change 이벤트가 나게. */
+  function clearPick() {
+    setFile(null);
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
+  /** 호출 전에 inFlight를 세워 둔다(onUpload·재시도). 재시도는 기존 결과를 유지한 채 버튼만 비활성화된다. */
   function send(attempt: Attempt) {
-    setOutcome(null);
     upload.mutate(attempt, {
       onSuccess: (result) => {
         setRetry(null);
+        setOutcomeFile(attempt.file.name);
         setOutcome({ kind: "success", result });
         // 같은 파일을 실수로 다시 보내지 않게 선택을 비운다(다시 보내도 서버가 FILE.DUPLICATE로 막는다).
-        setFile(null);
-        if (inputRef.current) inputRef.current.value = "";
-        void client.invalidateQueries({ queryKey: ORDER_INTAKES_QUERY_KEY });
+        clearPick();
       },
       onError: (error) => {
         const next = classifyUploadError(error);
+        setOutcomeFile(attempt.file.name);
         setOutcome(next);
-        // 같은 키를 다시 쓰는 경우는 두 가지뿐이다 — 응답 유실·LOCK_BUSY.
+        // 같은 키를 다시 쓰는 경우는 두 가지뿐이다 — 응답 유실·LOCK_BUSY(보낸 바이트 그대로 다시 보낸다).
         setRetry(next.kind === "response-lost" || next.kind === "lock-busy" ? attempt : null);
+        // 서버가 결론을 준 거부 — 엑셀에서 고쳐 같은 경로로 저장한 파일을 다시 고를 수 있게 입력칸을 비운다.
+        if (next.kind === "report" || next.kind === "file" || next.kind === "duplicate-po" || next.kind === "file-duplicate") clearPick();
         if (next.kind === "forbidden") latch();
       },
+      onSettled: () => {
+        inFlight.current = false;
+      },
     });
+  }
+
+  function onRetry() {
+    if (retry === null || inFlight.current) return;
+    inFlight.current = true;
+    send(retry);
   }
 
   function onPick(picked: File | null) {
@@ -107,7 +140,8 @@ export function IntakeCsvUploadPanel({ onForbidden }: { onForbidden?: () => void
     }
   }
 
-  function onUpload() {
+  async function onUpload() {
+    if (inFlight.current) return;
     if (file === null) {
       setFileError("올릴 CSV 파일을 먼저 골라 주세요.");
       inputRef.current?.focus();
@@ -119,8 +153,27 @@ export function IntakeCsvUploadPanel({ onForbidden }: { onForbidden?: () => void
       inputRef.current?.focus();
       return;
     }
+    inFlight.current = true;
+    // ★ 고른 순간이 아니라 보내는 순간의 바이트를 한 번 읽어 고정한다 — 엑셀에서 고쳐 저장한 파일은 File 객체가 낡아 읽기가 실패하고,
+    //   '결과 다시 받기'는 처음 보낸 바이트와 같아야 한다(같은 키·다른 내용 금지).
+    setReading(true);
+    let frozen: File;
+    try {
+      const bytes = await file.arrayBuffer();
+      frozen = new File([bytes], file.name, { type: file.type || "text/csv" });
+    } catch {
+      inFlight.current = false;
+      setReading(false);
+      clearPick();
+      setFileError("파일을 고른 뒤 내용이 바뀌었습니다 — 파일을 다시 골라 주세요.");
+      focusInputAfterBusy.current = true;
+      return;
+    }
+    setReading(false);
+    setOutcome(null);
+    setRetry(null);
     // ★ 클릭마다 새 키 — 파일 내용에서 파생하지 않는다.
-    send({ key: newUploadKey(), file });
+    send({ key: newUploadKey(), file: frozen });
   }
 
   async function onTemplate() {
@@ -187,17 +240,18 @@ export function IntakeCsvUploadPanel({ onForbidden }: { onForbidden?: () => void
             accept=".csv,text/csv"
             aria-describedby={describedBy}
             aria-invalid={fileError !== null}
+            disabled={busy}
             onChange={(event) => onPick(event.target.files?.[0] ?? null)}
             className="rounded border border-gray-300 px-2 py-1.5"
           />
         </label>
         <button
           type="button"
-          onClick={onUpload}
-          disabled={upload.isPending}
+          onClick={() => void onUpload()}
+          disabled={busy}
           className="cell-nowrap rounded bg-gray-900 px-4 py-2 text-white disabled:opacity-60"
         >
-          {upload.isPending ? "업로드 중…" : "업로드"}
+          {busy ? "업로드 중…" : "업로드"}
         </button>
       </div>
       {fileError !== null && (
@@ -205,11 +259,10 @@ export function IntakeCsvUploadPanel({ onForbidden }: { onForbidden?: () => void
           {fileError}
         </p>
       )}
-      {upload.isPending && (
-        <p role="status" className="mt-2 break-keep text-gray-600">
-          파일을 검사하고 있습니다. 큰 파일은 시간이 걸릴 수 있습니다 — 창을 닫지 말아 주세요.
-        </p>
-      )}
+      {/* 상태 알림 컨테이너는 항상 마운트한다(나중에 생긴 live region은 읽히지 않을 수 있다). */}
+      <p role="status" className="mt-2 break-keep text-gray-600">
+        {busy ? "파일을 검사하고 있습니다. 큰 파일은 시간이 걸릴 수 있습니다 — 창을 닫지 말아 주세요." : ""}
+      </p>
 
       {outcome !== null && (
         <div
@@ -220,7 +273,12 @@ export function IntakeCsvUploadPanel({ onForbidden }: { onForbidden?: () => void
           aria-label="업로드 결과"
           className="mt-4 rounded border border-gray-200 p-3 outline-none focus:ring-2 focus:ring-gray-400"
         >
-          <OutcomeView outcome={outcome} retry={retry} busy={upload.isPending} onRetry={() => retry !== null && send(retry)} />
+          {outcome.kind !== "success" && outcomeFile !== null && (
+            <p className="mb-1 text-xs text-gray-600">
+              파일: <span className="break-all">{outcomeFile}</span>
+            </p>
+          )}
+          <OutcomeView outcome={outcome} retry={retry} busy={busy} onRetry={onRetry} />
         </div>
       )}
     </section>
@@ -248,6 +306,7 @@ function OutcomeView({
         <div className="break-keep">
           <h3 className="font-semibold text-signal-red">등록하지 않았습니다 — 이미 등록된 바이어 PO</h3>
           <p className="mt-1">{outcome.message}</p>
+          <RepickHint />
           {outcome.intakeId !== null && (
             <Link to={`/orders/intakes/${outcome.intakeId}`} className="mt-1 inline-block underline">
               기존 인테이크 #{outcome.intakeId} 보기
@@ -260,6 +319,7 @@ function OutcomeView({
         <div className="break-keep">
           <h3 className="font-semibold text-signal-red">같은 파일이 이미 검토 대기 중입니다</h3>
           <p className="mt-1">{outcome.message}</p>
+          <RepickHint />
           <ul className="mt-1 flex flex-wrap gap-3">
             {outcome.intakeIds.map((id) => (
               <li key={id}>
@@ -299,6 +359,7 @@ function OutcomeView({
         <div className="break-keep">
           <h3 className="font-semibold text-signal-red">등록하지 않았습니다 — 파일을 읽지 못했습니다</h3>
           <p className="mt-1">{outcome.message}</p>
+          <RepickHint />
           {outcome.notes.map((note) => (
             <p key={note} className="mt-1 rounded border border-signal-amber/60 p-2">
               {note}
@@ -337,6 +398,11 @@ function OutcomeView({
         </p>
       );
   }
+}
+
+/** 서버가 결론을 준 거부 뒤에는 입력칸이 비워진다 — 고친 파일을 다시 고르게 안내한다. */
+function RepickHint() {
+  return <p className="mt-1 text-gray-600">파일을 고친 뒤 저장하고, 고친 파일을 다시 골라 주세요.</p>;
 }
 
 function SuccessView({ result }: { result: CsvImportResult }) {
@@ -405,6 +471,7 @@ function ReportView({ message, duplicateOnly, report }: { message: string; dupli
       </h3>
       <p className="mt-1">{message}</p>
       <p className="mt-1 text-gray-600">파일의 어떤 PO도 등록되지 않았습니다(일부만 등록되는 일은 없습니다).</p>
+      <RepickHint />
 
       {fileLevel.length > 0 && (
         <ul aria-label="파일 전체 오류" className="mt-2 grid gap-1">

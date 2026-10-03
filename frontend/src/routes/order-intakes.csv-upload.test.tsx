@@ -1,7 +1,7 @@
 // 오더 인테이크 CSV 업로드 화면 (S3-1 PR-14b) — 역할별 노출·파일 사전 검사·멱등 키 규칙·201/422/409 결과·양식 내려받기·접근성.
 // 응답 모양은 서버 계약(PROGRESS 'S3-1 PR-14a' PR-14b 인계 계약 2차 갱신본) 그대로. fetch 스텁은 정확 URL·메서드 일치.
 
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
 import { CSV_MAX_BYTES, type CsvImportResult } from "../lib/order-intake-csv";
@@ -184,6 +184,9 @@ describe("멱등 키 규칙", () => {
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
     await waitFor(() => expect(uploads(stub.calls)).toHaveLength(1));
     await screen.findByText("고칠 행이 있습니다.");
+    // 리포트 뒤에는 입력칸이 비워진다 — 같은 파일을 다시 골라 다시 누른다.
+    expect((screen.getByLabelText("CSV 파일") as HTMLInputElement).value).toBe("");
+    pick(file);
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
     await waitFor(() => expect(uploads(stub.calls)).toHaveLength(2));
     const [first, second] = uploads(stub.calls);
@@ -407,19 +410,44 @@ describe("업로드 결과", () => {
     pick(csvFile());
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
     expect(await screen.findByText(/빈 열이 2개/)).toBeInTheDocument();
+    pick(csvFile());
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
     expect(await screen.findByText(/3번째 줄에서 UTF-8로도/)).toBeInTheDocument();
+    pick(csvFile());
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
     expect(await screen.findByText(/230건이고, 한 파일에 200건까지/)).toBeInTheDocument();
     expect(uploads(stub.calls)).toHaveLength(3);
   });
 
-  it("그 밖의 오류는 서버 한국어 문구(api-errors 경로)", async () => {
+  it("413은 파일 수준 안내(서버 문구)", async () => {
     open(TRADER, () => errorBody(413, "IMPORTS.FILE.TOO_LARGE", "파일이 너무 큽니다(최대 20MB)."));
     await openPanel();
     pick(csvFile());
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
-    expect(await screen.findByRole("region", { name: "업로드 결과" })).toHaveTextContent("파일이 너무 큽니다(최대 20MB).");
+    const result = await screen.findByRole("region", { name: "업로드 결과" });
+    expect(result).toHaveTextContent("파일을 읽지 못했습니다");
+    expect(result).toHaveTextContent("파일이 너무 큽니다(최대 20MB).");
+  });
+
+  it("그 밖의 오류(500) — api-errors 경로의 서버 한국어 문구, 재시도 버튼 없음", async () => {
+    open(TRADER, () => errorBody(500, "COMMON.INTERNAL.UNEXPECTED", "예상하지 못한 오류가 발생했습니다.", { reason: "잠시 후 다시 시도" }));
+    await openPanel();
+    pick(csvFile());
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    const result = await screen.findByRole("region", { name: "업로드 결과" });
+    expect(within(result).getByRole("alert")).toHaveTextContent("예상하지 못한 오류가 발생했습니다. (잠시 후 다시 시도)");
+    expect(result).not.toHaveTextContent("파일을 읽지 못했습니다");
+    expect(within(result).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("409 KEY_CONFLICT — 새 요청으로 다시 올리라는 안내(같은 키 재시도 없음)", async () => {
+    open(TRADER, () => errorBody(409, "COMMON.IDEMPOTENCY.KEY_CONFLICT", "같은 요청 키로 다른 내용이 이미 처리되었습니다."));
+    await openPanel();
+    pick(csvFile());
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    const result = await screen.findByRole("region", { name: "업로드 결과" });
+    expect(within(result).getByRole("alert")).toHaveTextContent(/'업로드'를 다시 눌러 새 요청으로/);
+    expect(within(result).queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("업로드 403 — 래치", async () => {
@@ -429,5 +457,143 @@ describe("업로드 결과", () => {
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
     expect(await screen.findByText(/CSV 업로드와 표준 양식은 무역·관리자만/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "CSV 업로드" })).not.toBeInTheDocument();
+  });
+});
+
+/** 응답을 손으로 풀어 주는 업로드 핸들러 — 진행 중 상태를 관찰한다. */
+function deferred() {
+  let release: (r: Response) => void = () => undefined;
+  const promise = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  return { respond: (() => promise) as unknown as Respond, release };
+}
+
+describe("검토 반영(PR-14b 적대 검토)", () => {
+  it("업로드 중에는 파일 입력·업로드 버튼이 비활성, 상태 알림 컨테이너는 늘 있다", async () => {
+    const d = deferred();
+    open(TRADER, d.respond);
+    await openPanel();
+    const panel = screen.getByRole("region", { name: "CSV 업로드" });
+    expect(within(panel).getByRole("status")).toBeEmptyDOMElement();
+    pick(csvFile());
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    await waitFor(() => expect(screen.getByLabelText("CSV 파일")).toBeDisabled());
+    expect(screen.getByRole("button", { name: "업로드 중…" })).toBeDisabled();
+    expect(screen.getByText(/파일을 검사하고 있습니다/)).toHaveAttribute("role", "status");
+    d.release(jsonResponse(RESULT, 201));
+    await screen.findByText(/업로드 완료/);
+    expect(screen.getByLabelText("CSV 파일")).not.toBeDisabled();
+  });
+
+  it("업로드 중 패널을 닫아도 201이 오면 목록이 무효화되고, 다시 열면 결과가 남아 있다", async () => {
+    const d = deferred();
+    const stub = open(TRADER, d.respond);
+    await openPanel();
+    await screen.findByRole("link", { name: "PO-2026-001" });
+    pick(csvFile());
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    await waitFor(() => expect(uploads(stub.calls)).toHaveLength(1));
+    const toggle = screen.getByRole("button", { name: "CSV 업로드 닫기" });
+    expect(document.getElementById(toggle.getAttribute("aria-controls") ?? "")).not.toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.queryByRole("region", { name: "CSV 업로드" })).not.toBeInTheDocument(); // hidden
+    const before = stub.calls.filter((c) => c.url === "/api/v1/order-intakes").length;
+    d.release(jsonResponse(RESULT, 201));
+    await waitFor(() => expect(stub.calls.filter((c) => c.url === "/api/v1/order-intakes").length).toBeGreaterThan(before));
+    fireEvent.click(screen.getByRole("button", { name: "CSV 업로드" }));
+    expect(within(screen.getByRole("region", { name: "업로드 결과" })).getByText(/업로드 완료/)).toBeInTheDocument();
+  });
+
+  it("빠른 연속 클릭은 한 번만 보낸다(동기 진입 가드)", async () => {
+    const stub = open();
+    await openPanel();
+    pick(csvFile());
+    const button = screen.getByRole("button", { name: "업로드" });
+    // 한 act 안에서 연달아 누른다 — 렌더(버튼 비활성)가 끼어들기 전의 클릭은 ref 가드만 막을 수 있다.
+    act(() => {
+      button.click();
+      button.click();
+      button.click();
+    });
+    await screen.findByText(/업로드 완료/);
+    expect(uploads(stub.calls)).toHaveLength(1);
+  });
+
+  it("고른 뒤 내용이 바뀐 파일(읽기 NotReadableError)은 보내지 않고 다시 고르게 한다", async () => {
+    const stub = open();
+    await openPanel();
+    const stale = csvFile();
+    Object.defineProperty(stale, "arrayBuffer", { value: () => Promise.reject(new DOMException("changed", "NotReadableError")) });
+    pick(stale);
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    const alert = await screen.findByText("파일을 고른 뒤 내용이 바뀌었습니다 — 파일을 다시 골라 주세요.");
+    const input = screen.getByLabelText("CSV 파일") as HTMLInputElement;
+    expect(input).toHaveFocus();
+    expect(input.value).toBe("");
+    expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(alert.id);
+    expect(uploads(stub.calls)).toHaveLength(0);
+    // 가드가 풀려 다시 고르면 보낼 수 있다.
+    pick(csvFile());
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    await screen.findByText(/업로드 완료/);
+    expect(uploads(stub.calls)).toHaveLength(1);
+  });
+
+  it("보낼 때 읽은 바이트를 고정 — '결과 다시 받기'는 원본 File이 바뀌어도 같은 바이트를 보낸다", async () => {
+    const stub = open(TRADER, sequence(networkDown, () => jsonResponse(RESULT, 201)));
+    await openPanel();
+    const appended: unknown[] = [];
+    const realAppend = FormData.prototype.append;
+    vi.spyOn(FormData.prototype, "append").mockImplementation(function (this: FormData, ...args: Parameters<FormData["append"]>) {
+      appended.push(args[1]);
+      return realAppend.apply(this, args as [string, Blob, string]);
+    });
+    const original = csvFile("po.csv", "원래 내용");
+    pick(original);
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    await screen.findByRole("button", { name: "결과 다시 받기" });
+    // 이제 원본 File을 읽으면 실패한다(엑셀에서 고쳐 저장한 상황) — 재시도는 고정 바이트라 영향이 없다.
+    Object.defineProperty(original, "arrayBuffer", { value: () => Promise.reject(new DOMException("changed", "NotReadableError")) });
+    fireEvent.click(screen.getByRole("button", { name: "결과 다시 받기" }));
+    await screen.findByText(/업로드 완료/);
+    const [first, second] = uploads(stub.calls);
+    const a = (first?.rawBody as FormData).get("file") as File;
+    const b = (second?.rawBody as FormData).get("file") as File;
+    // 보낸 것은 고른 File이 아니라 보내는 순간 읽어 만든 사본이고, 재시도는 그 사본을 그대로 다시 보낸다.
+    expect(appended).toHaveLength(2);
+    expect(appended[0]).not.toBe(original);
+    expect(appended[1]).toBe(appended[0]);
+    expect(await a.text()).toBe("원래 내용");
+    expect(await b.text()).toBe("원래 내용");
+    expect(b.name).toBe("po.csv");
+  });
+
+  it("재시도 중에는 이전 결과를 유지하고 재시도 버튼만 비활성, 결과 뒤 포커스는 결과 영역", async () => {
+    const d = deferred();
+    open(TRADER, sequence(networkDown, d.respond));
+    await openPanel();
+    pick(csvFile("주문서.csv"));
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    const retry = await screen.findByRole("button", { name: "결과 다시 받기" });
+    const region = screen.getByRole("region", { name: "업로드 결과" });
+    expect(region).toHaveTextContent("파일: 주문서.csv");
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.getByRole("button", { name: "결과 다시 받기" })).toBeDisabled());
+    expect(screen.getByRole("region", { name: "업로드 결과" })).toHaveTextContent("결과를 받지 못했습니다");
+    d.release(jsonResponse(RESULT, 201));
+    const done = await screen.findByRole("region", { name: "업로드 결과" });
+    await waitFor(() => expect(done).toHaveTextContent("업로드 완료"));
+    await waitFor(() => expect(done).toHaveFocus());
+  });
+
+  it("리포트·파일 수준 결과에 파일명과 '다시 골라 주세요' 안내", async () => {
+    open(TRADER, () => errorBody(422, "ORDER_INTAKE.FILE.INVALID_ROWS", "고칠 행이 있습니다.", { errors: [], total_errors: 0, omitted_errors: 0, counts_by_code: {} }));
+    await openPanel();
+    pick(csvFile("10월발주.csv"));
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    const result = await screen.findByRole("region", { name: "업로드 결과" });
+    expect(result).toHaveTextContent("파일: 10월발주.csv");
+    expect(result).toHaveTextContent("고친 파일을 다시 골라 주세요");
   });
 });

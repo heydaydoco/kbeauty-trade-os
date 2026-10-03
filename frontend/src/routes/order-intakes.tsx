@@ -86,8 +86,9 @@ export function OrderIntakeListPage() {
           </div>
         )}
       </header>
-      {canWrite && (csvOpen || csvForbidden) && (
-        <div id="intake-csv-upload">
+      {/* 패널은 늘 마운트하고 숨기기만 한다 — 닫았다 열어도 결과·재시도 상태가 남고, 토글의 aria-controls가 항상 실재 id를 가리킨다. */}
+      {canWrite && (
+        <div id="intake-csv-upload" hidden={!csvOpen && !csvForbidden}>
           <IntakeCsvUploadPanel onForbidden={() => setCsvForbidden(true)} />
         </div>
       )}
