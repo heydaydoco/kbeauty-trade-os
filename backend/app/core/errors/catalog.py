@@ -385,6 +385,30 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "해소되지 않은 게이트가 있어 수주를 확정할 수 없습니다. 아래 항목(승인 필요·입금 확인·가격·최소수량·준비도 등)을 해소한 뒤 다시 확정해 주세요.",
     ),
+    ErrorCode.ORDER_INTAKE_STATE_NOT_PENDING: ErrorSpec(
+        409,
+        "이미 확정되었거나 거부된 오더 인테이크라 더 처리할 수 없습니다. 목록을 새로 불러와 현재 상태를 확인해 주세요.",
+    ),
+    ErrorCode.ORDER_INTAKE_LINE_UNMAPPED_ITEMS: ErrorSpec(
+        422,
+        "바이어 품번이 SKU에 매핑되지 않았거나 삭제된 품목이 있어 접수할 수 없습니다. 거래처 품번 매핑을 등록한 뒤 다시 확인해 주세요.",
+    ),
+    ErrorCode.ORDER_INTAKE_LINE_STALE_MAPPING: ErrorSpec(
+        409,
+        "검토한 뒤 바이어 품번 매핑이 바뀌었습니다. 품번 해석을 다시 확인(재해석)하고 내용을 검토한 뒤 확정해 주세요.",
+    ),
+    ErrorCode.ORDER_INTAKE_LINE_DUPLICATE_SKU: ErrorSpec(
+        422,
+        "같은 SKU로 매핑된 라인이 둘 이상입니다. 수주는 SKU마다 유상 라인 1줄이므로 라인을 합치거나 수정해 주세요.",
+    ),
+    ErrorCode.ORDER_INTAKE_LINE_LIMIT_EXCEEDED: ErrorSpec(
+        422,
+        "오더 인테이크의 라인은 1개 이상 200개 이하여야 합니다. 라인 수를 확인해 주세요.",
+    ),
+    ErrorCode.ORDER_INTAKE_GATE_UNRESOLVED: ErrorSpec(
+        409,
+        "접수 확정에 필요한 확인 항목을 평가하지 못했습니다. 잠시 후 다시 시도하시고, 계속되면 오류 번호와 함께 관리자에게 문의해 주세요.",
+    ),
     ErrorCode.IDEMPOTENCY_KEY_CONFLICT: ErrorSpec(
         409,
         "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",

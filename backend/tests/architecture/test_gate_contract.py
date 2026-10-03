@@ -39,6 +39,8 @@ SCANNED_FILES = {
     "modules/trade_chain/gate_flow.py",
     # PR-12a — 확정 통로도 통과 판정을 복제하지 않는다(`clearance`의 정산 `Settlement`·결과 코드 매핑만 쓴다)
     "modules/trade_chain/confirm.py",
+    # PR-13a — 인테이크 확정 통로·INTAKE phase 평가도 통과 판정을 복제하지 않는다(`clearance`의 `cleared`·정산만 쓴다)
+    "modules/trade_chain/intake_flow.py",
 }
 
 

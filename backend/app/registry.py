@@ -24,6 +24,7 @@ from app.modules.markets import models as markets_models
 from app.modules.materials import models as materials_models
 from app.modules.notifications import models as notifications_models
 from app.modules.numbering import models as numbering_models
+from app.modules.order_intake import models as order_intake_models
 from app.modules.outbox import models as outbox_models
 from app.modules.partners import models as partners_models
 from app.modules.payments import models as payments_models
@@ -55,6 +56,7 @@ __all__ = [
     "materials_models",
     "notifications_models",
     "numbering_models",
+    "order_intake_models",
     "outbox_models",
     "partners_models",
     "payments_models",

@@ -262,7 +262,13 @@ def test_so_line_consumers_point_at_the_right_source_line_tables() -> None:
 
 def test_the_po_comparison_key_is_written_only_through_the_normalizer() -> None:
     """`buyer_po_no_key`는 정규화 함수(`po_columns`)의 결과로만 쓴다 — SO 서비스 밖에서 이 열을 대입·생성자 키워드로 쓰는 코드는 0건(손으로 만든 키 금지)"""
-    allowed = {"modules/sales_orders/service.py", "modules/sales_orders/models.py"}
+    allowed = {
+        "modules/sales_orders/service.py",
+        "modules/sales_orders/models.py",
+        # 오더 인테이크(PR-13a)의 PO 비교 키도 같은 정규화기(`po_columns`)의 결과만 쓴다 — 아래에서 소스로 대사한다.
+        "modules/order_intake/service.py",
+        "modules/order_intake/models.py",
+    }
     for rel, tree in app_sources().items():
         if rel in allowed:
             continue
@@ -271,6 +277,8 @@ def test_the_po_comparison_key_is_written_only_through_the_normalizer() -> None:
                 assert not isinstance(node.ctx, ast.Store), rel
             if isinstance(node, ast.keyword) and node.arg == "buyer_po_no_key":
                 raise AssertionError(f"{rel}: buyer_po_no_key를 직접 만든다")
+    intake_service = ast.unparse(app_sources()["modules/order_intake/service.py"])
+    assert "po_columns(" in intake_service and "normalize_buyer_po_no" not in intake_service
     service = ast.unparse(app_sources()["modules/sales_orders/service.py"])
     assert "po_columns(" in service
     assert (

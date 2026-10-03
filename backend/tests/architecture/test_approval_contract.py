@@ -643,6 +643,9 @@ DECISION_COLUMNS = frozenset(
     }
 )
 MODEL_NAMES = frozenset({"Approval", "ApprovalEvent"})
+#: 이름이 겹치는 **비승인** 결정 열의 소유 파일 — 오더 인테이크(PR-13a)의 `decided_at`·`decided_by_id`는 확정·거부 결정 기록이며 승인과 무관하다.
+#: 대입 통로가 `order_intake/machine.py::apply_intake_transition` 1곳임은 `test_order_intake_contract`가 고정한다(여기서 면제해도 구멍이 되지 않는다).
+NON_APPROVAL_DECISION_OWNERS: frozenset[str] = frozenset({"modules/order_intake/machine.py"})
 
 
 def _imports_approval_models(tree: ast.Module) -> bool:
@@ -751,6 +754,8 @@ def test_no_one_outside_the_approvals_package_assigns_decision_columns_or_an_app
     """승인 패키지 밖에서는 결정·소비 컬럼 대입이 0건이고, `approval….status` 대입·`setattr(approval, 'status', …)`·튜플 언패킹 대입도 0건이다"""
     offenders: list[str] = []
     for rel, tree in _outside_approvals().items():
+        if rel in NON_APPROVAL_DECISION_OWNERS:
+            continue
         for attr, line, owner in _assigned_attributes(tree):
             if attr in DECISION_COLUMNS or (attr == "status" and "approval" in owner.lower()):
                 offenders.append(f"{rel}:{line}:{owner}.{attr}")

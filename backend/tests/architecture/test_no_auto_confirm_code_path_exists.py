@@ -171,7 +171,8 @@ REGISTRY: tuple[Entry, ...] = (
         allowed_files=frozenset(
             {
                 "modules/sales_orders/service.py",
-                "modules/trade_chain/so_reference.py",  # 참조 생성(QT/PI→SO) — PR-13 인테이크 확정이 여기 한 줄을 더한다
+                "modules/trade_chain/so_reference.py",  # 참조 생성(QT/PI→SO)
+                "modules/trade_chain/intake_flow.py",  # 인테이크 확정(PR-13a) — 사람 1클릭 `confirm_intake` 1곳이 같은 착지를 부른다
             }
         ),
         forbidden_modules=frozenset(
@@ -316,6 +317,95 @@ REGISTRY: tuple[Entry, ...] = (
             }
         ),
         notes="**SO 확정 = 게이트·승인 소비·동결**(§15 L3 4금 — 자동 확정 금지) — 라우터 1곳+행위자 필수+멱등 키. `force`·`skip`·`bypass`·ADMIN 분기 없음. 스케줄러·CLI·임포트·인테이크·보드 경로에서 import·언급 0",
+    ),
+    # S3-1 PR-13a — 오더 인테이크 확정(SO 접수 생성)·거부·착지. 인테이크 확정은 **사람 1클릭**이다: 호출처는 trade_chain 라우터 1곳뿐이고, 스케줄러·CLI·임포트·이관·알림·아웃박스·시드·보드
+    # (벌크 확정은 PR-15가 같은 함수를 건별 독립 트랜잭션으로 부르며 그 PR이 ADR과 함께 이 엔트리를 갱신한다)·승인·게이트·여신·입금 어디서도 부르거나 임포트하지 않는다.
+    Entry(
+        name="confirm_intake",
+        defined_in="app.modules.trade_chain.intake_flow",
+        allowed_files=frozenset(
+            {"modules/trade_chain/intake_flow.py", "modules/trade_chain/router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "identity",
+                "idempotency",
+                "readiness",
+                "policies",
+                "order_intake",
+                "order_board",
+                "approvals",
+                "gates",
+                "credit",
+                "payments",
+                "sales_orders",
+                "quotations",
+                "proforma_invoices",
+                "purchase_orders",
+            }
+        ),
+        notes="**인테이크 확정 = SO(접수) 생성**(AI·CSV 유래도 사람 확정 필수 — GC-H1) — 라우터 1곳+행위자 필수+멱등 키. 자동 확정·`force`·`skip`·ADMIN 분기 없음. 스케줄러·CLI·임포트·보드·착지 함수에서 import·언급 0",
+    ),
+    Entry(
+        name="apply_intake_transition",
+        defined_in="app.modules.order_intake.machine",
+        allowed_files=frozenset(
+            {
+                "modules/order_intake/machine.py",
+                "modules/order_intake/service.py",  # reject_intake — PENDING→REJECTED 유일 호출처
+                "modules/trade_chain/intake_flow.py",  # confirm_intake — PENDING→CONFIRMED 유일 호출처
+            }
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "readiness",
+                "policies",
+                "approvals",
+                "gates",
+                "credit",
+                "payments",
+            }
+        ),
+        requires_actor=False,  # 행위자는 `actor_id`(정수) — 사람 요청 함수(confirm_intake·reject_intake)가 `actor`를 요구한다
+        notes="인테이크 상태 대입의 단일 통로 — 호출처는 사람 요청 함수 2곳(확정·거부)뿐이다(자동 전이 0, §D1(e)). 스케줄러·CLI·임포트·이관·알림에서 언급 0",
+    ),
+    Entry(
+        name="register_intake",
+        defined_in="app.modules.order_intake.service",
+        allowed_files=frozenset({"modules/order_intake/service.py"}),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "trade_chain",
+            }
+        ),
+        forbid_module_import=False,  # 정의 모듈이 조회·편집 함수도 품는다 — 언급 검사로 충분
+        notes="인테이크 착지의 단일 통로 — `status` 인자 없이 PENDING으로만 만든다(CSV 입구 PR-14가 호출처를 더한다). 확정·승격 호출 없음, 스케줄러·임포트·이관·알림에서 언급 0",
     ),
     Entry(
         name="request_credit_approval",

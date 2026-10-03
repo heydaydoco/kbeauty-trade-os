@@ -28,6 +28,7 @@ from app.modules.gates.models import SUBJECT_SALES_ORDER
 from app.modules.gates.policy import outcome
 from app.modules.gates.registry import EvaluatorRegistry
 from app.modules.gates.types import (
+    SUBJECT_INTAKE,
     BasisValue,
     GateCode,
     GateLevel,
@@ -37,6 +38,7 @@ from app.modules.gates.types import (
     GateResolution,
     GateSubject,
 )
+from app.modules.order_intake import service as intake_service
 from app.modules.partners.models import PARTNER_TYPE_BUYER, Partner
 from app.modules.partners.service import partner_type_codes, resolve_buyer_items
 from app.modules.payments.pi_gate import (
@@ -108,6 +110,12 @@ def _require_so(subject: GateSubject) -> None:
         raise ValueError(f"SO 평가기가 받을 수 없는 대상입니다: {subject.kind}")
 
 
+def _require_so_or_intake(subject: GateSubject) -> None:
+    """INTAKE phase 어댑터(PR-13a) — 품번·중복 PO·가격·준비도·MOQ 5종은 인테이크(검토 시점)와 SO(확정 시점)가 **같은 평가기**를 쓴다. 여신·PI 입금은 SO 확정 전용이다."""
+    if subject.kind not in (SUBJECT_SALES_ORDER, SUBJECT_INTAKE):
+        raise ValueError(f"평가기가 받을 수 없는 대상입니다: {subject.kind}")
+
+
 def _passed(
     code: GateCode, reason_code: str, message_ko: str, basis: Basis | None = None
 ) -> GateOutcome:
@@ -121,7 +129,7 @@ def evaluate_item_mapping(
     session: Session, subject: GateSubject, phase: GatePhase
 ) -> list[GateOutcome]:
     """바이어 품번 → SKU. 미매핑·거래처 BUYER 상실·SKU 삭제=BLOCK/NONE / 단종 SKU = 인테이크 WARN·확정 BLOCK/NONE(A11-2). 마스터를 고쳐야 한다(override 불가)."""
-    _require_so(subject)
+    _require_so_or_intake(subject)
     code = GateCode.ITEM_MAPPING
     found: list[GateOutcome] = []
 
@@ -163,11 +171,18 @@ def evaluate_item_mapping(
         sku_id = line.sku_id if line.sku_id is not None else (mapped.sku_id if mapped else None)
         sku = skus.get(sku_id) if sku_id is not None else None
         basis: Basis = {"sku_id": sku_id, "buyer_item_code": buyer_code}
+        intake_drift = (
+            subject.kind == SUBJECT_INTAKE
+            and buyer_code is not None
+            and (mapped is None or mapped.sku_id != line.sku_id)
+        )
         if sku is None or sku.deleted_at is not None:
             reason, message = (
                 (
                     "SKU_DELETED",
-                    "삭제된 품목이 포함되어 있습니다. 품목을 교체하거나 수주에서 제거해 주세요.",
+                    "삭제된 품목이 포함되어 있습니다. 품목을 교체하거나 "
+                    + ("라인을 수정해" if subject.kind == SUBJECT_INTAKE else "수주에서 제거해")
+                    + " 주세요.",
                 )
                 if sku_id is not None
                 else (
@@ -183,6 +198,22 @@ def evaluate_item_mapping(
                     reason,
                     message,
                     basis,
+                    line_id=line.line_id,
+                )
+            )
+        elif intake_drift:
+            # 인테이크(검토 시점) 전용 — 저장본 SKU는 **검토자가 본 값**이다. 지금 매핑이 저장본과 다르면(매핑 소멸·다른 SKU·검토 뒤 신규 매핑) 낡은 검토다.
+            # 단종 분기보다 먼저 본다(단종 SKU가 낡은 매핑을 가리고 통과하지 않게). 소멸=ITEM_UNMAPPED(422), 변경=MAPPING_CHANGED(409 STALE_MAPPING).
+            found.append(
+                outcome(
+                    code,
+                    GateLevel.BLOCK,
+                    GateResolution.NONE,
+                    "ITEM_UNMAPPED" if mapped is None else "MAPPING_CHANGED",
+                    "바이어 품번 매핑이 없습니다. 거래처 품번 매핑을 등록해 주세요."
+                    if mapped is None
+                    else "검토한 뒤 바이어 품번 매핑이 바뀌었습니다. 품번을 다시 해석해 확인해 주세요.",
+                    basis if mapped is None else {**basis, "mapped_sku_id": mapped.sku_id},
                     line_id=line.line_id,
                 )
             )
@@ -232,9 +263,12 @@ def evaluate_duplicate_po(
     session: Session, subject: GateSubject, phase: GatePhase
 ) -> list[GateOutcome]:
     """같은 (거래처, 바이어 PO 키)의 다른 비취소 SO = BLOCK/NONE(데이터 무결성 — override 불가). PO번호 없음 = WARN(중복 확인 불가를 기록으로 남긴다)."""
-    _require_so(subject)
+    _require_so_or_intake(subject)
     code = GateCode.DUPLICATE_PO
     key = subject.po_no_key
+    if subject.kind == SUBJECT_INTAKE and key is None:
+        # 인테이크는 PO 키가 NOT NULL이다 — 없으면 어댑터 결함이라 통과(WARN)가 아니라 평가 불능(UNKNOWN)이어야 한다(fail-closed).
+        raise ValueError("인테이크 평가 대상에 PO 비교 키가 없습니다.")
     if key is None:
         return [
             outcome(
@@ -243,6 +277,35 @@ def evaluate_duplicate_po(
                 GateResolution.NONE,
                 "PO_NO_NOT_GIVEN",
                 "바이어 PO번호가 없어 중복 여부를 확인할 수 없습니다(견적·PI 유래 수주는 정상입니다).",
+            )
+        ]
+    if subject.kind == SUBJECT_INTAKE:
+        # 인테이크(검토 시점): 다른 **PENDING 인테이크**·살아 있는 비취소 SO가 같은 (거래처, 키)를 점유하면 BLOCK(데이터 무결성 — override 불가, 착지·확정 모두 거부).
+        occupied = intake_service.occupant(
+            session, subject.buyer_partner_id, key, exclude_intake_id=subject.id
+        )
+        if occupied is not None:
+            return [
+                outcome(
+                    code,
+                    GateLevel.BLOCK,
+                    GateResolution.NONE,
+                    "DUPLICATE_PO_NO",
+                    "같은 거래처·같은 바이어 PO번호의 다른 오더가 이미 있습니다. 기존 인테이크를 거부하거나 수주를 취소하거나 PO번호를 확인해 주세요.",
+                    {"buyer_po_no_key": key},
+                    detail={
+                        "other_doc_number": occupied.get("doc_number"),
+                        "other_intake_id": occupied.get("intake_id"),
+                        "other_status": occupied["status"],
+                    },
+                )
+            ]
+        return [
+            _passed(
+                code,
+                "NO_DUPLICATE",
+                "같은 PO번호의 다른 오더가 없습니다.",
+                {"buyer_po_no_key": key},
             )
         ]
     other = session.execute(
@@ -293,7 +356,7 @@ def evaluate_price_deviation(
     기준가 = 라인의 `list_price_amount`(SO: 라인 생성 시점 판가 스냅샷 — 확정 시 mutable한 `sku_prices`를 다시 읽지 않는다). 없음·≤0·통화 불일치는 환산하지 않고 UNKNOWN(override 가능).
     무상(`is_free`) 라인은 WARN. 허용치는 정책 `price_deviation_tolerance_bp`(미설정 = 0bp, `policy_source=UNSET_DEFAULT`로 드러난다). **PURCHASE 유형·매입가는 조회하지 않는다.**
     """
-    _require_so(subject)
+    _require_so_or_intake(subject)
     code = GateCode.PRICE_DEVIATION
     policy = get_policy(session, POLICY_PRICE_TOLERANCE)
     tolerance = int(policy.value)
@@ -446,7 +509,7 @@ def evaluate_market_readiness(
 ) -> list[GateOutcome]:
     """시장 준비 상태 — `readiness.cells_for`(매트릭스와 같은 규칙) 재사용. RED=BLOCK/OVERRIDE(ADMIN) · **GRAY=UNKNOWN/OVERRIDE(ADMIN)**(통과로 읽지 않는다) · YELLOW=WARN · GREEN=PASS ·
     시장·SKU 소멸=UNKNOWN. 결과는 계산값 표시이며 법적 판정이 아니다(메시지에 판정 워딩 금지)."""
-    _require_so(subject)
+    _require_so_or_intake(subject)
     code = GateCode.MARKET_READINESS
     market = subject.dest_market_code
     sku_ids = sorted({line.sku_id for line in subject.lines if line.sku_id is not None})
@@ -546,7 +609,7 @@ def evaluate_market_readiness(
 def evaluate_moq(session: Session, subject: GateSubject, phase: GatePhase) -> list[GateOutcome]:
     """같은 SKU **유상 라인 수량 합** < `skus.moq`(EA)면 BLOCK/OVERRIDE(무역·관리자). `moq` NULL = PASS('정책 없음'은 평가 실패가 아니다 — `moq_unset=true` 안내). 무상 라인은 대상이 아니다.
     결과는 SKU 묶음의 첫 라인(line_no 최소)에 붙는다. SKU를 읽을 수 없으면 UNKNOWN/NONE(틀 결과) — 품번 게이트가 먼저 막는다."""
-    _require_so(subject)
+    _require_so_or_intake(subject)
     code = GateCode.MOQ
     groups: dict[int, list[GateLine]] = defaultdict(list)
     for line in subject.lines:

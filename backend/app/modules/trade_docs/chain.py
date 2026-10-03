@@ -77,6 +77,14 @@ NON_CHILD_FK_ALLOWLIST: dict[tuple[str, str], str] = {
     ): "라인은 자기 헤더의 구성 요소다(소비는 LINE_CONSUMERS — S3-2·S4-1이 PO_LINE 소비자를 등록)",
     ("purchase_order_status_log", "purchase_order_id"): "상태이력은 전표의 사건 기록이다",
     (
+        "order_intakes",
+        "sales_order_id",
+    ): "인테이크→SO 단방향 백링크(출처 기록) — SO의 후속 전표가 아니며 SO 취소·만료를 막지 않는다(PR-13a, 순환 FK 방지)",
+    (
+        "order_intakes",
+        "copied_from_so_id",
+    ): "복제 재접수의 원본 SO 계보 표시(X-13) — 사슬 후속이 아니다(원본은 이미 취소 상태여야 한다)",
+    (
         "purchase_orders",
         "copied_from_id",
     ): "복제 계보 표시 — 사슬 후속이 아니다(살아 있음 판정 제외, X-08)",

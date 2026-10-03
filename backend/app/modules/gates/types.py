@@ -58,6 +58,9 @@ class GatePhase(StrEnum):
     CONFIRM = "CONFIRM"
 
 
+#: `GateSubject.kind` 값 — 평가 대상의 종류. SO는 DB `subject_type`(증거·override 저장)과 같은 문자열이고, INTAKE는 **저장하지 않는 실시간 계산 대상**이다(인테이크 검토 시점 — 증거·override 없음).
+SUBJECT_INTAKE = "INTAKE"
+
 #: 판정 근거 값의 형 — JSON 스칼라만(중첩 금지).
 BasisValue = int | str | bool | None
 

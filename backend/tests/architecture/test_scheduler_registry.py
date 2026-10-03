@@ -66,6 +66,8 @@ _NEVER_SEEDED = (
     "payments",  # S3-1 PR-10a — 입금 원장: 업무 행위의 기록(시드 불가·users FK 보유)
     "gate_evaluations",  # S3-1 PR-11a — 확정 시도 증적: 업무 행위의 기록(시드 불가·users FK 보유)
     "gate_overrides",  # S3-1 PR-11a — 통제된 예외 증적: 업무 행위의 기록(시드 불가·users FK 보유)
+    "order_intakes",  # S3-1 PR-13a — 바이어 PO 스테이징: 업무 행위의 기록(시드 불가·users FK 보유)
+    "order_intake_lines",
 )
 
 

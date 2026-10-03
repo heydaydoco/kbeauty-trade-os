@@ -22,21 +22,39 @@ _DASHES = dict.fromkeys(
 )
 #: 모양이 없는 한글 채움 문자(NFKC 뒤 U+1160 계열) — 카테고리가 Lo라 별도로 제거한다.
 _FILLERS = frozenset({"\u115f", "\u1160", "\u3164", "\uffa0"})
+#: 범주가 So(기호)라 카테고리 필터에 안 걸리지만 **렌더가 비는** 문자 — 점자 빈칸(U+2800) 등. 눈에 같은 PO번호가 다른 키가 되는 우회를 막는다(PR-13a 적대 검토).
+_BLANK_SYMBOLS = frozenset({"\u2800"})
 _INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc", "Mn", "Me"})
+_MAX_PASSES = 4
 
 
-def normalize_buyer_po_no(raw: str) -> str:
-    """정규화 키(빈 문자열일 수 있다 — 호출자가 빈 키를 거부한다)."""
-    folded = unicodedata.normalize("NFKC", raw).translate(_DASHES)
+def _clean(text: str) -> str:
+    folded = unicodedata.normalize("NFKC", text).translate(_DASHES)
     kept = (
         ch
         for ch in folded
         if ch not in _FILLERS
+        and ch not in _BLANK_SYMBOLS
         and unicodedata.category(ch) not in _INVISIBLE_CATEGORIES
         and not unicodedata.category(ch).startswith("Z")
         and not ch.isspace()
     )
     return "".join(kept).upper()
+
+
+def normalize_buyer_po_no(raw: str) -> str:
+    """정규화 키(빈 문자열일 수 있다 — 호출자가 빈 키를 거부한다).
+
+    `upper()`가 새 불가시·결합 문자·공백을 만들 수 있어(예: 대문자화 확장) **고정점까지 반복**한다(결과 안정성 — 키를 다시 정규화해도 같다). 수용 사항:
+    앞자리 0('PO007'≠'PO7')·키릴/그리스 동형문자('РО'≠'PO')는 같은 키로 접지 않는다(과병합이 오차단이라 더 위험 — 힌트·사람 확인 몫).
+    """
+    current = raw
+    for _ in range(_MAX_PASSES):
+        cleaned = _clean(current)
+        if cleaned == current:
+            break
+        current = cleaned
+    return current
 
 
 def po_columns(raw: object, *, field: str = "buyer_po_no") -> tuple[str | None, str | None]:
