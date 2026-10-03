@@ -160,6 +160,14 @@ def test_unmeasured_files_are_estimated_from_their_test_count() -> None:
     }
 
 
+def test_the_committed_durations_file_is_valid() -> None:
+    """커밋된 소요 시간 파일이 읽히고 경로가 rootdir 기준 테스트 파일 형식이다"""
+    durations = load_durations(DURATIONS_FILE)
+    assert durations.files, "tests/.shard_durations.json이 비어 있거나 없습니다."
+    assert durations.seconds_per_test > 0
+    assert all(name.startswith("tests/") and name.endswith(".py") for name in durations.files)
+
+
 # ── 플러그인: 가짜 아이템으로 실제 훅을 돌린다 ─────────────────────────────────
 @dataclass
 class _Item:
