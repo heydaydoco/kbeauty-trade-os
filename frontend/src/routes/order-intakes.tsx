@@ -8,6 +8,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
+import { IntakeCsvUploadPanel } from "../components/intake-csv-upload";
 import { toKstDisplay } from "../lib/datetime";
 import {
   INTAKE_STATUS_FILTERS,
@@ -39,7 +40,11 @@ export function IntakeStatusBadge({ status }: { status: string }) {
 
 export function OrderIntakeListPage() {
   const { me } = useSession();
+  // 등록(수동·CSV)·양식은 무역·관리자만(서버 계약 — hasRole은 ADMIN 포함). 403을 받으면 래치해 CSV 조작을 거둔다.
+  const [csvForbidden, setCsvForbidden] = useState(false);
   const canWrite = hasRole(me, "TRADE");
+  const canCsv = canWrite && !csvForbidden;
+  const [csvOpen, setCsvOpen] = useState(false);
   const [filters, setFilters] = useState({ status: "", q: "", assignee: "" });
   // 담당자 목록(활성 사용자 조회)은 무역·관리자 전용 API다 — 그 밖의 역할은 호출하지 않는다(403 소음 방지).
   const users = usePagedQuery<UserLookup>(["users", "lookup"], "/v1/users/lookup?size=200", canWrite);
@@ -63,11 +68,30 @@ export function OrderIntakeListPage() {
           </p>
         </div>
         {canWrite && (
-          <Link to="/orders/intakes/new" className="cell-nowrap rounded bg-gray-900 px-4 py-2 text-sm text-white">
-            수동 등록
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            {canCsv && (
+              <button
+                type="button"
+                aria-expanded={csvOpen}
+                aria-controls="intake-csv-upload"
+                onClick={() => setCsvOpen((open) => !open)}
+                className="cell-nowrap rounded border border-gray-900 px-4 py-2 text-sm"
+              >
+                {csvOpen ? "CSV 업로드 닫기" : "CSV 업로드"}
+              </button>
+            )}
+            <Link to="/orders/intakes/new" className="cell-nowrap rounded bg-gray-900 px-4 py-2 text-sm text-white">
+              수동 등록
+            </Link>
+          </div>
         )}
       </header>
+      {/* 패널은 늘 마운트하고 숨기기만 한다 — 닫았다 열어도 결과·재시도 상태가 남고, 토글의 aria-controls가 항상 실재 id를 가리킨다. */}
+      {canWrite && (
+        <div id="intake-csv-upload" hidden={!csvOpen && !csvForbidden}>
+          <IntakeCsvUploadPanel onForbidden={() => setCsvForbidden(true)} />
+        </div>
+      )}
 
       <form role="search" aria-label="인테이크 필터" className="mt-4 flex flex-wrap items-end gap-3 text-sm" onSubmit={(event) => event.preventDefault()}>
         <label className="flex flex-col gap-1">

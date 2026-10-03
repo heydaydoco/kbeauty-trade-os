@@ -108,6 +108,7 @@ export interface GateCall {
   url: string;
   method: string;
   body: Record<string, unknown> | null;
+  rawBody?: unknown;
   headers: Record<string, string>;
 }
 
@@ -126,7 +127,9 @@ export function stubGateFetch(me: unknown, handlers: GateHandler[]): { calls: Ga
       calls.push({
         url: input,
         method,
-        body: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null,
+        // multipart(FormData) 본문은 JSON이 아니다 — 원본은 rawBody로 남긴다(CSV 업로드 시험, PR-14b).
+        body: typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null,
+        rawBody: init?.body ?? null,
         headers: (init?.headers ?? {}) as Record<string, string>,
       });
       if (input === "/api/v1/auth/me") return Promise.resolve(jsonResponse(me));
