@@ -229,7 +229,7 @@ function IntakeDetailView({ id }: { id: number }) {
         </div>
       )}
 
-      <div className="mt-6 grid gap-6">
+      <div className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-6">
         <section aria-labelledby="intake-facts-title" className="rounded-lg border border-gray-200 p-4">
           <h2 id="intake-facts-title" className="text-lg font-semibold">
             접수 내용
