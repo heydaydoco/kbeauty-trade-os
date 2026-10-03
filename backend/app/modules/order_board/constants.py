@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from app.modules.order_intake.models import IntakeStatus
 from app.modules.trade_docs.machine import SalesOrderStatus
 
 
@@ -37,8 +38,12 @@ STAGE_LABELS_KO: dict[BoardStage, str] = {
     BoardStage.SO_CONFIRMED: "수주 확정",
 }
 
-#: 인테이크 열이 보는 인테이크 상태(확정·거부는 보드 밖).
-INTAKE_STAGE_STATUS = "PENDING"
+#: 인테이크 열이 보는 인테이크 상태 — 상태 열거의 단일 출처(`IntakeStatus`)에서 가져온다(문자열 하드코딩 금지).
+INTAKE_STAGE_STATUS = IntakeStatus.PENDING.value
+#: 보드에서 제외하는 인테이크 상태(확정=SO 카드로 이어짐·거부=종결) — 완전성 시험: `IntakeStatus` 전체 = 보드 포함 ∪ 보드 제외.
+EXCLUDED_INTAKE_STATUSES: frozenset[str] = frozenset(
+    {IntakeStatus.CONFIRMED.value, IntakeStatus.REJECTED.value}
+)
 
 #: SO 상태 → 열. 값이 없는 SO 상태(CANCELLED·RESERVED)는 보드에 나오지 않는다 — 완전성 테스트가 이 집합을 고정한다.
 BOARD_STAGE_STATUSES: dict[BoardStage, tuple[str, ...]] = {

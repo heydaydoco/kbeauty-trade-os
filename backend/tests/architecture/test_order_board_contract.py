@@ -18,12 +18,15 @@ from app.main import app
 from app.modules.order_board import schemas
 from app.modules.order_board.constants import (
     BOARD_STAGE_STATUSES,
+    EXCLUDED_INTAKE_STATUSES,
     EXCLUDED_SO_STATUSES,
+    INTAKE_STAGE_STATUS,
     STAGE_LABELS_KO,
     STAGE_ORDER,
     BoardStage,
     BulkAction,
 )
+from app.modules.order_intake.models import IntakeStatus
 from app.modules.trade_docs.constants import DocKind
 from app.modules.trade_docs.machine import RESERVED, STATUSES
 from tests.support.astscan import (
@@ -89,6 +92,15 @@ def test_the_mapping_check_is_not_vacuous() -> None:
     assert _mapping_problems(statuses, base, {"CANCELLED"}, set())  # 예약이 줄었다
     assert _mapping_problems(statuses, {**base, "D": ("RECEIVED",)}, {"CANCELLED"}, {"COMPLETED"})
     assert _mapping_problems(statuses, {**base, "D": ("CANCELLED",)}, {"CANCELLED"}, {"COMPLETED"})
+
+
+@pytest.mark.group_i
+def test_every_intake_status_is_on_the_board_or_explicitly_excluded() -> None:
+    """인테이크 열 완전성 — `IntakeStatus` 전체 = 보드 포함({PENDING}) ∪ 보드 제외(확정·거부), 서로소. 상태가 늘면 실패한다(카드 소실·문자열 하드코딩 방지)"""
+    included = {INTAKE_STAGE_STATUS}
+    assert included | set(EXCLUDED_INTAKE_STATUSES) == {s.value for s in IntakeStatus}
+    assert not included & set(EXCLUDED_INTAKE_STATUSES)
+    assert IntakeStatus.PENDING.value == INTAKE_STAGE_STATUS
 
 
 # ── 응답 모델 필드 부재 ─────────────────────────────────────────────────────────
