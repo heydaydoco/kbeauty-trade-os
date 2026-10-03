@@ -362,13 +362,27 @@ def test_po_date_accepts_only_iso_and_never_guesses(trade: Any, value: str) -> N
 
 
 def test_date_semantics_future_po_date_and_past_delivery_are_row_errors(trade: Any) -> None:
-    """PO일자는 미래일 수 없고 요청납기일은 오늘 이전일 수 없다(KST) — 행 오류로 보고되고(착지 중 500·전체 422가 아님) 오늘 납기는 통과한다"""
+    """PO일자는 미래일 수 없고 요청납기일은 오늘 이전일 수 없다(KST) — 파서 단계 행 오류로 다른 행 오류와 함께 보고되고(착지 중 500·전체 422가 아님) 오늘 납기는 통과한다"""
     w = world()
     assert [e["column"] for e in _one_row_error(trade, w, po_date=future(3))] == ["PO일자"]
     assert [e["column"] for e in _one_row_error(trade, w, delivery=past(1))] == ["요청납기일"]
     assert [
         e["column"] for e in _one_row_error(trade, w, delivery=_FUTURE.strftime("%Y/%m/%d"))
     ] == ["요청납기일"]
+    # 파서 단계에서 잡혀야 다른 행 오류와 **한 번에** 보고된다(착지 통로 재검사에만 맡기면 다른 오류가 있을 때 빠진다)
+    mixed = upload_csv(
+        trade,
+        csv_bytes(
+            [
+                csv_row(w, po="PO-F1", po_date=future(3), delivery=future(10)),
+                csv_row(w, po="PO-F2", qty="x"),
+            ]
+        ),
+    )
+    assert [(e["row_no"], e["column"], e["code"]) for e in error_rows(mixed)] == [
+        (2, "PO일자", "OUT_OF_RANGE"),
+        (3, "수량", "INVALID_FORMAT"),
+    ]
     ok = csv_row(w, po="PO-T", delivery=today_kst().isoformat(), po_date=today_kst().isoformat())
     assert upload_csv(trade, csv_bytes([ok])).status_code == 201
 

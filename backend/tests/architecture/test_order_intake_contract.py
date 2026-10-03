@@ -622,7 +622,7 @@ def test_the_template_header_is_one_constant_shared_by_download_and_upload() -> 
 
     assert csv_import.template_header() is csv_template.CSV_HEADER
     assert len(csv_template.CSV_HEADER) == 9 and len(set(csv_template.CSV_HEADER)) == 9
-    assert csv_template.HEADER_COLUMNS == csv_template.CSV_HEADER[:5]
+    assert csv_template.CSV_HEADER[:5] == csv_template.HEADER_COLUMNS
     assert set(csv_template.CSV_HEADER) >= csv_template.STRING_COLUMNS
     source = ast.unparse(app_sources()["modules/order_intake/csv_import.py"])
     assert "header=tpl.CSV_HEADER" in source and "string_columns=tpl.STRING_COLUMNS" in source
