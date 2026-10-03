@@ -68,8 +68,9 @@ def _freeze(kind: str, client: TestClient) -> tuple[str, str, dict[str, Any]]:
 
 
 @pytest.mark.parametrize("kind", ["QT", "PI", "SO", "PO"])
+@pytest.mark.golden
 def test_confirmed_prices_and_fx_are_immutable(kind: str) -> None:
-    """**DoD ④ 본체(4종 전표)** — 실제 동결 통로로 동결한 뒤, 그 전표에 열린 모든 변경 경로(내용 PATCH·라인 편집·메타 PATCH에 가격·환율·통화 필드 주입)를 시도해도 헤더·라인 행 전체가 바이트 단위로 같다 ·
+    """GC-A6 — **DoD ④ 본체(4종 전표)** — 실제 동결 통로로 동결한 뒤, 그 전표에 열린 모든 변경 경로(내용 PATCH·라인 편집·메타 PATCH에 가격·환율·통화 필드 주입)를 시도해도 헤더·라인 행 전체가 바이트 단위로 같다 ·
     허용 방향(FREE 메모 수정)은 동작하고 가격·환율은 그대로 · DB는 동결 행의 환율·결제조건 비우기를 CHECK로 거부한다. (QT·SO는 내용 편집 라우트가 409로 거부하고, PI·PO는 라우트 자체가 없다)"""
     from app.modules.trade_docs.constants import LINE_HEADER_FK, LINE_TABLES, DocKind
 

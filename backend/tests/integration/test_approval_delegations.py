@@ -81,8 +81,9 @@ def _authority(approval_id: int, user: Any) -> AuthorityKind:
 # ── 날짜 판정 — 양끝 포함 · UTC/KST 갈림 ────────────────────────────────────────
 
 
+@pytest.mark.golden
 def test_period_bounds_are_inclusive_on_both_ends(monkeypatch: pytest.MonkeyPatch) -> None:
-    """시작일·종료일 당일은 유효하고 시작 전날·종료 다음 날은 무효다(KST 달력 날짜 양끝 포함)"""
+    """GC-H5 — 시작일·종료일 당일은 유효하고 시작 전날·종료 다음 날은 무효다(KST 달력 날짜 양끝 포함)"""
     approval_id, _, delegator = _setup()
     delegate = make_user(RoleCode.LOGISTICS)  # TRADE 자격이 본인에게는 없는 수임자
     start, end = date(2026, 10, 10), date(2026, 10, 14)
@@ -99,10 +100,11 @@ def test_period_bounds_are_inclusive_on_both_ends(monkeypatch: pytest.MonkeyPatc
             assert _authority(approval_id, delegate) is expected, today
 
 
+@pytest.mark.golden
 def test_the_judgement_uses_the_korean_date_not_the_utc_date(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """UTC 2026-10-14 15:30 = KST 15일 00:30 — 종료일이 14일인 대결은 무효이고 15일이면 유효하다(UTC 날짜로 판정하면 반대가 된다)"""
+    """GC-H5 — UTC 2026-10-14 15:30 = KST 15일 00:30 — 종료일이 14일인 대결은 무효이고 15일이면 유효하다(UTC 날짜로 판정하면 반대가 된다)"""
     approval_id, _, delegator = _setup()
     delegate = make_user(RoleCode.LOGISTICS)
     ends_14th = add_delegation(delegator, delegate, date(2026, 10, 1), date(2026, 10, 14))
@@ -123,10 +125,11 @@ def test_the_judgement_uses_the_korean_date_not_the_utc_date(
 # ── 이력 — 사용 기록·위임자 알림 ────────────────────────────────────────────────
 
 
+@pytest.mark.golden
 def test_a_delegated_decision_records_both_people_and_the_delegation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """수임자가 결정하면 approvals·approval_events 양쪽에 수임자·위임자·대결 id가 같은 값으로 남고, 위임자에게 알림 1건"""
+    """GC-H5 — 수임자가 결정하면 approvals·approval_events 양쪽에 수임자·위임자·대결 id가 같은 값으로 남고, 위임자에게 알림 1건"""
     approval_id, requester, delegator = _setup()
     delegate = make_user(RoleCode.LOGISTICS)
     delegation_id = add_delegation(

@@ -41,10 +41,11 @@ LOSER_CODES = {
 }
 
 
+@pytest.mark.golden
 def test_twenty_users_bulk_confirming_overlapping_sets_in_different_orders_confirm_each_target_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """20명이 겹치는 인테이크 6·SO 6을 서로 다른 순서로 동시에 벌크 확정 → 대상마다 OK 정확히 1건(SO 생성 6·확정 6)·나머지 CONFLICT·FAILED 0·교착 0 ·
+    """GC-F3 — 20명이 겹치는 인테이크 6·SO 6을 서로 다른 순서로 동시에 벌크 확정 → 대상마다 OK 정확히 1건(SO 생성 6·확정 6)·나머지 CONFLICT·FAILED 0·교착 0 ·
     상태 전이 이벤트·이력·확정 증거가 대상마다 1개 · 리포트의 OK 건 = DB의 확정 건(수주 id·version 일치)"""
     w = world()
     intakes = [land(w) for _ in range(INTAKES)]

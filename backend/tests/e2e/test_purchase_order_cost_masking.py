@@ -730,6 +730,7 @@ def test_channel_9_no_other_document_response_carries_cost_margin_or_purchase_ke
 # ── 채널 합류: 모든 채널을 센티널 하나로 한 번에 순회(GC-G2) ─────────────────────────────
 
 
+@pytest.mark.golden
 def test_gc_g2_one_sweep_over_every_viewer_visible_surface(seeded: dict[str, Any]) -> None:
     """GC-G2 — VIEWER가 볼 수 있는 모든 표면(상세·목록·라인·상태이력·CSV·에러)을 순회한 응답 전체 문자열에 센티널 원가가 **0회**다"""
     with logged_in(RoleCode.VIEWER) as viewer:

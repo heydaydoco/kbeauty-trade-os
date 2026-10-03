@@ -730,8 +730,9 @@ def test_list_is_paginated_with_default_50_and_filters(trade: Any) -> None:
 
 
 @pytest.mark.group_g
+@pytest.mark.golden
 def test_there_is_no_http_route_that_lands_an_intake_as_anything_but_pending(trade: Any) -> None:
-    """HTTP로 CONFIRMED·REJECTED 인테이크를 직접 만드는 길이 없다 — 생성·편집 본문에 상태 필드가 없고, 모든 착지는 PENDING이다"""
+    """GC-H6 — HTTP로 CONFIRMED·REJECTED 인테이크를 직접 만드는 길이 없다 — 생성·편집 본문에 상태 필드가 없고, 모든 착지는 PENDING이다"""
     w = world()
     for _ in range(3):
         assert register(trade, w)["status"] == "PENDING"
