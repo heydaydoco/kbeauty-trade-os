@@ -89,6 +89,12 @@ function ResultRow({ row, label, onRefreshBoard }: { row: BulkItemResult; label:
         </p>
       )}
       {row.outcome === "FORBIDDEN" && <p className="mt-1 break-keep text-xs text-signal-red">이 건을 처리할 권한이 없습니다.</p>}
+      {row.outcome === "FAILED" && (
+        // 실패(422 — 미매핑 품번 등·404·예상 못 한 오류)도 원인은 상세 화면에서 고친다 — 막다른 길 금지.
+        <Link to={detailPath(row.kind, row.id)} className="cell-nowrap mt-1 inline-block text-xs underline">
+          상세에서 확인
+        </Link>
+      )}
     </li>
   );
 }

@@ -189,6 +189,10 @@ describe("벌크 — 결과 분류별 표시", () => {
     const failed = rowOf(dialog, "입력값이 올바르지 않습니다.");
     expect(within(failed).getByText("실패")).toBeInTheDocument();
     expect(within(failed).getByText("COMMON.VALIDATION.INVALID_FIELD")).toBeInTheDocument();
+    expect(within(failed).getByRole("link", { name: "상세에서 확인" })).toHaveAttribute("href", "/sales-orders/17");
+    // 처리됨·변경 없음·권한 없음 건에는 상세 처리 링크가 없다.
+    expect(within(rowOf(dialog, "이미 확정된 수주입니다.")).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(forbidden).queryByRole("link")).not.toBeInTheDocument();
     // 처리된 건에도 예외 승인·승인 요청 버튼은 없다(벌크는 통제를 부여하지 않는다).
     expect(within(dialog).queryByRole("button", { name: /예외 승인|승인 요청/ })).not.toBeInTheDocument();
   });
