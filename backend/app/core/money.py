@@ -124,8 +124,9 @@ class Money:
 
 _PLAIN_AMOUNT = re.compile(r"^(?P<int>\d+)(?:\.(?P<frac>\d+))?$", re.ASCII)
 _GROUPED_AMOUNT = re.compile(
-    r"^(?P<int>\d{1,3}(?:,\d{3})+)(?:\.(?P<frac>\d+))?$", re.ASCII
-)  # re.ASCII: 전각·아랍 숫자 등 비ASCII 숫자는 거부(int()가 받아 값이 조용히 바뀌는 입력 차단)
+    r"^(?P<int>[1-9]\d{0,2}(?:,\d{3})+)(?:\.(?P<frac>\d+))?$", re.ASCII
+)  # re.ASCII: 전각·아랍 숫자 등 비ASCII 숫자는 거부(int()가 받아 값이 조용히 바뀌는 입력 차단).
+# 첫 그룹은 0으로 시작하지 않는다('0,500'은 천단위 표기가 아니라 유럽식 소수 '0.500'일 수 있다 — 추측 금지, PR-14a B10).
 
 
 class AmountFormatError(ValueError):

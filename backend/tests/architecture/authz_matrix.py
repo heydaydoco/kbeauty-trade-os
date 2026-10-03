@@ -37,7 +37,7 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/delegations",
     # S3-1 PR-10a — 입금 원장(`/proforma-invoices/{id}/payments`는 위 PI 접두어가 이미 통제한다).
     "/api/v1/payments",
-    # S3-1 PR-13a — 오더 인테이크(등록·편집·재해석·거부=order_intake 라우터, 확정·게이트 조회=trade_chain 라우터). CSV 입구(import-csv·template.csv)는 PR-14가 행을 더한다.
+    # S3-1 PR-13a — 오더 인테이크(등록·편집·재해석·거부=order_intake 라우터, 확정·게이트 조회=trade_chain 라우터). CSV 입구(import-csv·template.csv)는 PR-14a가 행을 더했다.
     "/api/v1/order-intakes",
     # S3-1 PR-15a — 오더 보드(보드·드릴다운·CSV=전 역할, 벌크=무역·관리자, 저장 필터=전 역할·본인 것만[당사자성은 서비스 404]).
     "/api/v1/order-board",
@@ -284,6 +284,10 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         V: ALLOW,
     },
     ("POST", "/api/v1/order-intakes"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    # S3-1 PR-14a — CSV 입구. 양식 다운로드·업로드 모두 무역(관리자 상시 통과) — 양식은 업로드할 수 있는 역할만(적대 검토 판정: 더 엄격한 쪽 자율 확정,
+    # design-D D7 "CSV=전 역할"보다 좁힘). 업로드는 서비스가 역할을 한 번 더 확인한다.
+    ("GET", "/api/v1/order-intakes/template.csv"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("POST", "/api/v1/order-intakes/import-csv"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
     ("PATCH", "/api/v1/order-intakes/{intake_id}"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
     ("POST", "/api/v1/order-intakes/{intake_id}/resolve"): {
         A: ALLOW,

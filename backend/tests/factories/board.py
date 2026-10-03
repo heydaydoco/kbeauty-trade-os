@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import itertools
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from app.core.db.session import owner_engine
+from app.core.time import today_kst
 from app.modules.identity.models import RoleCode
 from app.modules.identity.service import AuthenticatedUser
 from tests.factories.trade import create_buyer, idem, raw_so, unique
@@ -89,7 +90,7 @@ def raw_intake(
                 text(
                     "INSERT INTO order_intake_lines (intake_id, currency, line_no, buyer_item_code, quantity,"
                     " unit_price_amount, requested_delivery_date) VALUES (:i, :c, :n, :code, :q, :p,"
-                    " CURRENT_DATE + 30 + :n)"
+                    " :d)"
                 ),
                 {
                     "i": intake_id,
@@ -98,6 +99,8 @@ def raw_intake(
                     "code": f"RAW-{line_no}",
                     "q": quantity,
                     "p": price,
+                    # DB CURRENT_DATE는 세션 시간대(UTC) 날짜라 KST 자정~09시에 하루 어긋난다 — 시험의 기대값과 같은 KST 기준으로 넣는다
+                    "d": today_kst() + timedelta(days=30 + line_no),
                 },
             )
     return intake_id

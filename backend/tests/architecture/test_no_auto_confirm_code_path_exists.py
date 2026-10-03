@@ -401,7 +401,10 @@ REGISTRY: tuple[Entry, ...] = (
     Entry(
         name="register_intake",
         defined_in="app.modules.order_intake.service",
-        allowed_files=frozenset({"modules/order_intake/service.py"}),
+        # PR-14a — CSV 입구(`csv_import`, 사람이 올린 파일·사람 세션 actor)가 호출처로 더해졌다.
+        allowed_files=frozenset(
+            {"modules/order_intake/service.py", "modules/order_intake/csv_import.py"}
+        ),
         forbidden_modules=frozenset(
             {
                 "platform",
@@ -414,7 +417,7 @@ REGISTRY: tuple[Entry, ...] = (
             }
         ),
         forbid_module_import=False,  # 정의 모듈이 조회·편집 함수도 품는다 — 언급 검사로 충분
-        notes="인테이크 착지의 단일 통로 — `status` 인자 없이 PENDING으로만 만든다(CSV 입구 PR-14가 호출처를 더한다). 확정·승격 호출 없음, 스케줄러·임포트·이관·알림에서 언급 0",
+        notes="인테이크 착지의 단일 통로 — `status` 인자 없이 PENDING으로만 만든다(호출처: 수동 입구 `create_manual_intake`·CSV 입구 `csv_import.import_csv` — 둘 다 사람 요청). 확정·승격 호출 없음, 스케줄러·임포트·이관·알림에서 언급 0",
     ),
     Entry(
         name="request_credit_approval",
