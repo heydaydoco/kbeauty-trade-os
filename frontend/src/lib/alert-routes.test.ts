@@ -21,6 +21,11 @@ describe("알림 이동 표", () => {
     expect(alertRoute("purchase_orders", null)).toBeNull();
   });
 
+  it("order_intakes 알림(생성·상태 변경)은 인테이크 상세로 이동한다", () => {
+    expect(alertRoute("order_intakes", 21)).toBe("/orders/intakes/21");
+    expect(alertRoute("order_intakes", null)).toBeNull();
+  });
+
   it("approvals 알림(요청·결과·대결·정체 독촉)은 승인 상세로 이동한다", () => {
     expect(alertRoute("approvals", 7)).toBe("/approvals/7");
     expect(alertRoute("approvals", null)).toBeNull();

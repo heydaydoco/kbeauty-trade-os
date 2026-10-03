@@ -20,6 +20,7 @@ const NAV = [
   { to: "/partners", label: "거래처" },
   { to: "/quotations", label: "견적" },
   { to: "/proforma-invoices", label: "PI" },
+  { to: "/orders/intakes", label: "주문 접수(인테이크)" },
   { to: "/sales-orders", label: "수주" },
   { to: "/purchase-orders", label: "발주" },
   { to: "/documents", label: "문서보관소" },
@@ -70,7 +71,7 @@ export function AppShell() {
       <header className="border-b border-gray-200">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 p-4">
           <span className="cell-nowrap font-bold">K-Beauty Trade OS</span>
-          <nav className="flex gap-4 text-sm">
+          <nav className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
             {[
               ...NAV,
               ...(canApprove ? APPROVAL_NAV : []),

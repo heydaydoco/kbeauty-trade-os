@@ -7,6 +7,8 @@ const ALERT_ROUTES: Record<string, (id: number) => string> = {
   quotations: (id) => `/quotations/${id}`,
   proforma_invoices: (id) => `/proforma-invoices/${id}`,
   sales_orders: (id) => `/sales-orders/${id}`,
+  // 오더 인테이크 알림(생성·상태 변경)은 entity_type="order_intakes" — 서버 order_intake 이벤트 (PR-13a).
+  order_intakes: (id) => `/orders/intakes/${id}`,
   purchase_orders: (id) => `/purchase-orders/${id}`,
   // 승인 알림(요청·결과·대결·정체 독촉)은 모두 entity_type="approvals" — 서버 approvals/alerts.py (PR-9b).
   approvals: (id) => `/approvals/${id}`,
