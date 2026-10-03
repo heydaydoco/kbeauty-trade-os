@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.core.db.purge import PURGE_BATCH, expired_before, purge_in_batches
 from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
@@ -278,7 +279,7 @@ def _revoke_all_sessions(session: Session, user_id: int, now: datetime) -> int:
 def _purge_expired_sessions(session: Session, user_id: int, now: datetime) -> None:
     """만료된 세션 행을 지운다 (ADR-0013 "만료 세션 정리").
 
-    로그인 시점에 해당 사용자분만 치운다 — 전역 청소는 배치의 일이고,
+    로그인 시점에 해당 사용자분만 치운다 — 전역 청소는 배치의 일이고(`purge_expired_sessions_all`),
     로그인 경로에서 전체 테이블을 훑으면 사용자가 그 비용을 기다린다.
     """
     session.execute(
@@ -286,6 +287,22 @@ def _purge_expired_sessions(session: Session, user_id: int, now: datetime) -> No
             UserSession.user_id == user_id,
             UserSession.expires_at <= now,
         )
+    )
+
+
+def purge_expired_sessions_all(*, now: datetime | None = None, batch: int = PURGE_BATCH) -> int:
+    """전 사용자의 만료 세션을 청크 삭제한다 — 잡 `session-purge`(daily@04:25 KST, ADR-0013·0058 ⑤).
+
+    술어는 로그인 시 사용자별 청소와 같다(`expires_at <= now`). 미만료 세션은 폐기(revoked) 여부와 무관하게
+    남긴다 — 로그인 청소와 결과가 같아야 하고, 폐기 행은 만료 전까지 "그 토큰은 폐기됐다"는 사실을 담는다.
+    지금 잠긴 행(`last_seen_at` 갱신 중)은 건너뛴다. audit 기록은 남기지 않는다(기술 행 TTL 청소 — 업무 사건 아님).
+
+    Returns:
+        지운 행 수.
+    """
+    moment = now or utcnow()
+    return purge_in_batches(
+        UserSession, expired_before(UserSession.expires_at, moment), batch=batch
     )
 
 

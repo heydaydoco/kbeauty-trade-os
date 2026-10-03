@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
@@ -155,5 +156,35 @@ def test_registered_jobs_stay_clear_of_the_four_bans() -> None:
             "document-expiry-sweep",
             # S3-1 PR-9a — 결재 대기 정체 독촉(읽기+alerts INSERT뿐 — 승인 상태 불변·자동 결정 없음·대외 발송 없음, ADR-0061 4금 논증)
             "approval-stagnation-scan",
+            # S3-1 PR-16 — 기술 행 TTL 청소(ADR-0013·0014 예약 이행, ADR-0058 ⑤): idempotency_keys·user_sessions의 만료분 DELETE뿐 —
+            # 원장·전표·감사·발주 무접촉·판정 없음·대외 발송 없음
+            "idempotency-purge",
+            "session-purge",
         }
     )
+
+
+def test_the_registry_has_exactly_twelve_jobs_with_the_s3_1_schedules() -> None:
+    """S3-1 종결 총수 대사 — 7+5=12행(X-45·ADR-0058 ①). 청소 잡 2종은 백업(03:00)·복원 리허설(04:00) 뒤·저장소 점검(05:00) 앞."""
+    schedules = {spec.code: spec.schedule for spec in scheduler.JOB_REGISTRY}
+    assert len(scheduler.JOB_REGISTRY) == 12
+    assert schedules["idempotency-purge"] == "daily@04:20"
+    assert schedules["session-purge"] == "daily@04:25"
+    daily = [s for s in schedules.values() if s.startswith("daily@")]
+    assert len(daily) == len(set(daily)), "같은 시각에 겹친 daily 잡이 있다"
+
+
+def test_purge_jobs_touch_only_their_own_technical_table() -> None:
+    """청소 함수가 다루는 모델은 자기 기술 표 하나뿐 — 전표·원장·감사 모델 무접촉(ADR-0058 ⑤ / design-F F18 (e))."""
+    from app.core.db import purge
+    from app.modules.idempotency import service as idempotency
+    from app.modules.identity import service as identity
+
+    idem = inspect.getsource(idempotency.purge_expired_all)
+    sess = inspect.getsource(identity.purge_expired_sessions_all)
+    assert "IdempotencyKey" in idem and "UserSession" not in idem
+    assert "UserSession" in sess and "IdempotencyKey" not in sess
+    for body in (idem, sess):
+        assert "audit." not in body and "AuditAction" not in body
+    helper = inspect.getsource(purge)
+    assert "app.modules" not in helper, "청크 헬퍼는 어떤 업무 모듈도 임포트하지 않는다"

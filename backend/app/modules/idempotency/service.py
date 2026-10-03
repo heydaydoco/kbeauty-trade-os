@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from hashlib import sha256
 from typing import Any
 
@@ -32,6 +32,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.core.db.purge import PURGE_BATCH, expired_before, purge_in_batches
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError
 from app.core.time import utcnow
@@ -141,7 +142,7 @@ def complete(
 
 
 def _purge_expired(session: Session, actor_user_id: int, now: Any) -> None:
-    """만료된 키를 치운다 (ADR-0014 — 전역 청소 배치는 S2-3).
+    """만료된 키를 치운다 (ADR-0014 — 전역 청소는 `purge_expired_all`·잡 `idempotency-purge`).
 
     해당 액터분만 지운다. 요청 경로에서 테이블 전체를 훑으면 사용자가 그 비용을
     기다린다.
@@ -151,4 +152,21 @@ def _purge_expired(session: Session, actor_user_id: int, now: Any) -> None:
             IdempotencyKey.actor_user_id == actor_user_id,
             IdempotencyKey.expires_at <= now,
         )
+    )
+
+
+def purge_expired_all(*, now: datetime | None = None, batch: int = PURGE_BATCH) -> int:
+    """전 액터의 만료 키를 청크 삭제한다 — 잡 `idempotency-purge`(daily@04:20 KST, ADR-0014·0058 ⑤).
+
+    술어는 요청 경로의 사용자별 청소와 같다(`expires_at <= now` — 유예 신설 없음). 완료 여부와 무관하다:
+    결과 없이 남은 만료 claim도 24시간이 지나면 기술 행일 뿐이다. 지금 잠긴 행(진행 중인 이어받기)은
+    건너뛴다(`purge_in_batches` — SKIP LOCKED). 24시간 이후 재시도는 키가 아니라 상태 검사(전이 409)가
+    이중 확정을 막는다(ADR-0014 부기). 다른 표(전표·원장·감사)는 건드리지 않는다.
+
+    Returns:
+        지운 행 수.
+    """
+    moment = now or utcnow()
+    return purge_in_batches(
+        IdempotencyKey, expired_before(IdempotencyKey.expires_at, moment), batch=batch
     )

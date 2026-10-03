@@ -59,6 +59,8 @@ def test_the_registry_is_visible_to_admins(admin: TestClient) -> None:
         "trade-docs-totals-verify",
         "document-expiry-sweep",
         "approval-stagnation-scan",
+        "idempotency-purge",
+        "session-purge",
     }
     # 등록만 되고 안 도는 잡을 화면이 구분해 보여 준다.
     assert all(item["is_mapped"] for item in body["items"])
