@@ -433,6 +433,18 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         500,
         "요청을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도하시고, 계속되면 오류 번호와 함께 관리자에게 알려 주세요.",
     ),
+    ErrorCode.ORDER_BOARD_BULK_TOO_MANY: ErrorSpec(
+        422,
+        "한 번에 처리할 수 있는 건수(50건)를 넘었습니다. 대상을 나눠서 다시 처리해 주세요.",
+    ),
+    ErrorCode.ORDER_BOARD_FILTER_LIMIT_REACHED: ErrorSpec(
+        422,
+        "저장 필터는 한 사람당 20개까지 만들 수 있습니다. 쓰지 않는 필터를 지운 뒤 다시 저장해 주세요.",
+    ),
+    ErrorCode.ORDER_BOARD_FILTER_DUPLICATE_NAME: ErrorSpec(
+        409,
+        "같은 이름의 저장 필터가 이미 있습니다. 다른 이름으로 저장하거나 기존 필터를 수정해 주세요.",
+    ),
 }
 
 

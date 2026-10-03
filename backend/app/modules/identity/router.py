@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from app.api.deps import AdminUser, CurrentUser, require_roles
 from app.core.config import settings
@@ -102,9 +102,19 @@ def list_users(params: Annotated[PageParams, Depends()]) -> Page[UserSummary]:
     summary="사용자 선택 목록 — 표시명만 (무역·관리자)",
     dependencies=[require_roles(RoleCode.TRADE)],
 )
-def lookup_users(params: Annotated[PageParams, Depends()]) -> Page[UserLookupItem]:
+def lookup_users(
+    params: Annotated[PageParams, Depends()],
+    q: Annotated[
+        str | None, Query(max_length=100, description="표시명 부분 일치(검색형 선택)")
+    ] = None,
+    assignee_target: Annotated[
+        bool, Query(description="true면 담당자 후보(무역·관리자 역할 보유자)만")
+    ] = False,
+) -> Page[UserLookupItem]:
     # ★ 경로 순서: "/{user_id}"보다 앞에 있어야 "lookup"이 id로 해석되지 않는다.
-    rows, total = service.list_active_user_names(offset=params.offset, limit=params.limit)
+    rows, total = service.list_active_user_names(
+        offset=params.offset, limit=params.limit, q=q, assignee_target=assignee_target
+    )
     return Page.of([UserLookupItem(id=i, display_name=n) for i, n in rows], total, params)
 
 

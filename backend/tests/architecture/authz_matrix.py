@@ -39,6 +39,8 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/payments",
     # S3-1 PR-13a — 오더 인테이크(등록·편집·재해석·거부=order_intake 라우터, 확정·게이트 조회=trade_chain 라우터). CSV 입구(import-csv·template.csv)는 PR-14가 행을 더한다.
     "/api/v1/order-intakes",
+    # S3-1 PR-15a — 오더 보드(보드·드릴다운·CSV=전 역할, 벌크=무역·관리자, 저장 필터=전 역할·본인 것만[당사자성은 서비스 404]).
+    "/api/v1/order-board",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -384,5 +386,39 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         L: ALLOW,
         C: ALLOW,
         V: DENY,
+    },
+    # S3-1 PR-15a — 오더 보드(ADR-0066·0067). 조회·CSV는 전 역할(카드에 원가·마진·여신·게이트 필드 없음), 벌크는 무역(관리자 상시 통과 —
+    # 각 건은 단일 통로가 역할·게이트·승인을 다시 판정), 저장 필터는 전 역할(개인 설정 — 타인 id는 서비스가 404).
+    ("GET", "/api/v1/order-board"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/order-board/items"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/order-board/export.csv"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("POST", "/api/v1/order-board/bulk"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
+    ("GET", "/api/v1/order-board/saved-filters"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("POST", "/api/v1/order-board/saved-filters"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("PATCH", "/api/v1/order-board/saved-filters/{filter_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("DELETE", "/api/v1/order-board/saved-filters/{filter_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
     },
 }

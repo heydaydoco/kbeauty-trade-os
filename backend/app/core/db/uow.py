@@ -44,6 +44,15 @@ class UnitOfWork:
             hook()
 
 
+def in_unit_of_work() -> bool:
+    """지금 열린 UnitOfWork가 있는가.
+
+    `unit_of_work()`는 중첩되면 바깥 트랜잭션에 **합류**한다(새 트랜잭션이 아니다). 그래서 "건마다 독립 트랜잭션"이 계약인 호출자
+    (오더 보드 벌크 — §17.6)는 건을 처리하기 전에 이 값이 False인지 확인해, 실수로 바깥 트랜잭션 안에서 불려 전체가 한 트랜잭션이 되는 일을 막는다.
+    """
+    return _current_uow.get() is not None
+
+
 @contextmanager
 def unit_of_work() -> Iterator[UnitOfWork]:
     """업무 동작 하나를 감싸는 트랜잭션 경계.

@@ -8,6 +8,12 @@
 
 거래처 잠금 모드: 여신 직렬화 경로=`FOR NO KEY UPDATE`, 유형·활성 검증 소비자(전표 생성 등)=`FOR KEY SHARE`,
 유형 해제(임포트)=`FOR UPDATE`. 55P03·40P01은 409 `COMMON.CONCURRENCY.LOCK_BUSY`로 번역된다(PR-2 핸들러).
+
+전표 사슬 밖의 잠금(같은 트랜잭션에 전표 잠금과 섞이지 않는다 — 순서표 튜플에는 넣지 않는다):
+  · 오더 보드 저장 필터 등록(S3-1 PR-15a): (0) 멱등 claim → **사용자 단위 advisory lock**
+    `pg_advisory_xact_lock(order_board.saved_filters.SAVED_FILTER_LOCK_NS, user_id)`(2인자 키 공간 — 스케줄러 잡 잠금 `SCHEDULER_LOCK_KEY`와
+    네임스페이스가 다르다) → `board_saved_filters` 재계수·INSERT. 행 잠금이 아닌 이유: 행이 0개일 때도 직렬화해야 상한(20)이 지켜진다.
+  · 오더 보드 벌크(S3-1 PR-15a): 자체 잠금 없음 — 건마다 독립 트랜잭션에서 단일 통로가 위 순서를 지킨다.
 """
 
 from __future__ import annotations

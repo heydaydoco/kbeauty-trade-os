@@ -6,20 +6,20 @@
 
 from __future__ import annotations
 
-import unicodedata
+from app.core.text import invisible_char_problem
 
 REASON_MIN = 5
 REASON_MAX = 500
 
-_INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
-_HANGUL_FILLERS = frozenset({"ᅟ", "ᅠ", "ㅤ", "ﾠ"})
-
 
 def reason_problem(value: str) -> str | None:
-    """사유가 규칙을 어기면 사용자용 한국어 문구, 통과면 None. 호출자는 이 문구를 422 detail에 싣는다."""
-    for char in value:
-        if char in _HANGUL_FILLERS or unicodedata.category(char) in _INVISIBLE_CATEGORIES:
-            return "사유에는 줄바꿈·탭·보이지 않는 글자(제어·서식·채움 문자)를 쓸 수 없습니다."
+    """사유가 규칙을 어기면 사용자용 한국어 문구, 통과면 None. 호출자는 이 문구를 422 detail에 싣는다.
+
+    ① 보이지 않는 글자 판정은 공용 헬퍼 `app.core.text.invisible_char_problem`(Cc·Cf·Zl·Zp·한글 채움 — PR-15a에서 추출, 동작 동일)이다.
+    """
+    problem = invisible_char_problem(value, label="사유")
+    if problem is not None:
+        return problem
     cleaned = value.strip()
     if not REASON_MIN <= len(cleaned) <= REASON_MAX:
         return f"사유는 {REASON_MIN}~{REASON_MAX}자로 입력해 주세요."

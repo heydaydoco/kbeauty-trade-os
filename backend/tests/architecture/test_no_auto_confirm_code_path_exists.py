@@ -281,12 +281,18 @@ REGISTRY: tuple[Entry, ...] = (
         notes="**사람 결정 통로(승인·반려·회수)** — 라우터 1곳+실 사용자 행위자 필수. 호출처 집합 = DECIDE_CALLERS(P7 Slack 어댑터가 더할 때 ADR 동반)",
     ),
     # S3-1 PR-12a — 확정·승인 요청·승인 시스템 통로 4종(호출자가 생긴 이 PR이 엔트리를 더한다). 확정은 **사람 1클릭**이다: 호출처는 라우터 1곳뿐이고, 스케줄러·CLI·임포트·이관·알림·아웃박스·시드·
-    # 인테이크·보드(벌크 확정은 PR-15가 같은 함수를 건별 독립 트랜잭션으로 부르며 그 PR이 ADR과 함께 이 엔트리를 갱신한다)·승인·게이트·여신·입금 어디서도 부르거나 임포트하지 않는다.
+    # 인테이크·승인·게이트·여신·입금 어디서도 부르거나 임포트하지 않는다. **PR-15a 갱신**: 오더 보드 벌크(`order_board/bulk.py` — 사람 1클릭 라우터 1곳이 부르는 `run_bulk`)만 같은 함수를
+    # 건별 독립 트랜잭션으로 부른다(ADR-0066 — 벌크 전용 확정 코드 없음, 아래 `run_bulk` 엔트리가 그 호출처를 다시 고정한다).
     Entry(
         name="confirm_sales_order",
         defined_in="app.modules.trade_chain.confirm",
         allowed_files=frozenset(
-            {"modules/trade_chain/confirm.py", "modules/trade_chain/router.py"}
+            {
+                "modules/trade_chain/confirm.py",
+                "modules/trade_chain/router.py",
+                # PR-15a — 오더 보드 벌크(사람 1클릭 `POST /order-board/bulk`)가 **같은 함수를 건별 독립 트랜잭션으로** 부른다(벌크 전용 확정 코드 없음 — ADR-0066).
+                "modules/order_board/bulk.py",
+            }
         ),
         forbidden_modules=frozenset(
             {
@@ -305,7 +311,6 @@ REGISTRY: tuple[Entry, ...] = (
                 "readiness",
                 "policies",
                 "order_intake",
-                "order_board",
                 "approvals",
                 "gates",
                 "credit",
@@ -316,15 +321,20 @@ REGISTRY: tuple[Entry, ...] = (
                 "purchase_orders",
             }
         ),
-        notes="**SO 확정 = 게이트·승인 소비·동결**(§15 L3 4금 — 자동 확정 금지) — 라우터 1곳+행위자 필수+멱등 키. `force`·`skip`·`bypass`·ADMIN 분기 없음. 스케줄러·CLI·임포트·인테이크·보드 경로에서 import·언급 0",
+        notes="**SO 확정 = 게이트·승인 소비·동결**(§15 L3 4금 — 자동 확정 금지) — 라우터 1곳+행위자 필수+멱등 키. `force`·`skip`·`bypass`·ADMIN 분기 없음. 스케줄러·CLI·임포트·인테이크 경로에서 import·언급 0, 보드는 벌크 1파일(`order_board/bulk.py`)만",
     ),
-    # S3-1 PR-13a — 오더 인테이크 확정(SO 접수 생성)·거부·착지. 인테이크 확정은 **사람 1클릭**이다: 호출처는 trade_chain 라우터 1곳뿐이고, 스케줄러·CLI·임포트·이관·알림·아웃박스·시드·보드
-    # (벌크 확정은 PR-15가 같은 함수를 건별 독립 트랜잭션으로 부르며 그 PR이 ADR과 함께 이 엔트리를 갱신한다)·승인·게이트·여신·입금 어디서도 부르거나 임포트하지 않는다.
+    # S3-1 PR-13a — 오더 인테이크 확정(SO 접수 생성)·거부·착지. 인테이크 확정은 **사람 1클릭**이다: 호출처는 trade_chain 라우터 1곳뿐이고, 스케줄러·CLI·임포트·이관·알림·아웃박스·시드·
+    # 승인·게이트·여신·입금 어디서도 부르거나 임포트하지 않는다. **PR-15a 갱신**: 오더 보드 벌크(`order_board/bulk.py`)만 같은 함수를 건별 독립 트랜잭션으로 부른다(ADR-0066).
     Entry(
         name="confirm_intake",
         defined_in="app.modules.trade_chain.intake_flow",
         allowed_files=frozenset(
-            {"modules/trade_chain/intake_flow.py", "modules/trade_chain/router.py"}
+            {
+                "modules/trade_chain/intake_flow.py",
+                "modules/trade_chain/router.py",
+                # PR-15a — 오더 보드 벌크(사람 1클릭)가 같은 함수를 건별 독립 트랜잭션으로 부른다(ADR-0066).
+                "modules/order_board/bulk.py",
+            }
         ),
         forbidden_modules=frozenset(
             {
@@ -343,7 +353,6 @@ REGISTRY: tuple[Entry, ...] = (
                 "readiness",
                 "policies",
                 "order_intake",
-                "order_board",
                 "approvals",
                 "gates",
                 "credit",
@@ -354,7 +363,7 @@ REGISTRY: tuple[Entry, ...] = (
                 "purchase_orders",
             }
         ),
-        notes="**인테이크 확정 = SO(접수) 생성**(AI·CSV 유래도 사람 확정 필수 — GC-H1) — 라우터 1곳+행위자 필수+멱등 키. 자동 확정·`force`·`skip`·ADMIN 분기 없음. 스케줄러·CLI·임포트·보드·착지 함수에서 import·언급 0",
+        notes="**인테이크 확정 = SO(접수) 생성**(AI·CSV 유래도 사람 확정 필수 — GC-H1) — 라우터 1곳+행위자 필수+멱등 키. 자동 확정·`force`·`skip`·ADMIN 분기 없음. 스케줄러·CLI·임포트·착지 함수에서 import·언급 0, 보드는 벌크 1파일(`order_board/bulk.py`)만",
     ),
     Entry(
         name="apply_intake_transition",
@@ -627,6 +636,42 @@ REGISTRY: tuple[Entry, ...] = (
         requires_actor=False,
         forbid_module_import=False,
         notes="override 철회 서비스 — 오케스트레이터(gate_flow) 1곳만 호출한다",
+    ),
+    # S3-1 PR-15a — 오더 보드 벌크(인테이크 확정·수주 확정·담당자 지정). **사람 1클릭**이다: 서비스 진입점 `run_bulk`의 호출처는 보드 라우터 1곳뿐이고,
+    # 스케줄러·CLI·임포트·이관·알림·아웃박스·시드·전표·승인·게이트 어디서도 부르거나 임포트하지 않는다(벌크가 자동 확정 경로가 되지 않게).
+    Entry(
+        name="run_bulk",
+        defined_in="app.modules.order_board.bulk",
+        allowed_files=frozenset({"modules/order_board/bulk.py", "modules/order_board/router.py"}),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "seeds",
+                "identity",
+                "idempotency",
+                "readiness",
+                "policies",
+                "trade_chain",
+                "order_intake",
+                "approvals",
+                "gates",
+                "credit",
+                "payments",
+                "sales_orders",
+                "quotations",
+                "proforma_invoices",
+                "purchase_orders",
+            }
+        ),
+        notes="**벌크 = 사람이 고른 건을 단일 통로로 건별 처리**(새 확정 경로 아님) — 라우터 1곳+행위자 필수+멱등 키. 스케줄러·CLI·임포트·이관·알림에서 import·언급 0",
     ),
     Entry(
         name="converge_quotation",

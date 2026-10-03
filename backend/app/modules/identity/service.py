@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
 from secrets import token_urlsafe
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -363,15 +364,42 @@ def active_roles_of(session: Session, user_id: int) -> frozenset[RoleCode] | Non
     return frozenset(_roles_by_user(session, [user_id]).get(user_id, set()))
 
 
-def list_active_user_names(*, offset: int, limit: int) -> tuple[list[tuple[int, str]], int]:
+#: 담당자 후보(`assignee_target`) 역할 — 전표·인테이크·벌크 ASSIGN의 담당자는 활성+무역/관리자 보유(ADR-0067 ③).
+ASSIGNEE_TARGET_ROLES: tuple[RoleCode, ...] = (RoleCode.TRADE, RoleCode.ADMIN)
+
+
+def list_active_user_names(
+    *,
+    offset: int,
+    limit: int,
+    q: str | None = None,
+    assignee_target: bool = False,
+) -> tuple[list[tuple[int, str]], int]:
     """활성 사용자의 (id, 표시명) — 이메일·역할은 싣지 않는다.
 
     비관리자가 수임자·담당자를 고를 때 쓴다. 사용자 목록 API는 관리자 전용이라
     표시명만 따로 여는 좁은 통로다(표시명 전 역할 노출 선례: 인증 담당자명).
+    `q`는 표시명 부분 일치(LIKE 와일드카드 이스케이프 — 검색형 선택 콤보박스, ADR-0066 ⑤), `assignee_target=True`면
+    무역·관리자 역할 보유자만(담당자 선택기 — ADR-0067 ③). 둘 다 읽기 전용 필터이고 응답 모양은 그대로다.
     """
     with unit_of_work() as uow:
         session = uow.session
-        base = (User.deleted_at.is_(None), User.is_active.is_(True))
+        base: tuple[Any, ...] = (User.deleted_at.is_(None), User.is_active.is_(True))
+        if q is not None and q.strip():
+            base = (*base, User.display_name.icontains(q.strip(), autoescape=True))
+        if assignee_target:
+            base = (
+                *base,
+                User.id.in_(
+                    select(UserRole.user_id)
+                    .join(Role, Role.id == UserRole.role_id)
+                    .where(
+                        UserRole.deleted_at.is_(None),
+                        Role.deleted_at.is_(None),
+                        Role.code.in_([role.value for role in ASSIGNEE_TARGET_ROLES]),
+                    )
+                ),
+            )
         total = session.execute(select(func.count()).select_from(User).where(*base)).scalar_one()
         rows = session.execute(
             select(User.id, User.display_name)
