@@ -250,3 +250,37 @@ class IntakeGateReportOut(BaseModel):
     #: 입력 완결성(거래처 유형·시장·통화·라인≥1·같은 SKU 유상 라인 중복·금액 상한)·확정 시점 납기 경과·복제 원본 자격은 확정 때 다시 검사한다(422·409).
     intake_confirmable: bool
     gates: list[IntakeGateResultOut]
+
+
+# ── CSV 입구 응답 (PR-14a) ──────────────────────────────────────────────────────
+
+
+class CsvImportIntakeOut(BaseModel):
+    """CSV 한 파일이 만든 인테이크 1건(바이어 PO 1건)의 요약 — 상세는 `GET /order-intakes/{id}`."""
+
+    id: int
+    version: int
+    buyer_partner_id: int
+    buyer_name: str | None
+    buyer_po_no: str
+    currency: str
+    dest_market_code: str
+    line_count: int
+    #: 품번이 아직 SKU에 매핑되지 않은 라인 수 — 오류가 아니다(검토 화면이 품번 등록을 유도한다).
+    unmapped_line_count: int
+    total_amount: int
+    total_text: str | None
+    #: 이 PO의 첫 엑셀 행번호(헤더=1).
+    first_row_no: int
+
+
+class CsvImportResult(BaseModel):
+    """`POST /order-intakes/import-csv` 201 — 전부 PENDING으로 착지했다(오류가 있으면 이 응답이 아니라 422·409 오류 응답이다)."""
+
+    original_filename: str
+    source_sha256: str
+    row_count: int
+    group_count: int
+    line_count: int
+    unmapped_line_count: int
+    intakes: list[CsvImportIntakeOut]

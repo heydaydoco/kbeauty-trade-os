@@ -74,6 +74,8 @@ MAPPING_STALE = "STALE"
 
 PO_UNIQUE = "uq_order_intakes_buyer_partner_id_buyer_po_no_key_pending"
 COPY_UNIQUE = "uq_order_intakes_copied_from_so_id_pending"
+#: CSV 파일 해시 멱등(PENDING 한정 부분 유니크) — 사전 조회를 빠져나간 동시 업로드의 최종 방어(PR-14a).
+FILE_UNIQUE = "uq_order_intakes_source_sha256_source_group_key_pending"
 
 
 def require_intake_writer(actor: AuthenticatedUser) -> None:
@@ -96,7 +98,7 @@ def map_integrity_error(
 ) -> AppError | None:
     """인테이크 제약 위반 → 지정 코드(제약명으로 분기) — 미등록 제약이면 None(호출자가 500을 유지한다: 값 없이 제약명만 로그, 삼키면 fail-open).
 
-    PENDING 점유 중복 PO → 409 `TRADE_DOCS.DOCUMENT.DUPLICATE_BUYER_PO`(점유 문서 id·상태만, 금액 없음) / 같은 원본 SO의 PENDING 복제 → 409 `COPY.SOURCE_NOT_ELIGIBLE`.
+    PENDING 점유 중복 PO → 409 `TRADE_DOCS.DOCUMENT.DUPLICATE_BUYER_PO`(점유 문서 id·상태만, 금액 없음) / 같은 원본 SO의 PENDING 복제 → 409 `COPY.SOURCE_NOT_ELIGIBLE` / 같은 CSV 파일의 PENDING 재착지 → 409 `FILE.DUPLICATE`.
     """
     name = _constraint_name(exc)
     if PO_UNIQUE in name and buyer_partner_id is not None and po_key is not None:
@@ -104,6 +106,8 @@ def map_integrity_error(
         return duplicate_po_error(found or {})
     if COPY_UNIQUE in name:
         return AppError(ErrorCode.TRADE_DOCS_COPY_SOURCE_NOT_ELIGIBLE)
+    if FILE_UNIQUE in name:
+        return AppError(ErrorCode.ORDER_INTAKE_FILE_DUPLICATE)
     logger.error("order_intake_unmapped_constraint", constraint=name)
     return None
 
