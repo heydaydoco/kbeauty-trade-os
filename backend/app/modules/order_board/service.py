@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
@@ -106,6 +107,20 @@ def _apply_bounds(column: Any, f: BoardFilter) -> list[Any]:
     return out
 
 
+#: 카드 표기 `IN-{id}`를 검색어로 받으면 그 인테이크 id로도 찾는다(대소문자 무시 — 앞뒤 공백은 필터가 이미 제거).
+INTAKE_REF = re.compile(r"^IN-(\d{1,18})$", re.IGNORECASE)
+
+
+def _buyers_named(q: str) -> Any:
+    """거래처 마스터 국문·영문명 부분 일치(LIKE 이스케이프) 거래처 id 서브쿼리 — 인테이크·SO 공용."""
+    return select(Partner.id).where(
+        or_(
+            Partner.name_ko.icontains(q, autoescape=True),
+            Partner.name_en.icontains(q, autoescape=True),
+        )
+    )
+
+
 def _intake_conditions(f: BoardFilter) -> list[Any]:
     conditions: list[Any] = [
         OrderIntake.deleted_at.is_(None),
@@ -120,19 +135,14 @@ def _intake_conditions(f: BoardFilter) -> list[Any]:
     if f.dest_market_code is not None:
         conditions.append(OrderIntake.dest_market_code == f.dest_market_code)
     if f.q is not None:
-        conditions.append(
-            or_(
-                OrderIntake.buyer_po_no.icontains(f.q, autoescape=True),
-                OrderIntake.buyer_partner_id.in_(
-                    select(Partner.id).where(
-                        or_(
-                            Partner.name_ko.icontains(f.q, autoescape=True),
-                            Partner.name_en.icontains(f.q, autoescape=True),
-                        )
-                    )
-                ),
-            )
-        )
+        matches: list[Any] = [
+            OrderIntake.buyer_po_no.icontains(f.q, autoescape=True),
+            OrderIntake.buyer_partner_id.in_(_buyers_named(f.q)),
+        ]
+        ref = INTAKE_REF.match(f.q)
+        if ref is not None:  # 카드 표기 `IN-{id}` 그대로 검색
+            matches.append(OrderIntake.id == int(ref.group(1)))
+        conditions.append(or_(*matches))
     conditions.extend(_apply_bounds(OrderIntake.created_at, f))
     return conditions
 
@@ -153,6 +163,8 @@ def _so_conditions(f: BoardFilter, statuses: tuple[str, ...]) -> list[Any]:
                 SalesOrder.doc_number.icontains(f.q, autoescape=True),
                 SalesOrder.buyer_name.icontains(f.q, autoescape=True),
                 SalesOrder.buyer_po_no.icontains(f.q, autoescape=True),
+                # 인테이크 카드와 같은 의미 — 거래처 마스터 국문·영문명으로도 찾는다(헤더 표기가 영문뿐이어도 국문으로 검색)
+                SalesOrder.buyer_partner_id.in_(_buyers_named(f.q)),
             )
         )
     conditions.extend(_apply_bounds(SalesOrder.created_at, f))

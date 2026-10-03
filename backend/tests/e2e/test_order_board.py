@@ -242,9 +242,32 @@ def test_filters_narrow_every_column_and_q_escapes_like_wildcards(client: TestCl
     assert ids(currency="EUR") == {i2} and ids(currency="USD") == {i1, s1, s2}
     assert ids(q="100%") == {i1}  # `%`가 와일드카드였다면 PO-ZZZ도 걸렸다
     assert ids(q="A_1") == {s1}  # `_`가 와일드카드였다면 PO-AB1도 걸렸다
-    assert ids(q="zeta") == {i2}  # 인테이크: 거래처 영문명 부분 일치(대소문자 무시)
+    # 거래처 마스터 영문명 부분 일치(대소문자 무시) — 인테이크·수주 같은 의미
+    assert ids(q="zeta") == {i2, s2}
     assert ids(q="raw buyer") == {s1, s2}  # 수주: 헤더 바이어 표기 부분 일치
     assert ids(dest_market_code="KR") == set()
+
+
+def test_q_finds_so_cards_by_the_buyer_master_korean_name_and_intakes_by_their_ref_label(
+    client: TestClient,
+) -> None:
+    """q — 수주 카드도 거래처 마스터 국문·영문명으로 찾는다(헤더 표기가 영문뿐이어도), 카드 표기 `IN-{id}`(대소문자 무시)는 그 인테이크 하나"""
+    _, owner = world_ids()
+    ganada = create_buyer(name_ko="가나다상사", name_en="Ganada Trading")
+    so = seed_so("RECEIVED", buyer=ganada, assignee=owner)
+    intake = raw_intake(buyer=ganada, assignee=owner)
+    other = raw_intake(buyer=create_buyer(), assignee=owner)
+
+    def ids(q: str) -> set[tuple[str, int]]:
+        body = _board(client, q=q)
+        return {(item["kind"], item["id"]) for col in body["columns"] for item in col["items"]}
+
+    assert scalar("SELECT buyer_name FROM sales_orders WHERE id = :i", i=so) != "가나다상사"
+    assert ids("가나다") == {("SO", so), ("INTAKE", intake)}
+    assert ids("ganada") == {("SO", so), ("INTAKE", intake)}
+    assert ids(f"IN-{other}") == {("INTAKE", other)}
+    assert ids(f"in-{other}") == {("INTAKE", other)}
+    assert ids(f"IN-{other}0") == set()  # 접두 일치가 아니라 정확히 그 id
 
 
 def test_created_range_is_kst_inclusive_on_both_ends(client: TestClient) -> None:
