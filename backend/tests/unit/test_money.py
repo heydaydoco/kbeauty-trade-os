@@ -141,3 +141,28 @@ def test_amount_format_error_is_structured_and_still_a_value_error() -> None:
         parse_minor_amount("12.345", "USD", field="입금액")
     assert isinstance(caught.value, AmountFormatError)
     assert (caught.value.field, "소수점 2자리" in caught.value.reason) == ("입금액", True)
+
+
+@pytest.mark.parametrize(
+    ("raw", "ok"),
+    [
+        ("1,000", True),
+        ("999,999", True),
+        ("1,000,000.50", True),
+        ("100,000", True),
+        ("0,500", False),  # 천단위가 아니라 유럽식 소수일 수 있다 — 추측 금지(PR-14a B10)
+        ("0,000", False),
+        ("00,500", False),
+        ("012,345", False),
+        ("1000,000", False),
+    ],
+)
+def test_grouped_amount_first_group_never_starts_with_zero(raw: str, ok: bool) -> None:
+    """천단위 콤마 표기의 첫 그룹은 1~3자리이고 0으로 시작하지 않는다 — '0,500'은 거부(경계: '1,000'·'100,000' 허용)"""
+    from app.core.money import AmountFormatError, parse_minor_amount
+
+    if ok:
+        assert parse_minor_amount(raw, "USD", field="단가") >= 100_000
+    else:
+        with pytest.raises(AmountFormatError):
+            parse_minor_amount(raw, "USD", field="단가")
