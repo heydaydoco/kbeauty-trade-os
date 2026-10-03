@@ -13,7 +13,7 @@ trade_chain(`intake_flow`)에 있다(SO 생성 단일 착지 `create_received_sa
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import date
 from typing import Any
@@ -156,6 +156,34 @@ def occupant(
     if so is not None:
         return {"doc_number": so[0], "status": so[1]}
     return None
+
+
+def occupants(
+    session: Session, buyer_partner_id: int, keys: Collection[str]
+) -> dict[str, dict[str, Any]]:
+    """`occupant`의 일괄판(CSV 입구 선조회 — PR-14a) — 키 목록을 **2쿼리**(PENDING 인테이크 `IN` + 비취소 SO `IN`)로 본다.
+
+    키 → 점유 detail(`occupant`와 같은 모양·같은 우선순위: PENDING 인테이크가 먼저, 없으면 SO). 점유 없는 키는 결과에 없다.
+    """
+    wanted = sorted(set(keys))
+    if not wanted:
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    for key, intake_id, status in session.execute(
+        select(OrderIntake.buyer_po_no_key, OrderIntake.id, OrderIntake.status)
+        .where(
+            OrderIntake.buyer_partner_id == buyer_partner_id,
+            OrderIntake.buyer_po_no_key.in_(wanted),
+            OrderIntake.status == IntakeStatus.PENDING.value,
+            OrderIntake.deleted_at.is_(None),
+        )
+        .order_by(OrderIntake.id)
+    ).all():
+        found.setdefault(str(key), {"intake_id": int(intake_id), "status": str(status)})
+    rest = [key for key in wanted if key not in found]
+    for key, (number, status) in sales_orders.po_occupants(session, buyer_partner_id, rest).items():
+        found[key] = {"doc_number": number, "status": status}
+    return found
 
 
 def require_po_free(
