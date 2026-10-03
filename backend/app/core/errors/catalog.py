@@ -419,7 +419,7 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.ORDER_INTAKE_FILE_TOO_MANY_GROUPS: ErrorSpec(
         422,
-        "한 파일에 담을 수 있는 바이어 PO는 200건까지입니다. 파일을 나누어 다시 올려 주세요.",
+        "한 파일에 담을 수 있는 바이어 PO 수를 넘었습니다(파일의 PO 수·상한은 안내 정보 참조). 파일을 나누어 다시 올려 주세요.",
     ),
     ErrorCode.ORDER_INTAKE_FILE_UNSUPPORTED_FORMAT: ErrorSpec(
         422,

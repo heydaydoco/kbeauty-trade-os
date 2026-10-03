@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
 
 from app.core.money import CURRENCY_MINOR_UNITS
+from app.core.time import today_kst
 from app.modules.identity.models import RoleCode
 from app.modules.imports import service as imports_service
 from app.modules.order_intake import csv_template
@@ -47,6 +49,11 @@ INVALID_ROWS = "ORDER_INTAKE.FILE.INVALID_ROWS"
 FILE_DUP = "ORDER_INTAKE.FILE.DUPLICATE"
 DUP_PO = "TRADE_DOCS.DOCUMENT.DUPLICATE_BUYER_PO"
 
+#: 날짜 파라미터는 오늘(KST) 기준 상대값 — 절대 날짜는 시간이 지나면 미래↔과거가 뒤집혀 시험 의미가 바뀐다.
+_TODAY = today_kst()
+_PAST = _TODAY - timedelta(days=40)
+_FUTURE = _TODAY + timedelta(days=40)
+
 
 @pytest.fixture
 def trade():  # type: ignore[no-untyped-def]
@@ -66,9 +73,12 @@ def _errors_of(response: Any, *, column: str | None = None) -> list[dict[str, An
 # ── 양식 ─────────────────────────────────────────────────────────────────────
 
 
-def test_template_is_the_nine_column_header_only_with_a_bom_for_every_role() -> None:
-    """양식 다운로드 — UTF-8 BOM·헤더 9열 완전 일치·데이터/안내 행 없음·CRLF. 전 역할이 받는다(헤더뿐이라 민감 값 없음). 비인증은 401"""
-    for role in RoleCode:
+def test_template_is_the_nine_column_header_only_with_a_bom_for_writers_only() -> None:
+    """양식 다운로드 — UTF-8 BOM·헤더 9열 완전 일치·데이터/안내 행 없음·CRLF. 업로드할 수 있는 무역·관리자만 받는다(물류·인증·조회 403 — 더 엄격한 쪽 자율 확정). 비인증은 401"""
+    for role in (RoleCode.LOGISTICS, RoleCode.CERT, RoleCode.VIEWER):
+        with logged_in(role) as client:
+            assert client.get(TEMPLATE_CSV).status_code == 403, role
+    for role in (RoleCode.TRADE, RoleCode.ADMIN):
         with logged_in(role) as client:
             response = client.get(TEMPLATE_CSV)
             assert response.status_code == 200, (role, response.text)
@@ -175,15 +185,21 @@ def test_two_buyers_may_use_the_same_po_number(trade: Any) -> None:
     assert scalar("SELECT count(DISTINCT buyer_partner_id) FROM order_intakes") == 2
 
 
-def test_optional_dates_may_be_blank_and_currency_and_market_are_uppercased(trade: Any) -> None:
-    """PO일자·요청납기일은 빈 칸 허용(없음) / 통화·시장 코드는 소문자 입력을 대문자화한다 — 코드의 대소문자는 의미 없다"""
+def test_dates_are_required_and_currency_and_market_are_uppercased(trade: Any) -> None:
+    """PO일자·요청납기일은 **필수**(빈 칸은 REQUIRED 행 오류 — 더 엄격한 쪽 자율 확정) / 통화·시장 코드는 소문자 입력을 대문자화한다 — 코드의 대소문자는 의미 없다"""
     w = world()
-    row = csv_row(w, po="PO-D", po_date="", delivery="", currency="usd", market="us")
+    blank = upload_csv(trade, csv_bytes([csv_row(w, po="PO-D", po_date="", delivery="  ")]))
+    assert blank.status_code == 422
+    assert [(e["column"], e["code"]) for e in error_rows(blank)] == [
+        ("PO일자", "REQUIRED"),
+        ("요청납기일", "REQUIRED"),
+    ]
+    row = csv_row(w, po="PO-D", currency="usd", market="us")
     response = upload_csv(trade, csv_bytes([row]))
     assert response.status_code == 201, response.text
     detail = get(trade, response.json()["intakes"][0]["id"])
     assert detail["currency"] == "USD" and detail["dest_market_code"] == "US"
-    assert detail["buyer_po_date"] is None and detail["lines"][0]["requested_delivery_date"] is None
+    assert detail["buyer_po_date"] == past() and detail["lines"][0]["requested_delivery_date"]
 
 
 def test_excel_formula_escape_is_reversed_only_through_the_shared_channel(trade: Any) -> None:
@@ -316,18 +332,18 @@ def _one_row_error(trade: Any, w: dict[str, Any], **kwargs: Any) -> list[dict[st
 @pytest.mark.parametrize(
     "value",
     [
-        "10/5/2026",
+        _PAST.strftime("%m/%d/%Y").lstrip("0"),
         "46000",
-        "2026-13-01",
-        "2026/10/05",
-        "2025/10/05",
-        "2025.10.05",
-        "20251005",
-        "26-10-05",
-        "2026-1-5",
-        "2026-02-30",
-        "２０２６-０１-０１",
-        "2026-01-01 00:00",
+        f"{_PAST.year}-13-01",
+        _FUTURE.strftime("%Y/%m/%d"),
+        _PAST.strftime("%Y/%m/%d"),
+        _PAST.strftime("%Y.%m.%d"),
+        _PAST.strftime("%Y%m%d"),
+        _PAST.strftime("%y-%m-%d"),
+        f"{_PAST.year}-1-5",
+        f"{_PAST.year}-02-30",
+        _PAST.isoformat().translate(str.maketrans("0123456789", "０１２３４５６７８９")),
+        f"{_PAST.isoformat()} 00:00",
         "1999-12-31",
     ],
 )
@@ -350,9 +366,9 @@ def test_date_semantics_future_po_date_and_past_delivery_are_row_errors(trade: A
     w = world()
     assert [e["column"] for e in _one_row_error(trade, w, po_date=future(3))] == ["PO일자"]
     assert [e["column"] for e in _one_row_error(trade, w, delivery=past(1))] == ["요청납기일"]
-    assert [e["column"] for e in _one_row_error(trade, w, delivery="2026/10/05")] == ["요청납기일"]
-    from app.core.time import today_kst
-
+    assert [
+        e["column"] for e in _one_row_error(trade, w, delivery=_FUTURE.strftime("%Y/%m/%d"))
+    ] == ["요청납기일"]
     ok = csv_row(w, po="PO-T", delivery=today_kst().isoformat(), po_date=today_kst().isoformat())
     assert upload_csv(trade, csv_bytes([ok])).status_code == 201
 
@@ -858,7 +874,7 @@ def test_the_same_file_twice_creates_one_set_and_the_second_is_a_409(trade: Any)
     assert _count() == 2 and _count("order_intake_lines") == 2
     # 한 글자만 달라도 다른 파일 — 이번에는 PO 중복이 막는다(해시 멱등은 PO 중복의 대체물이 아니다)
     changed = upload_csv(trade, content + b"\r\n")
-    assert changed.status_code in (409, 422), changed.text
+    assert changed.status_code == 409 and code_of(changed) == DUP_PO, changed.text
     assert _count() == 2
 
 
@@ -996,16 +1012,27 @@ def test_new_error_codes_have_the_designed_statuses_and_messages() -> None:
 
 
 @pytest.mark.group_k
-def test_the_error_report_never_echoes_amounts_or_internal_values(trade: Any) -> None:
-    """오류 리포트(응답 detail)는 행번호·열·코드·한국어 사유뿐이다 — 거래처 내부 id·SKU 코드·스택·SQL이 실리지 않는다"""
-    w = world(lines=1)
-    response = upload_csv(trade, csv_bytes([csv_row(w, po="PO-E", qty="x", price="9.999")]))
-    detail = response.json()["error"]["detail"]
-    assert set(detail) == {"errors", "total_errors", "omitted_errors"}
-    for item in detail["errors"]:
-        assert set(item) == {"row_no", "column", "code", "message_ko"}
-    text = response.text
-    assert "Traceback" not in text and "SELECT" not in text and "sku_id" not in text
+def test_the_error_report_carries_no_quantity_or_price_cell_and_no_internal_value(
+    trade: Any,
+) -> None:
+    """오류 리포트는 행번호·열·코드·한국어 사유뿐 — 수량·단가 **셀 원문을 인용하지 않고**(design-D D7 금액 미기재) 거래처 내부 id·SKU 코드가 실리지 않는다.
+
+    두 세계(서로 다른 거래처 id·SKU)에 같은 형식 오류를 올려 메시지가 글자 단위로 같음을 본다 — 세계마다 다른 내부 값이 새면 달라진다.
+    """
+    reports = []
+    for _ in range(2):
+        w = world(lines=1)
+        response = upload_csv(trade, csv_bytes([csv_row(w, po="PO-E", qty="7x", price="9.999")]))
+        assert response.status_code == 422
+        detail = response.json()["error"]["detail"]
+        assert set(detail) == {"errors", "total_errors", "omitted_errors", "counts_by_code"}
+        for item in detail["errors"]:
+            assert set(item) == {"row_no", "column", "code", "message_ko"}
+        assert "9.999" not in response.text and "7x" not in response.text
+        sku_code = scalar("SELECT sku_code FROM skus WHERE id = :i", i=w["sku_ids"][0])
+        assert sku_code not in response.text
+        reports.append([e["message_ko"] for e in detail["errors"]])
+    assert reports[0] == reports[1] and len(reports[0]) == 2
 
 
 @pytest.mark.group_k

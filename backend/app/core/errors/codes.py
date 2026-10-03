@@ -241,9 +241,9 @@ class ErrorCode(StrEnum):
     # 오더 인테이크 CSV 입구 (S3-1 PR-14a / design-D D2) — 파일 전체 원자(한 행이라도 오류면 전부 거부).
     #: 같은 파일(sha256)이 이미 검토 대기(PENDING) 인테이크로 올라와 있다 — detail `intake_ids`(기존 인테이크 id 목록)로 그 건을 처리한 뒤 다시 올린다.
     ORDER_INTAKE_FILE_DUPLICATE = "ORDER_INTAKE.FILE.DUPLICATE"
-    #: 파일의 행·셀 오류가 있어 **아무것도 등록하지 않았다** — detail `errors[{row_no, column, code, message_ko}]`(최대 200건)+`total_errors`·`omitted_errors`.
+    #: 파일의 행·셀 오류가 있어 **아무것도 등록하지 않았다** — detail `errors[{row_no, column, code, message_ko}]`(상한까지, 중복 PO·마스터 오류 우선)+`total_errors`·`omitted_errors`·`counts_by_code`.
     ORDER_INTAKE_FILE_INVALID_ROWS = "ORDER_INTAKE.FILE.INVALID_ROWS"
-    #: 한 파일이 만들 수 있는 인테이크(바이어 PO) 수 상한(200)을 넘었다 — 파일을 나눠 올린다.
+    #: 한 파일이 만들 수 있는 인테이크(바이어 PO) 수 상한을 넘었다 — detail `{groups, max_groups}`(상한 값은 `csv_template.MAX_GROUPS` 단일 출처).
     ORDER_INTAKE_FILE_TOO_MANY_GROUPS = "ORDER_INTAKE.FILE.TOO_MANY_GROUPS"
     #: 엑셀(.xlsx·.xls) 파일은 받지 않는다 — 엑셀에서 'CSV UTF-8'로 저장해 올린다.
     ORDER_INTAKE_FILE_UNSUPPORTED_FORMAT = "ORDER_INTAKE.FILE.UNSUPPORTED_FORMAT"

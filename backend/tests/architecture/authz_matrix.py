@@ -284,14 +284,9 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         V: ALLOW,
     },
     ("POST", "/api/v1/order-intakes"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
-    # S3-1 PR-14a — CSV 입구. 양식 다운로드는 전 역할(헤더 행뿐 — 민감 값 없음, design-D D7 "인테이크·CSV=전 역할"), 업로드는 무역(관리자 상시 통과) — 서비스가 역할을 한 번 더 확인한다.
-    ("GET", "/api/v1/order-intakes/template.csv"): {
-        A: ALLOW,
-        T: ALLOW,
-        L: ALLOW,
-        C: ALLOW,
-        V: ALLOW,
-    },
+    # S3-1 PR-14a — CSV 입구. 양식 다운로드·업로드 모두 무역(관리자 상시 통과) — 양식은 업로드할 수 있는 역할만(적대 검토 판정: 더 엄격한 쪽 자율 확정,
+    # design-D D7 "CSV=전 역할"보다 좁힘). 업로드는 서비스가 역할을 한 번 더 확인한다.
+    ("GET", "/api/v1/order-intakes/template.csv"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
     ("POST", "/api/v1/order-intakes/import-csv"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
     ("PATCH", "/api/v1/order-intakes/{intake_id}"): {A: ALLOW, T: ALLOW, L: DENY, C: DENY, V: DENY},
     ("POST", "/api/v1/order-intakes/{intake_id}/resolve"): {

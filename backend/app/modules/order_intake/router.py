@@ -71,7 +71,8 @@ def import_order_intakes_csv(
 
 @router.get(
     "/template.csv",
-    summary="오더 인테이크 CSV 표준 양식 (헤더 9열만 — UTF-8 BOM, 전 역할)",
+    summary="오더 인테이크 CSV 표준 양식 (헤더 9열만 — UTF-8 BOM, 업로드할 수 있는 무역·관리자만)",
+    dependencies=[require_roles(*CAN_WRITE)],
 )
 def download_intake_template(current: CurrentUser) -> Any:
     return csv_response(csv_template.DOWNLOAD_FILENAME, csv_import.template_header(), [])

@@ -102,8 +102,8 @@ def test_different_files_racing_for_the_same_po_land_exactly_one_file() -> None:
     assert scalar("SELECT count(DISTINCT source_sha256) FROM order_intakes") == 1  # 한 파일의 두 PO
 
 
-def test_files_listing_the_same_pos_in_opposite_orders_never_deadlock() -> None:
-    """PO 두 개를 서로 반대 순서로 담은 파일들이 동시에 오면 — 착지 순서를 (바이어, PO키)로 정렬해 교착이 없고 정확히 한 파일만 착지한다"""
+def test_files_listing_the_same_pos_in_opposite_orders_land_exactly_one_file() -> None:
+    """스모크 — PO 두 개를 서로 반대 순서로 담은 파일 8개가 동시에 오면 정확히 한 파일만 착지한다(나머지 409). 교착 방지 자체의 결정적 시험은 아래 interleaved 시험이다"""
     w = world(lines=1)
     code = w["codes"][0]
 
@@ -135,9 +135,9 @@ def test_two_files_interleaved_mid_landing_in_opposite_orders_do_not_deadlock(
         row = real(*args, **kwargs)
         if not getattr(local, "waited", False):
             local.waited = True
-            # 상대가 첫 PO를 착지할 때까지 기다린다(상대가 내 잠금에 막혀 있으면 3초 뒤 진행).
+            # 상대가 첫 PO를 착지할 때까지 기다린다(상대가 내 잠금에 막혀 있으면 1초 뒤 진행 — lock_timeout 5s 안쪽에 넉넉한 여유).
             with contextlib.suppress(threading.BrokenBarrierError):
-                barrier.wait(timeout=3)
+                barrier.wait(timeout=1)
         return row
 
     monkeypatch.setattr(csv_import.intake_service, "register_intake", interleaved)
