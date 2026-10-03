@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -505,7 +506,7 @@ def test_the_bulk_refuses_to_run_inside_an_open_transaction() -> None:
     assert so_row(so["id"])["status"] == "RECEIVED"
 
 
-# ══ K — 처리 도중 권한 변화(TOCTOU) ═══════════════════════════════════════════════════
+# ══ K — 처리 도중 권한 변화(TOCTOU)·로그 위생 ══════════════════════════════════════════════
 
 
 def _revoke(user_id: int, how: str) -> None:
@@ -553,6 +554,73 @@ def test_an_actor_who_loses_rights_mid_bulk_runs_nothing_more(
     assert so_row(sos[0]["id"])["status"] == "CONFIRMED"
     for so in sos[1:]:
         assert so_row(so["id"])["status"] == "RECEIVED"
+
+
+@pytest.mark.group_k
+def test_an_assignee_deactivated_after_the_precheck_fails_each_item_and_changes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """담당자 TOCTOU — 사전 검증(422)을 통과한 직후 담당자가 비활성화되면 건 트랜잭션 안의 재확인이 잡아 `FAILED`(`INVALID_FIELD`)·대상 무변(담당자·version)"""
+    sos = [ready_so() for _ in range(2)]
+    new_owner = board_user(TRADE)
+    original = bulk_module.require_assignee
+
+    def then_deactivate(assignee_id: int) -> None:
+        original(assignee_id)
+        _revoke(assignee_id, "deactivate")
+
+    monkeypatch.setattr(bulk_module, "require_assignee", then_deactivate)
+    before = {so["id"]: (so_row(so["id"])["assignee_id"], so_version(so["id"])) for so in sos}
+    with logged_in(TRADE) as client:
+        report = _ok(bulk(client, "ASSIGN", _so_targets(sos), assignee_id=new_owner))
+    assert [r["outcome"] for r in report["results"]] == ["FAILED", "FAILED"]
+    assert {r["code"] for r in report["results"]} == {"COMMON.VALIDATION.INVALID_FIELD"}
+    for so in sos:
+        assert (so_row(so["id"])["assignee_id"], so_version(so["id"])) == before[so["id"]]
+
+
+def _money_needles(minor: int) -> set[str]:
+    return {str(minor), f"{minor:,}", f"{minor / 100:.2f}", f"{minor / 100:,.2f}"}
+
+
+@pytest.mark.group_k
+def test_bulk_logs_carry_no_amounts_prices_or_credit_basis(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """로그 위생 — BLOCKED(여신 한도 초과)·FAILED(주입 오류)·OK가 섞인 벌크 확정의 로그 어디에도 금액·단가·한도 수치·basis가 없다
+    (벌크 로그는 액션·종류·id·결과·코드만, 실패 로그는 예외 트레이스백뿐). 7자리 이상 특이값으로 시각·id와 겹치지 않게 한다"""
+    ensure_approval_line()
+    price, quantity, limit = 7_654_321, 9, 31_337_017
+    blocked = ready_so(limit=limit, price=price, quantity=quantity)
+    failing = ready_so(price=price, quantity=quantity)
+    fine = ready_so(price=price, quantity=quantity)
+    original = bulk_module.so_confirm.confirm_sales_order
+
+    def boom(**kwargs: Any) -> Any:
+        if kwargs["so_id"] == failing["id"]:
+            raise RuntimeError("주입된 오류")
+        return original(**kwargs)
+
+    monkeypatch.setattr(bulk_module.so_confirm, "confirm_sales_order", boom)
+    with caplog.at_level(logging.DEBUG), logged_in(TRADE) as client:
+        report = _ok(bulk(client, "CONFIRM_SO", _so_targets([blocked, failing, fine])))
+    assert {r["id"]: r["outcome"] for r in report["results"]} == {
+        blocked["id"]: "BLOCKED",
+        failing["id"]: "FAILED",
+        fine["id"]: "OK",
+    }
+    logged = caplog.text
+    assert "order_board_bulk_item" in logged and "order_board_bulk_item_failed" in logged
+    needles = (_money_needles(price) | _money_needles(price * quantity) | _money_needles(limit)) | {
+        "limit_amount",
+        "basis",
+        "unit_price",
+        "exposure",
+        "total_amount",
+    }
+    for needle in sorted(needles):
+        assert needle not in logged, needle
+    assert "credit" not in logged.lower() and "여신" not in logged and "한도" not in logged
 
 
 # ══ J — 같은 벌크 키 재요청 = 재생 ══════════════════════════════════════════════════════

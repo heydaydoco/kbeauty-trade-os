@@ -224,11 +224,13 @@ def test_confirmed_column_is_newest_confirmed_first_and_the_others_oldest_first(
 
 
 def test_filters_narrow_every_column_and_q_escapes_like_wildcards(client: TestClient) -> None:
-    """필터 — 거래처·담당자·통화·시장·q(바이어명·PO번호·수주번호 부분 일치, `%`·`_`는 글자 그대로)가 4열 모두에 걸린다"""
+    """필터 — 거래처·담당자·통화·시장·q(바이어명·PO번호·수주번호 부분 일치, 인테이크·수주 모두 `%`·`_`는 글자 그대로)가 4열 모두에 걸린다"""
     buyer, owner = world_ids()
     other_buyer = create_buyer(name_en="Zeta Imports")
     other_owner = board_user(RoleCode.TRADE)
-    i1 = raw_intake(buyer=buyer, assignee=owner, po_no="PO-100%OFF")
+    i1 = raw_intake(buyer=buyer, assignee=owner, po_no="PO-1_0")
+    i1x = raw_intake(buyer=buyer, assignee=owner, po_no="PO-1X0")
+    i_pct = raw_intake(buyer=buyer, assignee=owner, po_no="PO-50%OFF")
     i2 = raw_intake(buyer=other_buyer, assignee=other_owner, po_no="PO-ZZZ", currency="EUR")
     s1 = seed_so("RECEIVED", buyer=buyer, assignee=owner, buyer_po_no="PO-A_1")
     s2 = seed_so("ON_HOLD", buyer=other_buyer, assignee=other_owner, buyer_po_no="PO-AB1")
@@ -237,11 +239,12 @@ def test_filters_narrow_every_column_and_q_escapes_like_wildcards(client: TestCl
         body = _board(client, **params)
         return {item["id"] for col in body["columns"] for item in col["items"]}
 
-    assert ids(buyer_partner_id=buyer) == {i1, s1}
+    assert ids(buyer_partner_id=buyer) == {i1, i1x, i_pct, s1}
     assert ids(assignee_id=other_owner) == {i2, s2}
-    assert ids(currency="EUR") == {i2} and ids(currency="USD") == {i1, s1, s2}
-    assert ids(q="100%") == {i1}  # `%`가 와일드카드였다면 PO-ZZZ도 걸렸다
-    assert ids(q="A_1") == {s1}  # `_`가 와일드카드였다면 PO-AB1도 걸렸다
+    assert ids(currency="EUR") == {i2} and ids(currency="USD") == {i1, i1x, i_pct, s1, s2}
+    assert ids(q="1_0") == {i1}  # 인테이크 PO: `_`가 와일드카드였다면 PO-1X0도 걸렸다
+    assert ids(q="%") == {i_pct}  # `%`가 와일드카드였다면 모든 카드가 걸렸다
+    assert ids(q="A_1") == {s1}  # 수주 PO: `_`가 와일드카드였다면 PO-AB1도 걸렸다
     # 거래처 마스터 영문명 부분 일치(대소문자 무시) — 인테이크·수주 같은 의미
     assert ids(q="zeta") == {i2, s2}
     assert ids(q="raw buyer") == {s1, s2}  # 수주: 헤더 바이어 표기 부분 일치
@@ -328,6 +331,24 @@ def test_the_date_filter_accepts_the_range_ends(client: TestClient) -> None:
     response = client.get(BOARD, params={"created_from": "2000-01-01", "created_to": "2999-12-31"})
     assert response.status_code == 200, response.text
     assert client.get(EXPORT, params={"created_to": "2999-12-31"}).status_code == 200
+
+
+def test_soft_deleted_intake_lines_are_left_out_of_counts_totals_and_the_csv(
+    client: TestClient,
+) -> None:
+    """soft delete된 인테이크 라인은 라인 수·합계·CSV 납기요청 최소일에서 빠진다"""
+    buyer, owner = world_ids()
+    intake = raw_intake(buyer=buyer, assignee=owner, lines=[(1, 100), (2, 300), (4, 50)])
+    first_line = scalar(
+        "SELECT id FROM order_intake_lines WHERE intake_id = :i AND line_no = 1", i=intake
+    )
+    set_column("order_intake_lines", first_line, deleted_at=datetime.now(UTC))
+    card = column(_board(client), "INTAKE_PENDING")["items"][0]
+    assert card["id"] == intake
+    assert card["line_count"] == 2 and card["total_amount"] == 2 * 300 + 4 * 50
+    (row,) = _csv(client, stage="INTAKE_PENDING")[1:]
+    assert row[6] == "2" and row[5] == "8.00"
+    assert row[9] == (today_kst() + timedelta(days=32)).isoformat()  # 1번 라인(+31일)은 빠졌다
 
 
 def test_drilldown_requires_a_known_stage_and_bounded_page_size(client: TestClient) -> None:
@@ -482,6 +503,8 @@ def test_user_lookup_supports_q_and_the_assignee_target_filter() -> None:
     board_user(RoleCode.ADMIN, name="김관리")
     board_user(RoleCode.VIEWER, name="김조회")
     board_user(RoleCode.LOGISTICS, name="100%물류")
+    # `%`가 와일드카드였다면 q='100%'·'0%물'에 아래 사용자도 걸렸다
+    board_user(RoleCode.LOGISTICS, name="1000물류")
     with logged_in(RoleCode.TRADE) as c:
 
         def names(**params: Any) -> set[str]:
