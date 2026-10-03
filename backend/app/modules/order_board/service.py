@@ -2,6 +2,7 @@
 
 ■ `get_order_board` — **비-Page 단일 객체**: 고정 4열(인테이크 대기·수주 접수·수주 보류·수주 확정), 열마다 `total`·`has_more`·카드 최대 50장. 함수명에 `list_` 접두를 쓰지 않는다
   (Page 봉투 스캔은 `list_` 접두만 본다 — 의도된 예외이며 열 상한·건수는 별도 테스트가 고정한다). 열 '더 보기'는 `list_board_items`(Page)가 맡는다.
+■ 읽기 트랜잭션은 첫 문장에서 `REPEATABLE READ, READ ONLY`(`read_snapshot`) — 6쿼리가 한 스냅샷을 본다(카드 중복·`total < len(items)` 방지).
 ■ **쿼리 수는 카드 수와 무관한 상수**다: 열 건수 2쿼리(인테이크 COUNT·SO 상태별 GROUP BY) + 열별 카드 4쿼리. 라인 수·인테이크 합계는 상관 서브쿼리, 담당자·거래처 이름은
   조인 — 카드마다 추가 질의가 없다(§18.4 N+1 금지). 게이트·여신은 평가하지 않는다(카드에 그 필드가 없다).
 ■ 보드는 **조회만** 한다(상태 대입 0). 취소 SO·확정/거부 인테이크는 보드에 없다. 원가·마진·매입가 열은 어느 쿼리도 읽지 않는다.
@@ -11,13 +12,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from sqlalchemy import Numeric, cast, func, or_, select
+from sqlalchemy import Numeric, cast, func, or_, select, text
 from sqlalchemy.orm import Session
 
-from app.core.db.uow import unit_of_work
+from app.core.db.uow import in_unit_of_work, unit_of_work
 from app.core.time import KST, to_kst, today_kst, utcnow
 from app.modules.identity.models import User
 from app.modules.order_board.constants import (
@@ -56,6 +59,27 @@ EXPORT_HEADER: tuple[str, ...] = (
 )
 
 _KIND_LABEL_KO = {CardKind.INTAKE: "인테이크", CardKind.SO: "수주"}
+
+
+# ── 읽기 스냅샷 ────────────────────────────────────────────────────────────────
+
+SNAPSHOT_STATEMENT = "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+
+
+@contextmanager
+def read_snapshot() -> Iterator[Session]:
+    """보드·드릴다운·CSV 읽기 트랜잭션 — **첫 문장**에서 `REPEATABLE READ, READ ONLY`로 바꿔 열 건수·열 카드 6쿼리가 **한 스냅샷**을 본다.
+
+    READ COMMITTED면 문장마다 스냅샷이 달라, 쿼리 사이에 커밋된 확정이 같은 SO를 '접수'·'확정' 두 열에 동시에 싣거나 `total < len(items)`를 만든다.
+    `SET TRANSACTION`은 트랜잭션의 첫 문장이어야 하므로 바깥 UoW에 합류해서는 안 된다(합류면 이미 다른 문장이 실행됐을 수 있다 — 프로그래밍 오류로 멈춘다).
+    """
+    if in_unit_of_work():
+        raise RuntimeError(
+            "보드 읽기는 독립 트랜잭션이어야 합니다 — 열린 트랜잭션 안에서 부를 수 없습니다."
+        )
+    with unit_of_work() as uow:
+        uow.session.execute(text(SNAPSHOT_STATEMENT))
+        yield uow.session
 
 
 # ── 필터 → 조건 ───────────────────────────────────────────────────────────────
@@ -365,8 +389,7 @@ def get_order_board(f: BoardFilter) -> dict[str, Any]:
     """보드 전체 — 고정 4열 × (전체 건수·`has_more`·카드 ≤ `COLUMN_LIMIT`). 쿼리 수 상수(6)."""
     generated_at = utcnow()
     today = today_kst()
-    with unit_of_work() as uow:
-        session = uow.session
+    with read_snapshot() as session:
         totals = _stage_totals(session, f)
         columns: list[dict[str, Any]] = []
         for stage in STAGE_ORDER:
@@ -392,8 +415,7 @@ def list_board_items(
 ) -> tuple[list[dict[str, Any]], int]:
     """한 열의 페이지(드릴다운 — Page 봉투). 정렬은 보드 열과 같다."""
     today = today_kst()
-    with unit_of_work() as uow:
-        session = uow.session
+    with read_snapshot() as session:
         if stage is BoardStage.INTAKE_PENDING:
             total = _intake_total_count(session, f)
             items = _intake_cards(session, f, offset=offset, limit=limit, today=today)
@@ -430,8 +452,7 @@ def _csv_row(kind: CardKind, row: Any, stage: BoardStage) -> tuple[Any, ...]:
 def export_rows(f: BoardFilter, stage: BoardStage | None = None) -> list[tuple[Any, ...]]:
     """보드 CSV 행 — 같은 필터·열 순서·열 정렬. 상한 초과는 422(조건을 좁히게 한다 — 조용한 잘라내기 금지)."""
     stages = (stage,) if stage is not None else STAGE_ORDER
-    with unit_of_work() as uow:
-        session = uow.session
+    with read_snapshot() as session:
         totals = _stage_totals(session, f)
         count = sum(totals[s] for s in stages)
         if count > EXPORT_MAX_ROWS:

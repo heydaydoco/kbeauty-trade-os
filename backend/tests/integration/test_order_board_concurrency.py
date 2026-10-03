@@ -16,7 +16,10 @@ from sqlalchemy.exc import DBAPIError
 
 from app.modules.identity.models import RoleCode
 from app.modules.order_board import bulk as bulk_module
-from app.modules.order_board.constants import BulkAction, BulkOutcome, CardKind
+from app.modules.order_board import service as board_service
+from app.modules.order_board.constants import BoardStage, BulkAction, BulkOutcome, CardKind
+from app.modules.order_board.schemas import BoardFilter
+from app.modules.trade_chain import confirm as so_confirm
 from tests.factories.approvals import count
 from tests.factories.board import actor, board_user
 from tests.factories.confirm import ready_so, so_row, so_version
@@ -162,3 +165,109 @@ def test_twenty_users_bulk_confirming_overlapping_sets_in_different_orders_confi
 
     assert count("sales_orders") == so_before + INTAKES  # 인테이크마다 SO 정확히 1건
     assert count("order_intakes", "status = 'CONFIRMED' AND sales_order_id IS NOT NULL") == INTAKES
+
+
+# ── 보드 읽기 스냅샷(REPEATABLE READ, READ ONLY) ─────────────────────────────────
+
+
+def _assert_consistent(board: dict[str, Any]) -> list[tuple[str, int]]:
+    """한 보드 응답의 정합 — (kind,id) 중복 0, 열마다 total ≥ 카드 수·has_more = (total > 카드 수)."""
+    keys = [(item["kind"], item["id"]) for col in board["columns"] for item in col["items"]]
+    assert len(keys) == len(set(keys)), keys
+    for col in board["columns"]:
+        assert col["total"] >= len(col["items"]), col["stage"]
+        assert col["has_more"] is (col["total"] > len(col["items"])), col["stage"]
+    return keys
+
+
+def test_a_confirmation_committed_between_the_board_queries_never_shows_a_card_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """결정적 인터리브 — 보드가 '수주 접수' 열을 읽은 **직후** 다른 연결에서 그 SO가 실제 확정 통로로 확정·커밋돼도, 보드 6쿼리는 한 스냅샷이라
+    '수주 확정' 열에 다시 나오지 않고 열 건수와 카드가 어긋나지 않는다(READ COMMITTED였다면 같은 카드가 두 열에 실리고 확정 열 total 0 < 카드 1)"""
+    so = ready_so()
+    trade = actor(board_user(RoleCode.TRADE), RoleCode.TRADE)
+    original = board_service._so_cards
+    fired: list[BaseException | None] = []
+
+    def confirm_elsewhere(session: Any, f: Any, stage: BoardStage, **kwargs: Any) -> Any:
+        cards = original(session, f, stage, **kwargs)
+        if stage is BoardStage.SO_RECEIVED and not fired:
+
+            def run() -> None:
+                try:
+                    so_confirm.confirm_sales_order(
+                        actor=trade,
+                        idempotency_key="interleave",
+                        so_id=so["id"],
+                        version=so_version(so["id"]),
+                    )
+                    fired.append(None)
+                except BaseException as exc:  # 결과로 판정한다
+                    fired.append(exc)
+
+            # 새 스레드 = 새 연결·새 트랜잭션(보드 트랜잭션에 합류하지 않는다)
+            thread = threading.Thread(target=run)
+            thread.start()
+            thread.join(60)
+        return cards
+
+    monkeypatch.setattr(board_service, "_so_cards", confirm_elsewhere)
+    board = board_service.get_order_board(BoardFilter())
+    assert fired == [None]  # 보드 쿼리 사이에 확정이 실제로 커밋됐다
+    assert so_row(so["id"])["status"] == "CONFIRMED"
+    keys = _assert_consistent(board)
+    assert keys.count(("SO", so["id"])) == 1
+    by_stage = {col["stage"]: col for col in board["columns"]}
+    assert [i["id"] for i in by_stage["SO_RECEIVED"]["items"]] == [so["id"]]
+    assert by_stage["SO_CONFIRMED"]["items"] == [] and by_stage["SO_CONFIRMED"]["total"] == 0
+    after = board_service.get_order_board(
+        BoardFilter()
+    )  # 다음 읽기는 새 스냅샷 — 확정 열로 옮겨 있다
+    assert [i["id"] for i in after["columns"][3]["items"]] == [so["id"]]
+
+
+def test_polling_the_board_while_bulk_confirmations_land_never_duplicates_a_card() -> None:
+    """H — 보드를 계속 읽는 동안 다른 사용자 4명이 벌크 확정을 건건이 커밋해도 어떤 응답에도 (kind,id) 중복이 없고 열마다 total ≥ 카드 수다.
+    끝난 뒤 보드는 12건 전부를 확정 열에 보인다"""
+    confirmers = 4
+    sos = [ready_so() for _ in range(12)]
+    targets = [bulk_module.Target(CardKind.SO, so["id"], so_version(so["id"])) for so in sos]
+    actors = [actor(board_user(RoleCode.TRADE), RoleCode.TRADE) for _ in range(confirmers)]
+    done = threading.Event()
+    finished = {"n": 0}
+    lock = threading.Lock()
+
+    def worker(index: int) -> Any:
+        if index == confirmers:  # 읽는 사람
+            boards: list[dict[str, Any]] = []
+            while (not done.is_set() or len(boards) < 3) and len(boards) < 2_000:
+                boards.append(board_service.get_order_board(BoardFilter()))
+            return boards
+        try:
+            return [
+                bulk_module.run_bulk(
+                    actor=actors[index],
+                    idempotency_key=f"poll-{index}-{t.id}",
+                    action=BulkAction.CONFIRM_SO,
+                    targets=[t],
+                )
+                for t in targets[index::confirmers]
+            ]
+        finally:
+            with lock:
+                finished["n"] += 1
+                if finished["n"] == confirmers:
+                    done.set()
+
+    outcomes = run_concurrently(worker, workers=confirmers + 1, timeout=300)
+    assert [o.error for o in outcomes if not o.ok] == []
+    for outcome in outcomes[:confirmers]:
+        assert all(report["ok_count"] == 1 for report in outcome.value)
+    boards = outcomes[confirmers].value
+    assert len(boards) >= 3
+    for board in boards:
+        _assert_consistent(board)
+    final = board_service.get_order_board(BoardFilter())
+    _assert_consistent(final)
+    assert {i["id"] for i in final["columns"][3]["items"]} == {so["id"] for so in sos}
