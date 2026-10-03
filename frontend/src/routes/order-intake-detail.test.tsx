@@ -900,12 +900,16 @@ describe("재판정 금지·키·오프라인 보강", () => {
     act(() => {
       window.dispatchEvent(new Event("offline"));
     });
-    if (kind === "확정" && dialog) fireEvent.click(dialogConfirm(dialog));
-    if (kind === "거부" && dialog) fireEvent.click(within(dialog).getByRole("button", { name: "거부" }));
-    if (kind === "품번 다시 확인") fireEvent.click(screen.getByRole("button", { name: "품번 다시 확인" }));
-    await waitFor(() => expect(posts(stub.calls, path)).toHaveLength(1));
-    act(() => {
-      window.dispatchEvent(new Event("online"));
-    });
+    try {
+      if (kind === "확정" && dialog) fireEvent.click(dialogConfirm(dialog));
+      if (kind === "거부" && dialog) fireEvent.click(within(dialog).getByRole("button", { name: "거부" }));
+      if (kind === "품번 다시 확인") fireEvent.click(screen.getByRole("button", { name: "품번 다시 확인" }));
+      await waitFor(() => expect(posts(stub.calls, path)).toHaveLength(1));
+    } finally {
+      // 실패해도 온라인으로 되돌린다 — 다음 시험이 오프라인 상태를 물려받지 않게.
+      act(() => {
+        window.dispatchEvent(new Event("online"));
+      });
+    }
   });
 });

@@ -156,11 +156,14 @@ describe("등록 요청", () => {
     act(() => {
       window.dispatchEvent(new Event("offline"));
     });
-    submit();
-    await waitFor(() => expect(posts(stub.calls)).toHaveLength(1));
-    act(() => {
-      window.dispatchEvent(new Event("online"));
-    });
+    try {
+      submit();
+      await waitFor(() => expect(posts(stub.calls)).toHaveLength(1));
+    } finally {
+      act(() => {
+        window.dispatchEvent(new Event("online"));
+      });
+    }
   });
 
   it("멱등 키: 같은 본문 재시도(실패 후)=같은 키, 본문이 바뀌면 새 키, A로 되돌아가면 A의 키", async () => {
