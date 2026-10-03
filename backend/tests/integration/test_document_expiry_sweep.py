@@ -55,6 +55,14 @@ TODAY = today_kst()
 YESTERDAY = TODAY - timedelta(days=1)
 
 
+@pytest.fixture(autouse=True)
+def _pin_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """시험 안의 '오늘'과 스윕·CLI의 '오늘'을 같은 날로 고정한다 — TODAY는 모듈 로드 시 1회 계산이라
+    실행 중 KST 자정을 넘기면 둘이 어긋나 경계 시험이 오판한다(PR #50 CI, KST 23:55~00:04 실행 선례)."""
+    monkeypatch.setattr(expiry_sweep, "today_kst", lambda: TODAY)
+    monkeypatch.setattr(cli, "today_kst", lambda: TODAY)
+
+
 def test_the_boundary_is_inclusive_of_the_validity_day_itself() -> None:
     """valid_until = 기준일이면 유지(당일 KST 24:00까지 유효) · 기준일−1이면 만료 — QT·PI 양쪽"""
     keep_qt, expire_qt = _qt(TODAY), _qt(YESTERDAY)
