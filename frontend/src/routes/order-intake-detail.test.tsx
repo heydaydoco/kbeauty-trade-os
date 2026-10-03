@@ -492,6 +492,9 @@ describe("거부", () => {
     expect(button()).toBeDisabled();
     typeReason(dialog, "😀😀😀😀😀");
     expect(button()).toBeEnabled();
+    // 이모지 300개 = 300자(코드포인트) — UTF-16 단위(600)로 세면 500 초과로 오판한다.
+    typeReason(dialog, "😀".repeat(300));
+    expect(button()).toBeEnabled();
     typeReason(dialog, "가".repeat(500));
     expect(button()).toBeEnabled();
     typeReason(dialog, "가".repeat(501));
