@@ -441,9 +441,13 @@ def _mentions(tree: ast.Module, name: str) -> bool:
 def test_intake_confirmation_is_requested_only_by_the_trade_chain_router_and_never_by_machinery() -> (
     None
 ):
-    """`confirm_intake`를 언급하는 파일은 정의(intake_flow)와 trade_chain 라우터뿐이다 — 스케줄러·CLI·아웃박스 디스패처·알림·시드·이관·임포트 어디서도 부르지 않는다(자동 확정 부재)"""
+    """`confirm_intake`를 언급하는 파일은 정의(intake_flow)·trade_chain 라우터·오더 보드 벌크(PR-15a — 사람 1클릭, 건별 독립 TX)뿐이다 — 스케줄러·CLI·아웃박스 디스패처·알림·시드·이관·임포트 어디서도 부르지 않는다(자동 확정 부재)"""
     mentioners = {rel for rel, tree in app_sources().items() if _mentions(tree, "confirm_intake")}
-    assert mentioners == {"modules/trade_chain/intake_flow.py", "modules/trade_chain/router.py"}
+    assert mentioners == {
+        "modules/trade_chain/intake_flow.py",
+        "modules/trade_chain/router.py",
+        "modules/order_board/bulk.py",
+    }
     for rel in ("modules/platform/scheduler.py", "cli.py", "modules/outbox/service.py"):
         assert "intake_flow" not in ast.unparse(app_sources()[rel])
     for rel, tree in app_sources().items():
