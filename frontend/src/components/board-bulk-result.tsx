@@ -6,7 +6,7 @@
 // ★ CONFLICT → 보드 새로 고침 안내. FORBIDDEN·FAILED·SKIPPED·OK는 각자 다른 배지·문구.
 // ★ 응답을 못 받은 경우(504·네트워크)만 '결과 다시 받기'(같은 키·같은 본문 재전송)를 보인다.
 
-import { useRef } from "react";
+import { useRef, type RefObject } from "react";
 import { Link } from "react-router";
 import { gateLabel, levelLabel } from "../lib/gate";
 import {
@@ -35,6 +35,8 @@ interface BulkResultDialogProps {
   onResend: () => void;
   onRefreshBoard: () => void;
   onClose: () => void;
+  /** 닫힐 때 연 버튼이 비활성·사라졌으면 포커스를 돌려줄 곳(벌크 영역). */
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 const fallbackLabel = (kind: CardKind, id: number): string => (kind === "INTAKE" ? `IN-${id}` : `수주 #${id}`);
@@ -109,11 +111,19 @@ export function BulkResultDialog({
   onResend,
   onRefreshBoard,
   onClose,
+  returnFocusRef,
 }: BulkResultDialogProps) {
   const boxRef = useRef<HTMLDivElement | null>(null);
-  useDialogBehavior(boxRef, () => {
-    if (!pending) onClose();
-  });
+  // 열리자마자 제목으로 포커스 — 처리 중에는 버튼이 전부 비활성이라 첫 포커스 대상이 없어 포커스가 모달 밖에 남는다.
+  const titleRef = useRef<HTMLHeadingElement | null>(null);
+  useDialogBehavior(
+    boxRef,
+    () => {
+      if (!pending) onClose();
+    },
+    titleRef,
+    returnFocusRef,
+  );
   const hasConflict = report?.results.some((row) => row.outcome === "CONFLICT") ?? false;
 
   return (
@@ -125,7 +135,9 @@ export function BulkResultDialog({
         aria-label={`${ACTION_LABEL[action]} 결과`}
         className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg bg-white p-5 shadow-lg"
       >
-        <h2 className="text-lg font-bold">{ACTION_LABEL[action]} 결과</h2>
+        <h2 ref={titleRef} tabIndex={-1} className="text-lg font-bold outline-none">
+          {ACTION_LABEL[action]} 결과
+        </h2>
         {pending && <p className="mt-2 text-sm text-gray-500">처리 중… 건마다 따로 처리하므로 시간이 걸릴 수 있습니다.</p>}
         {error && (
           <p role="alert" className="mt-2 break-keep text-sm text-signal-red">

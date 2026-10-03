@@ -10,7 +10,7 @@
 // 규약: 한국어 break-keep · 좁은 셀·헤더 nowrap · 숫자 가운데 정렬 · 금액은 서버 문자열 그대로 · 시각은 KST.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { BulkResultDialog } from "../components/board-bulk-result";
 import { BoardSavedFilters } from "../components/board-saved-filters";
@@ -54,14 +54,30 @@ import {
   type FieldErrors,
   type OrderBoard,
 } from "../lib/order-board";
+import { APPROVALS_QUERY_KEY } from "../lib/approval";
 import { ORDER_INTAKES_QUERY_KEY } from "../lib/order-intake";
 import { FRESH_EVERY_TIME, usePagedList, usePagedQuery } from "../lib/paging";
-import { SALES_ORDERS_QUERY_KEY } from "../lib/sales-order";
+import { PROFORMAS_QUERY_KEY } from "../lib/proforma";
+import { QUOTATIONS_QUERY_KEY } from "../lib/quotation";
+import { DOCUMENT_FLOW_QUERY_KEY, SALES_ORDERS_QUERY_KEY } from "../lib/sales-order";
 import { hasRole, useSession } from "../lib/session";
 import { MARKETS_SELECT_PATH, type Market } from "./markets";
 
 /** 보드·드릴다운 데이터 키 접두 — 벌크 뒤 이 접두로 무효화한다(저장 필터 키와 분리). */
 export const BOARD_DATA_KEY = [...ORDER_BOARD_QUERY_KEY, "data"] as const;
+
+/** 벌크 처리 뒤 무효화하는 다른 화면의 키 — 수주 확정 통로(confirm-panel)와 같은 집합 + 인테이크. */
+export const BULK_INVALIDATES = [
+  SALES_ORDERS_QUERY_KEY,
+  DOCUMENT_FLOW_QUERY_KEY,
+  QUOTATIONS_QUERY_KEY,
+  PROFORMAS_QUERY_KEY,
+  APPROVALS_QUERY_KEY,
+  ORDER_INTAKES_QUERY_KEY,
+] as const;
+
+/** 확인 창에 나열하는 대상 번호 수 — 그 이상은 '외 N건'. */
+const CONFIRM_LIST_MAX = 10;
 
 interface UserLookup {
   id: number;
@@ -315,6 +331,8 @@ export function OrderBoardPage() {
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
   const [drill, setDrill] = useState<{ stage: BoardStage; label: string } | null>(null);
   const [csvError, setCsvError] = useState<string | null>(null);
+  const [assigneeDropped, setAssigneeDropped] = useState(false);
+  const bulkAreaRef = useRef<HTMLElement | null>(null);
 
   const query = filterToQuery(applied);
   const board = useQuery({
@@ -371,8 +389,8 @@ export function OrderBoardPage() {
       setLost(false);
       setSelected(new Map());
       void client.invalidateQueries({ queryKey: BOARD_DATA_KEY });
-      void client.invalidateQueries({ queryKey: SALES_ORDERS_QUERY_KEY });
-      void client.invalidateQueries({ queryKey: ORDER_INTAKES_QUERY_KEY });
+      // 수주 확정은 문서 흐름·견적 전환(CONVERTED)·PI·승인 소비를 함께 바꾼다 — confirm-panel과 같은 집합.
+      for (const key of BULK_INVALIDATES) void client.invalidateQueries({ queryKey: key });
     },
     onError: (caught) => {
       setReport(null);
@@ -413,6 +431,15 @@ export function OrderBoardPage() {
   }
 
   // ── 필터 ──
+  /**
+   * 조건이 바뀌면 선택을 비운다 — 새 조건의 보드에 안 보이는 카드가 선택에 남아 벌크로 나가는 일을 막는다.
+   * ★ 선택을 최신 카드(새 version)로 몰래 바꿔 끼우지 않는다: 사람이 본 version 그대로 보내야 낙관 잠금이 의미가 있다.
+   */
+  function clearSelection() {
+    setSelected(new Map());
+    setPendingAction(null);
+  }
+
   function submitFilter(event: FormEvent) {
     event.preventDefault();
     const next = draftToFilter(draft, canBulk);
@@ -421,6 +448,8 @@ export function OrderBoardPage() {
     if (Object.keys(problems).length > 0) return;
     setApplied(next);
     setDrill(null);
+    clearSelection();
+    setAssigneeDropped(false);
   }
 
   function resetFilter() {
@@ -428,6 +457,8 @@ export function OrderBoardPage() {
     setClientErrors({});
     setApplied(EMPTY_FILTER);
     setDrill(null);
+    clearSelection();
+    setAssigneeDropped(false);
   }
 
   function applySaved(filter: BoardFilter) {
@@ -447,6 +478,9 @@ export function OrderBoardPage() {
     setClientErrors({});
     setApplied(next);
     setDrill(null);
+    clearSelection();
+    // 담당자 필터를 못 쓰는 역할 — 조용히 빼지 않고 알린다(저장 필터 원본의 assignee_id는 다시 저장해도 보존).
+    setAssigneeDropped(!canBulk && filter.assignee_id !== null);
   }
 
   async function exportCsv() {
@@ -462,6 +496,12 @@ export function OrderBoardPage() {
   const confirmCount =
     pendingAction === null ? 0 : buildBulkRequest(pendingAction, selectedCards, assignee?.id).targets.length;
   const skippedKinds = pendingAction === null ? 0 : selectedCards.length - confirmCount;
+  const confirmLabels =
+    pendingAction === null
+      ? []
+      : buildBulkRequest(pendingAction, selectedCards, assignee?.id).targets.map(
+          (target) => selected.get(cardKey(target))?.ref_label ?? `${target.kind}-${target.id}`,
+        );
 
   return (
     <section>
@@ -533,6 +573,8 @@ export function OrderBoardPage() {
             <select
               name="currency"
               value={draft.currency}
+              aria-invalid={fieldErrors.currency !== undefined}
+              aria-describedby={fieldErrors.currency ? "board-filter-currency-error" : undefined}
               onChange={(event) => setDraft({ ...draft, currency: event.target.value })}
               className="rounded border border-gray-300 px-3 py-2"
             >
@@ -552,6 +594,8 @@ export function OrderBoardPage() {
             <select
               name="dest_market_code"
               value={draft.dest_market_code}
+              aria-invalid={fieldErrors.dest_market_code !== undefined}
+              aria-describedby={fieldErrors.dest_market_code ? "board-filter-dest_market_code-error" : undefined}
               onChange={(event) => setDraft({ ...draft, dest_market_code: event.target.value })}
               className="rounded border border-gray-300 px-3 py-2"
             >
@@ -575,7 +619,13 @@ export function OrderBoardPage() {
               max={FILTER_DATE_MAX}
               value={draft.created_from}
               aria-invalid={fieldErrors.created_from !== undefined || fieldErrors.created_range !== undefined}
-              aria-describedby={fieldErrors.created_from ? "board-filter-created_from-error" : undefined}
+              aria-describedby={
+                fieldErrors.created_from
+                  ? "board-filter-created_from-error"
+                  : fieldErrors.created_range
+                    ? "board-filter-created_to-error"
+                    : undefined
+              }
               onChange={(event) => setDraft({ ...draft, created_from: event.target.value })}
               className="rounded border border-gray-300 px-3 py-2"
             />
@@ -611,10 +661,16 @@ export function OrderBoardPage() {
       <p className="mt-1 break-keep text-xs text-gray-500">접수일은 한국 시간(KST) 날짜 기준이며 시작·끝 날짜를 모두 포함합니다.</p>
       <FieldError message={fieldErrors.form} />
 
-      <BoardSavedFilters current={applied} onApply={applySaved} />
+      {assigneeDropped && (
+        <p role="status" className="mt-2 break-keep text-sm text-amber-800">
+          담당자 조건은 현재 역할에서 쓸 수 없어 제외했습니다. 저장 필터의 담당자 조건은 그대로 보존됩니다.
+        </p>
+      )}
+
+      <BoardSavedFilters current={applied} onApply={applySaved} canUseAssignee={canBulk} />
 
       {canBulk && (
-        <section aria-label="벌크 처리" className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 p-3 text-sm">
+        <section ref={bulkAreaRef} tabIndex={-1} aria-label="벌크 처리" className="mt-3 outline-none flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 p-3 text-sm">
           <span className="cell-nowrap">
             선택 <span className="num">{selectedCards.length}</span>건
           </span>
@@ -737,6 +793,17 @@ export function OrderBoardPage() {
                 <p className="mt-1">승인·예외 승인은 벌크로 부여되지 않습니다 — 막힌 건은 결과의 상세 링크에서 개별 처리합니다.</p>
               )}
               {skippedKinds > 0 && <p className="mt-1">선택 중 이 동작의 대상이 아닌 {skippedKinds}건은 보내지 않습니다.</p>}
+              <p className="mt-2 text-xs text-gray-600">대상</p>
+              <ul aria-label="대상 목록" className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs">
+                {confirmLabels.slice(0, CONFIRM_LIST_MAX).map((label) => (
+                  <li key={label} className="cell-nowrap rounded border border-gray-200 px-1.5 py-0.5">
+                    {label}
+                  </li>
+                ))}
+                {confirmLabels.length > CONFIRM_LIST_MAX && (
+                  <li className="cell-nowrap px-1.5 py-0.5 text-gray-600">외 {confirmLabels.length - CONFIRM_LIST_MAX}건</li>
+                )}
+              </ul>
             </>
           }
           confirmLabel={ACTION_LABEL[pendingAction]}
@@ -760,6 +827,7 @@ export function OrderBoardPage() {
             closeResult();
           }}
           onClose={closeResult}
+          returnFocusRef={bulkAreaRef}
         />
       )}
     </section>

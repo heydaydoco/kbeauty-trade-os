@@ -46,14 +46,21 @@ interface SavedFiltersProps {
   /** 지금 화면에 적용된 조건 — '현재 조건 저장'이 이것을 보낸다. */
   current: BoardFilter;
   onApply: (filter: BoardFilter) => void;
+  /**
+   * 담당자 필터를 쓸 수 있는 역할인가(무역·관리자). 아니면 화면의 현재 조건에 담당자가 없으므로,
+   * '현재 조건으로 다시 저장'이 저장 필터 원본의 assignee_id를 지우지 않게 그대로 보존한다.
+   */
+  canUseAssignee: boolean;
 }
 
 const NO_ERROR: SavedFilterError = { name: null, general: null };
 
-export function BoardSavedFilters({ current, onApply }: SavedFiltersProps) {
+export function BoardSavedFilters({ current, onApply, canUseAssignee }: SavedFiltersProps) {
   const client = useQueryClient();
   const nameId = useId();
   const renameId = useId();
+  const nameErrorId = useId();
+  const renameErrorId = useId();
   const list = usePagedQuery<SavedFilter>(SAVED_FILTERS_QUERY_KEY, "/v1/order-board/saved-filters");
   const items = list.data?.items ?? [];
   const total = list.data?.total ?? 0;
@@ -199,7 +206,9 @@ export function BoardSavedFilters({ current, onApply }: SavedFiltersProps) {
           onClick={() => {
             if (selected === null) return;
             setNotice(null);
-            update.mutate({ id: selected.id, body: { version: selected.version, filter_config: normalizeFilter(current) } });
+            const next = normalizeFilter(current);
+            const config = canUseAssignee ? next : { ...next, assignee_id: selected.filter_config?.assignee_id ?? null };
+            update.mutate({ id: selected.id, body: { version: selected.version, filter_config: config } });
           }}
           disabled={selected === null || busy}
           className="cell-nowrap rounded border border-gray-300 px-3 py-2 disabled:opacity-40"
@@ -238,11 +247,12 @@ export function BoardSavedFilters({ current, onApply }: SavedFiltersProps) {
               value={renaming}
               maxLength={SAVED_FILTER_NAME_MAX * 2}
               aria-invalid={renameError !== null}
+              aria-describedby={renameError ? renameErrorId : undefined}
               onChange={(event) => setRenaming(event.target.value)}
               className="rounded border border-gray-300 px-3 py-2"
             />
             {renameError && (
-              <span role="alert" className="break-keep text-xs text-signal-red">
+              <span id={renameErrorId} role="alert" className="break-keep text-xs text-signal-red">
                 {renameError}
               </span>
             )}
@@ -266,11 +276,12 @@ export function BoardSavedFilters({ current, onApply }: SavedFiltersProps) {
             value={name}
             maxLength={SAVED_FILTER_NAME_MAX * 2}
             aria-invalid={error.name !== null}
+            aria-describedby={error.name ? nameErrorId : undefined}
             onChange={(event) => setName(event.target.value)}
             className="rounded border border-gray-300 px-3 py-2"
           />
           {error.name && (
-            <span role="alert" className="break-keep text-xs text-signal-red">
+            <span id={nameErrorId} role="alert" className="break-keep text-xs text-signal-red">
               {error.name}
             </span>
           )}
