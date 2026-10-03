@@ -21,6 +21,7 @@ from app.modules.imports.parser import ParsedFile
 from app.modules.order_intake import csv_template as tpl
 from app.modules.order_intake.models import MAX_BUYER_ITEM_CODE
 from app.modules.trade_docs.buyer_po import po_columns
+from app.modules.trade_docs.constants import MAX_SAFE_INTEGER
 from app.modules.trade_docs.snapshot import line_amount, validate_quantity
 
 #: 셀 하나의 최대 길이(방어 — 어떤 열도 이보다 길 수 없다).
@@ -35,7 +36,18 @@ _EXPONENT = re.compile(r"^\d+(\.\d+)?[eE][+-]?\d+$", re.ASCII)
 _MARKET = re.compile(r"^[A-Z]{2}$", re.ASCII)
 
 #: 모양이 없는 채움 문자(한글 채움·점자 빈칸) — 카테고리 필터에 안 걸린다.
-_BLANKS = frozenset({"ᅟ", "ᅠ", "ㅤ", "ﾠ", "⠀"})
+_BLANKS = frozenset({"\u115f", "\u1160", "\u3164", "\uffa0", "\u2800"})
+#: 기본 무시 문자(Default_Ignorable) 중 범주가 Mn이라 카테고리 필터에 안 걸리는 것 — 결합 문자 잇기(CGJ)·변형 선택자·몽골 자유 변형 선택자·크메르 모음 고유음.
+_IGNORABLE_MARKS = frozenset(
+    {
+        "\u034f",
+        "\u17b4",
+        "\u17b5",
+        *map(chr, range(0x180B, 0x1810)),
+        *map(chr, range(0xFE00, 0xFE10)),
+        *map(chr, range(0xE0100, 0xE01F0)),
+    }
+)
 _INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Co", "Cs", "Cn"})
 #: 오늘 이전 PO일자는 이 날짜 이후여야 한다(엑셀 서식 오염 방어 — 1900·0001 류).
 _MIN_PO_DATE = date(2000, 1, 1)
@@ -89,6 +101,8 @@ class CsvLine:
     unit_price: str
     requested_delivery_date: date | None
     raw: dict[str, str]
+    #: 라인 금액(수량 × 단가 최소단위) — 그룹 합계 상한 검사용.
+    amount: int = 0
 
 
 @dataclass(slots=True)
@@ -121,6 +135,7 @@ def _problem_of_invisible(text: str) -> str | None:
         if (
             category in _INVISIBLE_CATEGORIES
             or ch in _BLANKS
+            or ch in _IGNORABLE_MARKS
             or (category == "Zs" and ch != " ")
             or (ch.isspace() and ch != " ")
         ):
@@ -443,8 +458,20 @@ def parse_rows(parsed: ParsedFile, *, today: date) -> ParsedCsv:
                         unit_price=price[0],
                         requested_delivery_date=delivery,
                         raw={name: row.cells[name] for name in tpl.CSV_HEADER},
+                        amount=quantity * price[1],
                     )
                 )
+    for group in groups.values():
+        total = sum(line.amount for line in group.lines)
+        if total > MAX_SAFE_INTEGER:
+            errors.append(
+                RowError(
+                    group.first_row_no,
+                    tpl.COL_UNIT_PRICE,
+                    E_OUT_OF_RANGE,
+                    f"PO({group.po_no})의 합계 금액이 허용 범위를 넘었습니다. PO를 나누거나 수량·단가를 확인해 주세요.",
+                )
+            )
     return ParsedCsv(
         groups=list(groups.values()),
         errors=errors,

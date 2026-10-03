@@ -463,6 +463,28 @@ def test_line_amount_over_the_safe_range_is_a_row_error(trade: Any) -> None:
     assert [(e["row_no"], e["column"]) for e in errors] == [(2, "단가")]
 
 
+def test_a_po_total_over_the_safe_range_is_reported_on_the_po_first_row(trade: Any) -> None:
+    """라인마다는 범위 안이어도 PO 합계가 정수 상한(2^53−1)을 넘으면 착지 중 전체 422가 아니라 그 PO 첫 행의 오류로 보고된다(다른 PO 오류와 함께)"""
+    w = world(lines=2, currency="KRW")
+    c = w["codes"]
+    content = csv_bytes(
+        [
+            csv_row(w, po="PO-BIG", code=c[0], qty="99,999,999", price="50,000,000"),
+            csv_row(w, po="PO-BIG", code=c[1], qty="99,999,999", price="50,000,000"),
+            csv_row(w, po="PO-OTHER", code=c[0], qty="x"),
+        ]
+    )
+    response = upload_csv(trade, content)
+    assert response.status_code == 422 and code_of(response) == INVALID_ROWS
+    assert [(e["row_no"], e["column"], e["code"]) for e in error_rows(response)] == [
+        (2, "단가", "OUT_OF_RANGE"),
+        (4, "수량", "INVALID_FORMAT"),
+    ]
+    assert _count() == 0
+    one_line = csv_bytes([csv_row(w, po="PO-ONE", code=c[0], qty="99,999,999", price="50,000,000")])
+    assert upload_csv(trade, one_line).status_code == 201  # 경계 안쪽은 통과
+
+
 @pytest.mark.parametrize("column", ["buyer", "po", "item"])
 @pytest.mark.parametrize("value", ["1.23E+10", "1E5", "9.99e-3", "12345678901234E+2"])
 def test_excel_exponent_pollution_in_code_columns_is_a_row_error(
@@ -495,6 +517,9 @@ def test_excel_exponent_pollution_in_code_columns_is_a_row_error(
         "LINE1\nLINE2",
         "A\u2028B",
         "A\x1fB",
+        "A\ufe0fB",
+        "A\u034fB",
+        "A\u3000B",
     ],
 )
 def test_invisible_and_control_characters_inside_a_value_are_row_errors(
