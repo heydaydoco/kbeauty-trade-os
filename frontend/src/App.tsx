@@ -31,6 +31,7 @@ import { ProformaDetailPage } from "./routes/proforma-detail";
 import { ProformaListPage } from "./routes/proformas";
 import { QuotationDetailPage } from "./routes/quotation-detail";
 import { QuotationListPage } from "./routes/quotations";
+import { OrderBoardPage } from "./routes/order-board";
 import { OrderIntakeCreatePage } from "./routes/order-intake-create";
 import { OrderIntakeDetailPage } from "./routes/order-intake-detail";
 import { OrderIntakeListPage } from "./routes/order-intakes";
@@ -117,6 +118,7 @@ export function AppRoutes() {
         <Route path="/proforma-invoices/:proformaId" element={<ProformaDetailPage />} />
         <Route path="/sales-orders" element={<SalesOrderListPage />} />
         <Route path="/sales-orders/:salesOrderId" element={<SalesOrderDetailPage />} />
+        <Route path="/orders/board" element={<OrderBoardPage />} />
         <Route path="/orders/intakes" element={<OrderIntakeListPage />} />
         <Route path="/orders/intakes/new" element={<OrderIntakeCreatePage />} />
         <Route path="/orders/intakes/:intakeId" element={<OrderIntakeDetailPage />} />

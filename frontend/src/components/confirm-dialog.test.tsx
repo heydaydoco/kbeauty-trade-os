@@ -94,4 +94,13 @@ describe("ConfirmDialog", () => {
     expect(confirmButton).toBeEnabled();
     expect(confirmButton).not.toHaveAttribute("aria-describedby");
   });
+
+  it("처리 중(버튼 전부 비활성 — 포커스 대상 0개)에도 Tab이 모달 밖으로 새지 않는다(PR-15b 검토)", () => {
+    render(
+      <ConfirmDialog title="제목" description="설명" confirmLabel="확정" pending onCancel={() => undefined} onConfirm={() => undefined} />,
+    );
+    // fireEvent는 기본 동작이 막히면 false를 돌려준다.
+    expect(fireEvent.keyDown(document, { key: "Tab" })).toBe(false);
+    expect(fireEvent.keyDown(document, { key: "Tab", shiftKey: true })).toBe(false);
+  });
 });
