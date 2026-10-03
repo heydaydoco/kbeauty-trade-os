@@ -404,7 +404,7 @@ function ReportView({ message, duplicateOnly, report }: { message: string; dupli
         {duplicateOnly ? " (이미 등록된 바이어 PO)" : ""}
       </h3>
       <p className="mt-1">{message}</p>
-      <p className="mt-1 text-gray-600">파일의 어떤 PO도 등록되지 않았습니다. 아래 사유를 모두 고친 뒤 파일 전체를 다시 올려 주세요.</p>
+      <p className="mt-1 text-gray-600">파일의 어떤 PO도 등록되지 않았습니다(일부만 등록되는 일은 없습니다).</p>
 
       {fileLevel.length > 0 && (
         <ul aria-label="파일 전체 오류" className="mt-2 grid gap-1">
@@ -448,7 +448,7 @@ function ReportView({ message, duplicateOnly, report }: { message: string; dupli
                   <td className="num cell-nowrap px-3 py-2">{e.row_no}</td>
                   <td className="cell-nowrap px-3 py-2 text-center">{e.column ?? "—"}</td>
                   <td className="cell-nowrap px-3 py-2">{rowCodeLabel(e.code)}</td>
-                  <td className="break-keep px-3 py-2">{e.message_ko}</td>
+                  <td className="min-w-64 break-keep px-3 py-2">{e.message_ko}</td>
                 </tr>
               ))}
             </tbody>
