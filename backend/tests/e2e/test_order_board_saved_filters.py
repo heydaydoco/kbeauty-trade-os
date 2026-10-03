@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -242,6 +244,76 @@ def test_concurrent_creates_at_the_boundary_never_exceed_the_limit() -> None:
         and str(o.error.code) == "ORDER_BOARD.FILTER.LIMIT_REACHED"  # type: ignore[union-attr]
         for o in refused
     )
+    with owner_engine.connect() as connection:
+        active = connection.execute(
+            text(
+                "SELECT count(*) FROM board_saved_filters WHERE user_id = :u AND deleted_at IS NULL"
+            ),
+            {"u": user.id},
+        ).scalar_one()
+    assert active == SAVED_FILTER_LIMIT
+
+
+@pytest.mark.group_j
+def test_a_create_that_waited_on_the_boundary_lock_recounts_and_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """결정적 경계 경합 — A가 본인 행을 잠근 채 멈춘 동안 B가 잠금을 **실제로 기다리게**(pg_locks 미부여 확인) 한 뒤 A를 커밋시키면, B는 잠금 뒤 다시 세어
+    20개를 보고 422로 거부된다(잠금 문의 결과 행 수로 세면 대기 중 커밋된 A의 행이 빠져 21개가 된다 — READ COMMITTED 함정 회귀 고정)"""
+    user = make_user(RoleCode.TRADE)
+    for n in range(SAVED_FILTER_LIMIT - 1):
+        saved_service.create_saved_filter(
+            actor=user, idempotency_key=f"pre-{n}", name=f"기존 {n}", filter_config=BoardFilter()
+        )
+    a_locked = threading.Event()
+    original = saved_service._name_taken
+
+    def pausing(session: Any, user_id: int, name: str, *, exclude_id: int | None) -> bool:
+        if (
+            name == "A 필터"
+        ):  # A는 잠금·개수 확인을 마친 뒤 여기서 B가 잠금 대기에 들어갈 때까지 멈춘다
+            a_locked.set()
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                with owner_engine.connect() as connection:
+                    waiting = connection.execute(
+                        text(
+                            "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid"
+                            " WHERE NOT l.granted AND a.datname = current_database()"
+                        )
+                    ).scalar_one()
+                if waiting:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError("B가 잠금 대기에 들어가지 않았다")
+        return original(session, user_id, name, exclude_id=exclude_id)
+
+    monkeypatch.setattr(saved_service, "_name_taken", pausing)
+    results: dict[str, Any] = {}
+
+    def run(label: str) -> None:
+        if label == "B":
+            assert a_locked.wait(15)
+        try:
+            results[label] = saved_service.create_saved_filter(
+                actor=user,
+                idempotency_key=f"det-{label}",
+                name=f"{label} 필터",
+                filter_config=BoardFilter(),
+            )
+        except Exception as exc:  # 결과로 판정한다
+            results[label] = exc
+
+    threads = [threading.Thread(target=run, args=(label,)) for label in ("A", "B")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+    assert results["A"][0] == 201
+    assert str(getattr(results["B"], "code", "")) == "ORDER_BOARD.FILTER.LIMIT_REACHED", results[
+        "B"
+    ]
     with owner_engine.connect() as connection:
         active = connection.execute(
             text(

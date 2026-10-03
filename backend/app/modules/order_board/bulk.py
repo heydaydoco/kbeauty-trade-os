@@ -279,9 +279,8 @@ def _confirm_so(actor: AuthenticatedUser, key: str, target: Target) -> ItemResul
 
 def _assign(actor: AuthenticatedUser, key: str, target: Target, assignee_id: int) -> ItemResult:
     """담당자 지정 1건 — 한 트랜잭션: 건별 claim → (재생이면 최초 결과) → 담당자 재확인 → 단일 편집 통로 → complete."""
-    if (
-        not actor.roles & ASSIGN_ROLES
-    ):  # SO 담당 편집 통로는 라우트 게이트뿐 — 같은 역할 집합으로 행별 재검증
+    # SO 담당 편집 통로는 라우트 게이트뿐 — 같은 역할 집합으로 행별 재검증한다(인테이크 편집은 통로가 스스로 다시 본다).
+    if not actor.roles & ASSIGN_ROLES:
         raise ForbiddenError(log_context={"actor_id": actor.id, "op": "order_board_assign"})
     with unit_of_work() as uow:
         session = uow.session
@@ -307,9 +306,8 @@ def _assign(actor: AuthenticatedUser, key: str, target: Target, assignee_id: int
             body = sales_orders_service.update_meta(actor=actor, so_id=target.id, payload=payload)
         else:
             body = intake_service.update_intake(actor=actor, intake_id=target.id, payload=payload)
-        if (
-            body["assignee_id"] != assignee_id
-        ):  # 통로가 값을 반영하지 않았다 — 성공으로 보고하지 않는다(fail-closed)
+        # 통로가 값을 반영하지 않았다면 성공으로 보고하지 않는다(fail-closed).
+        if body["assignee_id"] != assignee_id:
             raise RuntimeError("담당자 편집 통로가 요청한 담당자를 반영하지 않았다")
         new_version = int(body["version"])
         unchanged = new_version == target.expected_version

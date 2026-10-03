@@ -2,8 +2,8 @@
 
 ■ **소유권 = 당사자성**(§18.1 부기 ③): 모든 조회·수정·삭제는 `user_id = 행위자`로 거른다 — 타인 id는 **404**(존재 오라클 방지, 403 아님). 전 역할이 쓸 수 있다
   (원가가 없는 개인 설정). 다른 사람의 필터를 보거나 공유하는 경로는 없다(재판정 트리거: 공유 요구 — D-D10).
-■ **활성 20개 상한**: 등록은 그 사용자의 활성 행을 id 순으로 `FOR UPDATE` 잠근 뒤 센다 — 경계(19개)에서 동시 등록 둘이 모두 통과해 21개가 되는 일을 막는다
-  (경계에서는 잠글 행이 반드시 있다). 이름 유일은 DB 부분 유니크가 최종 보증이고 위반은 제약명으로 409로 번역한다(500 금지).
+■ **활성 20개 상한**: 등록은 그 사용자의 활성 행을 id 순으로 `FOR UPDATE` 잠근 **뒤 새 문장으로** 센다 — 경계(19개)에서 동시 등록 둘이 모두 통과해 21개가
+  되는 일을 막는다(경계에서는 잠글 행이 반드시 있다. 잠금 문의 결과 행 수로 세면 대기 중 커밋된 행이 빠져 뚫린다 — READ COMMITTED 함정, 실측). 이름 유일은 DB 부분 유니크가 최종 보증이고 위반은 제약명으로 409로 번역한다(500 금지).
 ■ `filter_config`는 `BoardFilter`(extra=forbid)로 저장 시 검증하고 **읽을 때 다시 검증**한다 — 스키마가 바뀌어 맞지 않는 옛 값은 조용히 무시·변환하지 않고
   `filter_config=null`·`needs_resave=true`로 드러낸다.
 ■ 등록 POST는 `Idempotency-Key`(같은 트랜잭션의 claim/complete), 수정·삭제는 `version` 낙관 잠금.
@@ -162,20 +162,18 @@ def create_saved_filter(
         )
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
-        held = (
+        mine = (BoardSavedFilter.user_id == actor.id, BoardSavedFilter.deleted_at.is_(None))
+        # ① 본인 활성 행을 id 순으로 잠가 경계 등록을 직렬화한다. ★ 이 잠금 문의 결과로 세면 안 된다 — READ COMMITTED에서 잠금 대기 뒤의 결과는
+        #   문장 시작 시점의 행 집합이라 대기 중에 커밋된 새 행이 빠진다(동시 등록이 모두 19개로 보고 통과 — 실측). ② 잠근 **뒤** 새 문장으로 센다.
+        session.execute(
+            select(BoardSavedFilter.id).where(*mine).order_by(BoardSavedFilter.id).with_for_update()
+        ).all()
+        active = int(
             session.execute(
-                select(BoardSavedFilter.id)
-                .where(
-                    BoardSavedFilter.user_id == actor.id,
-                    BoardSavedFilter.deleted_at.is_(None),
-                )
-                .order_by(BoardSavedFilter.id)
-                .with_for_update()
-            )
-            .scalars()
-            .all()
+                select(func.count()).select_from(BoardSavedFilter).where(*mine)
+            ).scalar_one()
         )
-        if len(held) >= SAVED_FILTER_LIMIT:
+        if active >= SAVED_FILTER_LIMIT:
             raise AppError(
                 ErrorCode.ORDER_BOARD_FILTER_LIMIT_REACHED,
                 detail={"limit": SAVED_FILTER_LIMIT},
