@@ -151,15 +151,69 @@ def test_unknown_or_invalid_filter_keys_are_refused_on_save(config: dict[str, An
         assert [f["name"] for f in _mine(client)] == ["정상"]
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["", "   ", "줄\n바꿈", "탭\t이름", "가" * 61],
-    ids=["빈", "공백", "줄바꿈", "탭", "61자"],
-)
-def test_bad_names_are_422(name: str) -> None:
-    """이름 — 빈 값·공백뿐·제어 문자·61자는 422(DB에 닿기 전)"""
+BAD_NAMES = {
+    "빈": "",
+    "공백": "   ",
+    "줄바꿈": "줄\n바꿈",
+    "탭": "탭\t이름",
+    "61자": "가" * 61,
+    "NUL": "a\x00b",
+    "C1-NEL": "주간\x85필터",
+    "C1-APC": "a\x9fb",
+    "줄구분-Zl": "a\u2028b",
+    "문단구분-Zp": "a\u2029b",
+    "제로폭-Cf": "주간\u200b",
+    "한글채움": "\u3164",
+    "방향제어-Cf": "\u202e주간",
+    "끝-제로폭": "주간 필터\u200b ",
+}
+
+
+@pytest.mark.parametrize("name", list(BAD_NAMES.values()), ids=list(BAD_NAMES))
+def test_bad_names_are_422_on_create_and_update(name: str) -> None:
+    """이름 — 빈 값·공백뿐·61자·보이지 않는 글자(C0·C1 제어·NUL·줄/문단 구분·제로폭·방향 제어·한글 채움 — strip 전 원문 검사)는 등록·수정 모두 422
+    `INVALID_FIELD`(DB에 닿기 전 — DB CHECK는 C0·C1 제어만 잡는다), 아무것도 바뀌지 않는다"""
     with logged_in(RoleCode.TRADE) as client:
-        assert _create(client, name).status_code == 422
+        created = _create(client, name)
+        assert created.status_code == 422, created.text
+        assert code_of(created) == "COMMON.VALIDATION.INVALID_FIELD"
+        kept = _created(client, "정상 이름")
+        patched = client.patch(f"{SAVED}/{kept['id']}", json={"version": 1, "name": name})
+        assert patched.status_code == 422, patched.text
+        assert code_of(patched) == "COMMON.VALIDATION.INVALID_FIELD"
+        (only,) = _mine(client)
+        assert only["name"] == "정상 이름" and only["version"] == 1
+
+
+@pytest.mark.parametrize(
+    "config",
+    [{"q": "a\x00b"}, {"q": "주간\u200b"}, {"created_from": "9999-12-31"}],
+    ids=["q-NUL", "q-제로폭", "날짜-범위밖"],
+)
+def test_a_filter_config_with_nul_or_out_of_range_dates_is_422_not_500(
+    config: dict[str, Any],
+) -> None:
+    """저장 필터 JSON의 `\\u0000`(JSONB가 거부 — 그대로 닿으면 500)·보이지 않는 글자·범위 밖 날짜는 등록·수정 모두 422, 저장 값 무변"""
+    with logged_in(RoleCode.TRADE) as client:
+        created = _create(client, "필터", config)
+        assert created.status_code == 422, created.text
+        kept = _created(client, "정상", {"q": "A"})
+        patched = client.patch(
+            f"{SAVED}/{kept['id']}", json={"version": 1, "filter_config": config}
+        )
+        assert patched.status_code == 422, patched.text
+        (only,) = _mine(client)
+        assert only["filter_config"]["q"] == "A" and only["version"] == 1
+
+
+def test_the_db_name_checks_are_translated_to_422_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    """두 번째 방어선 — 앱 검사를 건너뛰어 DB CHECK(`name_clean`·`name_nonblank`)에 닿아도 500이 아니라 422 `INVALID_FIELD`(제약명 번역)"""
+    monkeypatch.setattr(saved_service, "_clean_name", lambda raw: raw)
+    with logged_in(RoleCode.TRADE) as client:
+        for name in ("a\x01b", "   "):
+            response = _create(client, name)
+            assert response.status_code == 422, response.text
+            assert code_of(response) == "COMMON.VALIDATION.INVALID_FIELD"
         assert _mine(client) == []
 
 

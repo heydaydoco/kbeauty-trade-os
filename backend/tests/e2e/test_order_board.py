@@ -276,15 +276,35 @@ def test_created_range_is_kst_inclusive_on_both_ends(client: TestClient) -> None
         {"buyer_partner_id": "0"},
         {"created_from": "2026-09-10", "created_to": "2026-09-09"},
         {"q": "x" * 101},
+        {"created_from": "9999-12-31"},
+        {"created_to": "9999-12-31"},
+        {"created_from": "0001-01-01"},
+        {"created_to": "0001-01-01"},
+        {"created_from": "1999-12-31"},
+        {"created_to": "3000-01-01"},
+        {"q": "a\x00b"},
+        {"q": "주간\u200b"},
+        {"q": "\u202e주간"},
+        {"q": "a\u2028b"},
+        {"q": "\u3164"},
     ],
 )
 def test_unknown_or_malformed_filter_keys_are_422(
     client: TestClient, params: dict[str, str]
 ) -> None:
-    """필터 모델은 extra=forbid — 모르는 쿼리 키(원가 이름 포함)·형식 오류는 조용히 무시되지 않고 422"""
-    response = client.get(BOARD, params=params)
-    assert response.status_code == 422, response.text
-    assert response.json()["error"]["code"] == "COMMON.VALIDATION.INVALID_FIELD"
+    """필터 모델은 extra=forbid — 모르는 쿼리 키(원가 이름 포함)·형식 오류·범위 밖 날짜(2000-01-01~2999-12-31 밖 — `+1일` 오버플로 500 차단)·
+    보이지 않는 글자(NUL·제로폭·방향 제어·줄 구분·한글 채움)가 든 q는 조용히 무시되지 않고 422 — 보드·드릴다운·CSV 모두"""
+    for path, extra in ((BOARD, {}), (ITEMS, {"stage": "SO_RECEIVED"}), (EXPORT, {})):
+        response = client.get(path, params={**params, **extra})
+        assert response.status_code == 422, (path, response.text)
+        assert response.json()["error"]["code"] == "COMMON.VALIDATION.INVALID_FIELD"
+
+
+def test_the_date_filter_accepts_the_range_ends(client: TestClient) -> None:
+    """접수일 허용 범위의 양끝(2000-01-01·2999-12-31)은 200 — 경계 바로 밖만 422"""
+    response = client.get(BOARD, params={"created_from": "2000-01-01", "created_to": "2999-12-31"})
+    assert response.status_code == 200, response.text
+    assert client.get(EXPORT, params={"created_to": "2999-12-31"}).status_code == 200
 
 
 def test_drilldown_requires_a_known_stage_and_bounded_page_size(client: TestClient) -> None:

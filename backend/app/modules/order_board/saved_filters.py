@@ -4,6 +4,8 @@
   (원가가 없는 개인 설정). 다른 사람의 필터를 보거나 공유하는 경로는 없다(재판정 트리거: 공유 요구 — D-D10).
 ■ **활성 20개 상한**: 등록은 그 사용자의 활성 행을 id 순으로 `FOR UPDATE` 잠근 **뒤 새 문장으로** 센다 — 경계(19개)에서 동시 등록 둘이 모두 통과해 21개가
   되는 일을 막는다(경계에서는 잠글 행이 반드시 있다. 잠금 문의 결과 행 수로 세면 대기 중 커밋된 행이 빠져 뚫린다 — READ COMMITTED 함정, 실측). 이름 유일은 DB 부분 유니크가 최종 보증이고 위반은 제약명으로 409로 번역한다(500 금지).
+■ **이름 위생**: strip 전에 원문 전체를 `app.core.text.invisible_char_problem`(Cc·Cf·Zl·Zp·한글 채움)으로 검사해 422다. DB CHECK(`name_clean` — PG16 `[[:cntrl:]]`는
+  C0·C1 제어 0x00-0x1F·0x7F-0x9F만 잡는다, Zl·Zp·Cf는 못 잡는다)·`name_nonblank` 위반도 두 번째 방어선으로 422 `INVALID_FIELD`로 번역한다(500 금지).
 ■ `filter_config`는 `BoardFilter`(extra=forbid)로 저장 시 검증하고 **읽을 때 다시 검증**한다 — 스키마가 바뀌어 맞지 않는 옛 값은 조용히 무시·변환하지 않고
   `filter_config=null`·`needs_resave=true`로 드러낸다.
 ■ 등록 POST는 `Idempotency-Key`(같은 트랜잭션의 claim/complete), 수정·삭제는 `version` 낙관 잠금.
@@ -24,6 +26,7 @@ from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError, VersionConflictError
 from app.core.logging import get_logger
+from app.core.text import invisible_char_problem
 from app.core.time import utcnow
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
@@ -37,12 +40,20 @@ logger = get_logger(__name__)
 CREATE_ENDPOINT = "POST /api/v1/order-board/saved-filters"
 
 
+#: DB CHECK 위반 → 422 번역(두 번째 방어선 — 1차는 `_clean_name`).
+_NAME_CHECKS = frozenset(
+    {"ck_board_saved_filters_name_clean", "ck_board_saved_filters_name_nonblank"}
+)
+
+
 def _clean_name(raw: str) -> str:
+    """이름 — **strip 전에** 원문 전체에 보이지 않는 글자가 있으면 422, 앞뒤 공백 제거 뒤 비면 422."""
+    problem = invisible_char_problem(raw, label="필터 이름")
+    if problem is not None:
+        raise invalid("name", problem)
     name = raw.strip()
     if not name:
         raise invalid("name", "필터 이름을 입력해 주세요.")
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
-        raise invalid("name", "필터 이름에 줄바꿈·탭 같은 제어 문자를 쓸 수 없습니다.")
     return name
 
 
@@ -95,6 +106,10 @@ def _guarded(session: Session) -> Iterator[None]:
         name = str(getattr(getattr(exc.orig, "diag", None), "constraint_name", "") or "")
         if name == SAVED_FILTER_NAME_UNIQUE:
             raise _duplicate_name() from None
+        if name in _NAME_CHECKS:
+            raise invalid(
+                "name", "필터 이름에 쓸 수 없는 글자가 있습니다. 이름을 다시 입력해 주세요."
+            ) from None
         logger.error("order_board_unmapped_constraint", constraint=name)
         raise
 

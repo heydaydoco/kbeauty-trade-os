@@ -23,6 +23,7 @@ from pydantic import (
 )
 
 from app.core.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+from app.core.text import invisible_char_problem
 from app.modules.order_board.constants import (
     ACTION_KINDS,
     BULK_SCHEMA_HARD_LIMIT,
@@ -36,11 +37,16 @@ from app.modules.order_board.constants import (
 
 # ── 필터(쿼리·저장 필터 공용) ────────────────────────────────────────────────
 
+#: 접수일 필터의 허용 범위 — 밖이면 422(KST 경계 계산의 `date + 1일` 오버플로·의미 없는 연도를 입력 경계에서 막는다).
+FILTER_DATE_MIN = date(2000, 1, 1)
+FILTER_DATE_MAX = date(2999, 12, 31)
+
 
 class BoardFilter(BaseModel):
     """보드 공통 필터 — 쿼리 파라미터 모델이자 저장 필터 `filter_config`의 스키마. 모르는 키는 422다.
 
-    `q`는 바이어명·바이어 PO번호(수주는 수주번호 포함) 부분 일치(LIKE 와일드카드 이스케이프). `created_from`·`created_to`는 **KST 날짜**(양끝 포함)다.
+    `q`는 바이어명(거래처 마스터 국문·영문, 수주는 헤더 바이어 표기도)·바이어 PO번호·수주번호 부분 일치(LIKE 와일드카드 이스케이프), `IN-{숫자}`면 그 인테이크 id.
+    보이지 않는 글자(제어·서식·채움, NUL 포함)는 422. `created_from`·`created_to`는 **KST 날짜**(양끝 포함, 2000-01-01~2999-12-31)다.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -50,14 +56,18 @@ class BoardFilter(BaseModel):
     assignee_id: int | None = Field(default=None, ge=1)
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     dest_market_code: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
-    created_from: date | None = None
-    created_to: date | None = None
+    created_from: date | None = Field(default=None, ge=FILTER_DATE_MIN, le=FILTER_DATE_MAX)
+    created_to: date | None = Field(default=None, ge=FILTER_DATE_MIN, le=FILTER_DATE_MAX)
 
     @field_validator("q")
     @classmethod
-    def _blank_query_is_none(cls, value: str | None) -> str | None:
+    def _clean_query(cls, value: str | None) -> str | None:
+        """제어·서식·채움 문자(NUL 포함)는 422 — DB·JSONB에 닿아 500이 되거나 보이지 않는 글자로 검색을 속이는 경로를 막는다. 빈 값은 None."""
         if value is None:
             return None
+        problem = invisible_char_problem(value, label="검색어")
+        if problem is not None:
+            raise ValueError(problem)
         stripped = value.strip()
         return stripped or None
 
