@@ -13,7 +13,7 @@
 ■ **멱등**: 건별 키 = `sha256("{벌크 키}|{액션}|{종류}|{id}")` hex 64자(`idempotency_keys.idempotency_key` 128자 한도 회피). 확정 2종은 그 키를 단일 통로에
   그대로 넘긴다(성공은 최초 결과 재생, 거부는 키 미소비 — 단일 통로 규약 그대로). 담당자 지정은 단일 통로(PATCH)에 멱등 키가 없으므로 이 모듈이 **같은 트랜잭션**에서
   건별 claim/complete를 한다(재요청 시 낡은 version으로 CONFLICT가 나지 않고 최초 결과를 재생). **벌크 요청 단위 지문**(액션·정규화·정렬한
-  대상(kind,id,version)·담당자)도 같은 인프라로 대조한다(엔드포인트 스코프 `POST /api/v1/order-board/bulk`, 완료 기록 없음 — 지문 대조 전용): 같은 키에 다른 지문이면
+  대상(kind,id,version)·담당자)도 같은 인프라로 대조한다(엔드포인트 스코프 `POST /api/v1/order-board/bulk`, 키는 원 키의 sha256 파생 — 128자 한도, 완료 기록 없음 — 지문 대조 전용): 같은 키에 다른 지문이면
   **전체 409 `COMMON.IDEMPOTENCY.KEY_CONFLICT`**, 같은 지문이면 건별 파생 키로 진행한다. 같은 키 재요청은 OK·SKIPPED 건을 재생하고 거부 건은 다시 실행한다
   (단일 통로 규약 — 거부는 키를 소비하지 않는다. 그 사이 승인·override가 생겼으면 이번에는 통과할 수 있다).
 ■ **권한**: 벌크 전체는 무역·관리자(라우트+여기 사전 검증). 행별 역할 검증은 단일 통로가 하고(인테이크 편집·확정), SO 담당 편집 통로는 라우트 게이트만 있어
@@ -414,6 +414,11 @@ def bulk_fingerprint(
     }
 
 
+def bulk_scope_key(bulk_key: str) -> str:
+    """요청 지문 대조용 키 — 원 키의 sha256 hex 64자. 헤더 키 길이는 검증되지 않으므로(D-D13) 원 키를 그대로 저장하면 128자 초과에서 DB 오류(500)가 난다."""
+    return sha256(f"{bulk_key}|BULK".encode()).hexdigest()
+
+
 def check_bulk_key(actor: AuthenticatedUser, bulk_key: str, fingerprint: dict[str, Any]) -> None:
     """같은 벌크 키 + 다른 지문 = 전체 409 `KEY_CONFLICT`(기존 멱등 인프라의 지문 대조). 완료 기록은 남기지 않는다 — 리포트는 건별 재생으로 회수하고,
     거부 건은 다시 실행돼야 하기 때문이다(단일 통로 규약). 짧은 독립 트랜잭션이라 건 처리와 섞이지 않는다."""
@@ -422,7 +427,7 @@ def check_bulk_key(actor: AuthenticatedUser, bulk_key: str, fingerprint: dict[st
             uow.session,
             actor_user_id=actor.id,
             endpoint=BULK_ENDPOINT,
-            key=bulk_key,
+            key=bulk_scope_key(bulk_key),
             request_body=fingerprint,
         )
 

@@ -719,3 +719,18 @@ def test_reusing_a_bulk_key_for_a_different_request_is_refused_as_a_whole() -> N
     assert so_row(so["id"])["assignee_id"] == owner and so_row(so["id"])["status"] == "RECEIVED"
     assert so_row(other_so["id"])["assignee_id"] != owner
     assert _effects() == before
+
+
+@pytest.mark.group_j
+def test_a_bulk_key_longer_than_the_key_column_still_works_and_replays() -> None:
+    """헤더 키 길이는 검증되지 않는다(D-D13) — 300자 벌크 키도 500이 아니라 정상 처리·같은 키 재요청 재생·다른 요청 409(지문 대조 키는 sha256 파생)"""
+    so = ready_so()
+    owner = board_user(TRADE)
+    headers = {"Idempotency-Key": "k" * 300}
+    body = _so_targets([so])
+    with logged_in(TRADE) as client:
+        first = _ok(bulk(client, "ASSIGN", body, assignee_id=owner, headers=headers))
+        again = _ok(bulk(client, "ASSIGN", body, assignee_id=owner, headers=headers))
+        other = bulk(client, "ASSIGN", body, assignee_id=board_user(TRADE), headers=headers)
+    assert first == again and first["ok_count"] == 1
+    assert other.status_code == 409 and code_of(other) == "COMMON.IDEMPOTENCY.KEY_CONFLICT"
