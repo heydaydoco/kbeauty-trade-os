@@ -100,7 +100,7 @@ export function baseHandlers(filters: SavedFilter[] = []): GateHandler[] {
   return [
     ["/v1/alerts/unread-count", "GET", () => jsonResponse({ count: 0 })],
     ["/v1/approvals/inbox-count", "GET", () => jsonResponse({ count: 0 })],
-    ["/v1/system/currencies?size=200", "GET", () => jsonResponse(page([{ code: "USD", minor_units: 2 }, { code: "KRW", minor_units: 0 }]))],
+    ["/v1/system/currencies?size=200", "GET", () => jsonResponse(page([{ code: "USD" }, { code: "KRW" }])) /* 보드는 통화 코드만 쓴다(자릿수는 서버 total_text) */],
     ["/v1/markets?size=200", "GET", () => jsonResponse(page([{ id: 1, code: "US", name_ko: "미국" }, { id: 2, code: "JP", name_ko: "일본" }]))],
     ["/v1/order-board/saved-filters", "GET", () => jsonResponse(page(filters))],
   ];
