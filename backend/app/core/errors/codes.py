@@ -248,9 +248,6 @@ class ErrorCode(StrEnum):
     EXTERNAL_TIMEOUT = "COMMON.EXTERNAL.TIMEOUT"
     EXTERNAL_UNAVAILABLE = "COMMON.EXTERNAL.UNAVAILABLE"
 
-    # 최후
-    INTERNAL_UNEXPECTED = "COMMON.INTERNAL.UNEXPECTED"
-
     # 오더 보드 (S3-1 PR-15a / ADR-0066) — 벌크 건별 결과는 단일 통로의 코드를 그대로 싣고, 보드 자체의 거부만 여기 둔다.
     #: 벌크 대상이 상한(50건)을 넘는다 — 나눠서 처리해야 한다.
     ORDER_BOARD_BULK_TOO_MANY = "ORDER_BOARD.BULK.TOO_MANY"
@@ -258,3 +255,6 @@ class ErrorCode(StrEnum):
     ORDER_BOARD_FILTER_LIMIT_REACHED = "ORDER_BOARD.FILTER.LIMIT_REACHED"
     #: 같은 이름의 저장 필터가 이미 있다(본인 것 안에서 이름 유일).
     ORDER_BOARD_FILTER_DUPLICATE_NAME = "ORDER_BOARD.FILTER.DUPLICATE_NAME"
+
+    # 최후
+    INTERNAL_UNEXPECTED = "COMMON.INTERNAL.UNEXPECTED"

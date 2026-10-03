@@ -358,7 +358,44 @@ def test_the_boundary_scans_are_not_vacuous() -> None:
     assert _protected_mentions(bad) == {"record_transition"}
 
 
-# ── 잠금 키 공간 ─────────────────────────────────────────────────────────────────
+# ── 임포트 화이트리스트·잠금 키 공간 ─────────────────────────────────────────────
+
+#: order_board가 임포트해도 되는 S3 도메인 모듈 — 단일 통로(확정 2종·담당 편집 2종)와 그 모델·상태 열거·검증 도우미가 사는 곳뿐.
+ALLOWED_DOMAIN_MODULES = frozenset({"trade_chain", "order_intake", "sales_orders", "trade_docs"})
+#: 도메인이 아닌 공용 기반(행위자·멱등·거래처 마스터 이름).
+ALLOWED_KERNEL_MODULES = frozenset({"identity", "idempotency", "partners"})
+
+
+def _import_violations(trees: dict[str, ast.Module]) -> dict[str, set[str]]:
+    allowed = ALLOWED_DOMAIN_MODULES | ALLOWED_KERNEL_MODULES | {"order_board"}
+    found: dict[str, set[str]] = {}
+    for rel, tree in trees.items():
+        extra = imported_modules(tree) - allowed
+        if extra:
+            found[rel] = extra
+    return found
+
+
+@pytest.mark.group_i
+def test_the_board_imports_only_the_four_s3_domain_modules_and_the_kernel() -> None:
+    """order_board가 임포트하는 도메인 모듈 ⊆ {trade_chain, order_intake, sales_orders, trade_docs}(+ 공용 identity·idempotency·partners) —
+    게이트·승인·여신·override·견적·PI·발주 등 다른 도메인을 직접 부르면 단일 통로 우회 경로가 생긴다"""
+    assert _import_violations(BOARD_FILES) == {}
+    used = set().union(*(imported_modules(tree) for tree in BOARD_FILES.values()))
+    assert used >= ALLOWED_DOMAIN_MODULES  # 화이트리스트가 실제 사용과 맞다(죽은 항목 없음)
+
+
+def test_the_import_whitelist_scan_is_not_vacuous() -> None:
+    """자기검사 — 게이트·승인·여신 모듈을 임포트하는 합성 소스는 위반으로 잡힌다(from/import 양쪽)"""
+    bad = parse_source(
+        "from app.modules.gates import service as gates\n"
+        "import app.modules.approvals.service\n"
+        "from app.modules.credit.locking import lock_buyer_for_credit\n"
+        "from app.modules.trade_docs.validation import invalid\n"
+    )
+    assert _import_violations({"modules/order_board/x.py": bad}) == {
+        "modules/order_board/x.py": {"gates", "approvals", "credit"}
+    }
 
 
 def _advisory_lock_sites() -> dict[str, list[str]]:
