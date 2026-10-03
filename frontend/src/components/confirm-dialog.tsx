@@ -17,6 +17,8 @@ export function useDialogBehavior(
   ref: RefObject<HTMLElement | null>,
   onEscape: () => void,
   initialFocus?: RefObject<HTMLElement | null>,
+  /** 닫힐 때 연 버튼이 비활성·제거되어 포커스를 받을 수 없으면 여기로 돌린다(지정 안 하면 종전대로 아무 데도 안 보냄). */
+  returnFocusFallback?: RefObject<HTMLElement | null>,
 ) {
   const escape = useRef(onEscape);
   escape.current = onEscape;
@@ -36,7 +38,11 @@ export function useDialogBehavior(
       const items = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE));
       const first = items[0];
       const last = items[items.length - 1];
-      if (first === undefined || last === undefined) return;
+      // 포커스 가능한 요소가 하나도 없을 때(처리 중 버튼 전부 비활성 등)도 Tab이 모달 밖으로 새지 않게 막는다.
+      if (first === undefined || last === undefined) {
+        event.preventDefault();
+        return;
+      }
       const active = document.activeElement;
       if (!container.contains(active)) {
         event.preventDefault();
@@ -52,7 +58,14 @@ export function useDialogBehavior(
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
-      if (opener && document.contains(opener)) opener.focus();
+      const openerUsable =
+        opener !== null &&
+        opener !== document.body &&
+        document.contains(opener) &&
+        !(opener as HTMLElement & { disabled?: boolean }).disabled;
+      if (openerUsable) opener.focus();
+      else if (returnFocusFallback?.current) returnFocusFallback.current.focus();
+      else if (opener && document.contains(opener)) opener.focus();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
