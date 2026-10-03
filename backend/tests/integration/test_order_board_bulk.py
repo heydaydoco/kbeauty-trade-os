@@ -557,17 +557,19 @@ def test_an_actor_who_loses_rights_mid_bulk_runs_nothing_more(
 
 
 @pytest.mark.group_k
+@pytest.mark.parametrize("how", ["deactivate", "role_lost"], ids=["비활성화", "역할상실"])
 def test_an_assignee_deactivated_after_the_precheck_fails_each_item_and_changes_nothing(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, how: str
 ) -> None:
-    """담당자 TOCTOU — 사전 검증(422)을 통과한 직후 담당자가 비활성화되면 건 트랜잭션 안의 재확인이 잡아 `FAILED`(`INVALID_FIELD`)·대상 무변(담당자·version)"""
+    """담당자 TOCTOU — 사전 검증(422)을 통과한 직후 담당자가 비활성화(또는 무역 역할 상실)되면 건 트랜잭션 안의 재확인이 잡아 `FAILED`(`INVALID_FIELD`)·
+    대상 무변(담당자·version). 역할 상실은 단일 편집 통로가 보지 않으므로(활성만 확인) 벌크의 건별 재확인만이 막는다"""
     sos = [ready_so() for _ in range(2)]
     new_owner = board_user(TRADE)
     original = bulk_module.require_assignee
 
     def then_deactivate(assignee_id: int) -> None:
         original(assignee_id)
-        _revoke(assignee_id, "deactivate")
+        _revoke(assignee_id, how)
 
     monkeypatch.setattr(bulk_module, "require_assignee", then_deactivate)
     before = {so["id"]: (so_row(so["id"])["assignee_id"], so_version(so["id"])) for so in sos}
