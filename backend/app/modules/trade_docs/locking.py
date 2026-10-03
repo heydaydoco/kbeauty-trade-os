@@ -3,8 +3,12 @@
 한 트랜잭션의 잠금은 이 순서만 따른다(부분수열 허용 — 건너뛸 수는 있어도 뒤집을 수는 없다). 교착 방지는 코드
 리뷰가 아니라 헬퍼(`lock_document`·`chain.lock_chain`·`quantities.lock_lines_for_consumption`)로 구조화한다.
 
-    (0) 멱등 claim 행 → (1) order_intakes → (2) partners(바이어) → (3) QT → (4) PI → (5) SO → (6) PO
+    (−1) 파일 해시 advisory xact lock(CSV 입구 전용, 트랜잭션 첫 문장 — `order_intake.csv_import`, PR-14a)
+    → (0) 멱등 claim 행 → (1) order_intakes → (2) partners(바이어) → (3) QT → (4) PI → (5) SO → (6) PO
     → (7) approvals → (8) 라인(id 오름차순) → (9) doc_number_seq(항상 마지막)
+
+(−1)은 행 잠금이 아니라 같은 파일(sha256)의 업로드끼리만 직렬화하는 advisory 잠금이라 `LOCK_ORDER` 튜플(행 잠금 대상)에는 넣지 않는다 —
+트랜잭션의 첫 문장이므로 어떤 행 잠금보다 앞선다. 한 트랜잭션 안에서 같은 표의 여러 행을 잠그는 곳(임포트 확정 `load_targets_for_update` 등)은 **id 오름차순**이다.
 
 거래처 잠금 모드: 여신 직렬화 경로=`FOR NO KEY UPDATE`, 유형·활성 검증 소비자(전표 생성 등)=`FOR KEY SHARE`,
 유형 해제(임포트)=`FOR UPDATE`. 55P03·40P01은 409 `COMMON.CONCURRENCY.LOCK_BUSY`로 번역된다(PR-2 핸들러).

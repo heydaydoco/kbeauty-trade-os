@@ -292,6 +292,7 @@ class PartnersImportTarget:
         rows = session.execute(
             select(Partner)
             .where(Partner.id.in_(ids), Partner.deleted_at.is_(None))
+            .order_by(Partner.id)  # id 순 잠금 — 다른 잠금 경로와 교착 회피(PR-14a B2)
             .with_for_update()
         ).scalars()
         return {row.id: row for row in rows}
@@ -610,6 +611,7 @@ class MaterialsImportTarget:
         rows = session.execute(
             select(Material)
             .where(Material.id.in_(ids), Material.deleted_at.is_(None))
+            .order_by(Material.id)  # id 순 잠금(교착 회피)
             .with_for_update()
         ).scalars()
         return {row.id: row for row in rows}
@@ -1001,7 +1003,10 @@ class SkusImportTarget:
         if not ids:
             return {}
         rows = session.execute(
-            select(Sku).where(Sku.id.in_(ids), Sku.deleted_at.is_(None)).with_for_update()
+            select(Sku)
+            .where(Sku.id.in_(ids), Sku.deleted_at.is_(None))
+            .order_by(Sku.id)  # id 순 잠금(교착 회피)
+            .with_for_update()
         ).scalars()
         return {row.id: row for row in rows}
 

@@ -417,8 +417,8 @@ def _advisory_lock_sites() -> dict[str, list[str]]:
 
 @pytest.mark.group_j
 def test_the_saved_filter_lock_namespace_does_not_collide_with_other_advisory_locks() -> None:
-    """advisory lock 키 공간 — 앱 전체의 advisory 잠금 호출은 스케줄러(2인자: SCHEDULER_LOCK_KEY, 잡 id)·시드(1인자 bigint)·저장 필터(2인자: 네임스페이스, 사용자)
-    셋뿐이고, 2인자 네임스페이스끼리 다르다(같으면 사용자 id와 잡 id가 같을 때 서로를 막는다). 새 호출처가 생기면 실패한다(LOCK_ORDER 등재 강제)"""
+    """advisory lock 키 공간 — 앱 전체의 advisory 잠금 호출은 스케줄러(2인자: SCHEDULER_LOCK_KEY, 잡 id)·시드(1인자 bigint)·저장 필터(2인자: 네임스페이스, 사용자)·
+    CSV 입구(1인자: 파일 sha256의 hashtextextended 64비트 — LOCK_ORDER (−1), 시드 상수와의 충돌 확률 2^-64) 넷뿐이고, 2인자 네임스페이스끼리 다르다(같으면 사용자 id와 잡 id가 같을 때 서로를 막는다). 새 호출처가 생기면 실패한다(LOCK_ORDER 등재 강제)"""
     from app.modules.order_board.saved_filters import SAVED_FILTER_LOCK_NS
     from app.modules.platform.scheduler import SCHEDULER_LOCK_KEY
     from app.modules.seeds import service as seeds_service
@@ -428,9 +428,13 @@ def test_the_saved_filter_lock_namespace_does_not_collide_with_other_advisory_lo
         "modules/platform/scheduler.py",
         "modules/seeds/service.py",
         "modules/order_board/saved_filters.py",
+        "modules/order_intake/csv_import.py",
     }
     assert all(":ns" in sql for sql in sites["modules/platform/scheduler.py"])
     assert all(":ns" in sql for sql in sites["modules/order_board/saved_filters.py"])
     assert all("(:key)" in sql for sql in sites["modules/seeds/service.py"])  # 1인자 = 다른 키 공간
+    assert all(
+        "hashtextextended(:key, 0))" in sql for sql in sites["modules/order_intake/csv_import.py"]
+    )  # 1인자
     assert SAVED_FILTER_LOCK_NS != SCHEDULER_LOCK_KEY
     assert SAVED_FILTER_LOCK_NS != seeds_service._APPLY_LOCK_KEY

@@ -15,7 +15,7 @@ L1: 이 모듈은 **전이를 하지 않는다**(보류·재개·취소는 trade
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
@@ -181,6 +181,32 @@ def po_occupant(
         query = query.where(SalesOrder.id != exclude_id)
     found = session.execute(query.limit(1)).one_or_none()
     return (str(found[0]), str(found[1])) if found else None
+
+
+def po_occupants(
+    session: Session, buyer_partner_id: int, keys: Collection[str]
+) -> dict[str, tuple[str, str]]:
+    """`po_occupant`의 일괄판 — 키 목록을 **한 쿼리**(`IN`)로 본다. 키 → 점유 SO의 (문서번호, 상태), 점유 없으면 키가 없다.
+
+    같은 키를 둘 이상이 점유하는 경우(부분 유니크상 불가)에도 결정적이도록 id가 가장 작은 SO를 고른다.
+    """
+    wanted = sorted(set(keys))
+    if not wanted:
+        return {}
+    rows = session.execute(
+        select(SalesOrder.buyer_po_no_key, SalesOrder.doc_number, SalesOrder.status)
+        .where(
+            SalesOrder.buyer_partner_id == buyer_partner_id,
+            SalesOrder.buyer_po_no_key.in_(wanted),
+            SalesOrder.deleted_at.is_(None),
+            SalesOrder.status != "CANCELLED",
+        )
+        .order_by(SalesOrder.id)
+    ).all()
+    found: dict[str, tuple[str, str]] = {}
+    for key, number, status in rows:
+        found.setdefault(str(key), (str(number), str(status)))
+    return found
 
 
 def _duplicate_po_error(number: str, status: str) -> AppError:

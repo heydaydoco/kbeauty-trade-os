@@ -129,3 +129,38 @@ def test_the_size_limit_is_pinned_and_enforced() -> None:
         read_limited(io.BytesIO(b"0" * (MAX_UPLOAD_BYTES + 1)))
     assert caught.value.code == "IMPORTS.FILE.TOO_LARGE"
     assert caught.value.status_code == 413
+
+
+# ── strict 모드 (PR-14a B4 — 오더 인테이크 CSV 입구 전용, 기본값은 기존 동작) ────────
+
+
+@pytest.mark.parametrize(
+    ("text", "line_no"),
+    [
+        ('ID,이름,메모\r\n1,"닫히지 않은 따옴표,x\r\n', 2),
+        ('ID,이름,메모\r\n1,"ab"c,x\r\n', 2),
+    ],
+)
+def test_strict_mode_stops_at_broken_quotes_with_the_physical_line_number(
+    text: str, line_no: int
+) -> None:
+    """strict=True는 닫히지 않은 따옴표·따옴표 뒤 글자를 추측해 이어 붙이지 않고 물리 줄 번호와 함께 멈춘다(`csv.Error` 하위 타입)"""
+    import csv
+
+    with pytest.raises(parser.CsvSyntaxError) as caught:
+        parser.parse_csv(text, header=HEADER, string_columns=STRING_COLUMNS, strict=True)
+    assert caught.value.line_no == line_no and caught.value.reason
+    assert isinstance(caught.value, csv.Error)
+
+
+def test_default_mode_keeps_the_previous_lenient_behaviour() -> None:
+    """기본(strict=False) — 기존 임포트 동작 불변: 따옴표 뒤 글자는 이어 붙여 읽는다"""
+    parsed = _parse('ID,이름,메모\r\n1,"ab"c,x\r\n')
+    assert parsed.rows[0].cells["이름"] == "abc"
+
+
+def test_the_column_count_reason_is_one_shared_constant() -> None:
+    """열 개수 불일치 사유는 공유 상수 하나(`COLUMN_COUNT_MISMATCH`) — 문구는 이전과 같다"""
+    parsed = _parse("ID,이름,메모\r\n1,2\r\n")
+    assert parsed.problems[0].reason == parser.COLUMN_COUNT_MISMATCH.format(expected=3, actual=2)
+    assert parsed.problems[0].reason.startswith("열 개수가 다릅니다(기대 3칸, 실제 2칸).")

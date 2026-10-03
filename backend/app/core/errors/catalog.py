@@ -409,6 +409,22 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "접수 확정에 필요한 확인 항목을 평가하지 못했습니다. 잠시 후 다시 시도하시고, 계속되면 오류 번호와 함께 관리자에게 문의해 주세요.",
     ),
+    ErrorCode.ORDER_INTAKE_FILE_DUPLICATE: ErrorSpec(
+        409,
+        "같은 파일이 이미 검토 대기 중인 오더 인테이크로 올라와 있습니다. 기존 인테이크를 확정하거나 거부한 뒤 필요하면 다시 올려 주세요.",
+    ),
+    ErrorCode.ORDER_INTAKE_FILE_INVALID_ROWS: ErrorSpec(
+        422,
+        "파일에 고쳐야 할 행이 있어 아무것도 등록하지 않았습니다. 아래 행·열별 사유를 모두 고친 뒤 파일 전체를 다시 올려 주세요.",
+    ),
+    ErrorCode.ORDER_INTAKE_FILE_TOO_MANY_GROUPS: ErrorSpec(
+        422,
+        "한 파일에 담을 수 있는 바이어 PO 수를 넘었습니다(파일의 PO 수·상한은 안내 정보 참조). 파일을 나누어 다시 올려 주세요.",
+    ),
+    ErrorCode.ORDER_INTAKE_FILE_UNSUPPORTED_FORMAT: ErrorSpec(
+        422,
+        "엑셀 파일(.xlsx·.xls)은 올릴 수 없습니다. 엑셀에서 '다른 이름으로 저장 > CSV UTF-8(쉼표로 분리)'로 저장한 뒤 올려 주세요.",
+    ),
     ErrorCode.IDEMPOTENCY_KEY_CONFLICT: ErrorSpec(
         409,
         "같은 요청 키로 다른 내용이 이미 처리되었습니다. 화면을 새로 고쳐 처리 결과를 확인해 주세요.",
