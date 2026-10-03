@@ -165,8 +165,9 @@ def test_create_from_a_pi_copies_from_the_pi_and_fills_the_root_quotation(
     assert (after["status"], after["version"]) == ("ISSUED", pi["version"])
 
 
+@pytest.mark.golden
 def test_dod_one_the_whole_chain_needs_only_ids_and_versions(trade: TestClient) -> None:
-    """DoD ① QT→PI→SO를 **원천 id+version(+PI는 유효기간·계좌)만으로** 관통하고 SO 라인이 QT 스냅샷과 값이 같다 —
+    """GC-A9 — DoD ① QT→PI→SO를 **원천 id+version(+PI는 유효기간·계좌)만으로** 관통하고 SO 라인이 QT 스냅샷과 값이 같다 —
     마스터 판가를 바꾼 뒤에도 값은 QT 그대로(재입력 화면 없음)"""
     sku = create_priced_sku(amount=1500)
     qt = issued_quotation(trade, create_buyer(), [sku], quantity=20)
@@ -470,8 +471,9 @@ def test_discontinued_source_skus_are_accepted_and_flagged(trade: TestClient) ->
 # ── 중복 바이어 PO 0건 ──────────────────────────────────────────────────────
 
 
+@pytest.mark.golden
 def test_a_duplicate_buyer_po_is_rejected_with_the_occupying_document(trade: TestClient) -> None:
-    """DoD ② 같은 (바이어, PO번호)의 두 번째 비취소 SO는 409 DUPLICATE_BUYER_PO — detail은 점유 문서번호·상태뿐(금액 없음)"""
+    """GC-A7 — DoD ② 같은 (바이어, PO번호)의 두 번째 비취소 SO는 409 DUPLICATE_BUYER_PO — detail은 점유 문서번호·상태뿐(금액 없음)"""
     buyer = create_buyer()
     qt = issued_quotation(trade, buyer, [create_priced_sku()], quantity=10)
     line = qt["lines"][0]["id"]

@@ -90,10 +90,11 @@ def _approved(so: dict[str, Any], client: Any, approver: Any = None) -> int:
 
 
 @pytest.mark.parametrize("role", [TRADE, ADMIN], ids=["무역", "관리자"])
+@pytest.mark.golden
 def test_an_over_limit_order_cannot_be_confirmed_without_approval_even_by_an_admin(
     role: RoleCode,
 ) -> None:
-    """한도 초과 SO의 확정 = 409 GATE_BLOCKED(CREDIT·APPROVAL 해소·LIMIT_EXCEEDED, needs_approval=true) — **ADMIN도 동일**(예외 없음). SO·증적 무변 ·
+    """GC-A11 — 한도 초과 SO의 확정 = 409 GATE_BLOCKED(CREDIT·APPROVAL 해소·LIMIT_EXCEEDED, needs_approval=true) — **ADMIN도 동일**(예외 없음). SO·증적 무변 ·
     **승인 행 0·승인 이벤트 0**(확정 시도만으로 요청이 생기지 않는다) · 우회 시도 audit 1건 · BLOCKED 증거 1행(커밋)"""
     so = _over()
     with logged_in(role) as client:
@@ -215,10 +216,11 @@ def test_the_request_body_has_no_extra_fields() -> None:
 
 
 @pytest.mark.parametrize("confirmer", [TRADE, ADMIN], ids=["무역이확정", "관리자가확정"])
+@pytest.mark.golden
 def test_an_approved_over_limit_order_confirms_and_consumes_the_approval_once(
     confirmer: RoleCode,
 ) -> None:
-    """무역 요청 → **다른 사람**의 승인 → 확정 200 — credit_verdict=APPROVED·credit_approval_id=그 승인 · 승인 CONSUMED(1회·소비자 기록) ·
+    """GC-A11 — 무역 요청 → **다른 사람**의 승인 → 확정 200 — credit_verdict=APPROVED·credit_approval_id=그 승인 · 승인 CONSUMED(1회·소비자 기록) ·
     상태이력 확정 행의 approval_id · 증거 results.approval_id · 승인 이벤트 requested→approved→consumed"""
     so = _over()
     with logged_in(TRADE) as requester:
@@ -292,10 +294,11 @@ def test_a_pending_request_does_not_confirm_and_is_pointed_to_by_the_blocked_res
 
 
 @pytest.mark.parametrize("requester_role", [TRADE, ADMIN], ids=["무역기안", "관리자기안"])
+@pytest.mark.golden
 def test_the_requester_cannot_approve_their_own_request_and_so_the_order_stays_blocked(
     requester_role: RoleCode,
 ) -> None:
-    """자기 승인 금지(직무분리 — ADMIN 포함) — 기안자 본인의 승인 결정은 403 SELF_APPROVAL, 따라서 확정은 막힌 채 남는다"""
+    """GC-H3 — 자기 승인 금지(직무분리 — ADMIN 포함) — 기안자 본인의 승인 결정은 403 SELF_APPROVAL, 따라서 확정은 막힌 채 남는다"""
     from app.core.errors.exceptions import AppError
 
     so = _over()
@@ -327,8 +330,9 @@ def test_an_admin_can_approve_someone_elses_request_but_not_confirm_without_it()
 # ══ 승인 후 불변 — 편집 훅(eager)·digest(lazy) ═══════════════════════════════════════
 
 
+@pytest.mark.golden
 def test_editing_the_order_after_approval_voids_the_approval_and_requires_a_new_request() -> None:
-    """승인 후 SO 라인 수량 변경(서비스 경로) → 열린 승인이 **같은 트랜잭션에서** VOIDED(TARGET_CHANGED) — 확정은 막히고 재요청이 필요하다(새 승인 행)"""
+    """GC-H4 — 승인 후 SO 라인 수량 변경(서비스 경로) → 열린 승인이 **같은 트랜잭션에서** VOIDED(TARGET_CHANGED) — 확정은 막히고 재요청이 필요하다(새 승인 행)"""
     so = _over()
     with logged_in(TRADE) as client:
         approval_id = _approved(so, client)

@@ -88,10 +88,11 @@ def test_full_round_trip_walks_the_pi_status_forward_and_back_with_automatic_his
     ]
 
 
+@pytest.mark.golden
 def test_a_reversal_row_is_the_exact_negative_of_its_original_on_the_same_pi_currency_and_partner() -> (
     None
 ):
-    """역기록 = −전액·같은 PI·같은 통화·같은 partner(PI의 바이어)·reverses_payment_id=원 입금·사유 보존, 기록자 = 행위자"""
+    """GC-A12 — 역기록 = −전액·같은 PI·같은 통화·같은 partner(PI의 바이어)·reverses_payment_id=원 입금·사유 보존, 기록자 = 행위자"""
     pi = advance_pi()
     buyer = scalar("SELECT buyer_partner_id FROM proforma_invoices WHERE id = :i", i=pi)
     with logged_in(RoleCode.TRADE) as client:

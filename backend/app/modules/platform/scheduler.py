@@ -51,6 +51,8 @@ from app.modules.approvals import stagnation as approval_stagnation
 from app.modules.certifications import service as certifications
 from app.modules.collaboration import stagnation
 from app.modules.deadlines import service as deadlines
+from app.modules.idempotency import service as idempotency
+from app.modules.identity import service as identity
 from app.modules.notifications import dispatcher
 from app.modules.notifications import service as notifications
 from app.modules.platform import backups, storage
@@ -180,6 +182,14 @@ def _run_document_expiry_sweep() -> dict[str, int]:
     return _fail_if_any_failed(expiry_sweep.sweep_expired_documents(), what="견적·PI 만료 스윕")
 
 
+def _run_idempotency_purge() -> dict[str, int]:
+    return {"deleted": idempotency.purge_expired_all()}
+
+
+def _run_session_purge() -> dict[str, int]:
+    return {"deleted": identity.purge_expired_sessions_all()}
+
+
 @dataclass(frozen=True, slots=True)
 class JobSpec:
     code: str
@@ -264,6 +274,22 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         # 브리핑의 "미확인 알림" 집계에 오늘 독촉분이 들어간다.
         schedule="daily@07:10",
         run=_run_approval_stagnation_scan,
+    ),
+    JobSpec(
+        code="idempotency-purge",
+        name_ko="멱등 키 만료분 청소(TTL 24시간이 지난 기술 행만)",
+        # ADR-0014 예약 이행(ADR-0058 ⑤) — idempotency_keys의 expires_at <= now 행만 1,000행 청크로 지운다(잠긴 행은 건너뜀).
+        # 원장·전표·감사 무접촉. 백업(03:00)·일요일 복원 리허설(04:00) 뒤·저장소 점검(05:00) 앞.
+        schedule="daily@04:20",
+        run=_run_idempotency_purge,
+    ),
+    JobSpec(
+        code="session-purge",
+        name_ko="로그인 세션 만료분 청소(만료된 기술 행만)",
+        # ADR-0013 예약 이행(ADR-0058 ⑤) — user_sessions의 expires_at <= now 행만 1,000행 청크로 지운다.
+        # 미만료 세션(폐기 포함)은 남긴다. 멱등 청소(04:20) 5분 뒤.
+        schedule="daily@04:25",
+        run=_run_session_purge,
     ),
 )
 
@@ -473,7 +499,7 @@ def _alert_failure(job_id: int, *, code: str, name_ko: str, now: datetime) -> No
             # 안 읽히는 알림은 없는 알림이다(자기 적대 검증 확정 발견).
             subject_key=f"jobs.failed:{code}:{now.astimezone(KST):%Y%m%d}",
             title=f"배치 실행이 실패했습니다 — {name_ko}",
-            body=f"'{code}' 실행이 실패했습니다. 관리 화면에서 오류 내용을 확인해 주세요.",
+            body=f"'{code}' 실행이 실패했습니다. 관리자 API(GET /api/v1/scheduled-jobs) 또는 worker 로그에서 오류 내용을 확인해 주세요.",
             severity="CRITICAL",
             routing=notifications.Routing.ADMIN,
             entity_type="scheduled_jobs",

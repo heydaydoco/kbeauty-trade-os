@@ -74,6 +74,13 @@ describe("SO 상세 — 표시", () => {
     expect(screen.getAllByRole("link", { name: "PI-2026-0001" }).length).toBeGreaterThan(0);
   });
 
+  it("확정 시각은 UTC 원문이 아니라 KST 표기로 보인다(PR-16 워크스루 발견 — §2 UTC 저장·KST 표시)", async () => {
+    open(soDetail({ status: "CONFIRMED", confirmed_at: "2026-10-03T22:42:42.929146Z" }));
+    await heading();
+    expect(screen.getAllByText("2026. 10. 04. 07:42 (KST)").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/2026-10-03T22:42/)).not.toBeInTheDocument();
+  });
+
   it("단종 SKU 라인은 배지로 알린다(접수는 저장 허용·확정에서 차단)", async () => {
     open(soDetail({ lines: [{ ...SO_LINE, sku_status: "DISCONTINUED" }] }));
     await heading();

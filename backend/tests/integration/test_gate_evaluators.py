@@ -573,8 +573,9 @@ def _pi_so(mode: str | None, net: int = 0) -> tuple[int, int]:
 
 
 @covers(G.PI_DEPOSIT, L.BLOCK, R.OVERRIDE)
+@pytest.mark.golden
 def test_block_mode_blocks_a_short_deposit_and_passes_exactly_the_due_amount() -> None:
-    """모드 BLOCK: 순입금 = 청구액−1은 BLOCK/OVERRIDE(관리자·SHORT), = 청구액(등호)은 PASS — 상태값이 아니라 금액 대조"""
+    """GC-A10 — 모드 BLOCK: 순입금 = 청구액−1은 BLOCK/OVERRIDE(관리자·SHORT), = 청구액(등호)은 PASS — 상태값이 아니라 금액 대조"""
     short, _ = _pi_so("BLOCK", net=29_999)
     result = _pi_outcome(short)
     assert (result.level, result.resolution, result.reason_code) == (L.BLOCK, R.OVERRIDE, "SHORT")
@@ -620,8 +621,9 @@ def test_an_unset_mode_behaves_as_block_and_reports_its_source() -> None:
 
 
 @pytest.mark.parametrize("payment_type", ["LC", "TT_DEFERRED"])
+@pytest.mark.golden
 def test_the_gate_is_inactive_for_non_advance_payment_even_in_block_mode(payment_type: str) -> None:
-    """[활성/비활성 양방향 ①] 같은 PI·같은 모드(BLOCK)·같은 미입금에서 결제유형이 L/C·후불이면 PASS(INACTIVE) — 선수금 T/T일 때만 게이트가 켜진다"""
+    """GC-A10 — [활성/비활성 양방향 ①] 같은 PI·같은 모드(BLOCK)·같은 미입금에서 결제유형이 L/C·후불이면 PASS(INACTIVE) — 선수금 T/T일 때만 게이트가 켜진다"""
     pi = advance_pi()
     set_payment_terms(pi, payment_type)
     so = raw_so("RECEIVED", pi_id=pi)

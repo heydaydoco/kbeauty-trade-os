@@ -580,8 +580,9 @@ def test_double_click_is_one_history_row_and_a_stale_version_is_409(trade: TestC
 # ── 역순 취소 ───────────────────────────────────────────────────────────────
 
 
+@pytest.mark.golden
 def test_reverse_order_cancellation_restores_balances_across_the_chain(trade: TestClient) -> None:
-    """§20 A 역순 취소 — QT→PI→SO 체인에서 QT 취소·PI 취소는 409 SUCCESSOR_ALIVE(후속 번호 안내), SO를 먼저 취소하면 PI·QT 취소가 순서대로 성공하고
+    """GC-A8 — §20 A 역순 취소 — QT→PI→SO 체인에서 QT 취소·PI 취소는 409 SUCCESSOR_ALIVE(후속 번호 안내), SO를 먼저 취소하면 PI·QT 취소가 순서대로 성공하고
     소비량이 환원된다. 순서를 어긴 시도는 이력 0행 추가·상태 불변"""
     qt, pi = issued_pi_chain(trade, quantity=10)
     so = create_so_from_pi_via_api(trade, pi)

@@ -39,8 +39,9 @@ def _registry(**evaluators: Any) -> EvaluatorRegistry:
     return registry
 
 
+@pytest.mark.golden
 def test_a_sql_error_inside_an_evaluator_becomes_unknown_and_the_transaction_survives() -> None:
-    """평가기 안의 SQL 오류(0 나눗셈)는 SAVEPOINT에서 롤백돼 UNKNOWN(EVALUATION_ERROR)이 되고, 호출 트랜잭션은 계속 쓸 수 있다 — 평가 전에 쓴 행이 남고 이후 쿼리·커밋이 된다"""
+    """GC-A13 — 평가기 안의 SQL 오류(0 나눗셈)는 SAVEPOINT에서 롤백돼 UNKNOWN(EVALUATION_ERROR)이 되고, 호출 트랜잭션은 계속 쓸 수 있다 — 평가 전에 쓴 행이 남고 이후 쿼리·커밋이 된다"""
     so = passing_so()
     subject = _subject(so["id"])
 

@@ -276,7 +276,7 @@ function ProformaDetailView() {
         </div>
       )}
 
-      <div className="mt-6 grid gap-6">
+      <div className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-6">
         <section aria-label="PI 헤더" className="rounded-lg border border-gray-200 p-4">
           <h2 className="text-lg font-semibold">PI 정보</h2>
           <dl className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

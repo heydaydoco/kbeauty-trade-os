@@ -82,10 +82,11 @@ def _hold_back_credit_evaluation(monkeypatch: pytest.MonkeyPatch) -> None:
 # ══ 여신 결정적 경합 ═══════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.golden
 def test_two_concurrent_confirmations_cannot_both_fit_under_the_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """**결정적 경합** — 한도 1,000·같은 거래처 SO 2건(각 600): 거래처 잠금이 직렬화해 정확히 1건 200(확정·WITHIN_LIMIT)·1건 GATE_BLOCKED(CREDIT 승인 필요) —
+    """GC-F2 — **결정적 경합** — 한도 1,000·같은 거래처 SO 2건(각 600): 거래처 잠금이 직렬화해 정확히 1건 200(확정·WITHIN_LIMIT)·1건 GATE_BLOCKED(CREDIT 승인 필요) —
     `confirmed_at` 있는 SO는 정확히 1건. (잠금을 제거하면 둘 다 통과해 이 테스트가 실패해야 한다 — 변이 확인)"""
     ensure_approval_line()
     first = ready_so(limit=1_000, price=600, quantity=1)

@@ -329,7 +329,7 @@ function QuotationDetailView() {
         </div>
       )}
 
-      <div className="mt-6 grid gap-6">
+      <div className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-6">
         {editable ? (
           <HeaderEditor
             key={`${qt.id}-${resetToken}`}
