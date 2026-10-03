@@ -155,6 +155,8 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # 불변 열(extracted_snapshot·거래처·통화 등)은 ORM before_update 가드+AST 스캔+CHECK가 지킨다(트리거 미채택, ADR-0028·0040). 라인은 제자리 UPDATE·제외(soft delete).
         "order_intakes",
         "order_intake_lines",
+        # S3-1 PR-15a — 오더 보드 저장 필터(ADR-0066). 사용자가 화면에서 이름·조건을 고치고 지우는 개인 설정이다(soft delete·낙관 잠금).
+        "board_saved_filters",
     }
 )
 

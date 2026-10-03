@@ -68,6 +68,7 @@ _NEVER_SEEDED = (
     "gate_overrides",  # S3-1 PR-11a — 통제된 예외 증적: 업무 행위의 기록(시드 불가·users FK 보유)
     "order_intakes",  # S3-1 PR-13a — 바이어 PO 스테이징: 업무 행위의 기록(시드 불가·users FK 보유)
     "order_intake_lines",
+    "board_saved_filters",  # S3-1 PR-15a — 개인 설정(사용자 FK 소유 — 시드 불가)
 )
 
 

@@ -108,6 +108,8 @@ USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
     ("delegations", "revoked_by_id"): "ACTOR_LOG",
     ("user_roles", "user_id"): "IDENTITY_LINK",
     ("user_sessions", "user_id"): "IDENTITY_LINK",
+    # S3-1 PR-15a — 오더 보드 저장 필터의 소유자(개인 설정 — 그 사람 자신에 속한 행, 이관 대상 아님. 설계 PERSONAL 분류).
+    ("board_saved_filters", "user_id"): "IDENTITY_LINK",
 }
 
 #: 모든 테이블에 붙는 감사 컬럼 — 분류 대상이 아니다.
