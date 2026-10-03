@@ -728,6 +728,18 @@ describe("편집 PATCH — 헤더+라인 전체 교체", () => {
     expect(form.getByRole("button", { name: "최신 내용 불러오기" })).toBeInTheDocument();
   });
 
+  it("라우트 403 — 편집 폼·조치 버튼을 숨기고 조회 전용 안내를 보인다(래치 — 같은 화면에서는 복구하지 않음)", async () => {
+    const stub = open([[ID, "PATCH", () => apiError("AUTH.FORBIDDEN", 403)]]);
+    await ready();
+    const form = within(screen.getByRole("form", { name: "인테이크 편집" }));
+    fireEvent.change(form.getByLabelText("바이어 PO번호"), { target: { value: "PO-X" } });
+    fireEvent.click(form.getByRole("button", { name: "수정 저장" }));
+    await waitFor(() => expect(screen.queryByRole("form", { name: "인테이크 편집" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "접수 확정" })).not.toBeInTheDocument();
+    expect(screen.getByText(/수정·품번 재해석·확정·거부는 무역·관리자만/)).toBeInTheDocument();
+    expect(patches(stub.calls)).toHaveLength(1);
+  });
+
   it("거래처·통화는 편집 필드가 없다(등록 뒤 변경 불가)", async () => {
     open();
     await ready();

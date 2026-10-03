@@ -46,7 +46,9 @@ export function OrderIntakeDetailPage() {
   const id = Number(params.intakeId);
   const { me } = useSession();
   const client = useQueryClient();
-  const canWrite = hasRole(me, "TRADE");
+  const [writeForbidden, setWriteForbidden] = useState(false);
+  // 쓰기 라우트 403(역할 박탈 등)을 한 번 받으면 같은 화면에서는 쓰기 입력을 숨긴다(래치 — '최신 내용 불러오기'·새로고침으로 해제).
+  const canWrite = hasRole(me, "TRADE") && !writeForbidden;
 
   const detail = useQuery({
     queryKey: orderIntakeDetailKey(id),
@@ -104,6 +106,7 @@ export function OrderIntakeDetailPage() {
 
   function reload() {
     setJustFinished(false);
+    setWriteForbidden(false);
     setAnnounce(null);
     // 재조회가 끝난 뒤에 기준 version·폼을 새로 시드한다(옛 캐시로 시드하면 곧바로 또 어긋난다).
     void detail.refetch().then((result) => {
@@ -338,7 +341,7 @@ export function OrderIntakeDetailPage() {
           onFinished={() => setJustFinished(true)}
         />
 
-        {editable && <IntakeEditForm key={`${intake.id}-${formKey}`} intake={intake} version={base} onSaved={afterEdit} onForbidden={() => undefined} onReload={reload} />}
+        {editable && <IntakeEditForm key={`${intake.id}-${formKey}`} intake={intake} version={base} onSaved={afterEdit} onForbidden={() => setWriteForbidden(true)} onReload={reload} />}
       </div>
     </section>
   );

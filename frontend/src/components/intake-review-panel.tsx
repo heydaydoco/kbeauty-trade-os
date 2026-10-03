@@ -310,7 +310,7 @@ export function IntakeReviewPanel({
 
       {showActions && !write && (
         <p ref={noteRef} tabIndex={-1} role="note" className="mt-3 break-keep text-sm text-gray-600 focus:outline focus:outline-2 focus:outline-gray-900">
-          품번 재해석·확정·거부는 무역·관리자만 할 수 있습니다. 이 화면에서는 조회만 할 수 있습니다.
+          수정·품번 재해석·확정·거부는 무역·관리자만 할 수 있습니다. 이 화면에서는 조회만 할 수 있습니다.
         </p>
       )}
 
