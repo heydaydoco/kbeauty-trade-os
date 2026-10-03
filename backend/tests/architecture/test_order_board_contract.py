@@ -344,3 +344,44 @@ def test_the_boundary_scans_are_not_vacuous() -> None:
     )
     assert set(_state_assignments(bad)) == {"status", "assignee_id"}
     assert _protected_mentions(bad) == {"record_transition"}
+
+
+# ── 잠금 키 공간 ─────────────────────────────────────────────────────────────────
+
+
+def _advisory_lock_sites() -> dict[str, list[str]]:
+    sites: dict[str, list[str]] = {}
+    for rel, tree in app_sources().items():
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "text"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and "advisory" in node.args[0].value
+            ):
+                sites.setdefault(rel, []).append(node.args[0].value)
+    return sites
+
+
+@pytest.mark.group_j
+def test_the_saved_filter_lock_namespace_does_not_collide_with_other_advisory_locks() -> None:
+    """advisory lock 키 공간 — 앱 전체의 advisory 잠금 호출은 스케줄러(2인자: SCHEDULER_LOCK_KEY, 잡 id)·시드(1인자 bigint)·저장 필터(2인자: 네임스페이스, 사용자)
+    셋뿐이고, 2인자 네임스페이스끼리 다르다(같으면 사용자 id와 잡 id가 같을 때 서로를 막는다). 새 호출처가 생기면 실패한다(LOCK_ORDER 등재 강제)"""
+    from app.modules.order_board.saved_filters import SAVED_FILTER_LOCK_NS
+    from app.modules.platform.scheduler import SCHEDULER_LOCK_KEY
+    from app.modules.seeds import service as seeds_service
+
+    sites = _advisory_lock_sites()
+    assert set(sites) == {
+        "modules/platform/scheduler.py",
+        "modules/seeds/service.py",
+        "modules/order_board/saved_filters.py",
+    }
+    assert all(":ns" in sql for sql in sites["modules/platform/scheduler.py"])
+    assert all(":ns" in sql for sql in sites["modules/order_board/saved_filters.py"])
+    assert all("(:key)" in sql for sql in sites["modules/seeds/service.py"])  # 1인자 = 다른 키 공간
+    assert SAVED_FILTER_LOCK_NS != SCHEDULER_LOCK_KEY
+    assert SAVED_FILTER_LOCK_NS != seeds_service._APPLY_LOCK_KEY

@@ -2,8 +2,10 @@
 
 ■ **소유권 = 당사자성**(§18.1 부기 ③): 모든 조회·수정·삭제는 `user_id = 행위자`로 거른다 — 타인 id는 **404**(존재 오라클 방지, 403 아님). 전 역할이 쓸 수 있다
   (원가가 없는 개인 설정). 다른 사람의 필터를 보거나 공유하는 경로는 없다(재판정 트리거: 공유 요구 — D-D10).
-■ **활성 20개 상한**: 등록은 그 사용자의 활성 행을 id 순으로 `FOR UPDATE` 잠근 **뒤 새 문장으로** 센다 — 경계(19개)에서 동시 등록 둘이 모두 통과해 21개가
-  되는 일을 막는다(경계에서는 잠글 행이 반드시 있다. 잠금 문의 결과 행 수로 세면 대기 중 커밋된 행이 빠져 뚫린다 — READ COMMITTED 함정, 실측). 이름 유일은 DB 부분 유니크가 최종 보증이고 위반은 제약명으로 409로 번역한다(500 금지).
+■ **활성 20개 상한**: 등록은 **사용자별 트랜잭션 advisory lock**(`pg_advisory_xact_lock(SAVED_FILTER_LOCK_NS, user_id)` — 2인자 키 공간, 네임스페이스는
+  스케줄러의 잡 잠금 키와 다르다)을 잡은 **뒤 새 문장으로** 센다. 행 잠금(`FOR UPDATE`)은 행이 0개일 때 잠글 것이 없어 직렬화가 안 되고, 잠금 문의 결과 행 수로
+  세면 READ COMMITTED에서 대기 중 커밋된 행이 빠져 뚫린다(실측) — 그래서 행과 무관한 사용자 단위 잠금 + 잠근 뒤 재계수다. 이름 유일은 DB 부분 유니크가 최종
+  보증이고 위반은 제약명으로 409로 번역한다(500 금지).
 ■ **이름 위생**: strip 전에 원문 전체를 `app.core.text.invisible_char_problem`(Cc·Cf·Zl·Zp·한글 채움)으로 검사해 422다. DB CHECK(`name_clean` — PG16 `[[:cntrl:]]`는
   C0·C1 제어 0x00-0x1F·0x7F-0x9F만 잡는다, Zl·Zp·Cf는 못 잡는다)·`name_nonblank` 위반도 두 번째 방어선으로 422 `INVALID_FIELD`로 번역한다(500 금지).
 ■ `filter_config`는 `BoardFilter`(extra=forbid)로 저장 시 검증하고 **읽을 때 다시 검증**한다 — 스키마가 바뀌어 맞지 않는 옛 값은 조용히 무시·변환하지 않고
@@ -18,7 +20,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -39,6 +41,10 @@ logger = get_logger(__name__)
 
 CREATE_ENDPOINT = "POST /api/v1/order-board/saved-filters"
 
+
+#: 저장 필터 등록 직렬화용 advisory lock 네임스페이스(2인자 키의 첫 인자) — 스케줄러 잡 잠금(`SCHEDULER_LOCK_KEY`, 2인자)·시드 투입(1인자 bigint 키 공간)과
+#: 겹치지 않는 임의 상수다(아키텍처 시험이 다름을 고정한다).
+SAVED_FILTER_LOCK_NS = 7_340_215
 
 #: DB CHECK 위반 → 422 번역(두 번째 방어선 — 1차는 `_clean_name`).
 _NAME_CHECKS = frozenset(
@@ -163,7 +169,7 @@ def list_saved_filters(
 def create_saved_filter(
     *, actor: AuthenticatedUser, idempotency_key: str, name: str, filter_config: BoardFilter
 ) -> tuple[int, dict[str, Any]]:
-    """등록 — 한 트랜잭션: 멱등 claim → 본인 활성 행 잠금·개수(20 상한) → 이름 중복 → INSERT(SAVEPOINT) → `complete(201)`."""
+    """등록 — 한 트랜잭션: 멱등 claim → 사용자 advisory lock → 재계수(20 상한) → 이름 중복 → INSERT(SAVEPOINT) → `complete(201)`."""
     clean = _clean_name(name)
     config = _config_of(filter_config)
     with unit_of_work() as uow:
@@ -178,11 +184,12 @@ def create_saved_filter(
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
         mine = (BoardSavedFilter.user_id == actor.id, BoardSavedFilter.deleted_at.is_(None))
-        # ① 본인 활성 행을 id 순으로 잠가 경계 등록을 직렬화한다. ★ 이 잠금 문의 결과로 세면 안 된다 — READ COMMITTED에서 잠금 대기 뒤의 결과는
-        #   문장 시작 시점의 행 집합이라 대기 중에 커밋된 새 행이 빠진다(동시 등록이 모두 19개로 보고 통과 — 실측). ② 잠근 **뒤** 새 문장으로 센다.
+        # ① 사용자 단위 advisory lock으로 등록을 직렬화한다(행이 0개여도 잡힌다). ② 잠근 **뒤** 새 문장으로 센다 — READ COMMITTED에서 잠금을 기다린
+        #   문장의 결과는 그 문장 시작 시점 기준이라, 잠금 문의 결과로 세면 대기 중 커밋된 행이 빠진다(실측).
         session.execute(
-            select(BoardSavedFilter.id).where(*mine).order_by(BoardSavedFilter.id).with_for_update()
-        ).all()
+            text("SELECT pg_advisory_xact_lock(:ns, CAST(:uid AS integer))"),
+            {"ns": SAVED_FILTER_LOCK_NS, "uid": actor.id},
+        )
         active = int(
             session.execute(
                 select(func.count()).select_from(BoardSavedFilter).where(*mine)

@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from app.core.db.session import engine as app_engine
 from app.core.db.session import owner_engine
 from app.modules.identity.models import RoleCode
 from app.modules.order_board import saved_filters as saved_service
@@ -312,8 +313,8 @@ def test_concurrent_creates_at_the_boundary_never_exceed_the_limit() -> None:
 def test_a_create_that_waited_on_the_boundary_lock_recounts_and_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """결정적 경계 경합 — A가 본인 행을 잠근 채 멈춘 동안 B가 잠금을 **실제로 기다리게**(pg_locks 미부여 확인) 한 뒤 A를 커밋시키면, B는 잠금 뒤 다시 세어
-    20개를 보고 422로 거부된다(잠금 문의 결과 행 수로 세면 대기 중 커밋된 A의 행이 빠져 21개가 된다 — READ COMMITTED 함정 회귀 고정)"""
+    """결정적 경계 경합 — A가 사용자 잠금을 쥔 채 멈춘 동안 **B의 연결**(pid로 특정)이 advisory 잠금을 실제로 기다리게(pg_locks 미부여 확인) 한 뒤
+    A를 커밋시키면, B는 잠금 뒤 다시 세어 20개를 보고 422로 거부된다(잠금 문의 결과 행 수로 세면 대기 중 커밋된 A의 행이 빠져 21개가 된다 — READ COMMITTED 함정 회귀 고정)"""
     user = make_user(RoleCode.TRADE)
     for n in range(SAVED_FILTER_LIMIT - 1):
         saved_service.create_saved_filter(
@@ -321,6 +322,13 @@ def test_a_create_that_waited_on_the_boundary_lock_recounts_and_is_refused(
         )
     a_locked = threading.Event()
     original = saved_service._name_taken
+    original_claim = saved_service.idempotency.claim
+    b_pid: dict[str, int] = {}
+
+    def recording_claim(session: Any, **kwargs: Any) -> Any:
+        if kwargs.get("key") == "det-B":  # B의 트랜잭션이 쓰는 연결 — 잠금 대기를 이 pid로만 본다
+            b_pid["pid"] = int(session.execute(text("SELECT pg_backend_pid()")).scalar_one())
+        return original_claim(session, **kwargs)
 
     def pausing(session: Any, user_id: int, name: str, *, exclude_id: int | None) -> bool:
         if (
@@ -329,20 +337,23 @@ def test_a_create_that_waited_on_the_boundary_lock_recounts_and_is_refused(
             a_locked.set()
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
-                with owner_engine.connect() as connection:
-                    waiting = connection.execute(
-                        text(
-                            "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid"
-                            " WHERE NOT l.granted AND a.datname = current_database()"
-                        )
-                    ).scalar_one()
-                if waiting:
-                    break
+                if "pid" in b_pid:
+                    with owner_engine.connect() as connection:
+                        waiting = connection.execute(
+                            text(
+                                "SELECT count(*) FROM pg_locks l"
+                                " WHERE l.pid = :b_pid AND NOT l.granted AND l.locktype = 'advisory'"
+                            ),
+                            {"b_pid": b_pid["pid"]},
+                        ).scalar_one()
+                    if waiting:
+                        break
                 time.sleep(0.05)
             else:
-                raise AssertionError("B가 잠금 대기에 들어가지 않았다")
+                raise AssertionError("B가 사용자 잠금 대기에 들어가지 않았다")
         return original(session, user_id, name, exclude_id=exclude_id)
 
+    monkeypatch.setattr(saved_service.idempotency, "claim", recording_claim)
     monkeypatch.setattr(saved_service, "_name_taken", pausing)
     results: dict[str, Any] = {}
 
@@ -368,6 +379,70 @@ def test_a_create_that_waited_on_the_boundary_lock_recounts_and_is_refused(
     assert str(getattr(results["B"], "code", "")) == "ORDER_BOARD.FILTER.LIMIT_REACHED", results[
         "B"
     ]
+    with owner_engine.connect() as connection:
+        active = connection.execute(
+            text(
+                "SELECT count(*) FROM board_saved_filters WHERE user_id = :u AND deleted_at IS NULL"
+            ),
+            {"u": user.id},
+        ).scalar_one()
+    assert active == SAVED_FILTER_LIMIT
+
+
+@pytest.mark.group_j
+def test_twenty_one_concurrent_creates_from_zero_land_exactly_twenty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0개 상태(잠글 행이 없다)에서 서로 다른 이름으로 **동시 21건** → 20건 저장·1건 `LIMIT_REACHED`. 결정성: 처음 임계 구역에 들어간 건이
+    나머지 20건이 이 사용자의 advisory 잠금을 **기다리는 것**(pg_locks: advisory·classid=네임스페이스·objid=사용자·미부여)을 확인한 뒤에야 진행한다 —
+    행 잠금(FOR UPDATE)이었다면 0행이라 아무도 기다리지 않고 21건이 전부 0을 센다"""
+    user = make_user(RoleCode.TRADE)
+    workers = SAVED_FILTER_LIMIT + 1
+    # 21건이 정말 동시에 연결을 쥐도록 앱 풀(기본 최대 20)을 이 시험 동안만 넓힌다
+    monkeypatch.setattr(app_engine.pool, "_max_overflow", app_engine.pool._max_overflow + 5)
+    first = threading.Lock()
+    gate = {"opened": False}
+    original = saved_service._name_taken
+
+    def hold_first(session: Any, user_id: int, name: str, *, exclude_id: int | None) -> bool:
+        with first:
+            leader = not gate["opened"]
+            gate["opened"] = True
+        if leader:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                with owner_engine.connect() as connection:
+                    waiting = connection.execute(
+                        text(
+                            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+                            " AND classid = :ns AND objid = :uid AND objsubid = 2"
+                        ),
+                        {"ns": saved_service.SAVED_FILTER_LOCK_NS, "uid": user.id},
+                    ).scalar_one()
+                if waiting == workers - 1:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError("나머지 20건이 사용자 잠금을 기다리지 않았다")
+        return original(session, user_id, name, exclude_id=exclude_id)
+
+    monkeypatch.setattr(saved_service, "_name_taken", hold_first)
+
+    def worker(index: int) -> Any:
+        return saved_service.create_saved_filter(
+            actor=user,
+            idempotency_key=f"zero-{index}",
+            name=f"동시 {index:02d}",
+            filter_config=BoardFilter(),
+        )
+
+    outcomes = run_concurrently(worker, workers=workers, timeout=120)
+    ok = [o for o in outcomes if o.ok]
+    refused = [o for o in outcomes if not o.ok]
+    assert len(ok) == SAVED_FILTER_LIMIT and len(refused) == 1, [o.error for o in refused]
+    assert str(getattr(refused[0].error, "code", "")) == "ORDER_BOARD.FILTER.LIMIT_REACHED", (
+        refused[0].error
+    )
     with owner_engine.connect() as connection:
         active = connection.execute(
             text(
