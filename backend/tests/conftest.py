@@ -35,6 +35,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.db.session import owner_engine
+from tests.support.sharding import register_from_env as register_shard_plugin
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_INI = BACKEND_ROOT / "alembic.ini"
@@ -78,6 +79,8 @@ def pytest_configure(config: pytest.Config) -> None:
             f"테스트 대상 DB 이름이 {database_name!r}입니다. 테스트는 매 케이스 후 "
             "TRUNCATE로 정리하므로, 이름에 'test'가 없는 DB에는 절대 붙지 않습니다."
         )
+    # CI 샤드 분할(KBOS_TEST_SHARD="i/N"일 때만 — 없으면 전체 실행 그대로). ADR-0073.
+    register_shard_plugin(config)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

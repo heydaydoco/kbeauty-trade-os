@@ -29,6 +29,11 @@ markers = [
   "meta: 테스트·설정 자체를 검사하는 테스트",
 ]
 
+[tool.coverage.run]
+# CI는 테스트를 샤드(러너 여러 대)로 나눠 돌리고 .coverage.shard-* 를 다른 러너에서 병합한다(ADR-0073).
+# 경로를 backend/ 기준 상대(app/...)로 기록해 체크아웃 위치가 달라도 combine이 같은 파일로 합친다.
+relative_files = true
+
 [tool.ruff]
 target-version = "py313"
 line-length = 100

@@ -74,13 +74,104 @@ jobs:
             exit 1
           fi
 
-  # ── 백엔드 테스트 + 마이그레이션 드라이런 ────────────────────────────────
+  # ── 백엔드 정적 검사 + 마이그레이션 드라이런 (샤드와 병렬, 1회만) ──────────
+  # 린트·타입·드라이런 4종은 테스트 샤드마다 반복할 이유가 없어 경량 잡 하나로 뺐다(ADR-0073).
+  # 이 목록에서 검사가 빠지거나 샤드로 중복되면 test_ci_contract.py가 잡는다.
+  backend-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.14
+        env:
+          POSTGRES_PASSWORD: ci_postgres_pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      KBOS_OWNER_PASSWORD: ci_owner_pw
+      KBOS_APP_PASSWORD: ci_app_pw
+      APP_ENV: test
+      SECRET_KEY: ci_test_secret_key_0123456789abcdefgh
+      DATABASE_URL: postgresql+psycopg://kbos_app:ci_app_pw@localhost:5432/kbos_dev
+      MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_dev
+      TEST_DATABASE_URL: postgresql+psycopg://kbos_app:ci_app_pw@localhost:5432/kbos_test
+      TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_test
+      MIGRATION_CHECK_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_migr
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: DB 부트스트랩 (로컬과 동일한 init SQL을 psql로 실행)
+        env:
+          PGPASSWORD: ci_postgres_pw
+        run: |
+          # CI 전용 속도 설정 — 일회용 DB라 내구성(fsync)이 필요 없다(PR #42 선례). 운영 DB와 무관.
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+               -c "ALTER SYSTEM SET fsync = off" \
+               -c "ALTER SYSTEM SET synchronous_commit = off" \
+               -c "ALTER SYSTEM SET full_page_writes = off" \
+               -c "SELECT pg_reload_conf()"
+          for f in infra/postgres/init/*.sql; do
+            echo "== $f"
+            psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+                 -v owner_pw="$KBOS_OWNER_PASSWORD" \
+                 -v app_pw="$KBOS_APP_PASSWORD" \
+                 -f "$f"
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 의존성 설치
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: 린트 (ruff)
+        working-directory: backend
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: 타입 (mypy)
+        working-directory: backend
+        run: mypy app
+
+      - name: 마이그레이션 드라이런 4종 (kbos_migr — pytest DB와 분리)
+        working-directory: backend
+        env:
+          ALEMBIC_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_migr
+        run: |
+          heads=$(alembic heads | grep -c '(head)')
+          [ "$heads" -eq 1 ] || { echo "::error::alembic head가 $heads개 (1개여야 함)"; exit 1; }
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+          alembic check
+
+  # ── 백엔드 테스트 — 파일 단위 샤드 (ADR-0073) ─────────────────────────────
+  # 테스트 4,500+건을 한 러너에서 직렬로 돌리면 PR마다 20~25분, 느린 날은 60분 한도에 걸렸다
+  # (15분→30분→60분 연속 상향 — PR-7b·PR-11b·PR #42). 테스트 파일을 tests/.shard_durations.json의
+  # 실측 소요 시간으로 N개 샤드에 LPT 배정한다(tests/support/sharding.py — 파일 단위라 모듈 픽스처 보존).
+  # 샤드마다 커버리지 데이터만 모으고, 94% 게이트·샤드 완전성 대조는 backend-coverage 잡이 병합 후 건다.
+  # 샤드를 늘리려면 matrix.shard에 번호만 추가한다 — N은 strategy.job-total에서 자동으로 따라온다.
   backend:
     runs-on: ubuntu-latest
-    # 테스트 4,000+건 — 15분(PR-7b, 2026-09-30)·30분(PR-11b, 2026-10-01: 러너가 느린 날 30분 한도에 걸려 취소)
-    # 한도를 연달아 넘겼다. 직렬 단일 DB 구조라 병렬화가 어려우니 우선 60분으로 늘리고,
-    # 분할(샤드+커버리지 병합)은 PROGRESS 부채로 둔다.
-    timeout-minutes: 60
+    # 샤드당 40분: 평소 샤드 테스트는 직렬 20~25분의 1/3(약 7~9분)+셋업 2~3분이다. 40분은 평소의 3~4배라
+    # 느린 러너(PR #42는 평소의 2.5배)도 넘기고, 행 걸림은 종전 60분보다 일찍 끊는다. 샤드가 40분에
+    # 닿으면 한도를 올리지 말고 샤드 수를 늘린다.
+    timeout-minutes: 40
+    strategy:
+      # 한 샤드가 실패해도 나머지는 끝까지 돌려 실패 전체를 한 번에 본다(병합 판정은 ci-ok가 한다).
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     services:
       postgres:
         image: postgres:16.14
@@ -105,7 +196,14 @@ jobs:
       TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_test
       MIGRATION_CHECK_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_migr
       # 백업·복원 리허설 스크립트 테스트(pg_dump·openssl 필요)가 skip으로 조용히 사라지지 않게 한다 — 없으면 실패.
+      # 모든 샤드에 건다(어느 샤드에 배정되든 같은 가드).
       KBOS_REQUIRE_SCRIPT_TESTS: "1"
+      # 샤드 지정 "i/N" — 이 값이 있을 때만 tests/support/sharding.py가 켜진다(로컬 기본은 전체 실행).
+      KBOS_TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+      # 배정 보고서(수집 전체·배정 파일) — backend-coverage 잡이 독립 수집과 대조한다.
+      KBOS_TEST_SHARD_REPORT: shard-report-${{ matrix.shard }}.json
+      # 샤드마다 고유한 커버리지 데이터 파일 — backend-coverage 잡이 coverage combine으로 병합한다.
+      COVERAGE_FILE: .coverage.shard-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v5
 
@@ -146,37 +244,93 @@ jobs:
         working-directory: backend
         run: pip install -r requirements-dev.txt
 
-      - name: 린트 (ruff)
+      - name: 테스트 (샤드 — 커버리지 데이터만 수집, 94% 게이트는 backend-coverage 잡이 병합 후)
+        working-directory: backend
+        run: pytest -ra --cov=app --cov-report= --junitxml=junit-shard-${{ matrix.shard }}.xml -o junit_family=xunit1
+
+      # 실패해도 올린다(junit으로 원인 확인). .coverage.*는 숨김 파일이라 include-hidden-files가 없으면 빠진다.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-shard-${{ matrix.shard }}
+          path: |
+            backend/.coverage.shard-${{ matrix.shard }}
+            backend/shard-report-${{ matrix.shard }}.json
+            backend/junit-shard-${{ matrix.shard }}.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── 샤드 완전성 대조 + 커버리지 병합·게이트 94% (ADR-0031·ADR-0073) ─────────
+  # 샤드가 전부 성공해야 돈다(아니면 skipped → ci-ok 실패). DB 없이 수집·병합만 한다.
+  backend-coverage:
+    needs: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # --collect-only는 DB에 붙지 않지만 conftest 가드(APP_ENV=test·TEST_DATABASE_URL)와 설정 검증은 값을 요구한다.
+      APP_ENV: test
+      SECRET_KEY: ci_test_secret_key_0123456789abcdefgh
+      DATABASE_URL: postgresql+psycopg://kbos_app:ci_app_pw@localhost:5432/kbos_dev
+      MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_dev
+      TEST_DATABASE_URL: postgresql+psycopg://kbos_app:ci_app_pw@localhost:5432/kbos_test
+      TEST_MIGRATION_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_test
+      MIGRATION_CHECK_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_migr
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: 의존성 설치
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: backend-shard-*
+          path: backend/shard-data
+          merge-multiple: true
+
+      - name: 샤드 완전성 (합집합 = 독립 전체 수집 · 교집합 = ∅ · 샤드 1..N 전부 — 아니면 실패)
         working-directory: backend
         run: |
-          ruff check .
-          ruff format --check .
+          # 샤드 플러그인이 꺼진 상태(KBOS_TEST_SHARD 없음)의 독립 수집과 각 샤드 보고서를 대조한다.
+          pytest --collect-only -q -p no:cacheprovider > shard-data/collect-only.txt
+          python -m tests.support.shard_tools verify --collect-only shard-data/collect-only.txt shard-data/shard-report-*.json
 
-      - name: 타입 (mypy)
+      - name: 커버리지 병합 + 게이트 94% (ADR-0031 — S2-1 판정 조건 10)
         working-directory: backend
-        run: mypy app
-
-      - name: 마이그레이션 드라이런 4종 (kbos_migr — pytest DB와 분리)
-        working-directory: backend
-        env:
-          ALEMBIC_DATABASE_URL: postgresql+psycopg://kbos_owner:ci_owner_pw@localhost:5432/kbos_migr
         run: |
-          heads=$(alembic heads | grep -c '(head)')
-          [ "$heads" -eq 1 ] || { echo "::error::alembic head가 $heads개 (1개여야 함)"; exit 1; }
-          alembic upgrade head
-          alembic downgrade base
-          alembic upgrade head
-          alembic check
+          shopt -s nullglob
+          reports=(shard-data/shard-report-*.json)
+          data=(shard-data/.coverage.shard-*)
+          if [ "${#data[@]}" -ne "${#reports[@]}" ]; then
+            echo "::error::커버리지 데이터 ${#data[@]}개 ≠ 샤드 보고서 ${#reports[@]}개 — 빠진 샤드의 커버리지 없이 게이트를 통과할 수 없다."
+            exit 1
+          fi
+          coverage combine "${data[@]}"
+          coverage report -m --fail-under=94
+          coverage xml -o coverage.xml
 
-      - name: 테스트 (커버리지 게이트 94% — ADR-0031, S2-1 판정 조건 10)
+      - name: 샤드 소요 시간 갱신본 (CI 실측 — 균형이 나빠지면 이 아티팩트로 tests/.shard_durations.json 교체)
         working-directory: backend
-        run: pytest -ra --cov=app --cov-fail-under=94 --cov-report=xml --cov-report=term-missing
+        run: python -m tests.support.shard_tools durations shard-data/junit-shard-*.xml --output shard-durations.json
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: backend-coverage
           path: backend/coverage.xml
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shard-durations
+          path: backend/shard-durations.json
           retention-days: 7
 
   # ── 프런트엔드 ─────────────────────────────────────────────────────────
@@ -289,12 +443,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     if: always()
-    needs: [hygiene, backend, frontend, compose, compose-smoke]
+    # backend는 매트릭스 전체(샤드 하나라도 실패하면 failure), backend-coverage는 병합·94% 게이트·샤드 완전성.
+    needs: [hygiene, backend-checks, backend, backend-coverage, frontend, compose, compose-smoke]
     steps:
       - name: 모든 잡이 성공했는지
         run: |
-          results="${{ needs.hygiene.result }} ${{ needs.backend.result }} ${{ needs.frontend.result }} ${{ needs.compose.result }} ${{ needs.compose-smoke.result }}"
+          # needs 전체를 자동으로 본다 — needs에 잡을 넣고 이 목록 갱신을 잊어 실패가 새는 일이 없게.
+          results="${{ join(needs.*.result, ' ') }}"
           echo "결과: $results"
+          if [ -z "$results" ]; then
+            echo "::error::선행 잡 결과가 비어 있습니다 — 아무것도 확인하지 못한 채 통과할 수 없다."
+            exit 1
+          fi
           for r in $results; do
             if [ "$r" != "success" ]; then
               echo "::error::선행 잡 중 실패가 있습니다: $results"
