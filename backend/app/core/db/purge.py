@@ -19,7 +19,7 @@ from typing import Any
 
 from sqlalchemy import ColumnElement, delete, select
 
-from app.core.db.uow import unit_of_work
+from app.core.db.uow import in_unit_of_work, unit_of_work
 
 #: 한 트랜잭션에서 지우는 최대 행 수(ADR-0058 ⑤ "1,000행 청크").
 PURGE_BATCH = 1000
@@ -34,6 +34,9 @@ def purge_in_batches(
     """
     if batch < 1:
         raise ValueError("batch는 1 이상이어야 합니다.")
+    if in_unit_of_work():
+        # 바깥 UoW에 합류하면 전 청크가 한 트랜잭션으로 묶여 '청크마다 독립 커밋'이 소리 없이 깨진다(bulk 선례와 같은 가드).
+        raise RuntimeError("purge_in_batches는 열린 unit_of_work 밖에서만 호출할 수 있습니다.")
     total = 0
     while True:
         with unit_of_work() as uow:

@@ -499,7 +499,7 @@ def _alert_failure(job_id: int, *, code: str, name_ko: str, now: datetime) -> No
             # 안 읽히는 알림은 없는 알림이다(자기 적대 검증 확정 발견).
             subject_key=f"jobs.failed:{code}:{now.astimezone(KST):%Y%m%d}",
             title=f"배치 실행이 실패했습니다 — {name_ko}",
-            body=f"'{code}' 실행이 실패했습니다. 관리 화면에서 오류 내용을 확인해 주세요.",
+            body=f"'{code}' 실행이 실패했습니다. 관리자 API(GET /api/v1/scheduled-jobs) 또는 worker 로그에서 오류 내용을 확인해 주세요.",
             severity="CRITICAL",
             routing=notifications.Routing.ADMIN,
             entity_type="scheduled_jobs",

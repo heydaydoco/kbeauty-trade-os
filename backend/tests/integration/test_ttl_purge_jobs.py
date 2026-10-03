@@ -10,12 +10,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
 from sqlalchemy import text
 
+from app.core.db import purge
 from app.core.db.session import owner_engine
 from app.core.db.uow import unit_of_work
 from app.core.time import utcnow
@@ -140,6 +143,38 @@ def test_idempotency_purge_runs_in_chunks_until_nothing_is_left(actor: int) -> N
     _bulk_expired_keys(actor, 20, now=now)
     assert idempotency.purge_expired_all(now=now, batch=10) == 20  # 정확한 배수 — 빈 청크로 끝난다
     assert idempotency.purge_expired_all(now=now, batch=10) == 0
+
+
+def test_each_chunk_commits_on_its_own_so_a_mid_run_failure_keeps_earlier_chunks(
+    actor: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """청크마다 독립 트랜잭션 — 2번째 청크에서 실패해도 1번째 청크 삭제는 커밋돼 남고 나머지는 남는다(§17.6)"""
+    now = utcnow()
+    _bulk_expired_keys(actor, 25, now=now)
+    original = purge.unit_of_work
+    entries = [0]
+
+    @contextmanager
+    def fail_on_second_chunk() -> Iterator[Any]:
+        entries[0] += 1
+        if entries[0] == 2:
+            raise RuntimeError("주입 실패")
+        with original() as uow:
+            yield uow
+
+    monkeypatch.setattr(purge, "unit_of_work", fail_on_second_chunk)
+    with pytest.raises(RuntimeError, match="주입 실패"):
+        idempotency.purge_expired_all(now=now, batch=10)
+    assert _count("idempotency_keys") == 15
+
+
+def test_purge_refuses_to_join_an_open_unit_of_work(actor: int) -> None:
+    """열린 UoW 안에서 부르면 거부 — 합류하면 전 청크가 한 트랜잭션으로 묶인다"""
+    now = utcnow()
+    _bulk_expired_keys(actor, 3, now=now)
+    with pytest.raises(RuntimeError, match="unit_of_work 밖"), unit_of_work():
+        idempotency.purge_expired_all(now=now)
+    assert _count("idempotency_keys") == 3
 
 
 def test_a_purged_key_is_processed_as_new_on_retry(actor: int) -> None:
