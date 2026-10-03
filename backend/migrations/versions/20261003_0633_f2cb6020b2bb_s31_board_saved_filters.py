@@ -14,7 +14,10 @@ S3-1 PR-15a 오더 보드 저장 필터 — M12 (ADR-0066 / design-D D6 / design
   ■ CHECK는 create_table 안 op.f() 최종 이름이다(alembic check가 CHECK를 못 보므로 정의문 테스트 tests/integration/test_order_board_constraints.py가 고정한다 — 함정 ①·⑪).
   ■ 멱등 UNIQUE는 `WHERE deleted_at IS NULL` 부분 인덱스다(§17.4). 식별자 63자 이내(최장 47자).
   ■ MUTABLE 표(이름·조건 수정·soft delete가 앱 계정의 정상 UPDATE) — REVOKE 없음.
-  ■ downgrade는 인덱스 → 테이블 drop. 개인 설정 데이터는 함께 사라진다(되돌리기 비용 낮음 — ADR-0066).
+  ■ **보드 조회 전용 부분 인덱스 3개**(적대 검토 반영 — 기존 표에 additive): `ix_sales_orders_board_confirmed`(status, confirmed_at DESC, id DESC)·
+    `ix_sales_orders_board_created`(status, created_at, id) — 둘 다 WHERE deleted_at IS NULL, `ix_order_intakes_board_pending`(created_at, id)
+    WHERE status='PENDING' AND deleted_at IS NULL. 모델 선언은 `order_board/models.py`(보드 소유). trigram GIN은 부채(트리거: CONFIRMED 1만 건·보드 p95 300ms).
+  ■ downgrade는 보드 인덱스 → 저장 필터 인덱스 → 테이블 drop. 개인 설정 데이터는 함께 사라진다(되돌리기 비용 낮음 — ADR-0066).
 """
 
 from __future__ import annotations
@@ -87,9 +90,46 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
+    # 보드 조회 전용 부분 인덱스 3개(기존 표에 additive — 보드 열 쿼리의 필터·정렬과 같은 모양, 열 = 범위 스캔 + LIMIT 50)
+    op.create_index(
+        "ix_sales_orders_board_confirmed",
+        "sales_orders",
+        ["status", sa.text("confirmed_at DESC"), sa.text("id DESC")],
+        unique=False,
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
+    op.create_index(
+        "ix_sales_orders_board_created",
+        "sales_orders",
+        ["status", "created_at", "id"],
+        unique=False,
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
+    op.create_index(
+        "ix_order_intakes_board_pending",
+        "order_intakes",
+        ["created_at", "id"],
+        unique=False,
+        postgresql_where=sa.text("status = 'PENDING' AND deleted_at IS NULL"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_order_intakes_board_pending",
+        table_name="order_intakes",
+        postgresql_where=sa.text("status = 'PENDING' AND deleted_at IS NULL"),
+    )
+    op.drop_index(
+        "ix_sales_orders_board_created",
+        table_name="sales_orders",
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
+    op.drop_index(
+        "ix_sales_orders_board_confirmed",
+        table_name="sales_orders",
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
     op.drop_index(
         "uq_board_saved_filters_user_id_name_active",
         table_name="board_saved_filters",

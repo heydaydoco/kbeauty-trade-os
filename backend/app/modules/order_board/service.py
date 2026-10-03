@@ -279,7 +279,8 @@ def _so_select(*, with_min_delivery: bool = False) -> Any:
 def _so_order(stage: BoardStage) -> tuple[Any, ...]:
     """열 정렬 — 확정 열은 최근 확정 순, 나머지는 접수(생성) 오래된 순. id는 동률 깨기(페이지 안정성)."""
     if stage in NEWEST_FIRST_STAGES:
-        return (SalesOrder.confirmed_at.desc().nulls_last(), SalesOrder.id.desc())
+        # 확정 열의 SO는 확정 시각이 항상 있다(M10 CHECK) — 인덱스 `ix_sales_orders_board_confirmed`(status, confirmed_at DESC, id DESC)와 같은 정렬
+        return (SalesOrder.confirmed_at.desc(), SalesOrder.id.desc())
     return (SalesOrder.created_at.asc(), SalesOrder.id.asc())
 
 
