@@ -40,7 +40,7 @@ def test_item_keys_are_deterministic_64_hex_and_scoped_by_bulk_action_kind_and_i
 
 
 def test_processing_order_is_kind_rank_then_ascending_id() -> None:
-    """처리 순서 = 인테이크(잠금 순서 (1)) → SO((5)), 같은 종류 안에서 id 오름차순 — 요청 순서와 무관"""
+    """처리 순서 = 인테이크 → SO, 같은 종류 안에서 id 오름차순 — 요청 순서와 무관한 결정적 순서(재현성. 교착 방지는 건별 TX·LOCK_ORDER 담당)"""
     targets = [
         T(CardKind.SO, 3, 1),
         T(CardKind.INTAKE, 9, 1),
@@ -154,7 +154,7 @@ def _db_error(sqlstate: str) -> DBAPIError:
 def test_rejections_map_to_outcomes_by_code_and_status_only(
     exc: Exception, outcome: BulkOutcome, code: str
 ) -> None:
-    """거부 → 건 결과는 코드·상태 매핑뿐(판정 재수행 없음) — 게이트 차단=BLOCKED(서버 항목에서 basis·해시는 빼고 옮김), 403=FORBIDDEN, 409·잠금 경합=CONFLICT, 그 밖=FAILED"""
+    """거부 → 건 결과는 코드·상태 매핑뿐(판정 재수행 없음) — 게이트 차단=BLOCKED(서버 항목에서 basis·해시는 빼고 옮김), 403=FORBIDDEN, 경합 409·잠금 경합=CONFLICT, 그 밖=FAILED(업무 거부 409는 아래 전수 고정 테스트)"""
     result = bulk.classify_exception(T(CardKind.SO, 1, 1), exc)
     assert result.outcome is outcome and result.code == code and result.message_ko
     if outcome is BulkOutcome.BLOCKED:
@@ -183,3 +183,92 @@ def test_the_report_counts_from_the_finished_results() -> None:
     )
     assert set(report["outcome_counts"]) == {o.value for o in BulkOutcome}
     assert report["outcome_counts"]["FORBIDDEN"] == 0
+
+
+# ── 409 분류 고정(B6) ──────────────────────────────────────────────────────────
+
+
+def test_every_409_code_in_the_catalog_has_a_pinned_bulk_outcome() -> None:
+    """카탈로그의 **모든 409 코드**를 고정한다 — 업무 거부 집합(+게이트 차단)=BLOCKED, 그 밖(경합 집합·미분류)=CONFLICT.
+    분류 집합은 리터럴로 고정하고, 집합의 모든 코드는 실재하는 409다(죽은 항목 없음). 업무 거부 BLOCKED는 `blocked_gates`가 빈 목록이고 `code`로 구분한다"""
+    from app.core.errors.catalog import ERROR_CATALOG
+    from app.modules.order_board.constants import BLOCKING_409_CODES, CONTENTION_409_CODES
+
+    assert {
+        "ORDER_INTAKE.LINE.STALE_MAPPING",
+        "TRADE_DOCS.DOCUMENT.DUPLICATE_BUYER_PO",
+        "ORDER_INTAKE.GATE.UNRESOLVED",
+        "APPROVALS.APPROVAL.STALE",
+        "TRADE_DOCS.COPY.SOURCE_NOT_ELIGIBLE",
+    } == BLOCKING_409_CODES
+    assert {
+        "COMMON.CONCURRENCY.VERSION_CONFLICT",
+        "COMMON.CONCURRENCY.LOCK_BUSY",
+        "ORDER_INTAKE.STATE.NOT_PENDING",
+        "TRADE_DOCS.TRANSITION.NOT_ALLOWED",
+        "COMMON.IDEMPOTENCY.KEY_CONFLICT",
+    } == CONTENTION_409_CODES
+    codes_409 = {str(code) for code, spec in ERROR_CATALOG.items() if spec.status_code == 409}
+    assert codes_409 >= (BLOCKING_409_CODES | CONTENTION_409_CODES)
+    assert not BLOCKING_409_CODES & CONTENTION_409_CODES
+    for code in sorted(codes_409):
+        result = bulk.classify_exception(T(CardKind.SO, 1, 1), AppError(ErrorCode(code)))
+        expected = (
+            BulkOutcome.BLOCKED
+            if code in BLOCKING_409_CODES or code == "TRADE_CHAIN.CONFIRM.GATE_BLOCKED"
+            else BulkOutcome.CONFLICT
+        )
+        assert result.outcome is expected, code
+        assert result.code == code
+        if code in BLOCKING_409_CODES:
+            assert result.blocked_gates == [] and "개별" in result.message_ko
+
+
+# ── 서비스 진입점 이중 방어(B4)·벌크 지문(B3) ────────────────────────────────────
+
+
+def test_the_service_entry_rechecks_action_and_kind_even_without_the_request_schema() -> None:
+    """서비스 직접 호출도 액션·대상 종류 정합을 다시 본다 — 진입점 422, 건 실행(`run_item`)은 종류가 틀리면 다른 표의 id로 실행하지 않고 멈춘다(fail-closed)"""
+    from app.modules.identity.models import RoleCode
+    from app.modules.identity.service import AuthenticatedUser
+
+    trade = AuthenticatedUser(
+        id=1,
+        email="x@example.com",
+        display_name="x",
+        roles=frozenset({RoleCode.TRADE}),
+        session_id=0,
+    )
+    with pytest.raises(AppError) as caught:
+        bulk.run_bulk(
+            actor=trade,
+            idempotency_key="k",
+            action=BulkAction.CONFIRM_SO,
+            targets=[T(CardKind.INTAKE, 1, 1)],
+        )
+    assert caught.value.code is ErrorCode.VALIDATION_INVALID_FIELD
+    with pytest.raises(AppError) as caught:
+        bulk.run_bulk(
+            actor=trade,
+            idempotency_key="k",
+            action=BulkAction.CONFIRM_INTAKE,
+            targets=[T(CardKind.SO, 1, 1)],
+        )
+    assert caught.value.code is ErrorCode.VALIDATION_INVALID_FIELD
+    with pytest.raises(ValueError):
+        bulk.run_item(trade, "k", BulkAction.CONFIRM_SO, T(CardKind.INTAKE, 1, 1), None)
+    with pytest.raises(ValueError):
+        bulk.run_item(trade, "k", BulkAction.CONFIRM_INTAKE, T(CardKind.SO, 1, 1), None)
+
+
+@pytest.mark.group_j
+def test_the_bulk_fingerprint_ignores_order_and_exact_duplicates_but_not_versions() -> None:
+    """벌크 지문 = 액션·정렬한 대상(kind,id,version)·담당자 — 대상 순서·완전 중복은 같은 지문, version·액션·담당자가 다르면 다른 지문"""
+    a = [T(CardKind.SO, 2, 1), T(CardKind.INTAKE, 9, 3)]
+    base = bulk.bulk_fingerprint(BulkAction.ASSIGN, bulk.normalize_targets(a), 5)
+    shuffled = bulk.normalize_targets([a[1], a[0], a[0]])
+    assert bulk.bulk_fingerprint(BulkAction.ASSIGN, shuffled, 5) == base
+    assert base["targets"] == [["INTAKE", 9, 3], ["SO", 2, 1]]
+    assert bulk.bulk_fingerprint(BulkAction.ASSIGN, [T(CardKind.SO, 2, 2), a[1]], 5) != base
+    assert bulk.bulk_fingerprint(BulkAction.ASSIGN, a, 6) != base
+    assert bulk.bulk_fingerprint(BulkAction.CONFIRM_SO, a, None) != base

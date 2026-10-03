@@ -427,11 +427,18 @@ def test_a_failed_commit_is_reported_as_failed_and_not_counted_ok(
     sos = [ready_so() for _ in range(3)]
     new_owner = board_user(TRADE)
     real_commit = uow_module._commit
-    calls = {"n": 0}
+    real_update = bulk_module.sales_orders_service.update_meta
+    armed = {"on": False}
+
+    def arm_on_second(**kwargs: Any) -> Any:
+        # 2번째 건의 편집이 끝난 바로 그 트랜잭션의 커밋만 실패시킨다(커밋 횟수 세기에 기대지 않는다)
+        body = real_update(**kwargs)
+        armed["on"] = kwargs["so_id"] == sos[1]["id"]
+        return body
 
     def flaky(session: Any) -> None:
-        calls["n"] += 1
-        if calls["n"] == 3:  # 1번째: 담당자 사전 검증(읽기) / 2번째: 1번째 건 / 3번째: 2번째 건
+        if armed["on"]:
+            armed["on"] = False
             raise RuntimeError("커밋 실패 주입")
         real_commit(session)
 
@@ -439,6 +446,7 @@ def test_a_failed_commit_is_reported_as_failed_and_not_counted_ok(
         bulk_module.Target(CardKind.SO, t["id"], t["expected_version"]) for t in _so_targets(sos)
     ]
     trade_actor = actor(board_user(TRADE), TRADE)
+    monkeypatch.setattr(bulk_module.sales_orders_service, "update_meta", arm_on_second)
     monkeypatch.setattr(uow_module, "_commit", flaky)
     report = bulk_module.run_bulk(
         actor=trade_actor,
@@ -497,6 +505,56 @@ def test_the_bulk_refuses_to_run_inside_an_open_transaction() -> None:
     assert so_row(so["id"])["status"] == "RECEIVED"
 
 
+# ══ K — 처리 도중 권한 변화(TOCTOU) ═══════════════════════════════════════════════════
+
+
+def _revoke(user_id: int, how: str) -> None:
+    with owner_engine.begin() as connection:
+        if how == "deactivate":
+            connection.execute(
+                text("UPDATE users SET is_active = false WHERE id = :u"), {"u": user_id}
+            )
+        else:
+            connection.execute(
+                text("UPDATE user_roles SET deleted_at = now() WHERE user_id = :u"), {"u": user_id}
+            )
+
+
+@pytest.mark.group_k
+@pytest.mark.parametrize("how", ["deactivate", "role_lost"], ids=["비활성화", "역할상실"])
+def test_an_actor_who_loses_rights_mid_bulk_runs_nothing_more(
+    monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    """행위자 자격은 건마다 DB에서 다시 읽는다 — 1번째 건 처리 직후 행위자가 비활성화(또는 역할 상실)되면 남은 건은 실행하지 않고
+    `FORBIDDEN`(`COMMON.AUTH.FORBIDDEN`)·대상 무변, 리포트 = 실제 DB"""
+    sos = [ready_so() for _ in range(3)]
+    user_id = board_user(TRADE)
+    original = bulk_module.so_confirm.confirm_sales_order
+
+    def revoke_after_first(**kwargs: Any) -> Any:
+        result = original(**kwargs)
+        if kwargs["so_id"] == sos[0]["id"]:
+            _revoke(user_id, how)
+        return result
+
+    monkeypatch.setattr(bulk_module.so_confirm, "confirm_sales_order", revoke_after_first)
+    report = bulk_module.run_bulk(
+        actor=actor(user_id, TRADE),
+        idempotency_key=f"revoked-{how}",
+        action=BulkAction.CONFIRM_SO,
+        targets=[
+            bulk_module.Target(CardKind.SO, t["id"], t["expected_version"])
+            for t in _so_targets(sos)
+        ],
+    )
+    assert [r["outcome"] for r in report["results"]] == ["OK", "FORBIDDEN", "FORBIDDEN"]
+    assert {r["code"] for r in report["results"][1:]} == {"COMMON.AUTH.FORBIDDEN"}
+    assert report["ok_count"] == 1 and report["fail_count"] == 2
+    assert so_row(sos[0]["id"])["status"] == "CONFIRMED"
+    for so in sos[1:]:
+        assert so_row(so["id"])["status"] == "RECEIVED"
+
+
 # ══ J — 같은 벌크 키 재요청 = 재생 ══════════════════════════════════════════════════════
 
 
@@ -514,20 +572,21 @@ def _effects() -> dict[str, int]:
 
 @pytest.mark.group_j
 def test_the_same_bulk_key_replays_the_same_report_without_new_effects() -> None:
-    """같은 벌크 키·같은 본문 재요청 = 건별 재생으로 **같은 리포트** — 확정·증거·이벤트·audit·이력이 늘지 않는다(OK는 최초 결과 재생, BLOCKED는 같은 판정·증거 재사용)"""
+    """같은 벌크 키·같은 본문 재요청 = 건별 재생으로 **같은 리포트**(대상 순서만 바뀐 것은 같은 요청) — 확정·증거·이벤트·audit·이력이 늘지 않는다
+    (OK는 최초 결과 재생, BLOCKED는 같은 판정·증거 재사용)"""
     ensure_approval_line()
     w = world()
     intakes = [land(w) for _ in range(2)]
     sos = [ready_so(), ready_so(), ready_so(limit=3_000)]
-    headers = idem()
+    intake_key, so_key = idem(), idem()  # 같은 키는 완전히 같은 요청에만 — 액션마다 다른 키
     with logged_in(TRADE) as client:
         intake_body = [target("INTAKE", i["id"], i["version"]) for i in intakes]
         so_body = _so_targets(sos)
-        first_i = _ok(bulk(client, "CONFIRM_INTAKE", intake_body, headers=headers))
-        first_s = _ok(bulk(client, "CONFIRM_SO", so_body, headers=headers))
+        first_i = _ok(bulk(client, "CONFIRM_INTAKE", intake_body, headers=intake_key))
+        first_s = _ok(bulk(client, "CONFIRM_SO", so_body, headers=so_key))
         before = _effects()
-        again_i = _ok(bulk(client, "CONFIRM_INTAKE", intake_body, headers=headers))
-        again_s = _ok(bulk(client, "CONFIRM_SO", so_body, headers=headers))
+        again_i = _ok(bulk(client, "CONFIRM_INTAKE", intake_body, headers=intake_key))
+        again_s = _ok(bulk(client, "CONFIRM_SO", list(reversed(so_body)), headers=so_key))
     assert again_i == first_i and again_s == first_s
     assert [r["outcome"] for r in first_s["results"]] == ["OK", "OK", "BLOCKED"]
     assert _effects() == before
@@ -553,21 +612,42 @@ def test_the_same_bulk_key_replays_assign_instead_of_reporting_a_stale_version()
 
 
 @pytest.mark.group_j
-def test_reusing_a_bulk_key_with_a_different_version_conflicts_per_item() -> None:
-    """같은 벌크 키에 다른 version(본문 변경)을 실으면 그 건은 멱등 키 충돌(CONFLICT·KEY_CONFLICT) — 조용히 최초 결과로 흡수하지 않는다"""
-    so = ready_so()
-    owner = board_user(TRADE)
+def test_reusing_a_bulk_key_for_a_different_request_is_refused_as_a_whole() -> None:
+    """같은 벌크 키에 다른 요청(version·대상·액션·담당자 중 하나라도 다름)을 실으면 **요청 전체** 409 `COMMON.IDEMPOTENCY.KEY_CONFLICT` —
+    어떤 건도 실행하지 않는다(조용히 최초 결과로 흡수하거나 일부만 실행하지 않는다). 같은 요청은 다시 보내도 같은 리포트(재생)"""
+    so, other_so = ready_so(), ready_so()
+    owner, other_owner = board_user(TRADE), board_user(TRADE)
     headers = idem()
+    body = _so_targets([so])
     with logged_in(TRADE) as client:
-        _ok(bulk(client, "ASSIGN", _so_targets([so]), assignee_id=owner, headers=headers))
-        changed = _ok(
+        first = _ok(bulk(client, "ASSIGN", body, assignee_id=owner, headers=headers))
+        version_after = so_version(so["id"])
+        other_version = so_version(other_so["id"])
+        before = _effects()
+        refused = [
             bulk(
                 client,
                 "ASSIGN",
-                [target("SO", so["id"], so_version(so["id"]))],
+                [target("SO", so["id"], version_after)],
                 assignee_id=owner,
                 headers=headers,
-            )
-        )
-    assert changed["results"][0]["outcome"] == "CONFLICT"
-    assert changed["results"][0]["code"] == "COMMON.IDEMPOTENCY.KEY_CONFLICT"
+            ),
+            bulk(
+                client,
+                "ASSIGN",
+                [*body, *_so_targets([other_so])],
+                assignee_id=owner,
+                headers=headers,
+            ),
+            bulk(client, "ASSIGN", body, assignee_id=other_owner, headers=headers),
+            bulk(client, "CONFIRM_SO", body, headers=headers),
+        ]
+        again = _ok(bulk(client, "ASSIGN", body + body, assignee_id=owner, headers=headers))
+    for response in refused:
+        assert response.status_code == 409, response.text
+        assert code_of(response) == "COMMON.IDEMPOTENCY.KEY_CONFLICT"
+    assert again == first
+    assert so_version(so["id"]) == version_after and so_version(other_so["id"]) == other_version
+    assert so_row(so["id"])["assignee_id"] == owner and so_row(so["id"])["status"] == "RECEIVED"
+    assert so_row(other_so["id"])["assignee_id"] != owner
+    assert _effects() == before

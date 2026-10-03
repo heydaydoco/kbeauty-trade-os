@@ -8,19 +8,25 @@
 ■ **원자성 = 건별 독립 트랜잭션(§17.6) + 결과 리포트**: 단일 통로 함수가 각자 `unit_of_work()`를 연다. 바깥 트랜잭션 안에서 부르면 전부가 한 트랜잭션으로
   합류하므로(그러면 BLOCKED 증거 커밋·부분 성공이 깨진다) 건마다 `in_unit_of_work()`가 False임을 확인한다. 부분 성공이 정상이고(응답 200),
   **합계는 모든 건의 커밋·롤백이 끝난 뒤 결과 목록에서 센다**(건 트랜잭션 안에서 세지 않는다 — 커밋 실패한 건을 성공으로 세는 일이 없다).
-■ **처리 순서 = (종류 순위, id) 오름차순** — 종류 순위는 전역 LOCK_ORDER(인테이크 (1) → SO (5))와 같은 방향이고 같은 종류 안에서는 id 오름차순이다.
-  각 건 안의 잠금 순서는 단일 통로가 이미 지킨다.
+■ **처리 순서 = (종류 순위, id) 오름차순** — 목적은 결정적 처리 순서(재현성)다. 교착 방지는 건별 독립 TX(건 사이에 잠금을 들고 있지 않다)와
+  각 단일 통로의 LOCK_ORDER가 맡는다.
 ■ **멱등**: 건별 키 = `sha256("{벌크 키}|{액션}|{종류}|{id}")` hex 64자(`idempotency_keys.idempotency_key` 128자 한도 회피). 확정 2종은 그 키를 단일 통로에
   그대로 넘긴다(성공은 최초 결과 재생, 거부는 키 미소비 — 단일 통로 규약 그대로). 담당자 지정은 단일 통로(PATCH)에 멱등 키가 없으므로 이 모듈이 **같은 트랜잭션**에서
-  건별 claim/complete를 한다(재요청 시 낡은 version으로 CONFLICT가 나지 않고 최초 결과를 재생). 같은 벌크 키 재요청 = 건별 재생으로 같은 리포트.
+  건별 claim/complete를 한다(재요청 시 낡은 version으로 CONFLICT가 나지 않고 최초 결과를 재생). **벌크 요청 단위 지문**(액션·정규화·정렬한
+  대상(kind,id,version)·담당자)도 같은 인프라로 대조한다(엔드포인트 스코프 `POST /api/v1/order-board/bulk`, 완료 기록 없음 — 지문 대조 전용): 같은 키에 다른 지문이면
+  **전체 409 `COMMON.IDEMPOTENCY.KEY_CONFLICT`**, 같은 지문이면 건별 파생 키로 진행한다. 같은 키 재요청은 OK·SKIPPED 건을 재생하고 거부 건은 다시 실행한다
+  (단일 통로 규약 — 거부는 키를 소비하지 않는다. 그 사이 승인·override가 생겼으면 이번에는 통과할 수 있다).
 ■ **권한**: 벌크 전체는 무역·관리자(라우트+여기 사전 검증). 행별 역할 검증은 단일 통로가 하고(인테이크 편집·확정), SO 담당 편집 통로는 라우트 게이트만 있어
-  이 모듈이 같은 역할 집합으로 행별 재검증한다. 권한 없는 행은 `FORBIDDEN`. 담당자는 **활성+무역/관리자 역할 보유자**만(ADR-0067 ③ — 사전 422+건별 재확인).
+  이 모듈이 같은 역할 집합으로 행별 재검증한다. 권한 없는 행은 `FORBIDDEN`. **행위자 자격은 건마다 DB에서 다시 읽는다**(세션 시작 때의 역할은 처리 도중 바뀔 수 있다 —
+  TOCTOU): 비활성·역할 상실이면 그 건과 남은 건을 실행하지 않고 `FORBIDDEN`으로 보고한다. 각 건은 지금 역할로 만든 행위자로 단일 통로를 부른다.
+  담당자는 **활성+무역/관리자 역할 보유자**만(ADR-0067 ③ — 사전 422+건별 재확인).
+■ **409 분류**: 경합(`CONTENTION_409_CODES`)→CONFLICT, 업무 거부(`BLOCKING_409_CODES`)→BLOCKED(`blocked_gates` 빈 목록 — `code`로 구분), 그 밖의 409→CONFLICT.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from typing import Any
 
@@ -38,6 +44,8 @@ from app.modules.identity import service as identity
 from app.modules.identity.models import RoleCode
 from app.modules.identity.service import AuthenticatedUser
 from app.modules.order_board.constants import (
+    ACTION_KINDS,
+    BLOCKING_409_CODES,
     BULK_MAX_TARGETS,
     KIND_RANK,
     BulkAction,
@@ -56,11 +64,15 @@ logger = get_logger(__name__)
 BULK_ROLES = frozenset({RoleCode.TRADE, RoleCode.ADMIN})
 #: 담당자 편집을 할 수 있는 역할 — SO 메타 라우트(무역, 관리자 상시 통과)·인테이크 편집과 같은 집합. 행별로 재검증한다.
 ASSIGN_ROLES = frozenset({RoleCode.TRADE, RoleCode.ADMIN})
-#: 담당자가 될 수 있는 역할(ADR-0067 ③ — 활성 사용자이면서 무역·관리자 역할 보유).
-ASSIGNEE_ROLES = frozenset({RoleCode.TRADE, RoleCode.ADMIN})
+#: 담당자가 될 수 있는 역할(ADR-0067 ③ — 활성 사용자이면서 무역·관리자 역할 보유). 단일 출처 = 담당자 조회의 `assignee_target` 역할 집합.
+ASSIGNEE_ROLES = frozenset(identity.ASSIGNEE_TARGET_ROLES)
 
 #: 담당자 지정 건별 멱등 스코프(단일 통로 PATCH에는 멱등 키가 없다 — 이 모듈이 claim/complete한다).
 ASSIGN_ITEM_ENDPOINT = "POST /api/v1/order-board/bulk#ASSIGN"
+#: 벌크 요청 단위 지문 대조 스코프(완료 기록 없음 — 같은 키·다른 본문만 거부한다).
+BULK_ENDPOINT = "POST /api/v1/order-board/bulk"
+
+FORBIDDEN_REMAINING_MESSAGE = "처리하는 동안 요청한 사용자의 권한(활성 상태·역할)이 바뀌어 이 건은 실행하지 않았습니다. 다시 로그인한 뒤 확인해 주세요."
 
 #: 리포트에 싣는 게이트 미해소 항목 필드 — 단일 확정 통로의 409 detail에서 그대로 옮긴다(basis·detail·판정 해시는 싣지 않는다).
 BLOCKED_GATE_FIELDS: tuple[str, ...] = (
@@ -140,7 +152,7 @@ def item_key(bulk_key: str, action: BulkAction, kind: CardKind, target_id: int) 
 
 
 def processing_order(targets: list[Target]) -> list[Target]:
-    """처리 순서 — (종류 순위, id) 오름차순(전역 잠금 순서 방향·결정적 순서)."""
+    """처리 순서 — (종류 순위, id) 오름차순. 목적은 결정적 순서(재현성)이고 교착 방지는 건별 TX와 LOCK_ORDER가 맡는다."""
     return sorted(targets, key=lambda t: (KIND_RANK[t.kind], t.id))
 
 
@@ -214,7 +226,17 @@ def classify_exception(target: Target, exc: Exception) -> ItemResult:
             )
         if exc.status_code == 403:
             outcome = BulkOutcome.FORBIDDEN
+        elif exc.status_code == 409 and str(exc.code) in BLOCKING_409_CODES:
+            # 업무 거부 — 개별 처리 필요(상세 화면). 게이트 항목은 없다(`blocked_gates` 빈 목록, `code`로 구분).
+            return ItemResult(
+                target.kind,
+                target.id,
+                BulkOutcome.BLOCKED,
+                str(exc.code),
+                exc.message + BLOCKED_SUFFIX,
+            )
         elif exc.status_code == 409:
+            # 경합(`CONTENTION_409_CODES`)과 분류표에 없는 409 — 보드를 다시 불러오면 된다.
             outcome = BulkOutcome.CONFLICT
         else:
             outcome = BulkOutcome.FAILED
@@ -339,6 +361,9 @@ def run_item(
         raise RuntimeError(
             "벌크의 각 건은 독립 트랜잭션이어야 합니다 — 열린 트랜잭션 안에서 부를 수 없습니다."
         )
+    if target.kind not in ACTION_KINDS[action]:
+        # 종류가 맞지 않는 대상(예: 수주 확정에 인테이크 id)을 다른 표의 id로 실행하지 않는다 — 진입 검사를 건너뛴 호출의 마지막 방어(fail-closed).
+        raise ValueError(f"{action.value}는 {target.kind.value} 대상을 처리하지 않는다")
     key = item_key(bulk_key, action, target.kind, target.id)
     try:
         if action is BulkAction.CONFIRM_INTAKE:
@@ -367,6 +392,50 @@ def report(action: BulkAction, results: list[ItemResult]) -> dict[str, Any]:
     }
 
 
+def require_action_kinds(action: BulkAction, targets: list[Target]) -> None:
+    """서비스 진입점 이중 방어 — 요청 스키마가 이미 거른 액션·대상 종류 정합을 다시 본다(서비스 직접 호출도 422)."""
+    allowed = ACTION_KINDS[action]
+    wrong = sorted({f"{t.kind.value}-{t.id}" for t in targets if t.kind not in allowed})
+    if wrong:
+        raise invalid(
+            "targets",
+            f"{action.value}에 처리할 수 없는 대상 종류가 있습니다({', '.join(wrong)}).",
+        )
+
+
+def bulk_fingerprint(
+    action: BulkAction, targets: list[Target], assignee_id: int | None
+) -> dict[str, Any]:
+    """벌크 요청 지문 — 액션·정규화·정렬한 대상(kind,id,version)·담당자. 대상 순서·완전 중복이 달라도 같은 요청이면 같은 지문이다."""
+    return {
+        "action": action.value,
+        "targets": [[t.kind.value, t.id, t.expected_version] for t in processing_order(targets)],
+        "assignee_id": assignee_id,
+    }
+
+
+def check_bulk_key(actor: AuthenticatedUser, bulk_key: str, fingerprint: dict[str, Any]) -> None:
+    """같은 벌크 키 + 다른 지문 = 전체 409 `KEY_CONFLICT`(기존 멱등 인프라의 지문 대조). 완료 기록은 남기지 않는다 — 리포트는 건별 재생으로 회수하고,
+    거부 건은 다시 실행돼야 하기 때문이다(단일 통로 규약). 짧은 독립 트랜잭션이라 건 처리와 섞이지 않는다."""
+    with unit_of_work() as uow:
+        idempotency.claim(
+            uow.session,
+            actor_user_id=actor.id,
+            endpoint=BULK_ENDPOINT,
+            key=bulk_key,
+            request_body=fingerprint,
+        )
+
+
+def current_actor(actor: AuthenticatedUser) -> AuthenticatedUser | None:
+    """행위자의 **지금** 자격 — 비활성·삭제면 None, 아니면 DB의 현재 역할로 바꾼 행위자. 건마다 부른다(처리 도중 권한 회수 TOCTOU)."""
+    with unit_of_work() as uow:
+        roles = identity.active_roles_of(uow.session, actor.id)
+    if roles is None:
+        return None
+    return replace(actor, roles=frozenset(roles))
+
+
 def run_bulk(
     *,
     actor: AuthenticatedUser,
@@ -378,14 +447,29 @@ def run_bulk(
     """벌크 실행 — 모듈 독스트링의 계약. 사람 1클릭(`POST /order-board/bulk`)의 유일한 서비스 진입점이다."""
     if not actor.roles & BULK_ROLES:
         raise ForbiddenError(log_context={"actor_id": actor.id, "op": "order_board_bulk"})
+    require_action_kinds(action, targets)
     unique = normalize_targets(targets)
     if action is BulkAction.ASSIGN:
         if assignee_id is None:
             raise invalid("assignee_id", "담당자를 선택해 주세요.")
         require_assignee(assignee_id)
+    check_bulk_key(actor, idempotency_key, bulk_fingerprint(action, unique, assignee_id))
     results: list[ItemResult] = []
+    revoked = False
     for target in processing_order(unique):
-        result = run_item(actor, idempotency_key, action, target, assignee_id)
+        acting = None if revoked else current_actor(actor)
+        if acting is None or not acting.roles & BULK_ROLES:
+            # 처리 도중 자격 상실 — 이 건과 남은 건은 실행하지 않는다(fail-closed)
+            revoked = True
+            result = ItemResult(
+                target.kind,
+                target.id,
+                BulkOutcome.FORBIDDEN,
+                str(ErrorCode.AUTH_FORBIDDEN),
+                FORBIDDEN_REMAINING_MESSAGE,
+            )
+        else:
+            result = run_item(acting, idempotency_key, action, target, assignee_id)
         logger.info(
             "order_board_bulk_item",
             action=action.value,

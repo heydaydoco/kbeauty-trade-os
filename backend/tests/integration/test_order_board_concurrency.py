@@ -78,7 +78,7 @@ def test_twenty_users_bulk_confirming_overlapping_sets_in_different_orders_confi
         return [
             bulk_module.run_bulk(
                 actor=actors[index],
-                idempotency_key=f"race-{index}",
+                idempotency_key=f"race-{index}-{action.value}",  # 같은 키는 같은 요청에만
                 action=action,
                 targets=targets,
             )

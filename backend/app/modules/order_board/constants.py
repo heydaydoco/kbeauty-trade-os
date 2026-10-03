@@ -90,10 +90,37 @@ class BulkOutcome(StrEnum):
 
     OK = "OK"
     SKIPPED = "SKIPPED"  # 변경 없음(이미 그 담당자)
-    BLOCKED = "BLOCKED"  # 확정 게이트 미해소 — 개별 처리 필요(`blocked_gates` 서버 값)
-    CONFLICT = "CONFLICT"  # 버전·상태·잠금 경합(409 계열)
-    FORBIDDEN = "FORBIDDEN"  # 행별 서버측 역할 검증 거부(403)
+    #: 업무상 막힘 — 개별 처리 필요(상세 화면 링크 대상). 확정 게이트 미해소(`GATE_BLOCKED` — `blocked_gates`에 서버 값)와
+    #: 업무 거부 409(`BLOCKING_409_CODES` — `blocked_gates`는 빈 목록, `code`로 구분).
+    BLOCKED = "BLOCKED"
+    #: 경합 — 다른 사람이 먼저 바꿨다(`CONTENTION_409_CODES`·잠금 대기 초과·교착·`StaleDataError`, 그리고 분류표에 없는 409). 보드를 다시 불러오면 된다.
+    CONFLICT = "CONFLICT"
+    FORBIDDEN = "FORBIDDEN"  # 행별 서버측 역할 검증 거부(403)·처리 도중 행위자 자격 상실
     FAILED = "FAILED"  # 그 밖의 거부(404·422)·예상 못 한 오류
+
+
+#: 경합 409 — 같은 대상을 다른 사람이 먼저 바꿨다(새로고침 후 다시 선택).
+CONTENTION_409_CODES: frozenset[str] = frozenset(
+    {
+        "COMMON.CONCURRENCY.VERSION_CONFLICT",
+        "COMMON.CONCURRENCY.LOCK_BUSY",
+        "ORDER_INTAKE.STATE.NOT_PENDING",
+        "TRADE_DOCS.TRANSITION.NOT_ALLOWED",
+        "COMMON.IDEMPOTENCY.KEY_CONFLICT",
+    }
+)
+
+#: 업무 거부 409 → BLOCKED(개별 처리 필요 — 품번 재해석·중복 PO 정리·평가 불능 확인·승인 재요청·복제 원본 확인은 상세 화면의 일이다).
+#: 단일 통로(`confirm_intake`·`confirm_sales_order`)가 낼 수 있는 업무 거부 409 전부다. 이 집합과 경합 집합에 없는 409는 CONFLICT로 둔다.
+BLOCKING_409_CODES: frozenset[str] = frozenset(
+    {
+        "ORDER_INTAKE.LINE.STALE_MAPPING",
+        "TRADE_DOCS.DOCUMENT.DUPLICATE_BUYER_PO",
+        "ORDER_INTAKE.GATE.UNRESOLVED",
+        "APPROVALS.APPROVAL.STALE",
+        "TRADE_DOCS.COPY.SOURCE_NOT_ELIGIBLE",
+    }
+)
 
 
 #: 액션별 허용 대상 종류 — 확정 2종은 자기 종류만, ASSIGN은 둘 다.
@@ -104,4 +131,5 @@ ACTION_KINDS: dict[BulkAction, frozenset[CardKind]] = {
 }
 
 #: 처리 순서의 종류 순위 — 전역 LOCK_ORDER(인테이크 (1) → SO (5))와 같은 방향. 같은 종류 안에서는 id 오름차순.
+#: 목적은 **결정적 처리 순서(재현성)**다 — 교착 방지는 건별 독립 TX와 각 단일 통로의 LOCK_ORDER가 맡는다(건 사이에 잠금을 들고 있지 않다).
 KIND_RANK: dict[CardKind, int] = {CardKind.INTAKE: 0, CardKind.SO: 1}
