@@ -1,4 +1,4 @@
-"""샤드 도구 — 소요 시간 파일 갱신(``durations``)·완전성 대조(``verify``). ADR-0072.
+"""샤드 도구 — 소요 시간 파일 갱신(``durations``)·완전성 대조(``verify``). ADR-0073.
 
 backend/ 에서 실행한다.
 
@@ -64,7 +64,7 @@ def durations_from_junit(paths: Iterable[Path], root: Path = BACKEND_ROOT) -> di
             "backend/에서: pytest --junitxml=junit.xml -o junit_family=xunit1 → "
             "python -m tests.support.shard_tools durations junit.xml "
             "(또는 CI backend-coverage 잡의 shard-durations 아티팩트로 교체). "
-            "균형에만 쓰이며 누락·중복 방지와는 무관하다(ADR-0072)."
+            "균형에만 쓰이며 누락·중복 방지와는 무관하다(ADR-0073)."
         ),
         "generated_at": datetime.now(UTC).strftime("%Y-%m-%d"),
         "tests": tests,

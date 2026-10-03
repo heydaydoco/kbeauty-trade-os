@@ -1,5 +1,5 @@
 {
-  "_how_to_update": "backend/에서: pytest --junitxml=junit.xml -o junit_family=xunit1 → python -m tests.support.shard_tools durations junit.xml (또는 CI backend-coverage 잡의 shard-durations 아티팩트로 교체). 균형에만 쓰이며 누락·중복 방지와는 무관하다(ADR-0072).",
+  "_how_to_update": "backend/에서: pytest --junitxml=junit.xml -o junit_family=xunit1 → python -m tests.support.shard_tools durations junit.xml (또는 CI backend-coverage 잡의 shard-durations 아티팩트로 교체). 균형에만 쓰이며 누락·중복 방지와는 무관하다(ADR-0073).",
   "generated_at": "2026-10-03",
   "tests": 4530,
   "total_seconds": 2937.3,

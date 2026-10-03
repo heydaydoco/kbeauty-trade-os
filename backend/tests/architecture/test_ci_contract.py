@@ -3,7 +3,7 @@
 게이트가 조용히 무력화되는 경로를 막는다.
   ① ci-ok 잡의 needs에서 잡을 빠뜨리면, 그 잡이 빨개도 게이트는 초록이 된다.
   ② timeout-minutes가 없는 잡은 행이 걸리면 기본 360분을 태워 무료 분을 소진한다.
-  ③ 테스트 샤드 분할(ADR-0072): 샤드가 빠지거나 커버리지 병합 없이 94% 게이트가 사라지거나,
+  ③ 테스트 샤드 분할(ADR-0073): 샤드가 빠지거나 커버리지 병합 없이 94% 게이트가 사라지거나,
      린트·타입·드라이런이 샤드 분리 중에 누락되면 "CI 초록"이 일부 검사만 돈 결과가 된다.
 """
 
@@ -25,7 +25,7 @@ _CANDIDATES = [
 ]
 CI_YAML = next((p for p in _CANDIDATES if p.exists()), None)
 GATE_JOB = "ci-ok"
-#: 테스트 샤드 매트릭스 잡과 커버리지 병합·게이트 잡 (ADR-0072)
+#: 테스트 샤드 매트릭스 잡과 커버리지 병합·게이트 잡 (ADR-0073)
 BACKEND_JOB = "backend"
 COVERAGE_JOB = "backend-coverage"
 
@@ -86,7 +86,7 @@ def _all_runs(workflow: dict) -> dict[str, str]:
 
 
 def test_coverage_gate_is_armed(workflow: dict) -> None:
-    """병합 커버리지에 94% 게이트가 걸려 있다 (ADR-0031 채택 — 94%, ADR-0072 샤드 병합)
+    """병합 커버리지에 94% 게이트가 걸려 있다 (ADR-0031 채택 — 94%, ADR-0073 샤드 병합)
 
     게이트를 제거·완화하는 커밋이 조용히 통과하면 커버리지 하락을 다시 아무도
     못 본다. 임계 조정은 ADR-0031의 실측 절차(전체 실행 → 실측−2%p) 재적용 +
@@ -109,7 +109,7 @@ def test_coverage_gate_is_armed(workflow: dict) -> None:
     )
 
 
-# ── 테스트 샤드 분할 (ADR-0072) ────────────────────────────────────────────
+# ── 테스트 샤드 분할 (ADR-0073) ────────────────────────────────────────────
 def test_backend_is_a_shard_matrix(workflow: dict) -> None:
     """backend 잡은 shard 1..N(N≥2) 매트릭스이고, 샤드 지정 N은 매트릭스 크기에서 온다"""
     backend = workflow["jobs"][BACKEND_JOB]
