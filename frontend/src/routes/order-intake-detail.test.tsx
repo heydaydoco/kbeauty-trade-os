@@ -825,3 +825,84 @@ describe("읽기 전용", () => {
     expect(screen.getByRole("link", { name: "수주 #5" })).toHaveAttribute("href", "/sales-orders/5");
   });
 });
+
+describe("재판정 금지·키·오프라인 보강", () => {
+  it("미매핑 라인이 있고 서버 사전 점검이 미통과여도 확정 버튼은 서버를 부르고, 서버의 422를 그대로 안내한다", async () => {
+    const stub = open(
+      [[CONFIRM, "POST", () => apiError("ORDER_INTAKE.LINE.UNMAPPED_ITEMS", 422, "x", { lines: [{ line_no: 1, buyer_item_code: "NEW-1", reason_code: "ITEM_UNMAPPED" }] })]],
+      {
+        detail: intakeDetail({ lines: [intakeLine({ buyer_item_code: "NEW-1", sku_id: null, sku_code: null, sku_name_ko: null, sku_status: null, mapping_state: "UNMAPPED" })] }),
+        gates: intakeGateReport({ intake_confirmable: false, gates: [intakeGate({ level: "BLOCK", blocks_intake_confirm: true, settlement: "UNRESOLVED" })] }),
+      },
+    );
+    const dialog = await openConfirm();
+    fireEvent.click(dialogConfirm(dialog));
+    await waitFor(() => expect(posts(stub.calls, CONFIRM)).toHaveLength(1));
+    await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("라인 1(NEW-1)"));
+  });
+
+  it("STALE 라인이 있어도 확정 버튼은 서버를 부른다(409 STALE_MAPPING은 서버가 판정)", async () => {
+    const stub = open([[CONFIRM, "POST", () => apiError("ORDER_INTAKE.LINE.STALE_MAPPING", 409, "x", { lines: [] })]], {
+      detail: intakeDetail({ lines: [intakeLine({ mapping_state: "STALE" })] }),
+    });
+    const dialog = await openConfirm();
+    fireEvent.click(dialogConfirm(dialog));
+    await waitFor(() => expect(posts(stub.calls, CONFIRM)).toHaveLength(1));
+  });
+
+  it("품번 다시 확인 성공 뒤에는 키를 비운다 — 바뀐 것이 없어 version이 같아도 다음 요청은 새 키", async () => {
+    const stub = open([[RESOLVE, "POST", () => jsonResponse(intakeDetail({ version: 2 }))]]);
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "품번 다시 확인" }));
+    await screen.findByText(/바뀐 해석이 없습니다/);
+    fireEvent.click(screen.getByRole("button", { name: "품번 다시 확인" }));
+    await waitFor(() => expect(posts(stub.calls, RESOLVE)).toHaveLength(2));
+    const [a, b] = posts(stub.calls, RESOLVE);
+    expect(a?.body).toEqual({ version: 2 });
+    expect(b?.body).toEqual({ version: 2 });
+    expect(a?.headers["Idempotency-Key"]).not.toBe(b?.headers["Idempotency-Key"]);
+  });
+
+  it("편집 저장도 창 포커스 재조회로 앞서간 version이 아니라 화면 기준 version을 싣는다", async () => {
+    const stub = open([[ID, "PATCH", () => apiError("COMMON.CONCURRENCY.VERSION_CONFLICT", 409)]]);
+    await ready();
+    const form = () => within(screen.getByRole("form", { name: "인테이크 편집" }));
+    fireEvent.change(form().getByLabelText("바이어 PO번호"), { target: { value: "PO-내가-고침" } });
+    server.detail = intakeDetail({ version: 9 });
+    refetchViaFocus();
+    await screen.findByText(/다른 곳에서 이 인테이크가 수정되었습니다/);
+    fireEvent.click(form().getByRole("button", { name: "수정 저장" }));
+    await waitFor(() => expect(patches(stub.calls)).toHaveLength(1));
+    expect(patches(stub.calls)[0]?.body?.version).toBe(2);
+    expect(await form().findByRole("alert")).toHaveTextContent("다른 곳에서 이 인테이크가 먼저 수정되었습니다");
+  });
+
+  it.each([
+    ["확정", CONFIRM],
+    ["거부", REJECT],
+    ["품번 다시 확인", RESOLVE],
+  ])("오프라인 상태여도 %s 요청을 보내 본다(paused로 갇히지 않는다 — networkMode always)", async (kind, path) => {
+    const stub = open([
+      [CONFIRM, "POST", () => confirmed()],
+      [REJECT, "POST", () => jsonResponse(intakeDetail({ status: "REJECTED", version: 3 }))],
+      [RESOLVE, "POST", () => jsonResponse(intakeDetail({ version: 2 }))],
+    ]);
+    await ready();
+    let dialog: HTMLElement | null = null;
+    if (kind === "확정") dialog = await openConfirm();
+    if (kind === "거부") {
+      dialog = await openReject();
+      typeReason(dialog, "충분히 긴 거부 사유");
+    }
+    act(() => {
+      window.dispatchEvent(new Event("offline"));
+    });
+    if (kind === "확정" && dialog) fireEvent.click(dialogConfirm(dialog));
+    if (kind === "거부" && dialog) fireEvent.click(within(dialog).getByRole("button", { name: "거부" }));
+    if (kind === "품번 다시 확인") fireEvent.click(screen.getByRole("button", { name: "품번 다시 확인" }));
+    await waitFor(() => expect(posts(stub.calls, path)).toHaveLength(1));
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+  });
+});

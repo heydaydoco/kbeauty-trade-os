@@ -150,6 +150,19 @@ describe("등록 요청", () => {
     expect(posts(stub.calls)).toHaveLength(1);
   });
 
+  it("오프라인 상태여도 요청을 보내 본다(paused로 화면이 갇히지 않는다 — networkMode always)", async () => {
+    const stub = open([["/v1/order-intakes", "POST", created]]);
+    await fillValid();
+    act(() => {
+      window.dispatchEvent(new Event("offline"));
+    });
+    submit();
+    await waitFor(() => expect(posts(stub.calls)).toHaveLength(1));
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+  });
+
   it("멱등 키: 같은 본문 재시도(실패 후)=같은 키, 본문이 바뀌면 새 키, A로 되돌아가면 A의 키", async () => {
     let fail = true;
     const stub = open([["/v1/order-intakes", "POST", () => (fail ? apiError("COMMON.CONCURRENCY.LOCK_BUSY", 409) : created())]]);
