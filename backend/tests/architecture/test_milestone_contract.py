@@ -212,12 +212,6 @@ def _pin_problems(rel: str, tree: ast.Module) -> list[str]:
     names = referenced_names(tree)
     if "today_kst" not in names:
         return []
-    if "pin_today_kst" not in names:
-        return [f"{rel}: today_kst를 쓰는데 pin_today_kst 고정이 없다"]
-    binds_name = any(
-        isinstance(node, ast.ImportFrom) and any(alias.name == "today_kst" for alias in node.names)
-        for node in ast.walk(tree)
-    )
     pin_calls = [
         node
         for node in ast.walk(tree)
@@ -225,6 +219,12 @@ def _pin_problems(rel: str, tree: ast.Module) -> list[str]:
         and isinstance(node.func, ast.Name)
         and node.func.id == "pin_today_kst"
     ]
+    if not pin_calls:  # 임포트만 남고 호출이 없으면 고정이 아니다
+        return [f"{rel}: today_kst를 쓰는데 pin_today_kst 고정 호출이 없다"]
+    binds_name = any(
+        isinstance(node, ast.ImportFrom) and any(alias.name == "today_kst" for alias in node.names)
+        for node in ast.walk(tree)
+    )
     if binds_name and not any(len(call.args) >= 2 for call in pin_calls):
         return [f"{rel}: today_kst를 직접 가져오는데 고정 호출에 시험 모듈 자신을 넘기지 않는다"]
     return []
@@ -249,6 +249,10 @@ def test_the_pin_scan_catches_a_missing_pin() -> None:
     """자기검사 — 고정 없는 모듈·자기 모듈을 안 넘긴 고정을 실제로 잡고, 올바른 모듈에는 조용하다"""
     missing = parse_source("from app.core.time import today_kst\nx = today_kst()\n")
     assert _pin_problems("a.py", missing)
+    imported_only = parse_source(
+        "from app.core.time import today_kst\nfrom tests.support.kst import pin_today_kst\nx = today_kst()\n"
+    )
+    assert _pin_problems("a2.py", imported_only)
     unbound = parse_source(
         "from app.core.time import today_kst\nfrom tests.support.kst import pin_today_kst\n"
         "def f(m):\n    pin_today_kst(m)\n"
