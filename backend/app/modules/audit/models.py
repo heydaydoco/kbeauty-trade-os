@@ -79,6 +79,9 @@ class AuditAction:
     GATE_OVERRIDE_REVOKED = "gates.override.revoked"
     #: 휴일 캘린더 국가·연도 원자 교체(S3-2 PR-2a / ADR-0082) — detail=국가·연도·최초 선언 여부·전/후 건수·추가/삭제 날짜·근거 링크·확인일.
     HOLIDAYS_CALENDAR_REPLACED = "holidays.calendar.replaced"
+    #: 선적 당사자 추가·삭제(S3-2 PR-3a / design-integrated §2.7) — detail=선적 번호·역할·거래처 id(영문명·주소 원문 미기재 — 스냅샷 행이 정본).
+    SHIPMENTS_PARTY_ADDED = "shipments.party.added"
+    SHIPMENTS_PARTY_REMOVED = "shipments.party.removed"
 
 
 class AuditLog(PkMixin, Base):

@@ -74,6 +74,8 @@ REGISTRY: tuple[Entry, ...] = (
                 # PR-6a — 자동 전이 2종: 입금 수렴(테스트 호출, PR-10이 배선)·만료 스윕(잡 본체, 두 엣지뿐)
                 "modules/trade_chain/payment_status.py",
                 "modules/trade_chain/expiry_sweep.py",
+                # S3-2 PR-3a — 선적 사람 전이 2종(출고지시 동결 액션·취소)의 유일한 호출처
+                "modules/trade_chain/shipment_flow.py",
             }
         ),
         forbidden_modules=frozenset(
@@ -101,6 +103,7 @@ REGISTRY: tuple[Entry, ...] = (
                 "modules/proforma_invoices/service.py",  # PI 생성 착지(insert_issued) — 참조 생성 오케스트레이터가 부른다
                 "modules/sales_orders/service.py",  # SO 생성 착지(create_received_sales_order) — 참조 생성·인테이크 확정이 부른다
                 "modules/purchase_orders/service.py",  # PO 생성 착지(insert_issued) — create_purchase_order가 부른다(PR-8a)
+                "modules/shipments/service.py",  # S3-2 PR-3a — 선적 생성 착지(insert_planned) — 사람 1클릭 참조 생성이 부른다
             }
         ),
         forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
@@ -675,6 +678,67 @@ REGISTRY: tuple[Entry, ...] = (
             }
         ),
         notes="**벌크 = 사람이 고른 건을 단일 통로로 건별 처리**(새 확정 경로 아님) — 라우터 1곳+행위자 필수+멱등 키. 스케줄러·CLI·임포트·이관·알림에서 import·언급 0",
+    ),
+    # S3-2 PR-3a — 선적(ADR-0074·0075). **자동 선적 0**: 선적 생성·출고지시·취소는 사람 1클릭이고 호출처는 선적 라우터 1곳뿐이다 —
+    # SO 확정·인테이크·보드 벌크·스케줄러·CLI·임포트·이관·알림·아웃박스 어디서도 부르거나 임포트하지 않는다(I-01·I-05).
+    Entry(
+        name="create_shipment_from_sales_order",
+        defined_in="app.modules.trade_chain.shipment_flow",
+        allowed_files=frozenset(
+            {"modules/trade_chain/shipment_flow.py", "modules/trade_chain/shipment_router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "order_intake",
+                "order_board",
+                "approvals",
+                "gates",
+                "credit",
+                "payments",
+                "seeds",
+                "identity",
+                "idempotency",
+            }
+        ),
+        notes="SO→수출선적 참조 생성(계획 PLANNED) — 라우터 1곳+행위자 필수+멱등 키. 확정·인테이크·보드·스케줄러에서 import·언급 0",
+    ),
+    Entry(
+        name="release_shipment_order",
+        defined_in="app.modules.trade_chain.shipment_flow",
+        allowed_files=frozenset(
+            {"modules/trade_chain/shipment_flow.py", "modules/trade_chain/shipment_router.py"}
+        ),
+        forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
+        forbid_module_import=False,  # 정의 모듈이 다른 보호 함수(생성)와 같다 — 언급 검사로 충분
+        notes="출고지시(동결 액션 PLANNED→RELEASE_ORDERED) — 사람 1클릭, 라우터 1곳+행위자 필수+멱등 키",
+    ),
+    Entry(
+        name="transition_shipment",
+        defined_in="app.modules.trade_chain.shipment_flow",
+        allowed_files=frozenset(
+            {"modules/trade_chain/shipment_flow.py", "modules/trade_chain/shipment_router.py"}
+        ),
+        forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
+        forbid_module_import=False,
+        notes="선적 취소(사람 전이) — 라우터 1곳+행위자 필수. 마지막 선적이면 같은 TX에서 SO 자동 복귀(수렴 함수 1곳)",
+    ),
+    Entry(
+        name="converge_sales_order_shipping",
+        defined_in="app.modules.trade_chain.chain_ops",
+        allowed_files=frozenset({"modules/trade_chain/chain_ops.py"}),
+        forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
+        requires_actor=False,  # 서비스 계층은 actor_user_id(int — None 불가)를 받는다
+        forbid_module_import=False,  # 정의 모듈(chain_ops)은 lock_chain도 품는다 — 언급 검사로 충분
+        notes="SO 선적 수렴(CONFIRMED↔IN_SHIPMENT 자동 2엣지) — 호출처는 converge_parent(SHIPMENT) 1곳, 그 호출처는 선적 생성·라인 삭제·취소뿐",
     ),
     Entry(
         name="converge_quotation",

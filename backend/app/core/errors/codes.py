@@ -280,5 +280,21 @@ class ErrorCode(StrEnum):
     #: 휴일 CSV의 인코딩·머리글·크기·문법이 양식과 다르다(파일 단위 거부 — 행 문제는 미리보기 problems로).
     HOLIDAYS_CSV_INVALID_FORMAT = "HOLIDAYS.CSV.INVALID_FORMAT"
 
+    # 선적 (S3-2 PR-3a / ADR-0074 / design-integrated §2.6 — 이 PR이 쓰는 7종. 나머지 19종은 소비 PR[4a·5a]이 쓰면서 더한다 — 죽은 코드 금지)
+    #: 본문의 원천 라인이 경로의 원천 전표 소속이 아니다(없는·삭제된 라인 포함 — 존재 여부를 알려 주지 않는다, X-12).
+    SHIPMENTS_SOURCE_LINE_MISMATCH = "SHIPMENTS.SOURCE.LINE_MISMATCH"
+    #: 취소된 선적에는 당사자를 더하거나 지울 수 없다.
+    SHIPMENTS_SHIPMENT_NOT_ACTIVE = "SHIPMENTS.SHIPMENT.NOT_ACTIVE"
+    #: 한 선적에 같은 원천 라인이 이미 있다(부분 유니크 번역 — 수량을 고친다).
+    SHIPMENTS_LINE_DUPLICATE_SOURCE = "SHIPMENTS.LINE.DUPLICATE_SOURCE"
+    #: 선적의 마지막 라인은 지울 수 없다(라인 0건 선적 = SO 수렴 불변식 위반 — 선적 취소로 안내).
+    SHIPMENTS_LINE_LAST_LINE = "SHIPMENTS.LINE.LAST_LINE"
+    #: (선적, 역할) 살아 있는 당사자가 이미 있다(부분 유니크 번역).
+    SHIPMENTS_PARTY_ROLE_DUPLICATE = "SHIPMENTS.PARTY.ROLE_DUPLICATE"
+    #: 수출 SHIPPER·CONSIGNEE(자사·자동 스냅샷)는 직접 추가·삭제할 수 없다.
+    SHIPMENTS_PARTY_ROLE_NOT_ALLOWED = "SHIPMENTS.PARTY.ROLE_NOT_ALLOWED"
+    #: 당사자 거래처의 영문명이 비어 있다(서류 영문 원천 결측 — 거래처 화면에서 보완, fail-visible).
+    SHIPMENTS_PARTY_ENGLISH_NAME_MISSING = "SHIPMENTS.PARTY.ENGLISH_NAME_MISSING"
+
     # 최후
     INTERNAL_UNEXPECTED = "COMMON.INTERNAL.UNEXPECTED"
