@@ -65,6 +65,8 @@ export interface SalesOrderLine {
   source: SoLineSource | null;
   quantity_delta: number | null;
   price_changed: boolean | null;
+  /** 선적 잔량(S3-2 PR-3a 파생값) = 라인 수량 − 살아 있는 선적 라인 합. 상세 응답에만 있고 라인 편집 응답에는 없다(null·생략). */
+  shipment_open_quantity?: number | null;
 }
 
 export interface SalesOrderDetail extends SalesOrderSummary {

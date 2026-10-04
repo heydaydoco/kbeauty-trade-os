@@ -12,6 +12,8 @@ describe("상세 화면 레이아웃", () => {
       .map(([path]) => path);
     expect(offenders).toEqual([]);
     const fixed = Object.entries(sources).filter(([, src]) => src.includes('className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-6"'));
-    expect(fixed.length).toBeGreaterThanOrEqual(6);
+    // 하한 7 — S3-2 PR-3b가 선적 상세(shipment-detail.tsx)를 더했다(design-D D5: 새 상세는 이 glob에 자동 편입).
+    expect(fixed.length).toBeGreaterThanOrEqual(7);
+    expect(Object.keys(sources)).toContain("./shipment-detail.tsx");
   });
 });

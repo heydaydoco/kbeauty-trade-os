@@ -8,9 +8,12 @@
 // - 합계·라인 금액·원천 단가는 서버 문자열만 그대로 표시한다. 프런트 산술 0. 편집은 바뀐 필드만 보내고 무변경 저장은 막는다.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { ConfirmDialog } from "../components/confirm-dialog";
+import { ListPager } from "../components/list-pager";
+import { ListState } from "../components/list-state";
+import { ShipmentCreateDialog } from "../components/shipment-create-dialog";
 import { DocumentFlowPanel } from "../components/document-flow-panel";
 import { ConfirmPanel } from "../components/confirm-panel";
 import { GatePanel } from "../components/gate-panel";
@@ -31,7 +34,7 @@ import {
   canResumeSalesOrder,
   salesOrderStatusLabel,
 } from "../lib/doc-status";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { PROFORMAS_QUERY_KEY } from "../lib/proforma";
 import { QUOTATIONS_QUERY_KEY } from "../lib/quotation";
 import {
@@ -45,8 +48,10 @@ import {
 import { occupantNotice, soErrorMessage } from "../lib/sales-order-errors";
 import { QUANTITY_EXCEEDS_OPEN_CODE } from "../lib/proforma";
 import { hasRole, useSession } from "../lib/session";
+import { SHIPMENTS_QUERY_KEY, shipmentKindLabel, successorNumbers, type ShipmentListItem } from "../lib/shipment";
 import type { Market } from "./markets";
 import { SalesOrderStatusBadge, SourceLinks } from "./sales-orders";
+import { CountryRoute, ShipmentStatusBadge } from "./shipments";
 import type { Sku } from "./skus";
 
 interface UserLookup {
@@ -205,6 +210,8 @@ function SalesOrderDetailView() {
               "접수 상태입니다. 바이어 PO·조건·라인을 고칠 수 있습니다(가격·조건은 원천에서 복사된 값입니다)."}
             {so.status === "ON_HOLD" && "보류 중입니다. 내용을 고치려면 먼저 재개하세요(내부 메모·담당자만 수정 가능)."}
             {so.status === "CONFIRMED" && "확정된 수주입니다. 가격·조건·라인은 동결되어 고칠 수 없습니다(내부 메모·담당자만 수정 가능)."}
+            {so.status === "IN_SHIPMENT" &&
+              "선적이 진행 중인 수주(선적중)입니다. 선적이 살아 있는 동안 보류·취소할 수 없습니다 — 먼저 아래 '선적'에서 선적을 취소해 주세요. 가격·조건·라인은 동결되어 있습니다(내부 메모·담당자만 수정 가능)."}
             {so.status === "CANCELLED" && "취소된 수주입니다. 수주번호는 남고 다시 쓰이지 않으며, 읽기 전용입니다."}
           </p>
           <p className="mt-1 text-sm text-gray-500">
@@ -314,6 +321,8 @@ function SalesOrderDetailView() {
           }}
         />
 
+        <ShipmentsSection so={so} canCreate={canWrite} onReload={reload} />
+
         <GatePanel soId={so.id} soStatus={so.status} />
 
         <ConfirmPanel so={so} version={base} onReload={reload} reloadToken={resetToken} onConfirmed={() => setJustConfirmed(true)} />
@@ -380,13 +389,130 @@ function SalesOrderDetailView() {
             </p>
           }
           pending={transition.isPending}
-          error={transition.error ? soErrorMessage(transition.error, undefined, NOUN) : null}
+          error={transition.error ? cancelErrorView(transition.error) : null}
           onReload={isVersionConflict(transition.error) ? reload : undefined}
           onCancel={() => {
             transition.reset();
             setAction(null);
           }}
           onConfirm={(reason) => submitTransition({ to: "CANCELLED", version: base, reason })}
+        />
+      )}
+    </section>
+  );
+}
+
+/** 취소 409 `SUCCESSOR_ALIVE`(R-02) — 서버 문구 + 먼저 취소할 선적 번호 링크(선적 목록 검색으로 연다). 그 밖은 문구만. */
+function cancelErrorView(error: unknown): ReactNode {
+  const message = soErrorMessage(error, undefined, NOUN);
+  const successors = successorNumbers(error);
+  if (successors.length === 0) return message;
+  return (
+    <>
+      {message}
+      <span className="mt-1 block">
+        먼저 취소할 선적:{" "}
+        {successors.map((number, index) => (
+          <span key={number}>
+            {index > 0 && ", "}
+            <Link to={`/shipments?q=${encodeURIComponent(number)}`} className="cell-nowrap underline">
+              {number}
+            </Link>
+          </span>
+        ))}
+      </span>
+    </>
+  );
+}
+
+// ── 선적(S3-2 PR-3b — design-D D8) — 이 수주의 선적 목록 + '선적 만들기'(SO 참조 2단) ─────────────
+
+/** 선적을 만들 수 있는 수주 상태(서버 `CONSUMABLE_STATUSES[SO]` — 확정·선적중). 표시 편의일 뿐 서버가 정본. */
+const SHIPPABLE_SO_STATUSES = new Set(["CONFIRMED", "IN_SHIPMENT"]);
+
+function ShipmentsSection({ so, canCreate, onReload }: { so: SalesOrderDetail; canCreate: boolean; onReload: () => void }) {
+  const [creating, setCreating] = useState(false);
+  const list = usePagedList<ShipmentListItem>([...SHIPMENTS_QUERY_KEY, "list", "so", so.id], `/v1/shipments?so_id=${so.id}`, true, {
+    staleTime: 0,
+  });
+  const openTotal = so.lines.reduce((sum, line) => sum + Math.max(line.shipment_open_quantity ?? 0, 0), 0);
+  const shippable = SHIPPABLE_SO_STATUSES.has(so.status);
+  const showCreate = canCreate && shippable && openTotal > 0;
+
+  return (
+    <section aria-labelledby="so-shipments-title">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 id="so-shipments-title" className="text-lg font-semibold">
+          선적
+        </h2>
+        {showCreate && (
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className="cell-nowrap rounded bg-gray-900 px-3 py-2 text-sm text-white"
+          >
+            선적 만들기
+          </button>
+        )}
+      </div>
+      <p className="mt-1 break-keep text-xs text-gray-500">
+        {!shippable
+          ? "확정된 수주에서만 선적을 만들 수 있습니다."
+          : openTotal <= 0
+            ? "선적 잔량이 없습니다 — 모든 수량이 선적에 배정되었습니다(선적을 취소하면 잔량이 돌아옵니다)."
+            : canCreate
+              ? "남은 수량 안에서 여러 번 나눠 선적할 수 있습니다. 첫 선적을 만들면 수주가 '선적중'이 됩니다."
+              : "선적은 무역 담당·관리자가 만듭니다."}
+      </p>
+      <ListPager data={list.data} page={list.page} onPageChange={list.setPage} className="mt-2" />
+      <div className="mt-2 overflow-x-auto rounded-lg border border-gray-200">
+        <ListState isPending={list.isPending} error={list.error} isEmpty={list.data?.items.length === 0} emptyHint="이 수주의 선적이 없습니다.">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left text-gray-600">
+              <tr>
+                <th scope="col" className="cell-nowrap px-3 py-2">선적번호</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">증빙일</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">상태</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">구분</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">출발 → 도착</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">라인</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">합계</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data?.items.map((row) => (
+                <tr key={row.id} className="border-t border-gray-100">
+                  <td className="cell-nowrap px-3 py-2">
+                    <Link to={`/shipments/${row.id}`} className="underline">
+                      {row.doc_number}
+                    </Link>
+                  </td>
+                  <td className="num cell-nowrap px-3 py-2">{row.doc_date}</td>
+                  <td className="px-3 py-2 text-center">
+                    <ShipmentStatusBadge status={row.status} />
+                  </td>
+                  <td className="cell-nowrap px-3 py-2 text-center">{shipmentKindLabel(row.shipment_kind)}</td>
+                  <td className="px-3 py-2 text-center">
+                    <CountryRoute origin={row.origin_country_code} dest={row.dest_country_code} />
+                  </td>
+                  <td className="num cell-nowrap px-3 py-2">{row.line_count}</td>
+                  <td className="num cell-nowrap px-3 py-2">
+                    {row.total_text} {row.currency}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </ListState>
+      </div>
+      {creating && showCreate && (
+        <ShipmentCreateDialog
+          so={so}
+          onClose={() => setCreating(false)}
+          onReload={() => {
+            setCreating(false);
+            onReload();
+          }}
         />
       )}
     </section>
@@ -923,7 +1049,9 @@ function LinesSection({
     },
   });
 
-  const cols = editable ? 10 : 9;
+  // 선적 잔량(S3-2 PR-3a 파생값) — 상세 응답에 있을 때만 열을 둔다(라인 편집 응답은 값이 없다 — 0으로 그리지 않는다).
+  const showShipmentOpen = so.lines.some((line) => line.shipment_open_quantity !== undefined && line.shipment_open_quantity !== null);
+  const cols = (editable ? 10 : 9) + (showShipmentOpen ? 1 : 0);
 
   return (
     <section aria-labelledby="so-lines-title">
@@ -943,6 +1071,7 @@ function LinesSection({
                 <th className="cell-nowrap px-3 py-2">SKU</th>
                 <th className="cell-nowrap px-3 py-2">품명</th>
                 <th className="cell-nowrap px-3 py-2 text-center">수량</th>
+                {showShipmentOpen && <th className="cell-nowrap px-3 py-2 text-center">선적 잔량</th>}
                 <th className="cell-nowrap px-3 py-2 text-center">요청납기</th>
                 <th className="cell-nowrap px-3 py-2 text-center">단가</th>
                 <th className="cell-nowrap px-3 py-2 text-center">기준</th>
@@ -983,6 +1112,9 @@ function LinesSection({
                       {line.price_reason && <span className="block text-xs text-gray-500">사유: {line.price_reason}</span>}
                     </td>
                     <td className="num cell-nowrap px-3 py-2">{line.quantity}</td>
+                    {showShipmentOpen && (
+                      <td className="num cell-nowrap px-3 py-2">{line.shipment_open_quantity ?? "—"}</td>
+                    )}
                     <td className="num cell-nowrap px-3 py-2">{line.requested_delivery_date ?? "—"}</td>
                     <td className="num cell-nowrap px-3 py-2">{line.is_free ? "무상" : line.unit_price_text}</td>
                     <td className="cell-nowrap px-3 py-2 text-center">
@@ -1028,7 +1160,7 @@ function LinesSection({
             </tbody>
             <tfoot>
               <tr className="border-t border-gray-200 bg-gray-50 font-semibold">
-                <td colSpan={7} className="cell-nowrap px-3 py-2 text-right">
+                <td colSpan={showShipmentOpen ? 8 : 7} className="cell-nowrap px-3 py-2 text-right">
                   합계 (서버 계산)
                 </td>
                 <td className="num cell-nowrap px-3 py-2">
