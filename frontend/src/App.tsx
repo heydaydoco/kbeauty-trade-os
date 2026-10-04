@@ -26,6 +26,7 @@ import { RequirementTemplatesPage } from "./routes/requirement-templates";
 import { MaterialsPage } from "./routes/materials";
 import { NotFoundPage } from "./routes/not-found";
 import { PoliciesPage } from "./routes/policies";
+import { SettingsUsersPage } from "./routes/settings-users";
 import { PartnersPage } from "./routes/partners";
 import { BankAccountsPage } from "./routes/bank-accounts";
 import { ProformaDetailPage } from "./routes/proforma-detail";
@@ -137,6 +138,7 @@ export function AppRoutes() {
         <Route path="/brands" element={<BrandsPage />} />
         <Route path="/item-profiles" element={<ItemProfilesPage />} />
         <Route path="/settings/policies" element={<PoliciesPage />} />
+        <Route path="/settings/users" element={<SettingsUsersPage />} />
       </Route>
 
       <Route path="*" element={<NotFoundPage />} />

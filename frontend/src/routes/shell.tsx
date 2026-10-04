@@ -33,7 +33,10 @@ const NAV = [
 ] as const;
 
 /** ADMIN에게만 보이는 메뉴 — 표시 편의일 뿐, 서버가 정본이다(§18.1). */
-const ADMIN_NAV = [{ to: "/settings/policies", label: "정책 설정" }] as const;
+const ADMIN_NAV = [
+  { to: "/settings/policies", label: "정책 설정" },
+  { to: "/settings/users", label: "사용자·역할" },
+] as const;
 
 /** 은행 계좌 — 백엔드 authz_matrix: 조회 ADMIN·TRADE(쓰기는 ADMIN 전용이며 화면 안에서 다시 가른다). 표시 편의일 뿐 서버가 정본. */
 const BANK_NAV = { to: "/bank-accounts", label: "은행 계좌" } as const;
