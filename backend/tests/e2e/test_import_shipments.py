@@ -341,6 +341,27 @@ def test_gc_g3_no_cost_key_or_sentinel_reaches_any_import_surface() -> None:
     ) == [{"n": 0}]
 
 
+@pytest.mark.group_g
+def test_the_service_layer_omits_import_amount_keys_before_any_schema_applies(
+    trade: TestClient,
+) -> None:
+    """G3 2중 — 응답 모델(합집합)이 걸러 주기 **전에** 서비스 dict부터 수입선적 금액·통화 키를 만들지 않는다(만든 뒤 지우지 않는다 — PO
+    `include_cost` 관례): 상세 조립·목록 행·미리보기 dict를 직접 본다(스키마가 조용히 버리는 키도 여기서 잡힌다)"""
+    from app.modules.trade_chain import shipment_flow, shipment_view
+    from tests.factories.approvals import make_user
+
+    po = sentinel_po(trade, quantities=(6,))
+    shipment = created_import(trade, po["id"], [(po["lines"][0]["id"], 2)])
+    actor = make_user(RoleCode.ADMIN)  # 원가 열람 역할 — 역할 분기가 없음을 함께 본다
+    preview = shipment_flow.preview_shipment_from_purchase_order(
+        actor=actor, po_id=po["id"], payload=import_body([(po["lines"][0]["id"], 1)])
+    )
+    detail = shipment_view.get_shipment(shipment["id"], actor.roles)
+    items, _total = shipment_view.list_shipments(offset=0, limit=50, po_id=po["id"])
+    for label, payload in (("preview", preview), ("detail", detail), ("list", items)):
+        assert leaked_keys(payload) == set(), (label, leaked_keys(payload))
+
+
 @pytest.mark.group_k
 @pytest.mark.group_g
 def test_import_rows_carry_no_amount_or_currency_keys_for_any_role(trade: TestClient) -> None:
@@ -508,15 +529,21 @@ def test_import_errors_follow_404_409_422_and_reject_bad_inputs(trade: TestClien
     no_name = create_import_shipment(trade, nameless["id"], [(nameless["lines"][0]["id"], 1)])
     assert no_name.status_code == 422 and _code(no_name) == "SHIPMENTS.PARTY.ENGLISH_NAME_MISSING"
     assert no_name.json()["error"]["detail"] == {"po_id": "거래처 영문명을 확인해 주세요."}
-    with owner_engine.begin() as connection:
+    with (
+        owner_engine.begin() as connection
+    ):  # 공급사 유형 해제 + 다른 유형(바이어)만 남김 — '유형 무관 통과' 회귀를 잡는다
         connection.execute(
             text("UPDATE partner_type_links SET deleted_at = now() WHERE partner_id = :p"),
+            {"p": other["supplier_partner_id"]},
+        )
+        connection.execute(
+            text("INSERT INTO partner_type_links (partner_id, type_code) VALUES (:p, 'BUYER')"),
             {"p": other["supplier_partner_id"]},
         )
     revoked = create_import_shipment(trade, other["id"], [(other["lines"][0]["id"], 1)])
     assert revoked.status_code == 422 and _code(revoked) == "COMMON.VALIDATION.INVALID_FIELD"
     assert list(revoked.json()["error"]["detail"]) == ["po_id"]
-    for note in ("메모​", "a\x00b", "ㅤ"):
+    for note in ("메모\u200b", "a\x00b", "\u3164"):
         bad_note = create_import_shipment(trade, po["id"], [(line, 1)], internal_note=note)
         assert bad_note.status_code == 422 and list(bad_note.json()["error"]["detail"]) == [
             "internal_note"
