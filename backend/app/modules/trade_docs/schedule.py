@@ -377,7 +377,8 @@ def loading_fulfilment(
     """
     if deadline.status is not DueStatus.OK or deadline.value is None:
         return LoadingState.UNKNOWN
-    done = [d for d in (etd_actual_on, bl_actual_on) if d is not None]
+    done = sorted(d for d in (etd_actual_on, bl_actual_on) if d is not None)
     if done:
-        return LoadingState.MET if max(done) <= deadline.value else LoadingState.MET_LATE
+        latest = done[-1]  # 존재값의 MAX(전표 모듈은 내장 max 호출 0 — 채번 MAX+1 금지 스캔)
+        return LoadingState.MET if latest <= deadline.value else LoadingState.MET_LATE
     return LoadingState.OVERDUE if today > deadline.value else LoadingState.OPEN
