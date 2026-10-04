@@ -2,7 +2,7 @@
 
 권한: 보드·드릴다운·CSV 조회는 **전 역할**(카드에 원가·마진·여신·게이트 필드가 없다), 벌크는 **무역**(관리자 상시 통과 — 서비스가 역할을 한 번 더 확인하고
 각 건은 단일 통로가 다시 판정한다), 저장 필터는 **전 역할·본인 것만**(타인 id 404). 쿼리·본문 모델은 전부 `extra="forbid"`(모르는 키 422).
-`GET /order-board`는 함수명이 `list_`로 시작하지 않는 **비-Page 단일 객체**다(의도된 예외 — 고정 4열·열당 50). 쓰기 POST는 `Idempotency-Key` 필수, PATCH·DELETE는 `version`.
+`GET /order-board`는 함수명이 `list_`로 시작하지 않는 **비-Page 단일 객체**다(의도된 예외 — 고정 5열·열당 50). 쓰기 POST는 `Idempotency-Key` 필수, PATCH·DELETE는 `version`.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _filter_of(query: BoardFilter) -> BoardFilter:
 
 @router.get(
     "",
-    summary="오더 보드 (고정 4열 — 인테이크 대기·수주 접수·수주 보류·수주 확정, 열당 최대 50건+전체 건수·더 있음 표시, 전 역할)",
+    summary="오더 보드 (고정 5열 — 인테이크 대기·수주 접수·수주 보류·수주 확정·선적중, 열당 최대 50건+전체 건수·더 있음 표시, 전 역할)",
 )
 def get_order_board(
     current: CurrentUser, filters: Annotated[BoardFilter, Query()]

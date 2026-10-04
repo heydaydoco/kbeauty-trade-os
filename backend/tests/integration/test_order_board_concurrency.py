@@ -184,7 +184,7 @@ def _assert_consistent(board: dict[str, Any]) -> list[tuple[str, int]]:
 def test_a_confirmation_committed_between_the_board_queries_never_shows_a_card_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """결정적 인터리브 — 보드가 '수주 접수' 열을 읽은 **직후** 다른 연결에서 그 SO가 실제 확정 통로로 확정·커밋돼도, 보드 6쿼리는 한 스냅샷이라
+    """결정적 인터리브 — 보드가 '수주 접수' 열을 읽은 **직후** 다른 연결에서 그 SO가 실제 확정 통로로 확정·커밋돼도, 보드 7쿼리는 한 스냅샷이라
     '수주 확정' 열에 다시 나오지 않고 열 건수와 카드가 어긋나지 않는다(READ COMMITTED였다면 같은 카드가 두 열에 실리고 확정 열 total 0 < 카드 1)"""
     so = ready_so()
     trade = actor(board_user(RoleCode.TRADE), RoleCode.TRADE)
