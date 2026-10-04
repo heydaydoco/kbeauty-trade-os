@@ -1,7 +1,9 @@
 // 선적 상세 `/shipments/:shipmentId` (S3-2 PR-3b — design-D D6·D8·D9·D10·D13 / PROGRESS 'S3-2 PR-3a' 인계 계약).
 //
-// 섹션(세로 쌓기): 선적 정보(헤더·DG 요약) → 메모·담당·국가 → 라인(가용재고 '미산정' 자리) → 당사자 → 문서 흐름 → 상태 이력.
-// 마일스톤 타임라인·통관 기록은 PR-4a/4b(이 화면에 자리만 비워 두지 않는다 — 응답에 필드가 없다).
+// 섹션(세로 쌓기): 선적 정보(헤더·DG 요약) → 메모·담당·국가 → 마일스톤(휴일 요약·타임라인) → 라인(가용재고 '미산정' 자리) → 당사자 →
+// 통관 기록 → 마일스톤 변경 이력(롤오버·통보) → 문서 흐름 → 상태 이력. (PR-4b — design-D D6·D7: 마일스톤·통관·롤오버·통보)
+// - 마일스톤 쓰기는 헤더 version을 바꾸지 않는다 — 응답의 `board`로 상세 캐시의 `milestones` 칸만 바꾼다(기준 version 점프 0,
+//   진행 중이던 상세 재조회는 취소해 늦은 응답이 새 보드를 덮지 못하게).
 // 규칙(서버가 정본, 화면은 편의 — §18.1):
 // - 버튼은 서버가 준 `allowed_actions`로만 보인다(역할·상태 규칙을 화면에 복제하지 않는다).
 // - 쓰기는 화면이 본 기준 version(baseVersion)을 싣는다 — 서버 version이 앞서가면 '다른 곳에서 수정' 배너 + 불러오기(서버 409가 덮어쓰기를 막는다).
@@ -9,10 +11,14 @@
 // - 금액은 서버 문자열, 날짜(`doc_date`·`fx_rate_date`)는 문자열 그대로, 시각만 KST(`toKstDisplay`).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { ConfirmDialog } from "../components/confirm-dialog";
 import { DocumentFlowPanel } from "../components/document-flow-panel";
+import { MilestoneChangesSection } from "../components/milestone-changes";
+import { CUSTOMS_HEADING_ID, CUSTOMS_SECTION_ID, CustomsSection } from "../components/milestone-customs";
+import { MilestoneValueDialog } from "../components/milestone-dialogs";
+import { HolidaySummaryBanner, MilestoneTimeline, type MilestoneEditMode } from "../components/milestone-timeline";
 import { DocField, EMPTY, incotermText, paymentTermsText, show } from "../components/proforma-facts";
 import { SearchSelect } from "../components/search-select";
 import { AvailabilityBadge, CountryInput, DgBadge, PartnerFixHint, countryProblem } from "../components/shipment-parts";
@@ -21,6 +27,14 @@ import { ApiError, apiFetch } from "../lib/api";
 import { errorMessage, isVersionConflict } from "../lib/api-errors";
 import { toKstDisplay } from "../lib/datetime";
 import { salesOrderStatusLabel, shipmentStatusLabel } from "../lib/doc-status";
+import {
+  cancelBlockers,
+  derivedChanges,
+  milestoneChangesKey,
+  milestoneTypeLabel,
+  type MilestoneBoard,
+  type MilestoneRow,
+} from "../lib/milestone";
 import { ORDER_BOARD_QUERY_KEY } from "../lib/order-board";
 import { usePagedQuery } from "../lib/paging";
 import { DOCUMENT_FLOW_QUERY_KEY, SALES_ORDERS_QUERY_KEY, salesOrderDetailKey, type SalesOrderDetail } from "../lib/sales-order";
@@ -62,6 +76,17 @@ const soIdOf = (shipment: ShipmentDetail): number | null => (shipment.source.kin
 /** 선적 오류 문구 — 서버 한국어 message 그대로(낙관 잠금은 '선적' 안내문). */
 const shipmentError = (error: unknown, fallback = "요청을 처리하지 못했습니다."): string => errorMessage(error, fallback, NOUN);
 
+const MILESTONES_HEADING_ID = "shipment-milestones-title";
+
+/** 대화상자가 닫힌 뒤(포커스 복귀가 끝난 뒤) 그 섹션 제목으로 옮긴다 — 취소 409 '먼저 할 일'로 이어 주기. */
+function focusSection(headingId: string) {
+  setTimeout(() => {
+    const heading = document.getElementById(headingId);
+    heading?.scrollIntoView?.({ block: "start" });
+    heading?.focus();
+  }, 0);
+}
+
 /** 선적이 바뀌면 화면 상태 전체를 새로 시작한다 — 이전 선적의 기준 version·폼이 남지 않게. */
 export function ShipmentDetailPage() {
   const params = useParams();
@@ -90,6 +115,11 @@ function ShipmentDetailView() {
   const [baseVersion, setBaseVersion] = useState<number | null>(null);
   const actionLock = useRef(false);
   const [actionKeys, setActionKeys] = useState(() => createKeyKeeper());
+  // 마일스톤 대화상자 — 연 순간의 행(기준 version 고정, 뒤에서 보드가 새로 와도 점프하지 않는다).
+  const [editing, setEditing] = useState<{ mode: MilestoneEditMode; row: MilestoneRow } | null>(null);
+  const [announcements, setAnnouncements] = useState<string[]>([]);
+  const draftLock = useRef(false);
+  const [draftKeys, setDraftKeys] = useState(() => createKeyKeeper());
 
   const loadedVersion = detail.data?.version;
   useEffect(() => {
@@ -117,9 +147,56 @@ function ShipmentDetailView() {
     invalidateRelated(next.source.kind === "SALES_ORDER" ? next.source.id : null);
   }
 
+  /**
+   * 마일스톤 쓰기 응답의 보드 반영 — 상세 캐시의 `milestones`만 바꾼다(헤더 version·폼 기준 무변경). 진행 중 재조회는 취소(늦은 응답 폐기),
+   * 파생값이 바뀌었으면 안내문(aria-live), 목록 ETD/ETA·변경 이력은 다시 받는다.
+   */
+  function applyBoard(board: MilestoneBoard) {
+    void client.cancelQueries({ queryKey: detailKey, exact: true });
+    const previous = client.getQueryData<ShipmentDetail>(detailKey);
+    if (previous !== undefined) client.setQueryData(detailKey, { ...previous, milestones: board });
+    setAnnouncements(derivedChanges(previous?.milestones, board));
+    void client.invalidateQueries({ queryKey: [...SHIPMENTS_QUERY_KEY, "list"] });
+    void client.invalidateQueries({ queryKey: milestoneChangesKey("SHIPMENT", id) });
+  }
+
+  /** 통관 기록·통보가 바뀌면 보드(신고수리·미통보 수)·통관 요약이 서버에서 다시 계산된다 — 상세를 다시 받는다(기준 version 무변경). */
+  function refreshBoard() {
+    void client.invalidateQueries({ queryKey: detailKey, exact: true });
+    void client.invalidateQueries({ queryKey: [...SHIPMENTS_QUERY_KEY, "list"] });
+    void client.invalidateQueries({ queryKey: milestoneChangesKey("SHIPMENT", id) });
+  }
+
+  const draft = useMutation({
+    mutationFn: async (key: string) => {
+      try {
+        return await apiFetch<MilestoneBoard>(`/v1/shipments/${id}/milestones/plan-draft`, {
+          method: "POST",
+          idempotencyKey: key,
+          body: {},
+        });
+      } finally {
+        draftLock.current = false;
+      }
+    },
+    onSuccess: (board) => {
+      setDraftKeys(createKeyKeeper()); // 다음 초안은 새 요청(같은 키 재시도는 결과를 모르는 실패 때만)
+      setNotice(null);
+      applyBoard(board);
+    },
+    onError: (error) => setNotice(error),
+  });
+
+  function requestDraft() {
+    if (draftLock.current) return;
+    draftLock.current = true;
+    draft.mutate(draftKeys.keyFor("{}"));
+  }
+
   function reload() {
     setNotice(null);
     setAction(null);
+    setEditing(null);
     transition.reset();
     void detail.refetch().then((result) => {
       if (result.data) setBaseVersion(result.data.version);
@@ -179,6 +256,43 @@ function ShipmentDetailView() {
   const base = baseVersion ?? shipment.version;
   const stale = shipment.version !== base;
   const isExport = shipment.shipment_kind === "EXPORT";
+  const board = shipment.milestones;
+  const canEditMilestones = can(shipment, "EDIT_MILESTONES");
+  const hasMilestoneRows = board.rows.some((row) => row.kind === "STORED" && row.applicable && row.milestone_id !== null);
+
+  /** 취소 409 — 통관·실적이 살아 있으면 무엇을 먼저 해야 하는지 이어 준다(막다른 길 0). */
+  function cancelErrorNode(error: unknown): ReactNode {
+    const text = shipmentError(error);
+    const blockers = cancelBlockers(error);
+    const go = (headingId: string) => {
+      transition.reset();
+      setAction(null);
+      focusSection(headingId);
+    };
+    if (blockers.customs.length > 0) {
+      return (
+        <>
+          {text}
+          <span className="mt-1 block">먼저 삭제할 통관 기록: {blockers.customs.join(", ")}</span>
+          <button type="button" onClick={() => go(CUSTOMS_HEADING_ID)} className="cell-nowrap mt-1 block underline">
+            통관 기록으로 가기
+          </button>
+        </>
+      );
+    }
+    if (blockers.actuals.length > 0) {
+      return (
+        <>
+          {text}
+          <span className="mt-1 block">먼저 정정(지우기)할 실적: {blockers.actuals.map(milestoneTypeLabel).join(", ")}</span>
+          <button type="button" onClick={() => go(MILESTONES_HEADING_ID)} className="cell-nowrap mt-1 block underline">
+            마일스톤으로 가기
+          </button>
+        </>
+      );
+    }
+    return text;
+  }
 
   return (
     <section>
@@ -225,6 +339,18 @@ function ShipmentDetailView() {
               취소
             </button>
           )}
+          {can(shipment, "PLAN_DRAFT") && (
+            <button
+              type="button"
+              onClick={requestDraft}
+              disabled={draft.isPending}
+              className={`cell-nowrap rounded px-3 py-2 text-sm disabled:opacity-50 ${
+                hasMilestoneRows ? "border border-gray-300" : "bg-gray-900 text-white"
+              }`}
+            >
+              {draft.isPending ? "처리 중…" : hasMilestoneRows ? "빠진 종류 채우기" : "계획 초안 만들기"}
+            </button>
+          )}
         </div>
       </header>
 
@@ -265,6 +391,31 @@ function ShipmentDetailView() {
           <p className="break-keep text-sm text-gray-600">내부 메모: {show(shipment.internal_note)}</p>
         )}
 
+        <section aria-labelledby={MILESTONES_HEADING_ID}>
+          <h2 id={MILESTONES_HEADING_ID} tabIndex={-1} className="text-lg font-semibold">
+            마일스톤
+          </h2>
+          <p className="mt-1 break-keep text-xs text-gray-500">
+            계획·실적은 직접 입력하고, 적재기한·대금만기·제시기한은 서버가 다시 계산합니다(실적을 넣으면 바로 반영). D-N은 한국 날짜 기준입니다.
+            {can(shipment, "PLAN_DRAFT") && " '계획 초안 만들기'는 빈 계획 행만 만듭니다(값은 직접 입력)."}
+          </p>
+          <div className="mt-2 flex flex-col gap-2">
+            <HolidaySummaryBanner summary={board.holiday_summary} />
+            <div role="status" aria-live="polite" className="break-keep text-sm text-gray-700">
+              {announcements.map((text) => (
+                <p key={text}>{text}</p>
+              ))}
+            </div>
+            <MilestoneTimeline
+              board={board}
+              canEdit={canEditMilestones}
+              onEdit={(mode, row) => setEditing({ mode, row })}
+              customsSectionId={CUSTOMS_SECTION_ID}
+              label="마일스톤"
+            />
+          </div>
+        </section>
+
         <LinesSection
           key={`lines-${shipment.id}-${resetToken}`}
           shipment={shipment}
@@ -278,6 +429,21 @@ function ShipmentDetailView() {
           shipment={shipment}
           onSaved={(next) => afterWrite(next, false)}
           onError={setNotice}
+        />
+
+        <CustomsSection shipment={shipment} onChanged={refreshBoard} />
+
+        <MilestoneChangesSection
+          owner="SHIPMENT"
+          ownerId={shipment.id}
+          path={`/v1/shipments/${shipment.id}/milestone-changes`}
+          withNotices
+          canNotice={canEditMilestones}
+          todayKst={board.today_kst}
+          noun={NOUN}
+          onNoticeSaved={refreshBoard}
+          headingId="shipment-milestone-changes-title"
+          title="마일스톤 변경 이력"
         />
 
         {isExport ? (
@@ -326,13 +492,32 @@ function ShipmentDetailView() {
             </p>
           }
           pending={transition.isPending}
-          error={transition.error ? shipmentError(transition.error) : null}
+          error={transition.error ? cancelErrorNode(transition.error) : null}
           onReload={isVersionConflict(transition.error) ? reload : undefined}
           onCancel={() => {
             transition.reset();
             setAction(null);
           }}
           onConfirm={(reason) => submitAction("cancel", { to_status: "CANCELLED", version: base, reason })}
+        />
+      )}
+      {editing !== null && canEditMilestones && (
+        <MilestoneValueDialog<MilestoneBoard>
+          key={`${editing.mode}-${editing.row.milestone_type}`}
+          mode={editing.mode}
+          row={editing.row}
+          basePath={`/v1/shipments/${shipment.id}/milestones`}
+          noun={NOUN}
+          defaultZone={shipment.origin_country_code === "KR" ? "Asia/Seoul" : null}
+          todayKst={board.today_kst}
+          noticeBasePath={`/v1/shipments/${shipment.id}/milestone-changes`}
+          onSaved={(result) => applyBoard(result.board)}
+          onNoticeSaved={refreshBoard}
+          onClose={() => setEditing(null)}
+          onReload={() => {
+            setEditing(null);
+            refreshBoard();
+          }}
         />
       )}
     </section>

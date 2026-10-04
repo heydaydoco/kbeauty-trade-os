@@ -187,6 +187,15 @@ export const CUSTOMS_RECORD_ALIVE_CODE = "SHIPMENTS.SHIPMENT.CUSTOMS_RECORD_ALIV
 export const ACTUAL_RECORDED_CODE = "SHIPMENTS.SHIPMENT.ACTUAL_RECORDED";
 export const DECLARATION_DUPLICATE_CODE = "SHIPMENTS.CUSTOMS.DECLARATION_DUPLICATE";
 
+/**
+ * 마일스톤 쓰기의 '겹친 편집' — 낙관 잠금(VERSION_CONFLICT)과 최초 계획 동시 입력(409 DUPLICATE_TYPE — PR-4c 적대 검토 반영으로 OEM 경로에도
+ * 생긴다)을 같은 탈출로('최신 내용 불러오기' = 보드 재조회)로 처리한다. 문구는 서버 message 그대로(하드코딩 0).
+ */
+export const needsBoardReload = (error: unknown): boolean =>
+  error instanceof ApiError &&
+  error.status === 409 &&
+  (error.code === "COMMON.CONCURRENCY.VERSION_CONFLICT" || error.code === DUPLICATE_TYPE_CODE);
+
 /** 선적 취소 409의 `detail` 목록(통관 = declaration_nos, 실적 = milestone_types). 다른 오류·모양이면 빈 목록. */
 export function cancelBlockers(error: unknown): { customs: string[]; actuals: string[] } {
   if (!(error instanceof ApiError)) return { customs: [], actuals: [] };

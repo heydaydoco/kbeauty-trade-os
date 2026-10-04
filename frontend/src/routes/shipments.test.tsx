@@ -60,7 +60,10 @@ describe("선적 목록", () => {
     expect(within(row).getByText("수입")).toBeInTheDocument();
     expect(within(row).getByRole("link", { name: "PO-2026-0004" })).toHaveAttribute("href", "/purchase-orders/4");
     expect(within(row).queryByText(/0\.00/)).not.toBeInTheDocument();
-    expect(within(row).getByText("—")).toBeInTheDocument();
+    // 합계 칸 자체가 '—'(PR-4b가 ETD·ETA 열을 더해 같은 행에 '—'가 여럿 — 칸을 머리글 위치로 찾는다).
+    const headers = screen.getAllByRole("columnheader").map((th) => th.textContent);
+    const cells = within(row).getAllByRole("cell");
+    expect(cells[headers.indexOf("합계")]).toHaveTextContent(/^—$/);
   });
 
   it("목록에는 '선적 만들기'가 없고, 빈 목록은 수주 상세에서 만든다고 안내한다", async () => {
