@@ -266,5 +266,19 @@ class ErrorCode(StrEnum):
     #: 같은 이름의 저장 필터가 이미 있다(본인 것 안에서 이름 유일).
     ORDER_BOARD_FILTER_DUPLICATE_NAME = "ORDER_BOARD.FILTER.DUPLICATE_NAME"
 
+    # 휴일 캘린더 (S3-2 PR-2a / ADR-0082 / design-integrated §2.6·X-22) — 쓰기 통로는 PUT /holidays/{c}/{y} 하나(ADMIN).
+    #: 연도 선언의 근거 링크(http/https)·확인일(오늘 이전)이 없다 — 근거 없는 휴일 데이터는 받지 않는다(ADR-03).
+    HOLIDAYS_CALENDAR_SOURCE_REQUIRED = "HOLIDAYS.CALENDAR.SOURCE_REQUIRED"
+    #: 휴일 날짜의 연도가 선언 연도와 다르다(서비스 선검증 + DB 복합 FK·CHECK 번역 — R-24).
+    HOLIDAYS_CALENDAR_YEAR_MISMATCH = "HOLIDAYS.CALENDAR.YEAR_MISMATCH"
+    #: 한 요청 본문(또는 CSV)에 같은 날짜가 두 번 있다 — 입력 오류(422).
+    HOLIDAYS_CALENDAR_DUPLICATE_DATE = "HOLIDAYS.CALENDAR.DUPLICATE_DATE"
+    #: 같은 국가·연도를 동시에 처음 선언했다(부분 유니크 경합) — 다시 불러온 뒤 시도한다(409).
+    HOLIDAYS_CALENDAR_YEAR_DUPLICATE = "HOLIDAYS.CALENDAR.YEAR_DUPLICATE"
+    #: 국가 코드가 ISO 3166-1 alpha-2 대문자 두 글자가 아니다.
+    HOLIDAYS_COUNTRY_INVALID = "HOLIDAYS.COUNTRY.INVALID"
+    #: 휴일 CSV의 인코딩·머리글·크기·문법이 양식과 다르다(파일 단위 거부 — 행 문제는 미리보기 problems로).
+    HOLIDAYS_CSV_INVALID_FORMAT = "HOLIDAYS.CSV.INVALID_FORMAT"
+
     # 최후
     INTERNAL_UNEXPECTED = "COMMON.INTERNAL.UNEXPECTED"

@@ -77,6 +77,8 @@ class AuditAction:
     #: 게이트 override 부여·철회(S3-1 PR-11a) — detail=override id·게이트·대상 id·라인·허용 역할(사유·금액 금지; 사유 원문은 불변 `gate_overrides`가 정본).
     GATE_OVERRIDE_GRANTED = "gates.override.granted"
     GATE_OVERRIDE_REVOKED = "gates.override.revoked"
+    #: 휴일 캘린더 국가·연도 원자 교체(S3-2 PR-2a / ADR-0082) — detail=국가·연도·최초 선언 여부·전/후 건수·추가/삭제 날짜·근거 링크·확인일.
+    HOLIDAYS_CALENDAR_REPLACED = "holidays.calendar.replaced"
 
 
 class AuditLog(PkMixin, Base):

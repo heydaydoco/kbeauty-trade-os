@@ -13,3 +13,5 @@
 **기각한 대안** — A·T·L 전 동작 쓰기(물류가 수량·취소까지 — 원천 책임 혼재), 물류 쓰기 0(선적 실무 주체 부재 — 무역이 대행 입력), 마일스톤 세트 = CERT(§2 인증 편집 범위 밖 — R-14), 휴일 = A·T.
 
 **되돌리기 비용** — 넓히기 낮음(권한 행 1줄) / 좁히기 중간(운영 중 역할 회수 공지). **오너 판정 권장 1순위**(물류 역할의 업무 배정이 처음 문면화됨) — 번복 시 이 ADR을 "대체" 표기.
+
+**부기(2026-10-04 — S3-2 PR-2a 이행: 휴일 권한)** — 휴일 행만 이행했다: `GET /holidays/calendars`·`GET /holidays`·`GET /holidays/{country}/{year}/export.csv` = 전 역할, `PUT /holidays/{country}/{year}`(원자 교체)·`POST /holidays/{country}/{year}/import-csv/preview` = **ADMIN 전용**(`require_roles(ADMIN)` + `AdminUser` — 역할 검사가 입력·존재 검사보다 먼저: 물류가 틀린 국가·본문으로 PUT해도 403). `/api/v1/holidays`를 `GOVERNED_PREFIXES`에 등재하고 5행을 매트릭스에 더했으며, "표의 모든 행은 통제 접두어 아래" 단언을 더해 접두어 삭제가 조용히 통과하지 않게 했다(변이 kill). 선적·마일스톤 행(LOGISTICS 첫 전표 쓰기)은 PR-3a·4a·4c 몫 그대로.

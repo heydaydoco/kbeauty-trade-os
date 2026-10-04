@@ -47,6 +47,13 @@ def test_every_governed_operation_is_in_the_matrix_and_no_row_is_dead() -> None:
     assert set(EXPECTED) <= live, f"실제 라우트가 아닌 행: {sorted(set(EXPECTED) - live)}"
 
 
+def test_every_matrix_row_sits_under_a_governed_prefix() -> None:
+    """표의 행은 전부 통제 접두어 아래다 — 접두어를 빼면(예: `/api/v1/holidays`) 그 모듈의 새 라우트가 완비성 검사를
+    조용히 빠져나가므로, 접두어 삭제 자체를 실패로 만든다(S3-2 PR-2a — 레지스트리 공회전 변이 검출)"""
+    orphans = sorted(row for row in EXPECTED if not row[1].startswith(GOVERNED_PREFIXES))
+    assert orphans == [], f"통제 접두어 밖의 행: {orphans}"
+
+
 @pytest.fixture(scope="module")
 def client() -> Iterator[TestClient]:
     with TestClient(app) as test_client:

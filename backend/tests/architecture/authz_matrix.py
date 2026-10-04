@@ -41,6 +41,8 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/order-intakes",
     # S3-1 PR-15a — 오더 보드(보드·드릴다운·CSV=전 역할, 벌크=무역·관리자, 저장 필터=전 역할·본인 것만[당사자성은 서비스 404]).
     "/api/v1/order-board",
+    # S3-2 PR-2a — 휴일 캘린더(조회 = 전 역할, 원자 교체·CSV 미리보기 = 관리자 전용 — ADR-0079·0082).
+    "/api/v1/holidays",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -424,5 +426,23 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         L: ALLOW,
         C: ALLOW,
         V: ALLOW,
+    },
+    # S3-2 PR-2a — 휴일 캘린더. 조회(선언 목록·휴일 목록·CSV)는 전 역할, 쓰기(원자 교체)·CSV 미리보기는 관리자 전용(ADR-0079 — 기한 데이터 관리 주체 확대 금지).
+    ("GET", "/api/v1/holidays/calendars"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/holidays"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/holidays/{country}/{year}/export.csv"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("PUT", "/api/v1/holidays/{country}/{year}"): {A: ALLOW, T: DENY, L: DENY, C: DENY, V: DENY},
+    ("POST", "/api/v1/holidays/{country}/{year}/import-csv/preview"): {
+        A: ALLOW,
+        T: DENY,
+        L: DENY,
+        C: DENY,
+        V: DENY,
     },
 }

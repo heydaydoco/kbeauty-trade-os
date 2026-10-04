@@ -461,6 +461,30 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         409,
         "같은 이름의 저장 필터가 이미 있습니다. 다른 이름으로 저장하거나 기존 필터를 수정해 주세요.",
     ),
+    ErrorCode.HOLIDAYS_CALENDAR_SOURCE_REQUIRED: ErrorSpec(
+        422,
+        "휴일 캘린더에는 근거 링크(http:// 또는 https://)와 확인일(오늘 또는 그 이전)이 필요합니다. 관보·정부 공고 링크와 확인한 날짜를 입력해 주세요.",
+    ),
+    ErrorCode.HOLIDAYS_CALENDAR_YEAR_MISMATCH: ErrorSpec(
+        422,
+        "휴일 날짜의 연도가 선언 연도와 다릅니다. 해당 연도의 날짜만 입력하거나, 다른 연도는 그 연도 캘린더에서 등록해 주세요.",
+    ),
+    ErrorCode.HOLIDAYS_CALENDAR_DUPLICATE_DATE: ErrorSpec(
+        422,
+        "같은 날짜가 두 번 입력됐습니다. 날짜마다 휴일 이름을 하나만 남기고 다시 저장해 주세요.",
+    ),
+    ErrorCode.HOLIDAYS_CALENDAR_YEAR_DUPLICATE: ErrorSpec(
+        409,
+        "다른 사용자가 같은 국가·연도의 휴일 캘린더를 먼저 등록했습니다. 화면을 다시 불러온 뒤 내용을 확인하고 저장해 주세요.",
+    ),
+    ErrorCode.HOLIDAYS_COUNTRY_INVALID: ErrorSpec(
+        422,
+        "국가 코드는 ISO 영문 대문자 두 글자(예: KR, CN, US)여야 합니다. 국가 코드를 확인해 주세요.",
+    ),
+    ErrorCode.HOLIDAYS_CSV_INVALID_FORMAT: ErrorSpec(
+        422,
+        "휴일 CSV 형식을 확인해 주세요(UTF-8, 머리글 holiday_on,name).",
+    ),
 }
 
 

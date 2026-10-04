@@ -16,6 +16,7 @@ from app.modules.credit import (
 from app.modules.deadlines import router as deadlines_router
 from app.modules.documents import router as documents_router
 from app.modules.handover import router as handover_router
+from app.modules.holidays import router as holidays_router
 from app.modules.identity import router as identity_router
 from app.modules.imports import router as imports_router
 from app.modules.ingredients import router as ingredients_router
@@ -60,6 +61,7 @@ api_router.include_router(trade_chain_router.so_router)
 api_router.include_router(trade_chain_router.intake_router)
 api_router.include_router(order_intake_router.router)
 api_router.include_router(order_board_router.router)
+api_router.include_router(holidays_router.router)
 api_router.include_router(trade_chain_router.po_router)
 api_router.include_router(trade_chain_router.flow_router)
 api_router.include_router(sales_orders_router.router)
