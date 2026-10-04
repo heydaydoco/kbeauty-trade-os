@@ -117,3 +117,75 @@ def test_po_with_a_live_import_shipment_cannot_be_cancelled() -> None:
         )
     assert caught.value.code == "TRADE_DOCS.CANCEL.SUCCESSOR_ALIVE"
     assert caught.value.detail == {"successors": [_doc_number(shipment)]}
+
+
+def test_a_live_import_shipment_line_does_not_reduce_the_po_open_quantity() -> None:
+    """ADR-0077 ② — 수입선적 라인(PO_LINE 소비자 kind IN_TRANSIT)은 기본 잔량(FULFILL)을 줄이지 않는다(PO 잔량은 입고에서만 — S4-1),
+    `kinds={IN_TRANSIT}`로 읽으면 운송 중 수량으로 잡힌다(수입선적 생성 경로는 PR-5a — 여기서는 원시 행으로 소비자 등록만 본다)"""
+    from app.core.db.uow import unit_of_work
+    from app.modules.trade_docs.quantities import open_quantity
+
+    po = raw_po("ISSUED")
+    so = confirmed_so((10,))  # 헤더 사본 값(통화·조건)의 원천으로만 쓴다
+    shipment = raw_shipment(so["id"], kind="IMPORT", po_id=po)
+    with owner_engine.begin() as connection:
+        sku, currency = connection.execute(
+            text("SELECT sku_id, currency FROM sales_order_lines WHERE id = :i"),
+            {"i": so["line_ids"][0]},
+        ).one()
+        po_line = int(
+            connection.execute(
+                text(
+                    "INSERT INTO purchase_order_lines (po_id, currency, line_no, sku_id, sku_code,"
+                    " sku_name_ko, sku_kind, quantity, unit_cost, line_cost, price_basis)"
+                    " VALUES (:p, :c, 1, :s, 'S', '품', 'SINGLE', 10, 5, 50, 'MANUAL') RETURNING id"
+                ),
+                {"p": po, "c": currency, "s": sku},
+            ).scalar_one()
+        )
+        connection.execute(
+            text(
+                "INSERT INTO shipment_lines (shipment_id, line_no, po_line_id, sku_id, sku_code,"
+                " sku_name_ko, sku_kind, currency, quantity, is_free, line_amount)"
+                " VALUES (:sh, 1, :pl, :s, 'S', '품', 'SINGLE', :c, 4, false, 0)"
+            ),
+            {"sh": shipment, "pl": po_line, "s": sku, "c": currency},
+        )
+    with unit_of_work() as uow:
+        default = open_quantity(uow.session, "PO_LINE", [po_line])[po_line]
+        in_transit = open_quantity(
+            uow.session, "PO_LINE", [po_line], kinds=frozenset({"IN_TRANSIT"})
+        )[po_line]
+    assert (default.ordered, default.consumed, default.open) == (10, 0, 10)
+    assert (in_transit.consumed, in_transit.open) == (4, 6)
+
+
+def test_an_in_shipment_so_stays_fully_in_the_credit_exposure() -> None:
+    """ADR-0076 ④ — 실제 선적 생성으로 IN_SHIPMENT가 된 SO는 여신 노출에 **전액** 남고, 선적 취소로 CONFIRMED 복귀해도 같다
+    (노출 술어·`credit/exposure.py` 무변경 — 부분선적분 차감은 S3-3 미수 provider 몫, 그 전엔 COMPLETED도 RESERVED)"""
+    from app.modules.trade_chain import shipment_flow
+    from tests.factories.approvals import evaluate, raw_open_so, set_credit_limit
+    from tests.factories.shipments import create_body
+
+    so = confirmed_so((10,), price=70)  # 총액 700
+    set_credit_limit(so["buyer"], 10_000_000, "USD")
+    probe = raw_open_so(so["buyer"], status="RECEIVED", total=300)
+    actor = make_user(RoleCode.TRADE)
+    _, shipment = shipment_flow.create_shipment_from_sales_order(
+        actor=actor,
+        idempotency_key=unique("exp"),
+        so_id=so["id"],
+        payload=create_body([(so["line_ids"][0], 4)]),
+    )
+    assert so_status(so["id"]) == "IN_SHIPMENT"
+    assert evaluate(probe).open_orders_amount == 700  # 부분선적(4/10)이어도 차감 0
+    shipment_flow.transition_shipment(
+        actor=actor,
+        idempotency_key=unique("exp"),
+        shipment_id=shipment["id"],
+        to="CANCELLED",
+        version=shipment["version"],
+        reason="일정 취소",
+    )
+    assert so_status(so["id"]) == "CONFIRMED"
+    assert evaluate(probe).open_orders_amount == 700

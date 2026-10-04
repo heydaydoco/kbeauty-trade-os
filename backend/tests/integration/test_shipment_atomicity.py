@@ -97,6 +97,46 @@ def test_a_failure_after_cancel_keeps_the_shipment_and_the_so(
     assert original is not boom
 
 
+@pytest.mark.group_k
+def test_the_nightly_totals_verify_covers_shipments() -> None:
+    """§17.5 이중망 — 야간 합계 검산(`trade-docs-totals-verify`)이 선적을 DocKind 루프로 자동 편입한다: 생성·라인 수정 뒤 불일치 0,
+    헤더 합계를 원시로 어긋나게 하면 그 선적 번호로 잡힌다(자동 보정 없음)"""
+    from app.core.db.uow import unit_of_work
+    from app.modules.trade_docs import verify
+    from app.modules.trade_docs.constants import DocKind
+
+    so = confirmed_so((10, 5))
+    actor = make_user(RoleCode.TRADE)
+    _, body = shipment_flow.create_shipment_from_sales_order(
+        actor=actor,
+        idempotency_key=unique("tot"),
+        so_id=so["id"],
+        payload=create_body([(so["line_ids"][0], 4), (so["line_ids"][1], 5)]),
+    )
+    shipment_flow.update_line(
+        actor=actor,
+        shipment_id=body["id"],
+        line_id=body["lines"][0]["id"],
+        payload={"version": body["version"], "quantity": 2},
+    )
+
+    def shipment_mismatches() -> list[tuple[str, int]]:
+        with unit_of_work() as uow:
+            return [
+                (m.doc_number, m.header_total - m.lines_total)
+                for m in verify.verify_document_totals(uow.session)
+                if m.doc_kind is DocKind.SHIPMENT
+            ]
+
+    assert shipment_mismatches() == []
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE shipments SET total_amount = total_amount + 1 WHERE id = :i"),
+            {"i": body["id"]},
+        )
+    assert shipment_mismatches() == [(body["doc_number"], 1)]
+
+
 def test_the_translation_table_covers_every_unique_index_of_the_shipment_tables() -> None:
     """J-09 — 선적 계열 표의 유니크 인덱스(부분 유니크 포함, PK 제외)는 전부 번역표에 있고, 번역표에 죽은 이름이 없다(500 누수 0)"""
     with owner_engine.connect() as connection:
