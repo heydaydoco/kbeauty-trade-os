@@ -55,6 +55,27 @@ class ShipmentCreateFromSo(BaseModel):
     internal_note: StrictStr | None = Field(default=None, max_length=1000)
 
 
+class ShipmentLineFromPo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    po_line_id: StrictInt = Field(ge=1)
+    quantity: StrictInt
+
+
+class ShipmentCreateFromPo(BaseModel):
+    """PO 참조 수입선적 생성·미리보기 본문(S5·S6 — S3-2 PR-5a). 수출 본문과 같은 모양이고 원천 라인이 PO 라인이다.
+
+    **단가·원가·통화·환율·공급사·조건 필드가 구조적으로 없다**(서버가 원천 PO에서 복사 — 원가는 복사하지 않는다, ADR-0024)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lines: list[ShipmentLineFromPo] = Field(min_length=1, max_length=MAX_LINES)
+    origin_country_code: StrictStr = Field(pattern=COUNTRY_PATTERN)
+    dest_country_code: StrictStr = Field(pattern=COUNTRY_PATTERN)
+    parties: list[PartyIn] | None = Field(default=None, max_length=5)
+    internal_note: StrictStr | None = Field(default=None, max_length=1000)
+
+
 class ShipmentUpdateRequest(BaseModel):
     """헤더 편집(S7) — FREE 2열(메모·담당자)은 상태 무관, 국가 2열은 계획(PLANNED) 중에만(그 밖은 409 FROZEN). 보낸 필드만 바뀐다."""
 
@@ -68,7 +89,7 @@ class ShipmentUpdateRequest(BaseModel):
 
 
 class ShipmentLineAddRequest(BaseModel):
-    """라인 추가(S8) — 원천 SO 라인 1줄과 수량. 헤더 version 필수(라인 편집 = 헤더 version +1)."""
+    """라인 추가(S8) — 원천 라인 1줄(수출 = SO 라인 / 수입 = PO 라인 — 선적의 원천 전표 소속)과 수량. 헤더 version 필수(라인 편집 = 헤더 version +1)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -627,4 +648,34 @@ class ShipmentPreview(BaseModel):
     total_amount: int
     total_text: str
     lines: list[ShipmentPreviewLine]
+    parties: list[ShipmentPreviewParty]
+
+
+class ImportShipmentPreviewLine(BaseModel):
+    """수입 미리보기 라인 — **단가·금액·통화·무상 키 없음**(G3). 배정 가능량 = PO 라인 수량 − 살아 있는 수입선적 수량(PO 잔량 아님)."""
+
+    po_line_id: int
+    line_no: int
+    sku: ShipmentSkuOut
+    quantity: int
+    #: 이 선적 전 배정 가능량 / 이 선적 뒤 남을 배정 가능량(파생 — 화면 산술 0).
+    assignable_before: int
+    remaining_after: int
+    dg: DgOut
+
+
+class ImportShipmentPreview(BaseModel):
+    """수입선적 비저장 미리보기(S5 — S3-2 PR-5a). 채번·이벤트·멱등 키·잠금 0, 생성과 같은 검증. **통화·환율·합계 키 없음**(수입 상세와 같은 판정 — G3)."""
+
+    po_id: int
+    po_doc_number: str
+    po_status: str
+    doc_date: date
+    shipment_kind: Literal["IMPORT"]
+    counterparty: CounterpartyOut
+    origin_country_code: str
+    dest_country_code: str
+    payment_terms: PaymentTermsOut
+    incoterm: IncotermOut
+    lines: list[ImportShipmentPreviewLine]
     parties: list[ShipmentPreviewParty]

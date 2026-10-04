@@ -139,6 +139,9 @@ def test_write_schemas_carry_no_source_values_and_forbid_extras() -> None:
     requests = [
         schemas.ShipmentCreateFromSo,
         schemas.ShipmentLineFromSo,
+        # S3-2 PR-5a — PO 참조 수입선적 생성(원천 라인 = PO 라인 id·수량뿐 — 단가·원가·통화 필드 구조적 부재)
+        schemas.ShipmentCreateFromPo,
+        schemas.ShipmentLineFromPo,
         schemas.PartyIn,
         schemas.ShipmentUpdateRequest,
         schemas.ShipmentLineAddRequest,
@@ -170,6 +173,10 @@ def test_write_schemas_carry_no_source_values_and_forbid_extras() -> None:
         "parties",
         "internal_note",
     }
+    assert set(schemas.ShipmentCreateFromPo.model_fields) == set(
+        schemas.ShipmentCreateFromSo.model_fields
+    )
+    assert set(schemas.ShipmentLineFromPo.model_fields) == {"po_line_id", "quantity"}
 
 
 def test_shipment_responses_carry_no_cost_fields() -> None:
@@ -196,6 +203,7 @@ def test_shipment_responses_carry_no_cost_fields() -> None:
         schemas.ExportShipmentListItem,
         schemas.ImportShipmentListItem,
         schemas.ShipmentPreview,
+        schemas.ImportShipmentPreview,
         schemas.MilestoneBoardOut,
         schemas.MilestoneWriteOut,
         schemas.MilestoneChangeOut,
@@ -213,3 +221,53 @@ def test_the_scanners_catch_a_synthetic_violation() -> None:
     """자기검사 — 원장 임포트 문장을 실제로 잡는다"""
     tree = parse_source("from app.modules.stock import ledger\n")
     assert {m for m in imported_modules(tree) if "stock" in m}
+
+
+# ── G3 구조(S3-2 PR-5a) — 선적 코드는 PO 원가 열에 닿을 수단이 없다 ─────────────────────────────
+
+#: PO 원가 열 이름(`PurchaseLineMixin`·PO 헤더 — ADR-0057). 선적 코드의 식별자·문자열 상수로 나타나면 원가를 고르는 문장이 생길 수 있다.
+PO_COST_NAMES = frozenset({"unit_cost", "line_cost", "total_cost", "price_basis"})
+
+
+def _cost_name_uses(tree: ast.Module) -> set[str]:
+    """식별자(이름·속성)·**정확히 일치하는** 문자열 상수(`column("unit_cost")`)로 쓰인 원가 열 이름 — 주석·설명 문장은 대상 아님."""
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in PO_COST_NAMES:
+            found.add(node.id)
+        elif isinstance(node, ast.Attribute) and node.attr in PO_COST_NAMES:
+            found.add(node.attr)
+        elif isinstance(node, ast.Constant) and node.value in PO_COST_NAMES:
+            found.add(str(node.value))
+        elif isinstance(node, ast.keyword) and node.arg in PO_COST_NAMES:
+            found.add(str(node.arg))
+    return found
+
+
+@pytest.mark.group_g
+def test_shipment_code_cannot_select_po_cost_columns() -> None:
+    """GC-G3 구조 — 선적 모듈·오케스트레이션(수입선적 생성·응답 조립 포함)은 **PO 모델·서비스를 임포트하지 않고**
+    PO 원가 열 이름(`unit_cost`·`line_cost`·`total_cost`·`price_basis`)을 식별자·열 이름 상수로 쓰지 않는다 — 원가를 복사·조인하는 문장이
+    구조적으로 생길 수 없다(ADR-0024 10번째 채널 미개설). PO는 테이블 이름으로 원가 아닌 열만 고른다"""
+    sources = app_sources()
+    targets = sorted(SHIPMENT_FILES)
+    for rel in targets:
+        tree = sources[rel]
+        assert "purchase_orders" not in imported_modules(tree), rel
+        assert _cost_name_uses(tree) == set(), (rel, _cost_name_uses(tree))
+    # 공회전 방지 — 수입선적 생성 파일은 실제로 PO 표를 (원가 아닌 열로) 읽는다
+    flow = ast.unparse(sources["modules/trade_chain/shipment_flow.py"])
+    assert '"purchase_order_lines"' in flow.replace("'", '"') and "po_line_id" in flow
+
+
+def test_the_cost_name_scan_is_not_vacuous() -> None:
+    """자기검사 — 열 이름 상수·속성·키워드 인자로 원가 열을 고르는 코드를 잡고, 설명 문장 속 낱말은 무시한다"""
+    bad = parse_source(
+        "t = table('purchase_order_lines', column('unit_cost'))\n"
+        "x = t.c.line_cost\nf(total_cost=1)\nprice_basis = 2\n"
+    )
+    assert _cost_name_uses(bad) == PO_COST_NAMES
+    assert _cost_name_uses(parse_source('"""unit_cost는 고르지 않는다"""\n')) == set()
+    assert "purchase_orders" in imported_modules(
+        parse_source("from app.modules.purchase_orders.models import X\n")
+    )

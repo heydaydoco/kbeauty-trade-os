@@ -711,6 +711,40 @@ REGISTRY: tuple[Entry, ...] = (
         ),
         notes="SO→수출선적 참조 생성(계획 PLANNED) — 라우터 1곳+행위자 필수+멱등 키. 확정·인테이크·보드·스케줄러에서 import·언급 0",
     ),
+    # S3-2 PR-5a — PO→수입선적 참조 생성(ADR-0077). **자동 수입선적 0**: PO 발행(사람 1클릭)이 수입선적을 만들지 않고, 발주·OC·스케줄러·
+    # 임포트·이관·알림 어디서도 부르거나 언급하지 않는다(PO 모듈 포함 — PO 쪽에서 수입선적으로 가는 자동 경로 0).
+    Entry(
+        name="create_shipment_from_purchase_order",
+        defined_in="app.modules.trade_chain.shipment_flow",
+        allowed_files=frozenset(
+            {"modules/trade_chain/shipment_flow.py", "modules/trade_chain/shipment_router.py"}
+        ),
+        forbidden_modules=frozenset(
+            {
+                "platform",
+                "imports",
+                "handover",
+                "notifications",
+                "outbox",
+                "worklist",
+                "deadlines",
+                "collaboration",
+                "certifications",
+                "order_intake",
+                "order_board",
+                "approvals",
+                "gates",
+                "credit",
+                "payments",
+                "seeds",
+                "identity",
+                "idempotency",
+                "purchase_orders",
+            }
+        ),
+        forbid_module_import=False,  # 정의 모듈이 수출 생성 엔트리와 같다(모듈 임포트 금지는 그쪽이 건다) — 언급 검사로 충분
+        notes="PO→수입선적 참조 생성(계획 PLANNED) — 라우터 1곳+행위자 필수+멱등 키. 발주·OC·스케줄러에서 import·언급 0",
+    ),
     Entry(
         name="release_shipment_order",
         defined_in="app.modules.trade_chain.shipment_flow",

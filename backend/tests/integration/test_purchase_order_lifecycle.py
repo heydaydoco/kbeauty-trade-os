@@ -35,7 +35,6 @@ from tests.factories.trade import (
     create_po_via_api,
     create_purchase_priced_sku,
     create_supplier,
-    fake_successors,
     idem,
     logged_in,
     raw_po,
@@ -422,18 +421,46 @@ def test_transitions_do_not_recheck_the_supplier_type(trade: TestClient) -> None
     assert ok.status_code == 200
 
 
-def test_a_live_successor_blocks_cancelling_a_po(
-    trade: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """후속(수입선적·입고 문서 대역)이 살아 있으면 취소 409 CANCEL.SUCCESSOR_ALIVE — 죽은 후속은 막지 않는다. (S3-2·S4-1이 CHILD_LINKS에 실제 후속을 등록하는 자리)"""
-    with fake_successors(monkeypatch, fk_column="po_id", parent=DocKind.PURCHASE_ORDER) as fake:
-        po = create_po_via_api(trade)
-        child = fake.add(po["id"], status="ISSUED")
-        blocked = _api_transition(trade, po["id"], to="CANCELLED", reason="r")
-        assert blocked.status_code == 409
-        assert blocked.json()["error"]["code"] == "TRADE_DOCS.CANCEL.SUCCESSOR_ALIVE"
-        fake.set_status(child, "CANCELLED")
-        assert _api_transition(trade, po["id"], to="CANCELLED", reason="r").status_code == 200
+def test_a_live_successor_blocks_cancelling_a_po(trade: TestClient) -> None:
+    """후속(**실제 수입선적** — S3-2 PR-5a가 대역 테이블을 실 테이블로 교체, CHILD_LINKS PO→shipments)이 살아 있으면 취소 409
+    CANCEL.SUCCESSOR_ALIVE(detail = 선적 번호)·PO 상태·이력 무변 — 죽은(취소된) 후속은 막지 않는다. 입고 문서(S4-1)는 같은 자리에 가산한다"""
+    po = create_po_via_api(trade, sku_ids=[create_purchase_priced_sku()])
+    shipment = trade.post(
+        f"{PO}/{po['id']}/shipments",
+        json={
+            "lines": [{"po_line_id": po["lines"][0]["id"], "quantity": 4}],
+            "origin_country_code": "CN",
+            "dest_country_code": "KR",
+        },
+        headers=idem(),
+    )
+    assert shipment.status_code == 201, shipment.text
+    logs_before = _scalar(
+        "SELECT count(*) FROM purchase_order_status_log WHERE purchase_order_id = :i", i=po["id"]
+    )
+    blocked = _api_transition(trade, po["id"], to="CANCELLED", reason="r")
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "TRADE_DOCS.CANCEL.SUCCESSOR_ALIVE"
+    assert blocked.json()["error"]["detail"] == {"successors": [shipment.json()["doc_number"]]}
+    assert _scalar("SELECT status FROM purchase_orders WHERE id = :i", i=po["id"]) == "ISSUED"
+    assert (
+        _scalar(
+            "SELECT count(*) FROM purchase_order_status_log WHERE purchase_order_id = :i",
+            i=po["id"],
+        )
+        == logs_before
+    )
+    cancelled = trade.post(
+        f"/api/v1/shipments/{shipment.json()['id']}/transitions",
+        json={
+            "to_status": "CANCELLED",
+            "version": shipment.json()["version"],
+            "reason": "선적 취소",
+        },
+        headers=idem(),
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert _api_transition(trade, po["id"], to="CANCELLED", reason="r").status_code == 200
 
 
 # ── 메타: OC 열 편집 규칙 ────────────────────────────────────────────────────

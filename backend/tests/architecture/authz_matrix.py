@@ -468,6 +468,22 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         C: DENY,
         V: DENY,
     },
+    # S3-2 PR-5a — PO 참조 수입선적 생성·미리보기(design-D S5·S6 / §2.9): 무역(배정 가능량 소비 = 상업 사실 — 물류 쓰기 아님, X-14).
+    # `/api/v1/purchase-orders` 접두어가 통제한다(행만 추가).
+    ("POST", "/api/v1/purchase-orders/{po_id}/shipments/preview"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/purchase-orders/{po_id}/shipments"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
     ("GET", "/api/v1/shipments"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
     # S3-2 PR-3c — 선적 목록 CSV(S20): 전 역할 같은 헤더(원가·단가 열 0 — 역할별 분기 없음, design-C C8).
     ("GET", "/api/v1/shipments/export.csv"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},

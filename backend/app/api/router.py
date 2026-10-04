@@ -68,6 +68,8 @@ api_router.include_router(trade_chain_router.flow_router)
 # S3-2 PR-3a — 선적(목록·상세·헤더·라인·출고지시·취소·당사자)·SO 참조 수출선적 생성
 api_router.include_router(shipment_router.router)
 api_router.include_router(shipment_router.so_router)
+# S3-2 PR-5a — PO 참조 수입선적 생성(미리보기·생성)
+api_router.include_router(shipment_router.po_shipment_router)
 # S3-2 PR-4a — 선적 마일스톤(보드·계획·실적·초안)·변경 이력·통보·통관 기록
 api_router.include_router(milestone_router.router)
 api_router.include_router(milestone_router.oem_router)  # S3-2 PR-4c — OEM 생산 일정(M7~M9)

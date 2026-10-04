@@ -189,6 +189,55 @@ def created(
     return body
 
 
+# ── 수입선적(S3-2 PR-5a — PO 참조 생성) ──────────────────────────────────────────
+
+PO = "/api/v1/purchase-orders"
+
+
+def import_body(
+    lines: list[tuple[int, int]],
+    *,
+    origin: str = "CN",
+    dest: str = "KR",
+    parties: list[dict[str, Any]] | None = None,
+    internal_note: str | None = None,
+) -> dict[str, Any]:
+    """PO 참조 수입선적 생성 본문 — lines = [(po_line_id, quantity)]."""
+    body: dict[str, Any] = {
+        "lines": [{"po_line_id": line_id, "quantity": qty} for line_id, qty in lines],
+        "origin_country_code": origin,
+        "dest_country_code": dest,
+    }
+    if parties is not None:
+        body["parties"] = parties
+    if internal_note is not None:
+        body["internal_note"] = internal_note
+    return body
+
+
+def create_import_shipment(
+    client: TestClient,
+    po_id: int,
+    lines: list[tuple[int, int]],
+    *,
+    headers: dict[str, str] | None = None,
+    **kwargs: Any,
+) -> Any:
+    """`POST /purchase-orders/{id}/shipments` 응답(상태 확인은 호출자)."""
+    return client.post(
+        f"{PO}/{po_id}/shipments", json=import_body(lines, **kwargs), headers=headers or idem()
+    )
+
+
+def created_import(
+    client: TestClient, po_id: int, lines: list[tuple[int, int]], **kwargs: Any
+) -> dict[str, Any]:
+    response = create_import_shipment(client, po_id, lines, **kwargs)
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
 def cancel(
     client: TestClient,
     shipment_id: int,
