@@ -72,9 +72,8 @@ def _root_qt_id(session: Session, kind: DocKind, doc_id: int) -> tuple[int | Non
                 Shipment.id == doc_id,
                 Shipment.deleted_at.is_(None),
                 Shipment.shipment_kind == ShipmentKind.EXPORT.value,
-                SalesOrder.deleted_at.is_(
-                    None
-                ),  # 삭제 SO의 선적 진입도 SO 진입과 같은 404(PR-3c 적대 검토)
+                # 삭제 SO의 선적 진입도 SO 진입과 같은 404(PR-3c 적대 검토)
+                SalesOrder.deleted_at.is_(None),
             )
         ).scalar_one_or_none()
         if found is None:
