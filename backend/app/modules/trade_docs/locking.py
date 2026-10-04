@@ -9,9 +9,12 @@
 
 S3-2 PR-3a 개정(ADR-0078 — §17.2 부기 ② "변경은 ADR"): 선적은 SO·PO의 후속이라 조상 → 자기 순서로 (7)에 들어간다. (8)
 `shipment_children` = 선적 1건의 비-라인 하위 행(당사자 — 마일스톤·통관 기록은 PR-4a가 같은 슬롯을 쓴다), 여러 행이면 id 오름차순.
+**PO 소유 OEM 마일스톤 행도 이 슬롯**이다(T13, PR-4c — 선적 없이 (6) PO 다음에 바로 (8)을 잡는 부분수열).
 라인 범주는 **원천 라인 → 선적 라인**(id 순). 잠금 모드: SO 수렴을 동반할 수 있는 선적 쓰기(생성·라인·출고지시·취소)는 SO를
 `FOR UPDATE`로 **선점**한다(`lock_lines_for_consumption`의 헤더 `FOR SHARE`는 기보유 잠금에 흡수 — SHARE→UPDATE 승격 교착 차단).
 당사자 쓰기는 멱등 → partners `FOR KEY SHARE`(id 순) → shipments(R-08 — 거래처 검증이 선적 잠금 뒤로 가지 않게).
+PO `FOR SHARE`(PO 무수정 — PO 취소의 `FOR UPDATE`와 직렬화)는 두 경로다: **T2** 수입선적 생성(PR-5a)과 **T13** OEM 생산 일정 계획·실적
+(PR-4c — 멱등 → purchase_orders `FOR SHARE` → (8) milestones `FOR UPDATE` + 행 version).
 
 (−1)은 행 잠금이 아니라 같은 파일(sha256)의 업로드끼리만 직렬화하는 advisory 잠금이라 `LOCK_ORDER` 튜플(행 잠금 대상)에는 넣지 않는다 —
 트랜잭션의 첫 문장이므로 어떤 행 잠금보다 앞선다. 한 트랜잭션 안에서 같은 표의 여러 행을 잠그는 곳(임포트 확정 `load_targets_for_update` 등)은 **id 오름차순**이다.
