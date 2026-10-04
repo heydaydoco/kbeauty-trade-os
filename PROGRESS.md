@@ -1,5 +1,39 @@
 # PROGRESS
 
+## S3-2 PR-2b (휴일 캘린더 화면 프런트 — `/holidays`·편집 대화상자·CSV 미리보기 2단·`toZonedPairDisplay`) — 구현 기록 (2026-10-04)
+- **기준**: PR-2a 사슬 head `658a3e8`(main 미반영 로컬 사슬)에서 격리 워크트리로 시작. 백엔드 무변경(마이그레이션 0). push·PR 없음.
+- **커밋(12자리)**: `eca7eb083658` `toZonedPairDisplay` / `345607272727` 휴일 lib(계약 타입·전체 집합 조회·오류 매핑) / `34d989a26e76` 화면·대화상자·셸 메뉴·시험 / (이 절) PROGRESS.
+- **정본**: PR-2a 절의 'PR-2b 프런트 인계 계약' · 계획서 §4 PR-2b 행 · design-D §D2-3·§D5·§D12·§D13 · design-integrated §9. 응답 모양은 `backend/app/modules/holidays/router.py`·`schemas.py`와 대조.
+
+### 무엇을
+- **셸 메뉴 "휴일 캘린더"(`/holidays`, 전 역할)** — "발주" 다음(design-D §D5는 "선적" 다음 — 선적 메뉴가 아직 없어 그 자리. 선적 메뉴를 넣는 PR이 "선적"을 이 앞에 끼운다).
+- **화면 `routes/holidays.tsx`** — 국가 코드(입력 즉시 대문자)·연도(기본 = KST 올해) → 주소 `?country=&year=`(PR-4b UNVERIFIED 배지 링크의 진입점, 뒤로 가기·외부 링크 시 입력칸 렌더 단계 동기화). 형식 오류는 조회하지 않고 칸 아래 안내. ① **연도 상세(H2)**: `calendar === null` → 회색 '미등록' 배지 + "휴일 캘린더 미등록 — 확인 불가 (CN 2026)" + "평일로 간주하지 않습니다"(ADMIN만 '휴일 캘린더 등록') / `calendar` 있음·0건 → **"휴일 없음 확인"** / 그 외 표(`ListPager`). 근거 링크(`noopener noreferrer`)·확인일(문자열 그대로)·건수·마지막 수정(`toKstDisplay` — `updated_at`만). CSV 내보내기(H4)는 **전 역할**·선언 있을 때만. ② **선언 목록(H1)**: 국가를 고르면 그 국가 전 연도, 아니면 전체 — `usePagedList`+`ListPager`+`ListState`, 행 '보기'가 그 국가·연도를 연다.
+- **편집 대화상자 `components/holiday-calendar-dialog.tsx`(ADMIN만 렌더)** — `useDialogBehavior`(포커스 트랩·Esc·복귀). **편집본 = 전체 집합**: `fetchFullCalendar`가 `size=200`으로 끝까지 받아 합치고 받은 건수 ≠ total 또는 쪽 사이 version 변화면 편집을 시작하지 않는다(H3이 전체 교체라 1쪽 50건만으로 시작하면 나머지가 조용히 지워진다). 근거 링크·확인일(`max` = KST 오늘 문자열)·행(날짜 `type=date` 문자열·이름·삭제·추가[366 상한]·모두 지우기 = 휴일 없음 확인). **멱등 키**: 대화상자 열림 1회 = 키 1개, 같은 본문 재시도 = 같은 키, 본문(근거·확인일·행·CSV 채우기)이 바뀌면 새 키, 동기 잠금(ref)으로 더블클릭 1회. **version**: 연 시점 `calendar.version`(미선언 null). **409**(`VERSION_CONFLICT`·`YEAR_DUPLICATE`) → 다시 불러오기 안내 + '최신 내용 불러오기'(닫고 재조회). **422 칸별**: `SOURCE_REQUIRED` → `detail.source_url`·`verified_on` 각 칸 아래 / `YEAR_MISMATCH`·`DUPLICATE_DATE` → `detail.holiday_on` 날짜의 행 날짜 칸 / `INVALID_FIELD` → `detail.name {날짜: 문구}` 행 이름 칸 + 요청 검증형 `detail.항목[위치=holidays.N.name]` N번째 행. 칸 오류는 **행 uid**에 묶어 행을 지우거나 추가해도 어긋나지 않는다. 사전 검사(입력 편의 — 서버가 정본): 근거 결측·http(s) 아님, 확인일 결측·미래, 다른 연도(문자열 접두)·같은 날짜·빈 이름.
+- **CSV 2단(H5 → H3)** — 대화상자 안 'CSV로 채우기': 보내기 전 검사(.csv·빈 파일·256KB) → 미리보기 → **문제 0이면 편집본을 파일 행으로 채우고(새 키) 저장은 사람이 누른다 / 문제 1건↑이면 채우지 않고 문제표(행·칸·문구, 100건 초과 시 `TruncationNotice`)를 보이며 저장 버튼 비활성** — 'CSV 결과 버리기' 또는 깨끗한 파일 재미리보기 뒤에야 저장 가능(파일 전체 원자). 파일 단위 422 `INVALID_FORMAT`은 `detail.file` 문구를 파일 칸 아래에(편집본 무변경).
+- **`lib/datetime.ts` `toZonedPairDisplay(isoUtc, tz)`**(계획 PR-2b 행) — `"2026-11-05 14:00 (KST) · 2026-11-05 15:00 (Asia/Tokyo)"`, Asia/Seoul이면 KST 1개, `Intl` `timeZone`·`formatToParts`만, 날짜만 있는 문자열은 '-'(하루 밀림 차단), 잘못된 시간대는 KST + "현지 시각 확인 불가". 소비자는 PR-3b/4b(선적 시각형 마일스톤).
+
+### 편차·자율 확정 (계약 대비 — 전부 더 엄격하거나 계약 침묵분)
+1. **국가 입력은 자유 입력 2자**(SearchSelect 미사용): 휴일 국가는 markets FK가 아니고(PR-2a ④) 국가 마스터 API도 없다 — 검색 대상이 없다. 형식만 화면에서 거르고 서버가 정본(422 `COUNTRY.INVALID`).
+2. **편집 시작 = 전체 집합 조회**(인계 계약은 "편집본 전체를 보낸다"만 정함) — 쪽 합치기 + 건수·version 대조로 섞인 판 거부.
+3. **확인일 기본값** = 기존 선언의 `verified_on`(최초 선언은 빈칸 — 오늘로 자동 채우지 않는다: 근거를 실제로 확인한 날을 사람이 적게).
+4. **CSV 미리보기 위치** = 편집 대화상자 안(별도 화면 없음) — 쓰기 통로 H3 하나·키 규칙 하나로 묶인다.
+5. 셸 메뉴 자리(위 '무엇을' 첫 줄).
+
+### 검증 (실행 확인)
+- **typecheck**(`tsc -b --noEmit`) 통과 · **vitest 전체 69파일 1216 passed**(S3-2 기준선 1171 + 신규 45: `lib/datetime.test.ts` 6 · `lib/holidays.test.ts` 6 · `routes/holidays.test.tsx` 33) · **build** 통과(청크 500KB 경고는 기존과 같음).
+- **신규 vitest 그룹**: 역할별 노출(ADMIN 편집·CSV / TRADE·LOGISTICS·VIEWER 열람·CSV 내보내기만·쓰기 호출 0 / 비관리자 미선언 등록 버튼 0 / 내비 전 역할) · **미선언 ≠ 빈 선언**(배지·문구·CSV 버튼 유무) · 날짜 표시(`2026-01-01` 문자열 그대로 + `updated_at` KST `2026. 10. 01. 00:30`) · **소스 계약**(`holidays.tsx`·`components/holiday-*.tsx`·`lib/holidays.ts`에 `new Date(` 0, 표 수 = `overflow-x-auto` 수, 날짜·국가 칸 `cell-nowrap`·가운데) · 주소 진입·형식 오류 미조회·'보기' · 저장 성공(전체 집합+근거+version 본문·이름 trim) · 전체 집합 60건 편집 · total 불일치 거부 · 최초 선언 version null·0건 · 409 2종 · 422 4형(칸 + 행 삭제 후 uid 유지) · 사전 검사 · 키 규칙(재시도 같은 키/변경 새 키/재열림 새 키) · 더블클릭 1회 · CSV(문제 0 채우기→저장 / 문제 1건↑ 저장 비활성→버리기 / 파일 단위 422 / 사전 검사) · `fetchFullCalendar` 365건 2쪽·쪽 사이 version 변화 거부 · `toZonedPairDisplay` 6.
+- **실브라우저 관통 1회(리포 밖 스크립트 — 전용 PG 5445 `new-pg.sh 5445 --fresh`·`APP_ENV=dev` alembic `394c76a7d2b7 (head)`·uvicorn 127.0.0.1:8745·vite 5179 프록시, Playwright chromium headless_shell 1194 `executable_path` 지정 — 설치·의존성 추가 0)**: CLI `create-admin` 2계정 → 2번에 화면 API로 VIEWER 부여(200)·ADMIN 회수(200) → 관리자: 셸 메뉴 → `cn` 입력이 `CN`으로 → 조회 → **미선언 '확인 불가'** → 등록 2건 저장(상태 문구·표 `2026-01-01` 그대로·수정 `2026. 10. 04. 21:51 (KST)`) → 이름에 보이지 않는 글자(U+200B) 저장 → **서버 422가 2번째 행 이름 칸 아래**("휴일 이름에는 줄바꿈·탭·보이지 않는 글자…") → 문제 있는 CSV 미리보기(2건: 다른 해·형식) → **저장 비활성** → 깨끗한 CSV 3건 채우기 → 저장 3건 → 대화상자를 연 채 API로 경쟁 저장(200 v3) → 저장 **409 → '최신 내용 불러오기' → '휴일 없음 확인'** → CSV 내보내기 파일명 `휴일_CN_2026.csv`·BOM·머리글 `holiday_on,name\r\n` → VIEWER: 편집 버튼 0·CSV 내보내기 1·관리자 안내 1·미선언 등록 버튼 0·직접 PUT **403 `COMMON.AUTH.FORBIDDEN`**. 페이지 JS 오류 0.
+- **390px 실측(`document.documentElement.scrollWidth`)**: 편집 대화상자(CSV 문제표 표시) **390** · 빈 선언 **390** · 미선언 **390** · 휴일 표(긴 이름) **390**. 서버 2개는 PID로 종료(`pkill -f` 미사용, 종료 후 두 포트 연결 거부 확인). PG 5445는 전용 클러스터로 남겨 둠.
+
+### §22 11렌즈 (PR-2b)
+①**기능 통과** — 인계 계약 H1~H5 전부 화면에 배선, UNVERIFIED ≠ 빈 목록(계획 PR-2b 행 vitest) ②**데이터 해당 없음**(마이그레이션 0 — 날짜는 문자열 왕복) ③**트랜잭션 통과** — 쓰기 통로 H3 하나·CSV는 비저장 미리보기 → 사람 확인 → H3 ④**동시성·멱등 통과** — 열림 1회 = 키 1개·재시도 같은 키·본문 변경 새 키·동기 잠금·version 409·동시 최초 선언 409 다시 불러오기·전체 조회 섞인 판 거부 ⑤**보안·권한 통과** — 편집·미리보기 UI ADMIN만 렌더, 서버 403 실측(VIEWER 직접 PUT), 근거 링크 `noopener noreferrer` ⑥**시간 통과** — 날짜 문자열 `new Date` 0(소스 계약)·확인일 상한 = `todayKst()` 문자열·`updated_at`만 KST·`toZonedPairDisplay` ⑦**성능 통과** — 목록 Page 50·편집용 전체 조회 최대 2요청(200×2)·N+1 0 ⑧**테스트 통과** — vitest 45 신규(위 그룹) ⑨**운영 부분** — 휴일 데이터 운영 개시 runbook 문안은 PR-8(계획 배치) ⑩**문서 통과** — 이 절·'## 현재' ⑪**워크스루 통과** — 실브라우저 관통 1회(관리자·조회 2역할)·390px 4화면 실측(PR-16 3층 증거 중 리포 밖 실브라우저 층).
+
+### 부채 (신규 — 조용히 넘기지 않는다)
+- **R-2b-1 셸 메뉴 순서**: "휴일 캘린더"가 지금은 "발주" 다음이다. 선적 메뉴를 넣는 PR(선적 목록 화면)이 `{ to: "/shipments", label: "선적" }`을 **"발주"와 "휴일 캘린더" 사이**에 넣어야 design-D §D5 순서가 된다. 트리거: 선적 목록 화면 PR.
+- **R-2b-2 `new Date` 소스 계약 범위**: 이번 계약은 휴일 파일 3개만 덮는다. design-D §D12의 `routes/shipment-*.tsx`·`components/milestone-*.tsx` 계약은 그 파일을 만드는 PR(3b·4b)이 같은 방식으로 추가한다(이 PR의 `holidays.test.tsx` '소스 계약' 시험이 본보기).
+- **R-2b-3 Playwright 브라우저 판 불일치(환경)**: venv의 python playwright는 chromium 1243을 찾고 `/opt/pw-browsers`에는 1194만 있다 — `executable_path`로 1194 headless_shell을 지정해 돌렸다(설치 0). 이후 실브라우저 관통도 같은 지정이 필요하다. 트리거: 브라우저 e2e 도구 채택 재판정(PR-16 부채 ⑦) 또는 환경 갱신.
+- 기존 R-2a-2(CSV CP949 미수용)는 화면 문구로 'CSV UTF-8' 저장을 안내했다 — 무변경.
+
 ## S3-2 PR-2a (산식 순수 함수 + 휴일 백엔드 + open_quantity kind 필터, M13) — 구현 기록 (2026-10-04)
 - **기준**: PR-1 head `3b3723e`(main 미반영 로컬 사슬)에서 격리 워크트리로 시작. **PR-1b(승인 무결성 대사 잡)는 이 기준에 없다** — 병합 순서 정본은 1 → 1b → 2a이므로 오케스트레이터가 1b 병합 뒤 최신 main 위로 이 커밋들을 옮긴다(충돌 예상 위치: 이 PROGRESS 맨 위 절뿐 — 1b는 마이그레이션 0·잡 시험 파일, 2a는 `test_scheduler_registry.py`의 `_NEVER_SEEDED` 튜플만 만진다). push·PR 없음.
 - **커밋(12자리)**: `4d3535cf161b` kind 필터 / `b90b3094dd79` 산식 순수 함수·휴일 판정·순수성 시험 / `67b618bf9f1d` M13·모델·제약 시험 / `836490be027b` 휴일 API·에러 6종·authz / `9e4203c17a8d` 제약 번역표 완결성 시험 / `f21f042914f1` authz 접두어 공회전 단언 / `1f517251ce75` ADR 이행 부기 5건 / `c3ae208e67d4` 변이 생존 3건 시험 보강 / `72c363afbc87` 휴일 조회 한 스냅샷·golden 마커 정정 / `b0e153a6140a` `.shard_durations.json` 갱신 / (이 절) PROGRESS.
@@ -780,7 +814,8 @@
 - **S2-2 (인증 인스턴스·상태머신) — 종결(2026-08-12).** PR #17 `44d415268392`(3테이블·상태머신 27전이·날짜 스윕·CLI — ADR-0037~0040, GC v1.3 C9·C10) + PR #18 `640916e5a2ec`(documents CERTIFICATION 확장·태스크 서류 링크·§4.8 자동 적용 — ADR-0041·0042). 상세는 아래 "현재" 절의 직전 세션 상세 항목이 정본. **종결 시점 정본 기준선: pytest 1094·vitest 79·커버리지 게이트 94·CI 6잡.**
 
 ## 현재
-- **다음 할 일: S3-2 PR-2b(휴일 화면 — PR-2a 절의 프런트 인계 계약 준수)** — 이어서 PR-7(사용자·역할 화면) → PR-3a(M14 수출선적 커널) 순서(계획서 §4 의존 줄이 정본).
+- **다음 할 일: S3-2 PR-7(사용자·역할 화면 `/settings/users` — ADMIN 전용, 백엔드 0)** — 계정은 "CLI 생성 → 화면 역할 부여 → ADMIN 회수"(통합 §9 R-22), vitest(ADMIN 외 메뉴 미노출·마지막 관리자 오류)·K(기존 authz 무변경). 셸 `ADMIN_NAV`에 "사용자·역할"(design-D §D5·D14). 정본: 계획서 §4 PR-7 행·design-D §D14. 이어서 PR-3a(M14 수출선적 커널) → 3c → 3b → 4a → 4c → 4b → 5a → 5b → 6 → 8(계획서 §4 의존 줄이 정본).
+- (완료 2026-10-04 — PR-2b, 맨 위 'S3-2 PR-2b' 절) **다음 할 일: S3-2 PR-2b(휴일 화면 — PR-2a 절의 프런트 인계 계약 준수)** — 이어서 PR-7(사용자·역할 화면) → PR-3a(M14 수출선적 커널) 순서(계획서 §4 의존 줄이 정본).
 - (완료 2026-10-04 — PR-2a) **다음 할 일: S3-2 PR-2a(산식 순수 함수 `trade_docs/schedule.py`+휴일 백엔드[M13 `holiday_calendar_years`·`holidays` — down_revision `f2cb6020b2bb`, 복합 FK 명시적 짧은 이름 필수]·`open_quantity` kind 필터·`.shard_durations.json` 갱신)** — PR-1b(승인 무결성 대사 잡 — JOB 12→13·PR-9a 부채 ① 종결)는 구현 완료(맨 위 'S3-2 PR-1b' 절 — 기존 DB 실측 불일치 0·변이 14/14). 정본: 계획서 §4 PR-2a 행·design-integrated §9(R-24 등) → 부록. 그 뒤 2b → 7 → 3a → 3c → 3b → 4a → 4c → 4b → 5a → 5b → 6(JOB 13→14) → 8.
 - (완료 2026-10-04 — PR-1b) **다음 할 일: S3-2 PR-1b(승인 무결성 대사 잡 `approval-integrity-check` daily@05:40 — JOB 12→13, 마이그레이션 0)** — S3-2 계획은 **자율 확정(2026-10-04)**으로 끝났고 PR-1(문서 전용)이 계획서·부록 A~E·통합·DESIGN [M4] 보강 12문단·ADR-0074~0087·기존 ADR 부기·WBS v1.6·GC v1.5를 등재했다(맨 위 'S3-2 계획 확정·PR-1' 절 — 15 PR 순서·M13~M15·잡 12→14·오너 확인 권장 3건·부채 대사). PR-1b는 S3-1 PR-9a 부채 ①(트리거 'S3-2 이전' 도과)을 먼저 소비한다: **첫 커밋에서 기존 DB 승인 전건 대사 '불일치 0'을 실측해 기록**(1건↑이면 알림 형식 확정 전 원인 기록) → 잡 배선(불일치 = `approval-integrity:{approval_id}:{problem}` dedup 관리자 알림·FAILED = 실행 예외만)·CLI 수동 실행·4금 집합·총수 핀 13. 정본: 계획서 §4 PR-1b 행·design-integrated §2.8·§9 R-17·ADR-0087. 그 뒤 2a → 2b → 7 → 3a → 3c → 3b → 4a → 4c → 4b → 5a → 5b → 6 → 8.
 - (완료 2026-10-04 — 위 S3-2 계획 확정으로 대체) **S3-2 계획 세션(선적·기일 엔진·휴일 — WBS S3-2)** — S3-1은 PR-16(마감: 청소 잡 2종·runbook 4종·입구~출구 워크스루·PROGRESS 종결)으로 **구현 종결**(맨 위 'S3-1 PR-16 / S3-1 종결' 절 — DoD 4항 대사·부채 최종 목록·§4.6/G-xx 대사). S3-1의 남은 병합(PR #51 14b·15a/15b·PR-16)은 오케스트레이터가 CI green 확인 후 순서대로 처리한다. S3-2 계획 세션의 입력: WBS v1.5 S3-2 행(인계 판정 포함) + S3-1 이월 부채 P-01~P-07·P-57 + PR-16 신규 부채 ③(사용자 역할 화면 배정 판정)·⑦(브라우저 e2e 도구 채택 판정). 새 ADR 번호는 **0074부터**.

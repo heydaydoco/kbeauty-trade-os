@@ -12,6 +12,7 @@ import { DelegationsPage } from "./routes/delegations";
 import { BrandsPage } from "./routes/brands";
 import { DocumentsPage } from "./routes/documents";
 import { HealthPage } from "./routes/health";
+import { HolidaysPage } from "./routes/holidays";
 import { ImportsPage } from "./routes/imports";
 import { IngredientDetailPage } from "./routes/ingredient-detail";
 import { IngredientsPage } from "./routes/ingredients";
@@ -125,6 +126,7 @@ export function AppRoutes() {
         <Route path="/purchase-orders" element={<PurchaseOrderListPage />} />
         <Route path="/purchase-orders/new" element={<PurchaseOrderCreatePage />} />
         <Route path="/purchase-orders/:purchaseOrderId" element={<PurchaseOrderDetailPage />} />
+        <Route path="/holidays" element={<HolidaysPage />} />
         <Route path="/approvals" element={<ApprovalsPage />} />
         <Route path="/approvals/:approvalId" element={<ApprovalDetailPage />} />
         <Route path="/approval-lines" element={<ApprovalLinesPage />} />
