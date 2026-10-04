@@ -1,5 +1,84 @@
 # PROGRESS
 
+## S3-2 계획 확정·PR-1 (선적·기일 엔진·휴일 — 계획 자율 확정 + 문서 등재) — 기록 (2026-10-04)
+- **상태: 계획 자율 확정**(오너 지시 2026-09-29 — "PowerShell 없이 클라우드에서 끝까지, 결정·개입 없이", ADR-0011 부기). 웹 세션 판정 절차는 생략했고 판정 후보는 전부 **더 엄격한(fail-closed) 권장안으로 '자율 확정'**했다(사후 번복 가능 — 번복 비용이 큰 항목은 계획서 §5). **남은 판정 후보 0건.** 기준 커밋 main `a4d91c0`(S3-1 종결), 기준선 pytest 5031 passed·34 skipped · vitest 1171 · 커버리지 게이트 94(CI 3샤드).
+- **PR-1 범위 = 문서 전용(코드·테스트·마이그레이션 변경 0)**. 커밋(12자리): `e39e2f64852c` 계획 세션 체크포인트(부록 A·B·C 초안) / `52b923089085` 계획서 `docs/plans/s3-2-plan.md`+부록 `docs/plans/s3-2/design-A~E.md`+`design-integrated.md`(모순 37건 해소·적대 검토 44행 반영) / `d76f05da812b` DESIGN [M4] 보강 12문단 / `08c190328a87` ADR-0074~0087 신설 14건 / `1fabd2118486` 기존 ADR 부기 14파일 / `58dc6688203b` WBS v1.6 / `e0ed5c2f0943` GC v1.5 / `fb0f6fb6508c` runbook 예정 2행 초안 줄 / (이 절) PROGRESS.
+- **정본 우선순위**: `design-integrated.md` §9(적대 검토 정정 R-01~R-30) → 통합 §0~§8 → 부록 A~E. 구현 세션은 자기 PR이 소비하는 부록을 먼저 읽는다.
+
+### 계획 요약 (전건 자율 확정 — 계획서 §2 결정 19항의 요지)
+- **선적 = 전표 커널 편입**(DocKind `SHIPMENT`·접두어 `SH`, 수출·수입 한 kind+구분 4값). 헤더 원천 FK **정확히 하나**(수출 `so_id`·수입 `po_id`), 채널입고·샘플무상은 값만(DB 거부), 다중 SO 합적 없음. 통화·환율·결제조건·Incoterms·거래 상대·품명은 원천 사본, **수입선적은 PO 원가 비복사**, `doc_date` = 생성 시 KST 오늘 1회.
+- **상태 8값·활성 사람 엣지 3**(계획→출고지시 전용·계획/출고지시→취소), 피킹~종결 5값 RESERVED(S4-2). **ETD·B/L·ETA 실적은 출고지시 후에만, 실적·통관 기록이 살아 있으면 선적 취소 409.**
+- **SO CONFIRMED↔IN_SHIPMENT 자동 수렴 2엣지**(같은 TX, 불변식 IN_SHIPMENT ⇔ 살아 있는 선적 ≥1). **SO 취소는 후속 생존 검사 먼저**(409 `SUCCESSOR_ALIVE`). **SO COMPLETED·short-close 미개방**(S3-3 provider PR). 상태 총수 **30/152/182**.
+- **잔량**: SO 라인 FULFILL 소비·PO 라인 **IN_TRANSIT** 소비 + `open_quantity` kind 필터(PO 잔량은 입고에서만), 수입 초과 기준 = 배정 가능량.
+- **LOCK_ORDER** …PO → shipments → shipment_children → approvals → lines → seq, SO `FOR UPDATE` 선점(승격 금지)·PO `FOR SHARE`(수입 생성만)·당사자/통관 = 거래처 KEY SHARE 선행.
+- **마일스톤 9→11종**(저장 8: +B/L 발행일 / 파생 3: 적재기한·대금만기·+제시기한 편입), 계획/실적 이중값·덮어쓰기 금지, **수리일 = 통관 기록 MIN 파생**(부분 수리 PARTIAL 배지), 적재 이행일 = ETD·B/L 실적 MAX(가정).
+- **산식 = 순수 함수**(`trade_docs/schedule.py`): 대금만기 결제유형 분기(UNKNOWN 대체 금지)·L/C 만기·제시기한 MIN·tolerance(좁은 쪽) — **운영 L/C = UNKNOWN**(`lc_terms` S3-3).
+- **휴일**: 국가 ISO alpha-2(markets 비FK)·연도 선언(근거 링크·확인일 필수)·연도·국가 DB 강제·ADMIN 원자 교체·시드 0. **경고만**(자동 순연 0), 미선언 = **UNVERIFIED ≠ 평일**, 적용 = **ETA(도착국)만**.
+- **롤오버 이력·통보 IMMUTABLE**, 통보 = comm_logs SHIPMENT 주제(선적 전용 통로 — 범용 `/comm-logs` 쓰기·읽기·첨부 차단), 발송 0.
+- **권한**: 조회 전 역할 / 생성·라인·취소 A·T / 헤더·출고지시·당사자·통관·마일스톤·통보 A·T·**L(물류 첫 전표 쓰기)** / OEM 마일스톤 A·T / 휴일·마일스톤 세트 쓰기 A 전용.
+- **인계 판정**: short-close·PO 라인 ETA 열·OEM `profile_id`·facilities = 미신설(계산값·트리거 등재), QT/PI D-N = 구현, 마일스톤 세트 = 구현(부채 #15 종결). **§8.3 '자리'** = 선적 라인 `availability.status=NOT_IMPLEMENTED`+'가용재고 미산정' 배지.
+- **화면**: 선적 목록·상세(세로 마일스톤 타임라인)·SO/PO 상세 2단 생성·휴일 캘린더·사용자·역할(ADMIN)·보드 '선적중' 열·SO 필터 '선적중'·문서 흐름 SHIPMENT 노드·DG 배지(차단 0). **PR-16 부채**: ③ 역할 화면 = PR-7 / ⑤ SearchSelect = PR-3b / ⑥ durations = PR-2a / ⑦ 브라우저 e2e 도구 = 미채택(렌즈 11 3층 증거).
+- **문면과 다르게 확정한 8건**(DESIGN 부기·ADR·WBS v1.6 주석으로 해소): **WBS 대비 4** — ① COMPLETED 엣지 → S3-3(ADR-0076) ② DoD L/C 분기·검증 K = 순수 함수·K 테스트(ADR-0081) ③ OEM `profile_id` 미신설(ADR-0085) ④ 구분 4종 중 2종 경로 미개방(ADR-0074) / **DESIGN 대비 4(문면 변경)** — ⑤ §8.3 부기 ② SO `FOR UPDATE` 선점(ADR-0078) ⑥ §15 "SO 자동 엣지 0" → 2(ADR-0075) ⑦ §7.5 마일스톤 9→11종(ADR-0080) ⑧ §2 LOGISTICS 첫 전표 쓰기(ADR-0079).
+
+### 15개 PR 순서 (병합 순서 정본 — 직렬, 각 병합이 동작 가능)
+1 **PR-1** 문서 등재(이 절) → 2 **PR-1b** 승인 무결성 대사 잡(JOB 12→13) → 3 **PR-2a** 산식 순수 함수+휴일 백엔드·kind 필터·durations(**M13**) → 4 **PR-2b** 휴일 캘린더 화면 → 5 **PR-7** 사용자·역할 화면(백엔드 0) → 6 **PR-3a** 수출선적 커널·SO 수렴·SO 취소 검사 순서(**M14**) → 7 **PR-3c** 선적 export.csv·문서 흐름 노드(마이그 0) → 8 **PR-3b** 선적 화면·SO '선적 만들기'·보드 열·SearchSelect 수정 → 9 **PR-4a** 마일스톤·롤오버·통보·통관·실적/통관 취소 가드(**M15**) → 10 **PR-4c** OEM 마일스톤·마일스톤 세트 쓰기 경로 → 11 **PR-4b** 마일스톤 타임라인·통관·OEM·세트 화면 → 12 **PR-5a** 수입선적 → 13 **PR-5b** 수입선적 화면 → 14 **PR-6** 기일 스캔 잡(JOB 13→14) → 15 **PR-8** 마감(runbook·워크스루·golden 대사 ≥53·WBS/GC 확정·종결).
+- **마이그레이션 3건(직렬)**: **M13** `holiday_calendar_years`·`holidays`(down_revision `f2cb6020b2bb`, PR-2a) → **M14** `shipments`·`shipment_lines`·`shipment_parties`·`shipment_status_log`(PR-3a) → **M15** `customs_records`·`milestones`·`milestone_changes`·`milestone_change_notices`·`item_profile_milestone_types`+`comm_logs` 주제 CHECK 재정의(PR-4a). 신규 11표·IMMUTABLE +3(총 11표)·시드 0·에러 코드 신규 32종(SHIPMENTS 26·HOLIDAYS 6).
+- **잡 12 → 14**: `approval-integrity-check` daily@05:40(PR-1b — 불일치는 `approval-integrity:{approval_id}:{problem}` dedup 관리자 알림, 잡 FAILED = 실행 예외만, 첫 커밋에서 기존 DB 전건 대사 '불일치 0' 실측) → `trade-deadline-scan` daily@06:40(PR-6 — 선적 마일스톤 4종+QT/PI D-N, 기본 D-7/3/1, 시각형 도과 = UTC 비교). 대금만기·제시기한 알림 제외.
+
+### 오너 확인 권장 3건 (자율 확정으로 진행 — 번복 시 해당 ADR을 "대체" 표기)
+1. **LOGISTICS 첫 전표 쓰기 범위**(ADR-0079 — 물류 역할의 업무 배정이 처음 문면화됨. 넓히기 낮음/좁히기 중간).
+2. **승인 무결성 대사 잡 배선·알림 형식**(ADR-0087 — 원 부채의 오너=영준(보안 판정) 항목을 자율 확정. 번복 낮음 — `enabled=false`).
+3. **SO 자동 수렴 2엣지 = §15 "SO 자동 엣지 0" 문면 개정**(ADR-0075 — 번복 중간: IN_SHIPMENT→CONFIRMED 데이터 정정 마이그레이션 1건+보드 열 원복).
+- (참고 — 계획서 §5의 4순위) L/C 검증을 순수 함수로 충족한 WBS DoD 해석(ADR-0081 — 번복 낮음). 위 3건과 같은 방식으로 자율 확정 진행.
+
+### 부채 소비·이월 대사 (design-integrated §6 — 조용한 누락 금지)
+- **S3-2 안에서 종결 예정**: P-03(QT/PI D-N — PR-6) · P-04(수입선적 PO 참조·`customs_records` — PR-3a/4a/5a) · PR-16 ③(역할 화면 — PR-7) · ⑤(SearchSelect — PR-3b) · ⑥(durations — PR-2a, 재갱신은 신규 부채) · **PR-9a ①**(승인 무결성 대사 배선 — **PR-1b**, ADR-0087. 통합 §6.1 표의 'PR-6'은 R-17로 PR-1b로 정정됨) · 부채 #15 마일스톤 몫(item_profiles 마일스톤 세트 — PR-4a/4c) · 관찰 [S1-2] OEM 생산 마일스톤 프로파일(판정 종결).
+- **판정 후 재트리거로 유지**: P-02 short-close(미개방 → S3-3 provider PR) · P-05 PO 라인 ETA(열 미신설·계산값 → S3-4/P4 라인 단위 예정일 요구) · P-06 OEM `profile_id`(미신설 → 두 번째 프로파일 요구) · P-57 facilities(트리거 (a) 불발동 — (b)·(c) 유지) · PR-16 ⑦ 브라우저 e2e 도구(미채택 → 실브라우저 전용 회귀 2 PR 연속 또는 P4 착수).
+- **유지 이월(소유·트리거 원문 그대로)**: P-01(선적분 노출 차감 — S3-3 provider PR, exposure 무변경) · P-07(S4-1·S4-2 몫) · P-10(L/C 닫힘 — S3-3) · P-13(documents 확폭 — 선적 첨부 미개방) · P-21(AllocationPort — S4-2) · P-22(fx_rates) · P-39(Idempotency-Key 길이) · P-43 · P-46(브리핑 줄 — 선적 줄 미편입) · P-56 · PR-16 ①②④⑧⑨ · 기타 P-08·09·11·12·14~20·23~42·44·45·47~53·55·59(무접촉).
+- **S3-2 신규 부채 Q-01~Q-19**(S3-2 계획 등재 번호 — P-xx·아래 '부채' 절 번호와 별개, 소유·트리거 병기):
+  - **Q-01** 다중 SO 합적(N:M) — 트리거: 합적 실수요
+  - **Q-02** 원천 라인 소속 DB 강제(복합 FK) — 트리거: 소속 불일치 사고 1건
+  - **Q-03** 채널입고·샘플무상 생성 경로 — 트리거: S4-3·S5-2·무상 SO 판정
+  - **Q-04** SO COMPLETED 엣지·short-close — 소유: S3-3 provider PR
+  - **Q-05** 중량·CBM·박스 열 — 소유: S3-3 PL
+  - **Q-06** 비거래처 수하인("TO ORDER") — 소유: S3-3 L/C
+  - **Q-07** 주말 판정(국가별 주말 규칙) — 트리거: 사용자 요구 또는 S4-4 캘린더
+  - **Q-08** 대금만기·제시기한 알림 — 소유: S3-3 receivables·lc_terms
+  - **Q-09** OEM 마일스톤 알림 — 트리거: 사용자 요구
+  - **Q-10** 납기(`requested_delivery_date`) 대비 ETD/ETA 비교 규칙 — 트리거: 사용자 요구(Incoterms별 의미 판정)
+  - **Q-11** 브리핑 수신자 확장(무역·물류 담당) — 트리거: 사용자 요구
+  - **Q-12** 계정 생성 화면·API — 트리거: 운영 개시 후 계정 개설 2건↑ 또는 요청
+  - **Q-13** 수입선적 문서 흐름 노드(PO 미편입) — 소유: PO를 문서 흐름에 넣는 세션(S4-1)
+  - **Q-14** 보드 카드 선적 요약(건수·다음 ETD) — 트리거: 사용자 요구
+  - **Q-15** `.shard_durations.json` 재갱신 — 트리거: 샤드 소요 편차 2배 초과
+  - **Q-16** PR-3a 동시성 파일 분할 — 트리거: 단일 파일 10분 초과
+  - **Q-17** S3-2~S3-4 DG 선적 수동 점검 공백 — 소유: S3-4 체크리스트
+  - **Q-18** 통관 이슈 임시 규칙 = runbook 안내뿐(코드 0) — 트리거: 통관 이슈 사고 또는 S5-3
+  - **Q-19** 출발국 휴일 경고(ETD·Cargo Closing·서류마감) — DESIGN §7.5 문면 밖이라 S3-2는 ETA만 — 트리거: 사용자 요구 또는 S4-4 캘린더 뷰
+
+### 계획서 §8 착수 확인 항목 — 이번에 문서·정적 실측으로 확인한 것 (PR-1, 2026-10-04)
+- **① `alembic heads` 단일** — 확인: `alembic heads` = `f2cb6020b2bb (head)` 1개(실행 확인, 리비전 38개 DAG 정적 대조도 head 1). M13 `down_revision`은 `f2cb6020b2bb`.
+- **② SO 상태·이력 CHECK 재생성 불요** — 정적 확인: `sales_orders/models.py` `confirmed_at_consistent`가 IN_SHIPMENT·COMPLETED를 이미 포함, 상태 CHECK는 `STATUSES` 파생이라 엣지 추가만으로 값 공간 불변. 마이그레이션 실측은 PR-3a.
+- **③ `lock_lines_for_consumption` 헤더 소속 필터** — 정적 확인: 라인 잠금 쿼리가 `LINE_HEADER_FK[doc_kind] == doc_id`로 소속을 거르고 헤더는 `FOR SHARE`(read=True) — 계획 전제(SO `FOR UPDATE` 선점 후 SHARE 흡수)와 일치.
+- **④ 식별자 63자** — 계획 이름 30종 길이 계산: 최장 56자(`fk_item_profile_milestone_types_profile_id_item_profiles`)·`ck_milestones_customs_actual_from_records` 41자로 모두 통과. **단 R-24 복합 FK를 명명 규칙(`fk_%(table)s_%(column_0_N_name)s_%(referred)s`) 자동 이름에 맡기면 `fk_holidays_calendar_year_id_country_code_year_holiday_calendar_years` = 69자로 초과** → PR-2a(M13)에서 **명시적 짧은 이름 필수**(예: `fk_holidays_calendar_year`)·`_guard_name` 실측. 복합 UNIQUE 자동 이름은 46자로 통과.
+- **⑤ `comm_logs` CHECK 실명** — 확인: `ck_comm_logs_subject_type_valid`(`1df4a398d38a` 마이그레이션 `op.f()` 명시, 모델 `value_in("subject_type", COMM_SUBJECT_TYPES)`). 고정 테스트 `test_collaboration_constraints.py:151-156`(`COMM_SUBJECT_TYPES == ("CERTIFICATION",)`)가 계획 R-05 갱신 목록과 일치. downgrade 실패 동작·범용 경로 거부는 PR-4a 실측.
+- **⑧ `_trade_chain_imports`** — 정적 확인: 현재 `{"expiry_sweep"}`(`test_no_auto_confirm_code_path_exists.py:783`) — PR-6이 `deadline_scan`을 더한다.
+- **⑩ 프로덕션 실데이터 유무** — 문서 확인: **실데이터 없음** — S1.5 종결 판정(2026-08-07)으로 실데이터 반입 전체가 실사용 개시 시점으로 이월됐고 재개 트리거("실사용 준비" 선언)가 아직 없다(아래 '## 현재' S1.5 항목·'영준이가 지금 할 것' 7). 따라서 선적 커널 편입(DocKind 저장값)의 되돌리기 비용은 지금 '중간'이고, PR-3a·4a는 반입 전 병합 권장 그대로 유효.
+- **⑫ SO Literal assert 무변경 통과 전제** — 정적 확인: `SalesOrderTarget` assert(`trade_chain/router.py:95-96`)는 `public_transition_targets`(사람 엣지 − 동결 액션 − RESERVED 도달)와 비교하고 자동 엣지를 세지 않는다(`trade_docs/machine.py:195-207`) — 실행 확인은 PR-3a.
+- **R-02 전제 재확인** — 정적 확인: `_cancel_sales_order`(`lifecycle.py:342-359`)는 `SO_CANCELLABLE` 상태 검사가 `live_children_numbers`보다 먼저다 → PR-3a가 순서를 바꿔야 함(계획대로).
+- **R-14 전제 재확인** — 정적 확인: `GOVERNED_PREFIXES`(`tests/architecture/authz_matrix.py:25-44`)에 `/api/v1/item-profiles`·`/api/v1/shipments`·`/api/v1/holidays` 없음 → PR-2a·3a·4c가 등재.
+- **실행 확인이 필요해 이번에 못 한 것(첫 해당 PR에서 실측)**: ⑥ dedup 키 신형식과 에스컬레이션 prefix·담당 이관 키 재작성 호환(PR-6) / ⑦ `check_integrity` 전건 순회 시간·**기존 DB 불일치 0 실측**(PR-1b 첫 커밋) / ⑨ 샤드 편중(PR-3a 첫 CI).
+
+### 검증 (PR-1)
+- **코드 변경 0**: `git diff --stat 52b9230..HEAD` = `DESIGN.md`·`WBS.md`·`kbeauty-golden-cases-v1.md`·`PROGRESS.md`·`docs/adr/`(신설 14·부기 14)·`docs/runbook/prod.md`(1줄)뿐 — `backend/`·`frontend/`·`infra/`·`scripts/` 무변경.
+- **문서 계약 시험**: `tests/unit/test_runbook_and_compose_contract.py` 25 passed(runbook 상호 링크·앵커·수기 양식 계약 — 실행 확인). ADR 형식·GC golden 마커 대사를 직접 읽는 시험은 리포에 없다(grep 확인 — 문서 린트는 이 PR의 사람 검토 몫). `pytest -m golden --collect-only` = **43건**(S3-1 종결 기준선 그대로 — 10건은 구현 PR이 마커로 옮기고 PR-8이 ≥53 대사).
+- **전체 pytest**: 전용 PG 5442(`new-pg.sh 5442 --fresh` — 공유 DB 미사용) `kbos_test`에서 처음부터 끝까지 1회 **5033 passed · 34 skipped(=5067 수집), 1406.62s(23분 26초), EXIT 0**(실행 확인, 코드 HEAD = `fb0f6fb6508c` — 문서만 바뀐 트리). S3-1 종결 기준선 5031 passed·5065 수집과 2건 차이는 이 PR의 변경이 아니다(코드 변경 0 — `a4d91c0` 계열 트리의 수집 실측값 그대로; skipped 34는 같은 환경 사유).
+- **GC v1.5 수치**: 날짜 산술(B/L+30 연도 넘김·ETD −7·USANCE 90·B/L+21·수리일+30 윤년)·KST 변환(15:30Z → 다음 날)·LA 시각 변환·tolerance 좁은 쪽 반올림을 Python으로 재계산해 설계 표와 일치 확인.
+
+### §22 11렌즈 (PR-1 — 문서 PR)
+①기능 해당 없음(문서) ②데이터 해당 없음(스키마 변경 0 — 계획만) ③트랜잭션 해당 없음 ④동시성 해당 없음 ⑤보안 해당 없음(권한 계획은 ADR-0079 문서화) ⑥시간 GC 경계 값 KST·UTC 재계산 확인 ⑦성능 해당 없음 ⑧테스트 기존 전체 테스트 무변경·문서 계약 시험 통과, GC v1.5 10건 등재(마커는 구현 PR) ⑨운영 runbook 예정 줄(활성 시점 명시) ⑩**문서 통과** — DESIGN [M4] 보강 12문단(문면 변경 4건 명시)·ADR 0074~0087·기존 ADR 부기·WBS v1.6·GC v1.5 ⑪워크스루 해당 없음(PR-8). 부채 신규 0(위 Q-01~Q-19는 계획 등재분).
+- **판단 기록(이 PR에서 계획 문면과 다르게 처리한 표기 3건 — 내용 변경 없음)**: ① 계획·통합 §4가 DESIGN 부기 머리표를 "[M5] 보강"이라 적었으나 DESIGN의 `[Mn]`은 업무 모듈 표지이고(§8.3 S3-1 부기도 [M4]) 선적·기일 엔진은 §7 M4라 **"[M4] 보강(S3-2 계획 — 자율 확정 2026-10-04)"**로 달았다. ② 통합 §3이 기존 ADR 부기를 "13건"이라 했으나 나열된 파일은 14개(0021·0024·0037·0051·0052·0053·0054·0055·0058·0059·0060·0064·0066·0067) — 14개 전부에 달았다. ③ 통합 §6.1 표의 PR-9a ① 처리 PR 'PR-6'은 §9 R-17이 우선해 'PR-1b'로 적었다.
+
 ## S3-1 PR-16 / S3-1 종결 (마감 — 청소 잡 2종·runbook·워크스루 렌즈 11·PROGRESS 종결) — 구현 기록 (2026-10-04)
 - **기준**: 로컬 브랜치 `worktree-agent-a914afb9004760511`(14a CSV 백엔드·15a/15b 보드·14b CSV 화면 포함 — 14a는 main `bc25727` 병합, 14b는 PR #51과 내용 동일) + 자정 경계 시험 결함 수정 2건 체리픽(`a3855c87854a`·`59ecc7f21337`). push·PR은 오케스트레이터 몫 — 아래 커밋 해시는 main 위로 체리픽한 PR #52 브랜치의 실제 해시(원 워크트리 해시와 트리 동일).
 - **커밋(12자리)**: `bfa0832df139` 청소 잡 2종·레지스트리 12행 / `eeef82e048ce` 워크스루 결함① 확정 시각 KST / `e4d8379e2edb` 워크스루 e2e 1쌍 / `d83f4fbeed78` 워크스루 결함② 390px 가로 스크롤 / `deb35b3c6ae0` GC v1.4 golden 고정 / `b34f25aa5fb7` runbook 4종 / `50c174b55a29` ADR 부기 / `2e01ac5fd31e` testing.md / `53772643dd18` PROGRESS 종결 / 검토 반영 커밋(purge UoW 가드·청크 독립 시험·runbook ⑧·ADR-0058 문구·알림 문구·이 해시 정정).
@@ -630,7 +709,8 @@
 - **S2-2 (인증 인스턴스·상태머신) — 종결(2026-08-12).** PR #17 `44d415268392`(3테이블·상태머신 27전이·날짜 스윕·CLI — ADR-0037~0040, GC v1.3 C9·C10) + PR #18 `640916e5a2ec`(documents CERTIFICATION 확장·태스크 서류 링크·§4.8 자동 적용 — ADR-0041·0042). 상세는 아래 "현재" 절의 직전 세션 상세 항목이 정본. **종결 시점 정본 기준선: pytest 1094·vitest 79·커버리지 게이트 94·CI 6잡.**
 
 ## 현재
-- **다음 할 일: S3-2 계획 세션(선적·기일 엔진·휴일 — WBS S3-2)** — S3-1은 PR-16(마감: 청소 잡 2종·runbook 4종·입구~출구 워크스루·PROGRESS 종결)으로 **구현 종결**(맨 위 'S3-1 PR-16 / S3-1 종결' 절 — DoD 4항 대사·부채 최종 목록·§4.6/G-xx 대사). S3-1의 남은 병합(PR #51 14b·15a/15b·PR-16)은 오케스트레이터가 CI green 확인 후 순서대로 처리한다. S3-2 계획 세션의 입력: WBS v1.5 S3-2 행(인계 판정 포함) + S3-1 이월 부채 P-01~P-07·P-57 + PR-16 신규 부채 ③(사용자 역할 화면 배정 판정)·⑦(브라우저 e2e 도구 채택 판정). 새 ADR 번호는 **0074부터**.
+- **다음 할 일: S3-2 PR-1b(승인 무결성 대사 잡 `approval-integrity-check` daily@05:40 — JOB 12→13, 마이그레이션 0)** — S3-2 계획은 **자율 확정(2026-10-04)**으로 끝났고 PR-1(문서 전용)이 계획서·부록 A~E·통합·DESIGN [M4] 보강 12문단·ADR-0074~0087·기존 ADR 부기·WBS v1.6·GC v1.5를 등재했다(맨 위 'S3-2 계획 확정·PR-1' 절 — 15 PR 순서·M13~M15·잡 12→14·오너 확인 권장 3건·부채 대사). PR-1b는 S3-1 PR-9a 부채 ①(트리거 'S3-2 이전' 도과)을 먼저 소비한다: **첫 커밋에서 기존 DB 승인 전건 대사 '불일치 0'을 실측해 기록**(1건↑이면 알림 형식 확정 전 원인 기록) → 잡 배선(불일치 = `approval-integrity:{approval_id}:{problem}` dedup 관리자 알림·FAILED = 실행 예외만)·CLI 수동 실행·4금 집합·총수 핀 13. 정본: 계획서 §4 PR-1b 행·design-integrated §2.8·§9 R-17·ADR-0087. 그 뒤 2a → 2b → 7 → 3a → 3c → 3b → 4a → 4c → 4b → 5a → 5b → 6 → 8.
+- (완료 2026-10-04 — 위 S3-2 계획 확정으로 대체) **S3-2 계획 세션(선적·기일 엔진·휴일 — WBS S3-2)** — S3-1은 PR-16(마감: 청소 잡 2종·runbook 4종·입구~출구 워크스루·PROGRESS 종결)으로 **구현 종결**(맨 위 'S3-1 PR-16 / S3-1 종결' 절 — DoD 4항 대사·부채 최종 목록·§4.6/G-xx 대사). S3-1의 남은 병합(PR #51 14b·15a/15b·PR-16)은 오케스트레이터가 CI green 확인 후 순서대로 처리한다. S3-2 계획 세션의 입력: WBS v1.5 S3-2 행(인계 판정 포함) + S3-1 이월 부채 P-01~P-07·P-57 + PR-16 신규 부채 ③(사용자 역할 화면 배정 판정)·⑦(브라우저 e2e 도구 채택 판정). 새 ADR 번호는 **0074부터**.
 - **S2-4 (대행 협업·T1 시드·장애 SOP·백업/복원 리허설) — 착수(2026-09-29, 클라우드 세션 자율 진행 — 오너 지시).** 계획서 `docs/plans/s2-4-plan.md`(자율 확정 13항·사후 번복 가능)를 PR-1 첫 커밋으로 등재했다. **3-PR 분할**: **PR-1 `s2-4-agency-hub`**(대행 협업 데이터 모델[certifications 컬럼 4·agency_contracts·comm_logs·documents 소유 COMM_LOG]·정체 스캔 잡 `stagnation-scan`·스코어카드·인증 편집 폼/통신 기록/`/agencies` 화면 — ADR-0048) → **PR-2 `s2-4-seeds-zip`**(T1 시드 카탈로그+투입[앱 경로·초안]·신규 시장 위저드·전달 서류 zip — ADR-0049) → **PR-3 `s2-4-ops-backup`**(백업 컨테이너·암호화·복원 리허설 실증·신선도 잡·용량 모니터·물리 정리·장애 SOP·수기 양식·Phase 2 리허설 관통 — ADR-0050·Phase 2 종결). 브랜치 `claude/continue-previous-session-lcc3uu`는 병합 커밋 `fa19e1b6d953`에서 재시작했다(원격은 병합된 옛 이력뿐이라 force-with-lease). 설계 충돌 1건 자율 조정: S2-2 판정("인스턴스 비용 컬럼 0")을 유지해 스코어카드 비용은 현행 계약 수수료 표시로 채운다(계획 §0-2 ④·§5 ①). **기준선(S2-3 종결): pytest 1468·vitest 143·커버리지 96.40%.**
 - **S2-4 PR-3 `s2-4-ops-backup` — 병합 완료(#24 `3c0900e82948`, 2026-09-29 — CI 6체크 success[백업 스크립트 테스트 CI 실행 확인]·mergeable clean 확인 후 squash) · Phase 2 종결.** 범위: **백업·복원**(`infra/backup/` — backup.sh[스냅샷 일관 매니페스트·AES-256·fail-closed·임시 폴더→rename·14세트 보관]·restore-rehearsal.sh[스크래치 DB 실복원·해시·행수·head·FILE 문서·소유·앱 역할 권한·append-only 검증]·**restore.sh[새 DB로 실제 복원]**·scheduler.sh[catch-up]·compose `backup` 서비스[dev profile·prod 기본]) / **`GET /api/v1/system/backups`**(관리자·audit·매니페스트 요약만) / 잡 **`backup-freshness`**(08:00 KST)·**`storage-monitor`**(05:00 KST — 여유율·고아·유실·물리 정리[기본 OFF·CLI dry-run]) / **`documents.purged_at`**(마이그레이션 1건 `9c2d5e7a1b34`) / **worker 기동 시 잡 자동 등록**(레지스트리 7행) / **장애 SOP·수기 표준 양식·백업 운영 절차**(`docs/runbook/`) — **ADR-0050.** **기준선(로컬 실측 2026-09-29): pytest 1884 passed(PR-2 종결 1755 대비 +129)·vitest 199(변경 없음)·ruff check·format·mypy 157파일·프런트 typecheck·build 통과.** **검증 기록**: ① 변이 점검(스크립트·신선도·저장소·물리 정리 수십 건 — 생존 변이는 테스트 보강) ② **Phase 2 실데이터 리허설 관통**(스모크 데이터 — 실영준 데이터 아님): worker 자동 등록 7종 → T1 시드→확정→대행 인증 1건(처리방식·공)→태스크→통신 기록(다음 액션 기한)→정체 스캔(기준일 이동)·독촉 알림→전달 서류 zip 해시 대조→백업→복원 리허설 성공→`/system/backups` 조회·audit→물리 정리 dry-run/apply 후 재백업·재리허설 통과→저장소 임계 알림→신선도 알림 / **실제 앱 스키마로 재검증**: 백업→리허설(소유·권한·append-only ⓕ 통과, 실물 없는 FILE 문서 2건은 **리허설이 정확히 실패로 잡음**)→`restore.sh` 새 DB 복원→`alembic current`=head·앱 역할 읽기·append-only 유지 확인 — 임시 관리자 `s24pr3-smoke@local.kbos` 관통 직후 비활성 처분(원격 로컬 dev DB) ③ 적대 검증 2렌즈(코드·테스트/문서) — **high 3건 반영**(물리 정리가 잠금·재확인 전에 실물을 지우던 순서·앱이 root 소유 백업 폴더를 못 읽던 권한·복원 절차 문서가 권한/소유를 복구 못 하던 오류) 외 med/low 다수(평문 임시 잔존·리허설 ⓓ 프로세스 치환·스케줄러 catch-up·미래/불가능 날짜·문서의 미래 날짜 규칙 오기·양식 라벨·CI에서 스크립트 테스트 skip 방지[`KBOS_REQUIRE_SCRIPT_TESTS`]). **자율 확정**: 백업 산출물 호스트 밖 복제는 운영자 몫(문서 경고)·시점 복구(PITR) 비포함·백업 화면 비포함(API만)·worker 잡 자동 등록.
 - **[S2-4 PR-3 관찰 등재]** ① 백업 산출물의 **호스트 밖 복제**는 시스템이 하지 않는다(같은 디스크 백업은 디스크 장애에 무력 — 운영자 몫). ② 패스프레이즈 분실 시 백업 복구 불가·변경 시 옛 세트는 옛 패스프레이즈 필요. ③ CBC 암호화는 무결성 인증이 없다(평문 매니페스트 해시로 확인 — 볼륨 쓰기 권한자가 산출물+매니페스트를 함께 바꾸는 경우 미방어). ④ 고아·유실 알림은 해결 때까지 매일 반복. ⑤ 백업 상태 화면 없음(관리자 API만). ⑥ 이 환경에서는 컨테이너(docker compose)로 백업 서비스를 실제 기동해 보지 못했다 — 스크립트·compose 구성은 로컬 PG로 실행 검증하고 compose는 구문·계약 테스트로 확인했다(CI compose 잡은 렌더만 확인). **실 배포 후 첫 일주일간 신선도 알림·리허설 결과 확인 필수.** ⑦ 실데이터 1건 관통은 반입 재개(영준 \"실사용 준비\" 선언) 시 재수행 항목. **재판정 트리거: 실운영 개시·디스크 증설·백업 복제 방식 결정 시.**
@@ -883,7 +963,7 @@ git pull origin main
 docker compose up -d --build
 docker compose run --rm api pytest -q
 ```
-현재 상태 = **S3-1 구현 종결(2026-10-04 PR-16) — 다음은 S3-2 계획 세션(맨 위 PR-16 절·'현재' 첫 줄).** 이하는 이전 시점 기록(보존): **S2-4 전 PR 병합 완료(#22 `5d3222f859be`·#23 `7c4a9739e061`·#24 `3c0900e82948`) — Phase 2 종결. Phase 3 S3-1(전표 사슬 전반부·인테이크·승인 코어)의 계획 세션은 2026-09-30 자율 확정으로 완료했고(최상단 "S3-1 계획 자율 확정" 항목), 계획 산출물(계획서 `docs/plans/s3-1-plan.md`+부록 7·DESIGN [M4] 보강·ADR 0051~0067·WBS v1.5·GC v1.4·runbook)은 S3-1 PR-1(문서 전용)로 등재한다. 다음은 S3-1 PR-2(플랫폼 기반).** (S2-3은 PR-1 #19 `1c1e385ab533`·PR-2 #20 `c948e76e11cf`·PR-3 #21 `fa19e1b6d953` 병합으로 종결.) 이하는 종결된 S2-3의 분할 기록(보존): PR-1 범위: 아웃박스 디스패처(부채 #11)·scheduled_jobs 실행기+등록 2행(부채 #12)·알림센터·알림 규칙 CRUD·신규 2테이블(0행 유지)·태스크 forbid(요청 18). PR-2 이월분: 기일 스캔·GC-C1·데일리 브리핑·문서 링크 삭제 409(요청 19)·잡 등록 2행 추가. PR-3 이월분: 매트릭스(조건 A 모집합 명시)·인증 보드. **실데이터 반입은 이월 상태**(2026-08-07 오너 결정 — 트리거: 영준 "실사용 준비" 선언). 반입 재개 시에는 원천 엑셀 폴더 경로 실측부터.
+현재 상태 = **S3-2 계획 자율 확정·PR-1 문서 등재(2026-10-04) — 다음은 S3-2 PR-1b(승인 무결성 대사 잡 — 맨 위 S3-2 절·'현재' 첫 줄).** 직전: S3-1 구현 종결(2026-10-04 PR-16). 이하는 이전 시점 기록(보존): **S2-4 전 PR 병합 완료(#22 `5d3222f859be`·#23 `7c4a9739e061`·#24 `3c0900e82948`) — Phase 2 종결. Phase 3 S3-1(전표 사슬 전반부·인테이크·승인 코어)의 계획 세션은 2026-09-30 자율 확정으로 완료했고(최상단 "S3-1 계획 자율 확정" 항목), 계획 산출물(계획서 `docs/plans/s3-1-plan.md`+부록 7·DESIGN [M4] 보강·ADR 0051~0067·WBS v1.5·GC v1.4·runbook)은 S3-1 PR-1(문서 전용)로 등재한다. 다음은 S3-1 PR-2(플랫폼 기반).** (S2-3은 PR-1 #19 `1c1e385ab533`·PR-2 #20 `c948e76e11cf`·PR-3 #21 `fa19e1b6d953` 병합으로 종결.) 이하는 종결된 S2-3의 분할 기록(보존): PR-1 범위: 아웃박스 디스패처(부채 #11)·scheduled_jobs 실행기+등록 2행(부채 #12)·알림센터·알림 규칙 CRUD·신규 2테이블(0행 유지)·태스크 forbid(요청 18). PR-2 이월분: 기일 스캔·GC-C1·데일리 브리핑·문서 링크 삭제 409(요청 19)·잡 등록 2행 추가. PR-3 이월분: 매트릭스(조건 A 모집합 명시)·인증 보드. **실데이터 반입은 이월 상태**(2026-08-07 오너 결정 — 트리거: 영준 "실사용 준비" 선언). 반입 재개 시에는 원천 엑셀 폴더 경로 실측부터.
 
 ## 영준이가 지금 할 것
 1. ~~S2-1 PR-1(#15)·PR-2(#16) 병합~~ — **완료(`a7fad6b` origin/main 실측 2026-08-11)**.
