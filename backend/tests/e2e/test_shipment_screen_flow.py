@@ -1,4 +1,4 @@
-"""A·K. 선적 화면 경로 (S3-2 PR-3b — 프런트 소비 계약, 백엔드 코드 무변경).
+"""A(모듈 마커 `group_a` — 시험 3건 전부)·K(역할별 동작 시험 1건만 `group_k` 추가). 선적 화면 경로 (S3-2 PR-3b — 프런트 소비 계약, 백엔드 코드 무변경).
 
 SO 상세 '선적 만들기' 2단 대화상자가 보내는 **본문 그대로**(빈칸 라인 제외·원천 값 필드 0) 미리보기 → 생성을 하고,
 부분선적 2건 → 선적 잔량 0, +1 → 409 `EXCEEDS_OPEN`의 `detail.open_quantity` 키가 **SO 라인 id**인지(화면이 그 라인 칸 아래에
@@ -139,7 +139,7 @@ def test_screen_flow_two_partial_shipments_reach_zero_and_the_next_409_is_keyed_
 
 
 def test_screen_reads_follow_the_so_into_and_out_of_shipping(trade: TestClient) -> None:
-    """A·K — 화면 조회 경로: SO 목록 '선적중' 필터·SO 상세 선적 섹션(Page·최신순)·보드 '선적중' 열·선적에서 연 문서 흐름(SO 아래 노드)
+    """A — 화면 조회 경로: SO 목록 '선적중' 필터·SO 상세 선적 섹션(Page·최신순)·보드 '선적중' 열·선적에서 연 문서 흐름(SO 아래 노드)
     → 선적 2건 취소 → SO 확정 복귀·필터에서 빠짐·잔량 복원"""
     so = confirmed_so((3,))
     line = so["line_ids"][0]
