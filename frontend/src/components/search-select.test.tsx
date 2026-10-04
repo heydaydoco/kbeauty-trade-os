@@ -128,6 +128,54 @@ describe("SearchSelect", () => {
     expect(onPick).toHaveBeenCalledWith({ id: 2, name: "둘째" });
   });
 
+  // PR-16 부채 ⑤(S3-2 PR-3b 수정) — 디바운스 대기 중 옛 결과(검색 전 첫 바이어)를 빠르게 눌러 엉뚱한 거래처가 골라지던 결함.
+  it("빠른 입력 직후에는 옛 결과가 사라지고 클릭·Enter로 아무것도 고르지 않는다(오선택 0) — 새 결과가 오면 그것만 고른다", async () => {
+    const fetchMock = vi.fn((input: string) => {
+      const rows = input.includes("q=") ? [{ id: 5, name: "콜마" }] : [{ id: 1, name: "첫 바이어" }];
+      return Promise.resolve(jsonResponse({ items: rows, total: rows.length, page: 1, size: 20 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onPick = vi.fn();
+    renderWithProviders(<Harness onPick={onPick} />);
+    const box = screen.getByRole("combobox", { name: "거래처 검색" });
+    fireEvent.focus(box);
+    const stale = await screen.findByRole("option", { name: "첫 바이어" });
+
+    fireEvent.change(box, { target: { value: "콜마" } });
+    // 디바운스(300ms) 대기 중 — 옛 목록은 화면에 없고 '검색 중…'만 보인다.
+    expect(screen.queryByRole("option")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("검색 중…");
+    fireEvent.click(stale);
+    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onPick).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole("option", { name: "콜마" }));
+    expect(onPick).toHaveBeenCalledTimes(1);
+    expect(onPick).toHaveBeenCalledWith({ id: 5, name: "콜마" });
+  });
+
+  it("검색어를 지워도 디바운스 동안은 옛(검색어) 결과를 고를 수 없다", async () => {
+    const fetchMock = vi.fn((input: string) => {
+      const rows = input.includes("q=") ? [{ id: 5, name: "콜마" }] : [{ id: 1, name: "첫 바이어" }];
+      return Promise.resolve(jsonResponse({ items: rows, total: rows.length, page: 1, size: 20 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onPick = vi.fn();
+    renderWithProviders(<Harness onPick={onPick} />);
+    const box = screen.getByRole("combobox", { name: "거래처 검색" });
+    fireEvent.focus(box);
+    fireEvent.change(box, { target: { value: "콜마" } });
+    await screen.findByRole("option", { name: "콜마" });
+
+    fireEvent.change(box, { target: { value: "" } });
+    expect(screen.queryByRole("option", { name: "콜마" })).toBeNull();
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onPick).not.toHaveBeenCalled();
+    expect(await screen.findByRole("option", { name: "첫 바이어" })).toBeInTheDocument();
+  });
+
   it("Esc로 목록이 닫힌다", async () => {
     stub([{ id: 1, name: "첫째" }]);
     renderWithProviders(<Harness />);
