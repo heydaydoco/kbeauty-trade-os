@@ -118,6 +118,8 @@ def test_duplicates_are_409_and_derived_or_oem_types_are_422(admin: TestClient) 
             422,
             "SHIPMENTS.MILESTONE.TYPE_NOT_APPLICABLE",
         ), milestone_type
+        # 서비스 1차 검사가 낸 422(입력처 안내 detail 동반) — DB CHECK 번역(2차 방어선)은 detail이 없다(층 구분 — 4a ⑤ 선례)
+        assert "선적 일정 종류" in response.json()["error"]["detail"]["milestone_type"]
     assert _add(admin, profile, "ATD").status_code == 422
     extra = admin.post(
         f"{PROFILES}/{profile}/milestone-types",
