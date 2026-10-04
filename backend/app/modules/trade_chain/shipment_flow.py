@@ -238,7 +238,7 @@ def _plan(
             role=PartyRole.CONSIGNEE.value,
             partner_id=buyer.id,
             name_en=consignee_name,
-            address_en=shipments.clean_address(buyer.address_en),
+            address_en=shipments.clean_address(buyer.address_en, field="so_id"),
             is_auto=True,
         )
     ]
@@ -251,7 +251,9 @@ def _plan(
                 name_en=shipments.require_english_name(
                     partner.name_en, field=f"parties[{index}].partner_id"
                 ),
-                address_en=shipments.clean_address(partner.address_en),
+                address_en=shipments.clean_address(
+                    partner.address_en, field=f"parties[{index}].partner_id"
+                ),
                 is_auto=False,
             )
         )
@@ -655,7 +657,7 @@ def add_party(
             role=role,
             partner_id=partner.id,
             name_en=name_en,
-            address_en=shipments.clean_address(partner.address_en),
+            address_en=shipments.clean_address(partner.address_en, field="partner_id"),
             is_auto=False,
             created_by_id=actor.id,
             updated_by_id=actor.id,

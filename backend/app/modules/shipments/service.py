@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
+from app.core.text import invisible_char_problem, is_invisible_char
 from app.core.time import utcnow
 from app.modules.shipments.models import Shipment, ShipmentLine, ShipmentParty
 from app.modules.trade_docs import editing
@@ -41,6 +42,11 @@ CONSTRAINT_ERRORS: dict[str, ErrorCode] = {
     "uq_shipment_lines_shipment_id_line_no_active": ErrorCode.CONCURRENCY_VERSION_CONFLICT,
     # 동시 출고지시·취소 등 헤더 경합은 FOR UPDATE + version이 먼저 막는다. 채번 유니크는 시퀀스 행 잠금이 보증(발생 시 409 — 500 금지).
     "uq_shipments_doc_number": ErrorCode.CONCURRENCY_VERSION_CONFLICT,
+    # 입력(거래처 마스터 텍스트)에서 오는 값의 CHECK — 서비스 검사(`require_english_name`·`clean_address`)가 1차이고, 이 번역은
+    # 검사를 빠져나간 값이 500으로 새지 않게 하는 2차 방어선이다(PR-3a 적대 검토: C1 제어문자 500 — 같은 422로 번역).
+    "ck_shipment_parties_name_en_clean": ErrorCode.SHIPMENTS_PARTY_ENGLISH_NAME_MISSING,
+    "ck_shipment_parties_address_en_clean": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_shipment_parties_address_en_not_blank": ErrorCode.VALIDATION_INVALID_FIELD,
 }
 
 
@@ -208,10 +214,17 @@ def insert_planned(
     return row
 
 
+#: 주소에서만 허용하는 줄 구분 문자(탭·LF·CR) — 그 밖의 보이지 않는 글자는 거부(DB `ck_shipment_parties_address_en_clean`과 짝).
+_ADDRESS_LINE_BREAKS = frozenset("\t\n\r")
+
+
 def require_english_name(name_en: str | None, *, field: str) -> str:
-    """거래처 영문명 — 비었거나 제어문자(탭·줄바꿈 등)가 있으면 422 ENGLISH_NAME_MISSING(서류 영문 원천 결측 — fail-visible)."""
-    text = (name_en or "").strip()
-    if not text or any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+    """거래처 영문명 — 비었거나 **strip 전 원문**에 보이지 않는 글자(Cc[C0·DEL·C1]·Cf·Zl·Zp·한글 채움 — 하우스 규칙
+    `invisible_char_problem`)가 있으면 422 ENGLISH_NAME_MISSING(서류 영문 원천 결측·오염 — fail-visible). 미리보기·생성·당사자 추가가 같은 판정이다
+    (DB CHECK `name_en_clean`은 C0·C1만 보는 최후 방어선 — 번역표가 같은 422로 바꾼다)."""
+    raw = name_en or ""
+    text = raw.strip()
+    if not text or invisible_char_problem(raw, label="거래처 영문명") is not None:
         raise AppError(
             ErrorCode.SHIPMENTS_PARTY_ENGLISH_NAME_MISSING,
             detail={field: "거래처 영문명을 확인해 주세요."},
@@ -219,8 +232,18 @@ def require_english_name(name_en: str | None, *, field: str) -> str:
     return text
 
 
-def clean_address(address_en: str | None) -> str | None:
-    text = (address_en or "").strip()
+def clean_address(address_en: str | None, *, field: str) -> str | None:
+    """거래처 영문 주소 스냅샷 — 여러 줄(탭·LF·CR)은 허용, 그 밖의 보이지 않는 글자(Cc·Cf·Zl·Zp·한글 채움)는 422 INVALID_FIELD.
+    공백뿐이면 NULL로 접는다(주소는 선택 값)."""
+    raw = address_en or ""
+    if any(is_invisible_char(ch) for ch in raw if ch not in _ADDRESS_LINE_BREAKS):
+        raise AppError(
+            ErrorCode.VALIDATION_INVALID_FIELD,
+            detail={
+                field: "거래처 영문 주소에 보이지 않는 글자(제어·서식·채움 문자)가 있습니다 — 거래처 주소를 확인해 주세요."
+            },
+        )
+    text = raw.strip()
     return text or None
 
 

@@ -259,6 +259,12 @@ class ShipmentParty(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, Acto
         CheckConstraint(
             "address_en IS NULL OR btrim(address_en) <> ''", name="address_en_not_blank"
         ),
+        # 주소의 줄 구분은 탭·LF·CR만 허용 — 그 밖의 C0·DEL·C1 제어문자는 거부(서비스 422가 1차, 이 CHECK는 최후 방어선 — 번역표 등재).
+        CheckConstraint(
+            "address_en IS NULL OR translate(address_en, chr(9) || chr(10) || chr(13), '')"
+            " !~ '[[:cntrl:]]'",
+            name="address_en_clean",
+        ),
         CheckConstraint(
             "NOT is_auto OR role IN ("
             + ", ".join(f"'{r}'" for r in sorted(AUTO_PARTY_ROLES))

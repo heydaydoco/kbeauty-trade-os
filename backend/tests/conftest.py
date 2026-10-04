@@ -127,8 +127,26 @@ def _prepare_schema() -> None:
       "인가 코드가 잘못된 것처럼 보이는" 실패로 나타나 원인 추적을 크게 낭비시킨다.
       매번 바닥부터 올리면 그 상태가 존재할 수 없고, downgrade 경로도 덤으로
       매 실행 검증된다.
+    ★ downgrade 전에 남은 행을 비운다(S3-2 PR-3a): 중단된 직전 실행이 남긴 데이터가 있으면 데이터 손실을 거부하는 downgrade 가드
+      (M14 — 선적 행·선적중 수주가 있으면 RuntimeError)가 세션 자체를 막는다. 시험 DB의 데이터는 버려도 되는 것이므로 가드를 우회하지 않고
+      데이터를 먼저 지운다(운영·kbos_migr의 가드는 그대로).
     """
     config = AlembicConfig(str(ALEMBIC_INI))
+    with owner_engine.begin() as connection:
+        leftovers = (
+            connection.execute(
+                text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                    " AND tablename <> 'alembic_version'"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if leftovers:
+            connection.execute(
+                text("TRUNCATE " + ", ".join(f'"{name}"' for name in leftovers) + " CASCADE")
+            )
     command.downgrade(config, "base")
     command.upgrade(config, "head")
 

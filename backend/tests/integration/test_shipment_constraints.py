@@ -456,6 +456,15 @@ def test_party_constraints(so: dict[str, Any]) -> None:
     with engine.begin() as connection:
         first = _party(connection, **base)
         _party(connection, **{**base, "role": "NOTIFY", "is_auto": False})
+        _party(  # 주소 줄 구분(탭·CR·LF)은 허용 — address_en_clean 양성 대조
+            connection,
+            **{
+                **base,
+                "role": "CUSTOMS_BROKER",
+                "is_auto": False,
+                "address_en": "1 Main St\r\nSuite\t5",
+            },
+        )
     cases = [
         ({"role": "CARRIER", "is_auto": False}, "ck_shipment_parties_role_valid"),
         ({"role": "FORWARDER", "is_auto": True}, "ck_shipment_parties_auto_role"),
@@ -470,6 +479,18 @@ def test_party_constraints(so: dict[str, Any]) -> None:
         (
             {"role": "FORWARDER", "is_auto": False, "address_en": "  "},
             "ck_shipment_parties_address_en_not_blank",
+        ),
+        (
+            {"role": "FORWARDER", "is_auto": False, "name_en": "A\u0085B"},
+            "ck_shipment_parties_name_en_clean",
+        ),
+        (
+            {"role": "FORWARDER", "is_auto": False, "address_en": "1 Main\x0bSt"},
+            "ck_shipment_parties_address_en_clean",
+        ),
+        (
+            {"role": "FORWARDER", "is_auto": False, "address_en": "1 Main\u0096St"},
+            "ck_shipment_parties_address_en_clean",
         ),
     ]
     for override, constraint in cases:
@@ -611,3 +632,59 @@ def test_constraint_names_fit_postgres_identifier_limit() -> None:
             )
         ]
     assert len(names) > 50 and max(len(n) for n in names) <= 63
+
+
+# ── M14 downgrade 가드(PR-3a 적대 검토 반영) ─────────────────────────────────────
+
+
+def _m14() -> Any:
+    import importlib.util
+    from pathlib import Path
+
+    path = next(
+        (Path(__file__).resolve().parents[2] / "migrations" / "versions").glob(
+            "*_acd34f28c11e_s32_shipments.py"
+        )
+    )
+    spec = importlib.util.spec_from_file_location("m14_s32_shipments", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.group_k
+def test_m14_downgrade_refuses_to_drop_live_shipment_data(so: dict[str, Any]) -> None:
+    """M14 downgrade 가드 — 선적 행이 있거나 IN_SHIPMENT SO가 있으면 DDL 전에 RuntimeError(선적 기록 소실·근거 없는 선적중 수주 방지).
+    빈 상태는 통과. 실제 `downgrade()`를 롤백할 트랜잭션 안에서 불러 표가 그대로임을 확인한다(가드 제거 변이 = 표가 drop되어 실패)"""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+
+    module = _m14()
+    with owner_engine.connect() as connection:
+        module.refuse_lossy_downgrade(connection)  # 확정 SO만 있고 선적 0 → 통과
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE sales_orders SET status = 'IN_SHIPMENT' WHERE id = :i"), {"i": so["id"]}
+        )
+    with owner_engine.connect() as connection, pytest.raises(RuntimeError, match="M14"):
+        module.refuse_lossy_downgrade(connection)
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE sales_orders SET status = 'CONFIRMED' WHERE id = :i"), {"i": so["id"]}
+        )
+    # 취소된 선적도 기록이다 — 상태·soft delete와 무관하게 센다
+    raw_shipment(so["id"], status="CANCELLED")
+    with owner_engine.connect() as connection:
+        tx = connection.begin()
+        try:
+            with (
+                Operations.context(MigrationContext.configure(connection)),
+                pytest.raises(RuntimeError, match="M14"),
+            ):
+                module.downgrade()
+        finally:
+            tx.rollback()
+    with owner_engine.connect() as connection:
+        assert connection.execute(text("SELECT to_regclass('shipments')")).scalar_one() is not None
+        assert connection.execute(text("SELECT count(*) FROM shipments")).scalar_one() == 1

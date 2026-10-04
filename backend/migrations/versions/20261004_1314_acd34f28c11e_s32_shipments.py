@@ -10,7 +10,8 @@ S3-2 PR-3a 수출선적 커널 스키마 — M14 (ADR-0074·0077·0078 / design-
      markets FK 아님)·합계·동결 시각. CHECK: 헤더 공통 25종 + kind_valid·**kind_source**[원천 FK 정확히 하나 + 수출·수입만 — 채널입고·샘플무상 행
      DB 거부]·import_has_no_amount[PO 원가 비복사]·country_format·counterparty_name_not_blank·source_terms_complete[원천 사본 완결]·
      no_copy_lineage·planned_not_frozen·released_frozen. UNIQUE doc_number(전역)·(id, currency)[라인 복합 FK 대상], 부분 인덱스 so_id·po_id live·목록·담당)
-  ② shipment_parties — 당사자(역할 5값 CHECK, (선적, 역할) unique_active, 자동 스냅샷 행은 CONSIGNEE·SHIPPER만 — auto_role, 영문명 비공백·제어문자 금지)
+  ② shipment_parties — 당사자(역할 5값 CHECK, (선적, 역할) unique_active, 자동 스냅샷 행은 CONSIGNEE·SHIPPER만 — auto_role, 영문명 비공백·제어문자 금지,
+     주소는 탭·LF·CR만 허용하고 그 밖의 C0·DEL·C1 제어문자 금지 — address_en_clean[PR-3a 적대 검토 반영])
   ③ shipment_status_log — 선적 상태 변경 이력(IMMUTABLE — revoke_mutations, status_log_checks 7종 + 탄생 행 유일)
   ④ shipment_lines — 선적 라인(원천 라인 FK 정확히 하나[one_source], 헤더 복합 FK (shipment_id, currency), 수출 = SO 단가 사본·numeric 곱
      금액[export_priced, R-04]·무상 규약 승계[export_free_iff_zero_price], 수입 = 단가 NULL·금액 0[import_no_price], (선적, 원천 라인) unique_active)
@@ -23,7 +24,10 @@ S3-2 PR-3a 수출선적 커널 스키마 — M14 (ADR-0074·0077·0078 / design-
   ■ 멱등·중복 UNIQUE는 unique_active 부분 인덱스(WHERE deleted_at IS NULL — §17.4), doc_number는 전역 UNIQUE(재발급 금지 §17.3).
   ■ **시드 0** — 전부 ActorMixin(users FK) 소유 표라 마이그레이션 시드 금지(함정 ⑩).
   ■ shipment_status_log는 REVOKE UPDATE, DELETE, TRUNCATE를 손으로 부른다(table_policy.IMMUTABLE_TABLES와 짝).
-  ■ downgrade는 인덱스 → 테이블 역순 drop(REVOKE는 테이블과 함께 소멸). 데이터가 있으면 함께 사라진다(운영 실데이터 반입 전 — 계획 §8 ⑩).
+  ■ downgrade는 인덱스 → 테이블 역순 drop(REVOKE는 테이블과 함께 소멸).
+  ■ **downgrade 가드(PR-3a 적대 검토 반영)**: 선적 행이 1건이라도 있거나(soft delete 포함) IN_SHIPMENT 상태 SO가 있으면 RuntimeError로
+    중단한다 — 선적 기록을 조용히 지우거나, 선적 표가 사라진 뒤 "살아 있는 선적 ≥ 1"을 뜻하는 IN_SHIPMENT SO(이전 리비전 코드에는 복귀 엣지가
+    없다)를 거짓 상태로 남기지 않는다. 되돌리려면 선적을 먼저 정리(취소·SO 복귀)하고 데이터 처리 방침을 정한 뒤 내린다.
 """
 
 from __future__ import annotations
@@ -303,6 +307,11 @@ def upgrade() -> None:
             name=op.f("ck_shipment_parties_address_en_not_blank"),
         ),
         sa.CheckConstraint(
+            "address_en IS NULL OR translate(address_en, chr(9) || chr(10) || chr(13), '')"
+            " !~ '[[:cntrl:]]'",
+            name=op.f("ck_shipment_parties_address_en_clean"),
+        ),
+        sa.CheckConstraint(
             "btrim(name_en) <> '' AND name_en !~ '[[:cntrl:]]'",
             name=op.f("ck_shipment_parties_name_en_clean"),
         ),
@@ -550,7 +559,21 @@ def upgrade() -> None:
     )
 
 
+def refuse_lossy_downgrade(bind: sa.engine.Connection) -> None:
+    """선적 행(삭제 포함) 또는 IN_SHIPMENT SO가 있으면 RuntimeError — DDL 전에 부른다(되돌릴 수 없는 손실·거짓 상태 방지)."""
+    shipments = bind.execute(sa.text("SELECT count(*) FROM shipments")).scalar_one()
+    in_shipment = bind.execute(
+        sa.text("SELECT count(*) FROM sales_orders WHERE status = 'IN_SHIPMENT'")
+    ).scalar_one()
+    if shipments or in_shipment:
+        raise RuntimeError(
+            f"선적 {shipments}건·선적중(IN_SHIPMENT) 수주 {in_shipment}건이 있어 M14를 내릴 수 없습니다 — 선적 기록이 사라지고 "
+            "선적중 수주가 근거 없는 상태로 남습니다. 선적을 정리(취소·수주 확정 복귀)하고 데이터 처리 방침을 정한 뒤 내리세요."
+        )
+
+
 def downgrade() -> None:
+    refuse_lossy_downgrade(op.get_bind())
     op.drop_index(
         "uq_shipment_lines_shipment_id_so_line_id_active",
         table_name="shipment_lines",
