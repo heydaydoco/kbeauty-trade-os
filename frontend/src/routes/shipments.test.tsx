@@ -33,6 +33,35 @@ const LIST: GateHandler = ["/v1/shipments", "GET", () => jsonResponse(page(ROWS)
 const rowOf = (name: string) => screen.getByRole("link", { name }).closest("tr") as HTMLElement;
 
 describe("선적 목록", () => {
+  it("ETD·ETA 열(부채 R-3b-3 — PR-4a 유효값): 날짜 문자열 그대로 + 실적/예정 표지, 값 없으면 '—'", async () => {
+    stubGateFetch(TRADER, [
+      [
+        "/v1/shipments",
+        "GET",
+        () =>
+          jsonResponse(
+            page([
+              shipmentListItem({
+                etd: { value: "2026-10-03", basis: "ACTUAL" },
+                eta: { value: "2026-10-20", basis: "PLANNED" },
+              }),
+              shipmentListItem({ id: 32, doc_number: "SH-2026-0002" }),
+            ]),
+          ),
+      ],
+    ]);
+    renderWithProviders(<AppRoutes />, { route: "/shipments" });
+    await screen.findByRole("link", { name: "SH-2026-0001" });
+    const headers = screen.getAllByRole("columnheader").map((th) => th.textContent);
+    expect(headers).toEqual(expect.arrayContaining(["ETD", "ETA"]));
+    const cells = within(rowOf("SH-2026-0001")).getAllByRole("cell");
+    expect(cells[headers.indexOf("ETD")]).toHaveTextContent("2026-10-03 실적");
+    expect(cells[headers.indexOf("ETA")]).toHaveTextContent("2026-10-20 예정");
+    const empty = within(rowOf("SH-2026-0002")).getAllByRole("cell");
+    expect(empty[headers.indexOf("ETD")]).toHaveTextContent(/^—$/);
+    expect(empty[headers.indexOf("ETA")]).toHaveTextContent(/^—$/);
+  });
+
   it("행·상태 배지·구분·원천 링크·출발→도착·라인 수·합계(서버 문자열)·담당을 보인다", async () => {
     stubGateFetch(TRADER, [LIST]);
     renderWithProviders(<AppRoutes />, { route: "/shipments" });

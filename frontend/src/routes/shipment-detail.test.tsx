@@ -566,17 +566,31 @@ describe("선적 상세 — 라인·메모·당사자 쓰기", () => {
   });
 });
 
-describe("선적 화면 — 소스 계약 (design-D D12·D13, PR-2b R-2b-2 승계)", () => {
+describe("선적 화면 — 소스 계약 (design-D D12·D13, PR-2b R-2b-2 승계 — PR-4b: 마일스톤 컴포넌트·lib 편입)", () => {
   const sources = import.meta.glob(
-    ["./shipments.tsx", "./shipment-*.tsx", "../components/shipment-*.tsx", "../lib/shipment.ts"],
+    [
+      "./shipments.tsx",
+      "./shipment-*.tsx",
+      "../components/shipment-*.tsx",
+      "../lib/shipment.ts",
+      "../components/milestone-*.tsx",
+      "../lib/milestone.ts",
+    ],
     { query: "?raw", import: "default", eager: true },
   ) as Record<string, string>;
   const code = (src: string) => src.replace(/\/\/.*$/gm, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
 
-  it("스캔 대상이 실제로 있다(공회전 방지) — 테스트 파일 제외 5개", () => {
+  it("스캔 대상이 실제로 있다(공회전 방지) — 테스트 파일 제외 12개(마일스톤 6 컴포넌트 + lib 포함)", () => {
     expect(Object.keys(sources).filter((path) => !path.includes(".test.")).sort()).toEqual([
+      "../components/milestone-changes.tsx",
+      "../components/milestone-customs.tsx",
+      "../components/milestone-dialogs.tsx",
+      "../components/milestone-oem-section.tsx",
+      "../components/milestone-set-editor.tsx",
+      "../components/milestone-timeline.tsx",
       "../components/shipment-create-dialog.tsx",
       "../components/shipment-parts.tsx",
+      "../lib/milestone.ts",
       "../lib/shipment.ts",
       "./shipment-detail.tsx",
       "./shipments.tsx",

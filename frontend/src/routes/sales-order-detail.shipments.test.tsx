@@ -72,6 +72,17 @@ describe("SO 상세 — 선적 섹션·선적 잔량", () => {
     expect(sent(calls, "/v1/shipments?so_id=9", "GET")).toHaveLength(1);
   });
 
+  it("선적 섹션 ETD·ETA 열(부채 R-3b-3) — 서버 유효값 문자열 + 실적/예정 표지, 없으면 '—'", async () => {
+    open(confirmed(), TRADER, [], page([shipmentListItem({ etd: null, eta: { value: "2026-10-21", basis: "ACTUAL" } })]));
+    await heading();
+    const section = shipSection();
+    await within(section).findByRole("link", { name: "SH-2026-0001" });
+    const headers = within(section).getAllByRole("columnheader").map((th) => th.textContent);
+    const cells = within(within(section).getByRole("link", { name: "SH-2026-0001" }).closest("tr") as HTMLElement).getAllByRole("cell");
+    expect(cells[headers.indexOf("ETD")]).toHaveTextContent(/^—$/);
+    expect(cells[headers.indexOf("ETA")]).toHaveTextContent("2026-10-21 실적");
+  });
+
   it("'선적 만들기'는 무역·관리자 + 확정·선적중 + 잔량 합 > 0일 때만", async () => {
     open();
     await heading();
