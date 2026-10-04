@@ -90,6 +90,9 @@ USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
         "shipment_status_log",
         "actor_user_id",
     ): "ACTOR_LOG",  # S3-2 PR-3a — 선적 상태이력 행위자(이력)
+    # S3-2 PR-4a — 마일스톤 변경 이력·통보 연결의 행위자(불변 이력 — 이관으로 바뀌지 않는다)
+    ("milestone_changes", "actor_user_id"): "ACTOR_LOG",
+    ("milestone_change_notices", "actor_user_id"): "ACTOR_LOG",
     ("import_staging", "confirmed_by_id"): "ACTOR_LOG",
     # S3-1 PR-9a — 승인 4표(ADR-0061). 승인 대기 건은 **역할 기반**이라 이관 대상이 아니다(requested_by·decided_by는 이력이고,
     # 대결은 개인 결재 권한의 임시 위탁이라 이관하지 않는다 — 이관 도구가 대상 계정을 비활성화하면 대결은 계산 술어로 즉시 무효).

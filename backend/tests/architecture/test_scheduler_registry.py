@@ -78,6 +78,12 @@ _NEVER_SEEDED = (
     "shipment_lines",
     "shipment_parties",
     "shipment_status_log",
+    # S3-2 PR-4a — 통관·마일스톤 계열 5표: 업무 행위의 기록(사람 입력만 — 시드 불가·users FK 보유)
+    "customs_records",
+    "milestones",
+    "milestone_changes",
+    "milestone_change_notices",
+    "item_profile_milestone_types",
 )
 
 

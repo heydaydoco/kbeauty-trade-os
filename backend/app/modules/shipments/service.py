@@ -13,6 +13,7 @@ L1: 이 모듈은 **전이·참조 생성·SO 수렴을 하지 않는다**(trade
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -23,9 +24,18 @@ from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.text import invisible_char_problem, is_invisible_char
 from app.core.time import utcnow
-from app.modules.shipments.models import Shipment, ShipmentLine, ShipmentParty
+from app.modules.shipments.models import (
+    CustomsRecord,
+    ItemProfileMilestoneType,
+    Milestone,
+    MilestoneChange,
+    MilestoneChangeNotice,
+    Shipment,
+    ShipmentLine,
+    ShipmentParty,
+)
 from app.modules.trade_docs import editing
-from app.modules.trade_docs.constants import DocKind
+from app.modules.trade_docs.constants import RELEASE_BOUND_ACTUALS, DocKind
 from app.modules.trade_docs.doc_number import issue_document_number
 from app.modules.trade_docs.snapshot import line_amount
 from app.modules.trade_docs.transition import record_birth
@@ -49,6 +59,46 @@ CONSTRAINT_ERRORS: dict[str, ErrorCode] = {
     "ck_shipment_parties_address_en_not_blank": ErrorCode.VALIDATION_INVALID_FIELD,
 }
 
+#: S3-2 PR-4a(M15) — 통관 기록·마일스톤 계열 표의 제약 번역(같은 원칙: 유니크 인덱스 + **입력에서 값이 오는 열**을 검사하는 CHECK 전부).
+#: 서비스 선검증이 1차이고 이 표는 경합·검사 누락이 500으로 새지 않게 하는 2차 방어선이다(J-09 완결성 시험이 실제 제약과 대사).
+#: 입력 유래가 아닌 내부 불변식(소유자 정확히 하나·이력 값 쌍·무변경 이력 금지)은 번역하지 않는다 — 위반은 결함이라 500으로 드러난다.
+MILESTONE_CONSTRAINT_ERRORS: dict[str, ErrorCode] = {
+    # 유니크 — 동시 최초 입력·같은 신고번호 경합
+    "uq_customs_records_declaration_kind_declaration_no_active": (
+        ErrorCode.SHIPMENTS_CUSTOMS_DECLARATION_DUPLICATE
+    ),
+    "uq_milestones_shipment_id_milestone_type_active": ErrorCode.SHIPMENTS_MILESTONE_DUPLICATE_TYPE,
+    "uq_milestones_po_id_milestone_type_active": ErrorCode.SHIPMENTS_MILESTONE_DUPLICATE_TYPE,
+    # 품목군 세트 중복(쓰기 경로 PR-4c — R-26 DUPLICATE_TYPE 재사용)
+    "uq_item_profile_milestone_types_profile_type_active": (
+        ErrorCode.SHIPMENTS_MILESTONE_DUPLICATE_TYPE
+    ),
+    # 통보 연결 — 통보마다 새 통신 기록이라 겹칠 수 없다(경합·결함이면 500이 아니라 재시도 안내 409)
+    "uq_milestone_change_notices_change_id_comm_log_id": ErrorCode.CONCURRENCY_VERSION_CONFLICT,
+    # 통관 기록 입력 열
+    "ck_customs_records_kind_valid": ErrorCode.SHIPMENTS_CUSTOMS_KIND_MISMATCH,
+    "ck_customs_records_declaration_no_shape": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_customs_records_accept_after_declare": ErrorCode.SHIPMENTS_CUSTOMS_ACCEPT_BEFORE_DECLARE,
+    "ck_customs_records_note_clean": ErrorCode.VALIDATION_INVALID_FIELD,
+    # 마일스톤 입력 열(경로의 종류·계획/실적 값·시간대) — 덮어쓰기 금지 2중의 DB 층(파생 종류 = type_valid 위반)
+    "ck_milestones_type_valid": ErrorCode.SHIPMENTS_MILESTONE_DERIVED_NOT_EDITABLE,
+    "ck_milestones_owner_type_scope": ErrorCode.SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE,
+    "ck_milestones_date_shape": ErrorCode.SHIPMENTS_MILESTONE_VALUE_SHAPE_MISMATCH,
+    "ck_milestones_datetime_shape": ErrorCode.SHIPMENTS_MILESTONE_VALUE_SHAPE_MISMATCH,
+    "ck_milestones_tz_iff_instant": ErrorCode.SHIPMENTS_MILESTONE_VALUE_SHAPE_MISMATCH,
+    "ck_milestones_tz_format": ErrorCode.SHIPMENTS_MILESTONE_TIMEZONE_INVALID,
+    "ck_milestones_customs_actual_from_records": (
+        ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD
+    ),
+    # 변경 이력 사유(사람 입력)
+    "ck_milestone_changes_reason_required": ErrorCode.SHIPMENTS_MILESTONE_REASON_REQUIRED,
+    "ck_milestone_changes_reason_clean": ErrorCode.VALIDATION_INVALID_FIELD,
+    # 품목군 세트 종류(PR-4c 쓰기 경로 — 파생·OEM 종류 = R-26 TYPE_NOT_APPLICABLE 재사용)
+    "ck_item_profile_milestone_types_type_valid": ErrorCode.SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE,
+    # 선적 통보 기록(comm_logs SHIPMENT 주제)의 요지 — 선적 통로가 같은 flush로 넣는다
+    "ck_comm_logs_summary_not_blank": ErrorCode.VALIDATION_INVALID_FIELD,
+}
+
 
 def constraint_name(exc: IntegrityError) -> str | None:
     return getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
@@ -59,8 +109,8 @@ def flush_translated(session: Session) -> None:
     try:
         session.flush()
     except IntegrityError as exc:
-        name = constraint_name(exc)
-        code = CONSTRAINT_ERRORS.get(name or "")
+        name = constraint_name(exc) or ""
+        code = CONSTRAINT_ERRORS.get(name) or MILESTONE_CONSTRAINT_ERRORS.get(name)
         if code is None:
             raise
         raise AppError(code, log_context={"constraint": name}) from None
@@ -331,3 +381,250 @@ def apply_header_edit(
         row.assignee_id = assignee_id
     editing.bump_header_version(row)  # 편집 요청은 항상 새 version(겹친 편집 409)
     row.updated_by_id = actor_id
+
+
+# ── 통관 기록·마일스톤 착지 (S3-2 PR-4a — 잠금·검증은 오케스트레이터[trade_chain.customs_flow·milestone_flow]가 끝낸 뒤 부른다) ──
+
+
+def require_customs_record(
+    session: Session, shipment_id: int, record_id: int, *, for_update: bool = False
+) -> CustomsRecord:
+    """경로의 통관 기록이 경로의 선적 소속이 아니면(삭제 포함) 404 — 부작용 0(`D:370` 부모-자식). `for_update` = shipment_children 잠금."""
+    stmt = select(CustomsRecord).where(
+        CustomsRecord.id == record_id,
+        CustomsRecord.shipment_id == shipment_id,
+        CustomsRecord.deleted_at.is_(None),
+    )
+    if for_update:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    row = session.execute(stmt).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(
+            log_context={"shipment_id": shipment_id, "customs_record_id": record_id}
+        )
+    return row
+
+
+def live_customs_accepted(session: Session, shipment_id: int, kind: str) -> list[date | None]:
+    """구분 일치·살아 있는 통관 기록들의 수리일(미수리 = None) — 신고수리 실적 파생(X-02·R-06)의 입력."""
+    return list(
+        session.execute(
+            select(CustomsRecord.accepted_on)
+            .where(
+                CustomsRecord.shipment_id == shipment_id,
+                CustomsRecord.declaration_kind == kind,
+                CustomsRecord.deleted_at.is_(None),
+            )
+            .order_by(CustomsRecord.id)
+        ).scalars()
+    )
+
+
+def insert_customs_record(
+    session: Session, row: Shipment, values: dict[str, Any], *, actor_id: int
+) -> CustomsRecord:
+    """통관 기록 1행 INSERT — (구분, 신고번호) 경합은 409 DECLARATION_DUPLICATE로 번역(부분 유니크)."""
+    record = CustomsRecord(
+        shipment_id=row.id,
+        declaration_kind=values["declaration_kind"],
+        declaration_no=values["declaration_no"],
+        declared_on=values["declared_on"],
+        accepted_on=values["accepted_on"],
+        customs_broker_partner_id=values["customs_broker_partner_id"],
+        note=values["note"],
+        created_by_id=actor_id,
+        updated_by_id=actor_id,
+    )
+    session.add(record)
+    flush_translated(session)
+    return record
+
+
+def apply_customs_update(customs: CustomsRecord, changes: dict[str, Any], *, actor_id: int) -> None:
+    """통관 기록 정정 — 명시 대입만(동적 setattr 0). 보낸 열만 바뀌고 version +1(겹친 정정 409)."""
+    if "declaration_no" in changes:
+        customs.declaration_no = changes["declaration_no"]
+    if "declared_on" in changes:
+        customs.declared_on = changes["declared_on"]
+    if "accepted_on" in changes:
+        customs.accepted_on = changes["accepted_on"]
+    if "customs_broker_partner_id" in changes:
+        customs.customs_broker_partner_id = changes["customs_broker_partner_id"]
+    if "note" in changes:
+        customs.note = changes["note"]
+    customs.updated_by_id = actor_id
+    customs.updated_at = (
+        utcnow()
+    )  # 같은 행위자·같은 값이어도 dirty → version_id_col +1(겹친 정정 409)
+
+
+def remove_customs_record(customs: CustomsRecord, *, actor_id: int) -> None:
+    """통관 기록 삭제(soft delete — 사유는 호출자가 audit_log에 남긴다). version +1."""
+    customs.deleted_at = utcnow()
+    customs.updated_by_id = actor_id
+    customs.updated_at = (
+        utcnow()
+    )  # 같은 행위자·같은 값이어도 dirty → version_id_col +1(겹친 정정 409)
+
+
+@dataclass(frozen=True, slots=True)
+class CancelBlockers:
+    """선적 취소를 막는 살아 있는 사실 기록(R-01·R-16) — 통관 신고번호들·ETD·B/L 발행·ETA 실적 종류들."""
+
+    customs_numbers: list[str]
+    actual_types: list[str]
+
+
+def cancel_blockers(session: Session, shipment_id: int) -> CancelBlockers:
+    """살아 있는 통관 기록·출고 결속 실적(ETD·BL_ISSUED·ETA) — 선적 헤더 `FOR UPDATE`를 쥔 호출자가 부른다(하위 쓰기는 전부 같은 헤더를
+    `FOR UPDATE`로 잡으므로 판정과 취소 사이에 새 사실이 끼어들 수 없다)."""
+    numbers = list(
+        session.execute(
+            select(CustomsRecord.declaration_no)
+            .where(CustomsRecord.shipment_id == shipment_id, CustomsRecord.deleted_at.is_(None))
+            .order_by(CustomsRecord.id)
+        ).scalars()
+    )
+    actuals = list(
+        session.execute(
+            select(Milestone.milestone_type)
+            .where(
+                Milestone.shipment_id == shipment_id,
+                Milestone.deleted_at.is_(None),
+                Milestone.milestone_type.in_(sorted(RELEASE_BOUND_ACTUALS)),
+                (Milestone.actual_on.is_not(None)) | (Milestone.actual_at.is_not(None)),
+            )
+            .order_by(Milestone.milestone_type)
+        ).scalars()
+    )
+    return CancelBlockers(numbers, actuals)
+
+
+def find_milestone(
+    session: Session, shipment_id: int, milestone_type: str, *, for_update: bool
+) -> Milestone | None:
+    """(선적, 종류) 살아 있는 마일스톤 행 — 없으면 None. `for_update` = shipment_children 잠금(헤더 잠금 뒤)."""
+    stmt = select(Milestone).where(
+        Milestone.shipment_id == shipment_id,
+        Milestone.milestone_type == milestone_type,
+        Milestone.deleted_at.is_(None),
+    )
+    if for_update:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def insert_milestone(
+    session: Session, *, shipment_id: int, milestone_type: str, actor_id: int
+) -> Milestone:
+    """빈 마일스톤 행(값 없음) — 값은 호출자가 대입한다. (선적, 종류) 경합은 409 DUPLICATE_TYPE으로 번역."""
+    row = Milestone(
+        shipment_id=shipment_id,
+        milestone_type=milestone_type,
+        created_by_id=actor_id,
+        updated_by_id=actor_id,
+    )
+    session.add(row)
+    flush_translated(session)
+    return row
+
+
+@dataclass(frozen=True, slots=True)
+class MilestoneValue:
+    """마일스톤 값 하나 — 날짜형(on) 또는 시각형(at + tz). 셋 다 None이면 '값 없음'."""
+
+    on: date | None = None
+    at: datetime | None = None
+    tz: str | None = None
+
+    @property
+    def empty(self) -> bool:
+        return self.on is None and self.at is None
+
+
+def set_planned(milestone: Milestone, value: MilestoneValue, *, actor_id: int) -> None:
+    milestone.planned_on = value.on
+    milestone.planned_at = value.at
+    milestone.tz = value.tz if value.at is not None else _other_tz(milestone, planned=False)
+    milestone.updated_by_id = actor_id
+    milestone.updated_at = utcnow()  # dirty 보장 → version_id_col +1
+
+
+def set_actual(milestone: Milestone, value: MilestoneValue, *, actor_id: int) -> None:
+    milestone.actual_on = value.on
+    milestone.actual_at = value.at
+    milestone.tz = value.tz if value.at is not None else _other_tz(milestone, planned=True)
+    milestone.updated_by_id = actor_id
+    milestone.updated_at = utcnow()  # dirty 보장 → version_id_col +1
+
+
+def _other_tz(milestone: Milestone, *, planned: bool) -> str | None:
+    """한쪽 시각 값을 지울 때 남은 쪽 시각 값이 있으면 그 tz를 유지한다(`tz_iff_instant`)."""
+    other = milestone.planned_at if planned else milestone.actual_at
+    return milestone.tz if other is not None else None
+
+
+def insert_change(
+    session: Session,
+    *,
+    milestone: Milestone,
+    change_kind: str,
+    old: MilestoneValue,
+    new: MilestoneValue,
+    reason: str | None,
+    actor_id: int,
+) -> MilestoneChange:
+    """변경 이력 1행(IMMUTABLE) — 사유 CHECK 위반은 422로 번역."""
+    change = MilestoneChange(
+        milestone_id=milestone.id,
+        change_kind=change_kind,
+        old_on=old.on,
+        old_at=old.at,
+        old_tz=old.tz if old.at is not None else None,
+        new_on=new.on,
+        new_at=new.at,
+        new_tz=new.tz if new.at is not None else None,
+        reason=reason,
+        actor_user_id=actor_id,
+    )
+    session.add(change)
+    flush_translated(session)
+    return change
+
+
+def require_change(session: Session, shipment_id: int, change_id: int) -> MilestoneChange:
+    """경로의 변경 이력이 경로의 선적 마일스톤 소속이 아니면 404(부작용 0 — 다른 선적의 변경 id 차단)."""
+    change = session.execute(
+        select(MilestoneChange)
+        .join(Milestone, Milestone.id == MilestoneChange.milestone_id)
+        .where(MilestoneChange.id == change_id, Milestone.shipment_id == shipment_id)
+    ).scalar_one_or_none()
+    if change is None:
+        raise NotFoundError(log_context={"shipment_id": shipment_id, "change_id": change_id})
+    return change
+
+
+def insert_notice(
+    session: Session, *, change: MilestoneChange, comm_log_id: int, actor_id: int
+) -> MilestoneChangeNotice:
+    notice = MilestoneChangeNotice(
+        change_id=change.id, comm_log_id=comm_log_id, actor_user_id=actor_id
+    )
+    session.add(notice)
+    flush_translated(session)
+    return notice
+
+
+def profile_milestone_sets(session: Session, profile_ids: set[int]) -> dict[int, frozenset[str]]:
+    """품목군 → 마일스톤 세트(살아 있는 행). 세트가 없는 품목군은 키가 없다(호출자가 '세트 미정의'로 본다)."""
+    if not profile_ids:
+        return {}
+    found: dict[int, set[str]] = {}
+    for profile_id, milestone_type in session.execute(
+        select(ItemProfileMilestoneType.profile_id, ItemProfileMilestoneType.milestone_type).where(
+            ItemProfileMilestoneType.profile_id.in_(sorted(profile_ids)),
+            ItemProfileMilestoneType.deleted_at.is_(None),
+        )
+    ).all():
+        found.setdefault(int(profile_id), set()).add(str(milestone_type))
+    return {key: frozenset(values) for key, values in found.items()}

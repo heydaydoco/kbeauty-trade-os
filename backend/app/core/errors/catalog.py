@@ -513,6 +513,74 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "거래처의 영문명이 비어 있어 선적 서류에 쓸 수 없습니다. 거래처 화면에서 영문명을 입력한 뒤 다시 시도해 주세요.",
     ),
+    ErrorCode.SHIPMENTS_SHIPMENT_CUSTOMS_RECORD_ALIVE: ErrorSpec(
+        409,
+        "통관 기록이 남아 있는 선적은 취소할 수 없습니다. 통관 기록을 사유와 함께 먼저 삭제해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_SHIPMENT_ACTUAL_RECORDED: ErrorSpec(
+        409,
+        "ETD·B/L 발행·ETA 실적이 기록된 선적은 취소할 수 없습니다. 잘못 입력한 실적이면 사유와 함께 실적을 정정(삭제)한 뒤 취소해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_CUSTOMS_DECLARATION_DUPLICATE: ErrorSpec(
+        409,
+        "같은 구분·신고번호의 통관 기록이 이미 있습니다. 기존 통관 기록을 확인해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_CUSTOMS_KIND_MISMATCH: ErrorSpec(
+        422,
+        "신고 구분이 선적 구분과 다릅니다. 수출선적에는 수출신고, 수입선적에는 수입신고를 기록해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_CUSTOMS_REASON_REQUIRED: ErrorSpec(
+        422,
+        "통관 기록을 정정하거나 삭제하려면 사유가 필요합니다. 사유를 입력해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_CUSTOMS_DATE_IN_FUTURE: ErrorSpec(
+        422,
+        "신고일·수리일은 오늘(한국 날짜) 이후일 수 없습니다. 실제 신고·수리된 날짜를 확인해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_CUSTOMS_ACCEPT_BEFORE_DECLARE: ErrorSpec(
+        422,
+        "수리일이 신고일보다 앞설 수 없습니다. 신고일과 수리일을 확인해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_DUPLICATE_TYPE: ErrorSpec(
+        409,
+        "이 종류의 마일스톤이 이미 있습니다. 화면을 다시 불러온 뒤 기존 마일스톤을 수정해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_DERIVED_NOT_EDITABLE: ErrorSpec(
+        422,
+        "자동 계산 마일스톤(적재기한·대금만기·제시기한)은 직접 수정할 수 없습니다. 계산의 근거가 되는 실적·계획·통관 기록을 고쳐 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_IN_FUTURE: ErrorSpec(
+        422,
+        "실적은 아직 오지 않은 날짜·시각으로 기록할 수 없습니다. 실제로 일어난 날짜·시각을 확인해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_REASON_REQUIRED: ErrorSpec(
+        422,
+        "계획 변경(롤오버)이나 실적 정정에는 사유가 필요합니다. 사유를 입력해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE: ErrorSpec(
+        422,
+        "이 선적 구분에는 쓰지 않는 마일스톤 종류입니다. 선적 상세의 마일스톤 목록에서 종류를 다시 선택해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE: ErrorSpec(
+        409,
+        "취소된 선적의 마일스톤은 수정할 수 없습니다. 필요하면 수주에서 새 선적을 만들어 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD: ErrorSpec(
+        422,
+        "신고수리 실적은 통관 기록의 수리일에서 자동으로 반영됩니다. 통관 기록에서 수리일을 입력해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_TIMEZONE_INVALID: ErrorSpec(
+        422,
+        "시간대가 올바르지 않습니다. 목록에서 시간대(예: Asia/Seoul)를 선택해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_VALUE_SHAPE_MISMATCH: ErrorSpec(
+        422,
+        "이 마일스톤 종류에 맞지 않는 값 형식입니다. 서류마감·Cargo Closing은 시각과 시간대, 나머지는 날짜로 입력해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_BEFORE_RELEASE: ErrorSpec(
+        422,
+        "ETD·B/L 발행·ETA 실적은 출고지시 뒤에만 기록할 수 있습니다. 출고지시를 먼저 진행해 주세요.",
+    ),
 }
 
 

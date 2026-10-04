@@ -52,7 +52,11 @@ from app.core.db.mixins import (
 )
 
 #: 통신 기록의 주제 유형 — 소비분 한정 확장(위 독스트링). 폭 20은 후속 주제 여유다.
-COMM_SUBJECT_TYPES = ("CERTIFICATION",)
+#: S3-2 PR-4a(M15·ADR-0083): SHIPMENT = 선적 마일스톤 롤오버 통보 기록 — **선적 전용 통로(M6)만** 만든다.
+COMM_SUBJECT_TYPES = ("CERTIFICATION", "SHIPMENT")
+#: 범용 `/comm-logs`가 다루는 주제(쓰기·목록·id 접근·문서 첨부) — SHIPMENT는 범위 밖이다(R-05: POST 스키마 422·목록 기본 제외·
+#: id 접근 404·COMM_LOG 첨부 거부). 선적 통보는 선적 권한·화면(`/shipments/{id}/milestone-changes…`)으로만 오간다.
+GENERIC_COMM_SUBJECT_TYPES = ("CERTIFICATION",)
 
 
 class AgencyContract(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):

@@ -40,6 +40,9 @@ IMMUTABLE_TABLES: frozenset[str] = frozenset(
         "gate_overrides",
         # S3-2 PR-3a — 선적 상태 변경 이력(ADR-0074·§17.5 확장 "상태 변경 이력 성격 — 신설 세션 등재"). 정정은 새 전이 기록이다.
         "shipment_status_log",
+        # S3-2 PR-4a — 마일스톤 변경 이력·통보 연결(ADR-0083·§17.5 확장). 롤오버·실적 정정은 새 이력 행이고 통보는 사후 연결 행이다.
+        "milestone_changes",
+        "milestone_change_notices",
     }
 )
 
@@ -169,6 +172,11 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "shipments",
         "shipment_lines",
         "shipment_parties",
+        # S3-2 PR-4a — 통관 기록(수리일 기입·정정·soft delete — 정정·삭제 사실은 audit_log, ADR-0074)·마일스톤(계획·실적 갱신 —
+        # 변경 이력의 정본은 IMMUTABLE `milestone_changes`, ADR-0080)·품목군 마일스톤 세트(해제 = soft delete — 쓰기 경로 PR-4c).
+        "customs_records",
+        "milestones",
+        "item_profile_milestone_types",
     }
 )
 

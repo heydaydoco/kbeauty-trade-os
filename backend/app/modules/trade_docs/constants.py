@@ -189,6 +189,116 @@ class PartyRole(StrEnum):
     CUSTOMS_BROKER = "CUSTOMS_BROKER"
 
 
+class DeclarationKind(StrEnum):
+    """통관 신고 구분(design-A A8) — 선적 구분과 같아야 한다(수출선적 = 수출신고만, 422 `SHIPMENTS.CUSTOMS.KIND_MISMATCH`).
+    통관 기록은 사실 기록이다(세율·과세가격·세액·HS 열 없음 — §15 법적 판정 금지)."""
+
+    EXPORT = "EXPORT"
+    IMPORT = "IMPORT"
+
+
+class MilestoneType(StrEnum):
+    """마일스톤 종류(§7.5 9종 → 11종 + OEM 4종 — ADR-0080 / design-integrated §2.4·§9 R-03).
+
+    저장형(사람 입력, `milestones` 행)과 파생형(계산값 — 저장하지 않는다, DB CHECK가 거부)으로 나뉜다. 파생형 쓰기는 422
+    `SHIPMENTS.MILESTONE.DERIVED_NOT_EDITABLE`(덮어쓰기 금지 2중 — 서비스 + CHECK). OEM 4종은 PO 소유 행만(PR-4c 쓰기 경로)."""
+
+    # 선적 저장형 8
+    DOC_CUTOFF = "DOC_CUTOFF"  # 서류마감(시각형)
+    CARGO_CLOSING = "CARGO_CLOSING"  # Cargo Closing(시각형)
+    PSI = "PSI"  # 수출 전 검사
+    CUSTOMS_CLEARED = "CUSTOMS_CLEARED"  # 신고수리 — 실적 = 통관 기록 MIN(accepted_on) 파생(X-02)
+    ETD = "ETD"
+    BL_ISSUED = "BL_ISSUED"  # B/L(AWB) 발행일(§7.5 확장 — 제시기한 산식 입력)
+    ETA = "ETA"
+    IMPORT_TAX_DUE = "IMPORT_TAX_DUE"  # 수입 세금 납부기한(사람 입력 — 법정 기한 계산 안 함)
+    # OEM 생산 4(PO 소유 — PR-4c)
+    RAW_MATERIAL_READY = "RAW_MATERIAL_READY"
+    FILLING = "FILLING"
+    PACKING = "PACKING"
+    OUTGOING_INSPECTION = "OUTGOING_INSPECTION"
+    # 파생 3(비저장 — DB CHECK에 없다)
+    LOADING_DEADLINE = "LOADING_DEADLINE"  # 적재기한 = 수리일 + 30(수출)
+    PAYMENT_DUE = "PAYMENT_DUE"  # 대금만기(결제유형 분기)
+    PRESENTATION_DEADLINE = "PRESENTATION_DEADLINE"  # L/C 제시기한 = MIN(B/L+21, 유효기일)(LC만)
+
+
+#: 선적 소유 저장형 8종(표시 순서와 무관한 집합). 품목군 마일스톤 세트도 이 8종만 담는다(CHECK).
+SHIPMENT_STORED_MILESTONES: frozenset[str] = frozenset(
+    {
+        MilestoneType.DOC_CUTOFF.value,
+        MilestoneType.CARGO_CLOSING.value,
+        MilestoneType.PSI.value,
+        MilestoneType.CUSTOMS_CLEARED.value,
+        MilestoneType.ETD.value,
+        MilestoneType.BL_ISSUED.value,
+        MilestoneType.ETA.value,
+        MilestoneType.IMPORT_TAX_DUE.value,
+    }
+)
+#: PO 소유 OEM 생산 4종(`ck_milestones_owner_type_scope` — OEM 4종 ⇔ po_id).
+OEM_MILESTONES: frozenset[str] = frozenset(
+    {
+        MilestoneType.RAW_MATERIAL_READY.value,
+        MilestoneType.FILLING.value,
+        MilestoneType.PACKING.value,
+        MilestoneType.OUTGOING_INSPECTION.value,
+    }
+)
+#: 저장형 전부(DB CHECK `ck_milestones_type_valid`의 값 공간).
+STORED_MILESTONES: frozenset[str] = SHIPMENT_STORED_MILESTONES | OEM_MILESTONES
+#: 파생형 3종 — 저장하지 않는다(쓰기 422 + CHECK 거부).
+DERIVED_MILESTONES: frozenset[str] = frozenset(
+    {
+        MilestoneType.LOADING_DEADLINE.value,
+        MilestoneType.PAYMENT_DUE.value,
+        MilestoneType.PRESENTATION_DEADLINE.value,
+    }
+)
+#: 시각형(UTC 시각 + IANA tz) 종류 — 나머지는 날짜형(현지 달력일 DATE).
+DATETIME_MILESTONES: frozenset[str] = frozenset(
+    {MilestoneType.DOC_CUTOFF.value, MilestoneType.CARGO_CLOSING.value}
+)
+#: 출고지시(RELEASE_ORDERED) 이후에만 실적을 받는 종류 — 실적이 살아 있으면 선적 취소 409(R-01, 도착 실적은 출항을 함의).
+RELEASE_BOUND_ACTUALS: frozenset[str] = frozenset(
+    {MilestoneType.ETD.value, MilestoneType.BL_ISSUED.value, MilestoneType.ETA.value}
+)
+#: 선적 구분별 저장형 적용 집합(design-B B1 표 — 채널입고·샘플무상은 경로가 열리는 세션이 행을 더한다).
+SHIPMENT_MILESTONES_BY_KIND: dict[str, frozenset[str]] = {
+    ShipmentKind.EXPORT.value: SHIPMENT_STORED_MILESTONES - {MilestoneType.IMPORT_TAX_DUE.value},
+    ShipmentKind.IMPORT.value: SHIPMENT_STORED_MILESTONES - {MilestoneType.PSI.value},
+}
+#: 선적 마일스톤 보드의 행 순서(업무 흐름 — design-D D6). 저장형 8 + 파생 3 = 11행.
+SHIPMENT_BOARD_ORDER: tuple[str, ...] = (
+    MilestoneType.DOC_CUTOFF.value,
+    MilestoneType.CARGO_CLOSING.value,
+    MilestoneType.PSI.value,
+    MilestoneType.CUSTOMS_CLEARED.value,
+    MilestoneType.LOADING_DEADLINE.value,
+    MilestoneType.ETD.value,
+    MilestoneType.BL_ISSUED.value,
+    MilestoneType.PRESENTATION_DEADLINE.value,
+    MilestoneType.ETA.value,
+    MilestoneType.IMPORT_TAX_DUE.value,
+    MilestoneType.PAYMENT_DUE.value,
+)
+
+
+class MilestoneChangeKind(StrEnum):
+    """마일스톤 변경 이력 종류(ADR-0083) — 롤오버 = PLAN_CHANGED. PLAN_CHANGED·ACTUAL_CORRECTED는 사유 필수(CHECK)."""
+
+    PLAN_SET = "PLAN_SET"
+    PLAN_CHANGED = "PLAN_CHANGED"
+    ACTUAL_RECORDED = "ACTUAL_RECORDED"
+    ACTUAL_CORRECTED = "ACTUAL_CORRECTED"
+
+
+#: 사유 필수 변경 종류(롤오버·실적 정정).
+REASON_REQUIRED_CHANGES: frozenset[str] = frozenset(
+    {MilestoneChangeKind.PLAN_CHANGED.value, MilestoneChangeKind.ACTUAL_CORRECTED.value}
+)
+
+
 class PriceBasis(StrEnum):
     MASTER = "MASTER"  # 마스터 판가(price_at)
     MANUAL = "MANUAL"  # 사람이 입력

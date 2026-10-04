@@ -106,6 +106,20 @@ NON_CHILD_FK_ALLOWLIST: dict[tuple[str, str], str] = {
         "shipments",
         "copied_from_id",
     ): "믹스인이 주는 복제 계보 열 — 선적은 복제 경로가 없다(CHECK no_copy_lineage로 항상 NULL)",
+    # S3-2 PR-4a — 선적 하위 사실 기록(후속 전표 아님 — 상태·문서번호 없음). 생존 시 선적 취소 가드는 사슬이 아니라 명시 검사다
+    # (통관 기록 → CUSTOMS_RECORD_ALIVE, ETD·B/L·ETA 실적 → ACTUAL_RECORDED — R-01·R-16).
+    (
+        "customs_records",
+        "shipment_id",
+    ): "통관 기록은 선적의 사실 기록이다(후속 전표 아님 — 생존 시 취소 409는 선적 취소 서비스의 명시 검사)",
+    (
+        "milestones",
+        "shipment_id",
+    ): "마일스톤은 선적 일정의 계획·실적 행이다(후속 전표 아님 — ETD·B/L·ETA 실적 생존 취소 409는 명시 검사)",
+    (
+        "milestones",
+        "po_id",
+    ): "OEM 생산 마일스톤은 PO 일정 행이다(후속 전표 아님 — PO 상태·잔량 무변경, 쓰기 경로 PR-4c)",
 }
 
 
