@@ -27,6 +27,7 @@ from app.modules.sales_orders.models import SalesOrder, SalesOrderLine
 from app.modules.sales_orders.ports import AllocationStatus
 from app.modules.shipments.models import Shipment, ShipmentLine, ShipmentParty
 from app.modules.shipments.service import live_lines, require_shipment
+from app.modules.trade_chain.milestone_view import RECORD_EDITABLE_STATES, assemble, customs_summary
 from app.modules.trade_docs.constants import DocKind, ShipmentKind
 from app.modules.trade_docs.machine import EDITABLE_STATES, TERMINAL_STATUSES
 from app.modules.trade_docs.models import ShipmentStatusLog
@@ -39,8 +40,8 @@ KIND = DocKind.SHIPMENT
 #: 당사자·출고지시·헤더(국가·메모·담당) 쓰기 역할 — 물류 첫 전표 쓰기(ADR-0079). 생성·라인·취소는 무역(SO 잔량·수렴 = 상업 사실).
 LOGISTICS_WRITERS = frozenset({RoleCode.ADMIN, RoleCode.TRADE, RoleCode.LOGISTICS})
 TRADE_WRITERS = frozenset({RoleCode.ADMIN, RoleCode.TRADE})
-#: 당사자를 바꿀 수 있는 상태 — S3-2 활성 상태(계획·출고지시). 취소·예약 상태는 409 NOT_ACTIVE.
-PARTY_EDITABLE_STATES = frozenset({"PLANNED", "RELEASE_ORDERED"})
+#: 당사자를 바꿀 수 있는 상태 — S3-2 활성 상태(계획·출고지시). 취소·예약 상태는 409 NOT_ACTIVE. 통관·마일스톤·통보와 같은 집합(PR-4a).
+PARTY_EDITABLE_STATES = RECORD_EDITABLE_STATES
 
 _PURCHASE_ORDERS = table(
     "purchase_orders", column("id", Integer), column("doc_number", String), column("status", String)
@@ -70,6 +71,9 @@ def allowed_actions(row: Shipment, roles: frozenset[RoleCode]) -> list[str]:
         actions.append("EDIT_META")
     if row.status in PARTY_EDITABLE_STATES and logistics:
         actions.append("EDIT_PARTIES")
+    # PR-4a — 마일스톤 계획·실적·통보 기록(EDIT_MILESTONES)·계획 초안(PLAN_DRAFT)·통관 기록(EDIT_CUSTOMS) = 무역·물류, 계획/출고지시 중
+    if row.status in RECORD_EDITABLE_STATES and logistics:
+        actions.extend(("EDIT_MILESTONES", "PLAN_DRAFT", "EDIT_CUSTOMS"))
     return actions
 
 
@@ -146,6 +150,9 @@ def detail_body(session: Session, row: Shipment, roles: frozenset[RoleCode]) -> 
         ).scalars()
     )
     cur = row.currency
+    assembled = assemble(
+        session, row
+    )  # 마일스톤 보드 + 통관 수리일(요약 재사용) — 고정 질의 수(PR-4a)
     line_bodies: list[dict[str, Any]] = []
     dg_lines = 0
     for line in lines:
@@ -212,6 +219,8 @@ def detail_body(session: Session, row: Shipment, roles: frozenset[RoleCode]) -> 
             }
             for p in parties
         ],
+        "milestones": assembled.board,
+        "customs_summary": customs_summary(assembled.customs_accepted),
         "allowed_actions": allowed_actions(row, roles),
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),

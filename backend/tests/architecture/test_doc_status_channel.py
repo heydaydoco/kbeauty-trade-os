@@ -615,7 +615,8 @@ def test_no_http_delete_on_the_document_itself() -> None:
         for path, operations in app.openapi()["paths"].items()
         if "delete" in operations and "/sales-orders" in path
     } == {"/api/v1/sales-orders/{so_id}/lines/{line_id}"}
-    # 선적(S3-2 PR-3a)은 라인 제외·당사자 제외 DELETE만 있다(폐기 = 취소 전이, 번호는 남는다)
+    # 선적(S3-2 PR-3a)은 라인 제외·당사자 제외 DELETE만 있다(폐기 = 취소 전이, 번호는 남는다).
+    # PR-4a — 통관 기록(선적 하위 사실 기록, 사유 필수·audit) 삭제가 더해진다. 선적 헤더 자체의 DELETE는 여전히 0이다.
     assert {
         path
         for path, operations in app.openapi()["paths"].items()
@@ -623,6 +624,7 @@ def test_no_http_delete_on_the_document_itself() -> None:
     } == {
         "/api/v1/shipments/{shipment_id}/lines/{line_id}",
         "/api/v1/shipments/{shipment_id}/parties/{party_id}",
+        "/api/v1/shipments/{shipment_id}/customs-records/{record_id}",
     }
 
 
