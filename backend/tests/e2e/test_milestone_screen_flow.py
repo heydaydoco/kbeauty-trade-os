@@ -1,4 +1,4 @@
-"""A(모듈 마커 `group_a` — 3건 전부)·K(역할별 버튼 근거 시험 1건만 `group_k` 추가). 마일스톤·통관·OEM 생산 일정·품목군 세트 화면 경로
+"""A(모듈 마커 `group_a` — 3건 전부)·K(역할별 버튼 근거 시험 2건 `group_k` 추가 — 선적·OEM/세트). 마일스톤·통관·OEM 생산 일정·품목군 세트 화면 경로
 (S3-2 PR-4b — 프런트 소비 계약, 백엔드 앱 코드 무변경).
 
 선적 상세 마일스톤 타임라인·대화상자·통관 섹션·변경 이력·발주 상세 '생산 일정'·품목군 '마일스톤 세트'가 보내는 **본문 그대로**
@@ -248,13 +248,12 @@ def test_screen_flow_shipment_timeline_rollover_notice_holiday_customs_and_cance
         assert record["declaration_no"] == "AB-2001" and record["accepted_on"] is None
         customs_row = _rows(logi, sid)["CUSTOMS_CLEARED"]
         assert customs_row["input_source"] == "CUSTOMS_RECORD"
+        # 미수리 기록 1건뿐 — 부분 수리 배지 근거(R-06)·실적 없음(MIN은 NULL 무시 — '완료' 표시 근거 0, 적대 검토 low ⑫)
         assert (customs_row["customs_state"], customs_row["customs_pending_count"]) == (
-            "NONE",
+            "PARTIAL",
             1,
-        ) or (
-            customs_row["customs_state"],
-            customs_row["customs_pending_count"],
-        ) == ("PARTIAL", 1)
+        )
+        assert customs_row["actual"] is None
 
     with logged_in(RoleCode.TRADE) as trade:
         blocked = trade.post(
@@ -363,6 +362,7 @@ def test_screen_flow_datetime_cutoff_sends_utc_instant_and_tz_and_reads_scan_and
         assert row["local_date"] == _day(6) and row["unknown_reason"] is None
 
 
+@pytest.mark.group_k
 def test_screen_flow_oem_schedule_section_and_item_profile_milestone_set() -> None:
     """A — 발주 상세 '생산 일정': OEM 보드 4행·allowed_actions(무역 = EDIT_MILESTONES / 조회 = 없음 — 버튼 근거), 계획 → {board, change},
     일반 구매 발주 보드 422(화면은 섹션을 그리지 않는다). 품목군 '마일스톤 세트': 관리자 추가 201·제거 204, 무역 추가 403(화면은 버튼 0)."""
@@ -390,6 +390,15 @@ def test_screen_flow_oem_schedule_section_and_item_profile_milestone_set() -> No
         assert plain.status_code == 422 and _code(plain) == "SHIPMENTS.MILESTONE.OWNER_NOT_OEM"
     with logged_in(RoleCode.VIEWER) as viewer:
         assert viewer.get(f"{PO}/{po['id']}/milestones").json()["allowed_actions"] == []
+    # 물류는 선적 일정은 쓰지만 PO(OEM) 쓰기는 0(X-16) — 보드 버튼 근거 [] + 직접 요청 403(적대 검토 low ⑬)
+    with logged_in(RoleCode.LOGISTICS) as logi:
+        assert logi.get(f"{PO}/{po['id']}/milestones").json()["allowed_actions"] == []
+        denied = logi.post(
+            f"{PO}/{po['id']}/milestones/FILLING/plan",
+            json={"planned_on": _day(11), "version": 1},
+            headers=idem(),
+        )
+        assert denied.status_code == 403
 
     profile = create_item_profile(unique("PRF"))
     with logged_in(RoleCode.TRADE) as trade:
