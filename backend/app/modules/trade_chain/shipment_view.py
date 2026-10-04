@@ -1,11 +1,16 @@
-"""선적 응답 조립 — 상세·목록·CSV·상태이력·가용 '자리' (S3-2 PR-3a·PR-3c / design-D D3 / design-integrated X-24·X-26).
+"""선적 응답 조립 — 상세·목록·CSV·상태이력·가용 '자리' (S3-2 PR-3a·PR-3c·PR-5a / design-D D3 / design-integrated X-24·X-26).
 
 ■ 상세는 **고정 쿼리 수**(라인 1·원천 SO 1·원천 라인 1·잔량 2·SKU DG 1·당사자 1·담당자 1 = 8)다 — 라인 수와 무관(N+1 0, `D:376`).
+  수입선적은 원천 라인이 PO 라인이다(라인 번호 1·배정 가능량 2 — 같은 개수).
+■ **수입선적 응답 갈래(S3-2 PR-5a — GC-G3·R-3c-2)**: 수입선적의 상세·목록 dict는 통화·소수 자릿수·환율·합계·라인 단가/금액/통화/무상 키를
+  **만들지 않는다**(만든 뒤 지우지 않는다 — PO `include_cost` 관례). PO 통화·환율은 PO CostHidden이 원가 비열람 역할에게 가리는 필드라 선적이 우회
+  통로가 되지 않게 **전 역할 같은 모양**(원가 열람 역할로도 0)이고, 응답 모델도 구분 판별자 합집합(`ImportShipmentDetail`)이라 담을 자리가 없다.
+  CSV는 같은 열을 빈칸으로 둔다(헤더 고정). PO 라인을 읽을 때는 원가 열을 고르지 않는다(`_PURCHASE_ORDER_LINES` — PO 모델 임포트 0).
 ■ §8.3 가용재고 '자리'(X-26): `AllocationPort`는 **무변경**이다(읽기 메서드 없음 — 소비자 없는 메서드를 더하지 않는다). 선적 라인 응답의
   `availability.status`는 `AllocationStatus.NOT_IMPLEMENTED` 값을 그대로 싣는다(화면 "가용재고 미산정" 배지 — 0·현재고 표시 금지).
   S4-2가 포트에 읽기를 더하면 `availability_of` 한 곳만 바꾼다.
 ■ `allowed_actions`는 **표시 편의**다(서버가 쓰기 시 다시 검사 — 셸 메뉴 관례). 역할·상태에서 계산해 프런트에 상태 규칙을 복제하지 않게 한다.
-■ 금액은 판매가 축(SO 단가 사본)이라 마스킹 비대상이고 원가 열은 없다(수입선적 원가 비복사 — 응답 분기는 PR-5a).
+■ 금액은 판매가 축(SO 단가 사본)이라 마스킹 비대상이고 원가 열은 없다(수입선적 원가 비복사 — 응답 갈래는 위 PR-5a 항목).
 ■ CSV(S20)는 목록과 **같은 조건 함수**를 쓰고 전 역할 같은 헤더다(원가·단가 열 0 — 역할별 분기 없음). BOM·수식 이스케이프는 공용 통로
   `core.csv_export`가 한다(라우터가 `csv_response`로만 내보낸다).
 """
@@ -36,7 +41,7 @@ from app.modules.trade_chain.milestone_view import (
 from app.modules.trade_docs.constants import DocKind, ShipmentKind
 from app.modules.trade_docs.machine import EDITABLE_STATES, TERMINAL_STATUSES
 from app.modules.trade_docs.models import ShipmentStatusLog
-from app.modules.trade_docs.quantities import open_quantity
+from app.modules.trade_docs.quantities import ASSIGNABLE_KINDS, open_quantity
 from app.modules.trade_docs.validation import invalid
 from app.modules.trade_docs.views import incoterm_body, money_text, payment_terms_body, rate_text
 
@@ -50,6 +55,10 @@ PARTY_EDITABLE_STATES = RECORD_EDITABLE_STATES
 
 _PURCHASE_ORDERS = table(
     "purchase_orders", column("id", Integer), column("doc_number", String), column("status", String)
+)
+#: 수입선적 원천 라인(PO 라인) — **원가 열을 고르지 않는다**(라인 번호만 — 수량·배정 가능량은 `open_quantity`가 읽는다). PO 모델 임포트 0(ADR-0024).
+_PURCHASE_ORDER_LINES = table(
+    "purchase_order_lines", column("id", Integer), column("line_no", Integer)
 )
 
 
@@ -137,8 +146,61 @@ def _assignee(session: Session, user_id: int) -> dict[str, Any]:
     return {"id": user_id, "display_name": name}
 
 
-def detail_body(session: Session, row: Shipment, roles: frozenset[RoleCode]) -> dict[str, Any]:
-    lines = live_lines(session, row.id)
+def is_import(row: Shipment) -> bool:
+    """수입선적 — 응답에서 금액·통화 계열 키를 **만들지 않는** 갈래(G3 — 만든 뒤 지우지 않는다, PO `include_cost` 관례)."""
+    return row.shipment_kind == ShipmentKind.IMPORT.value
+
+
+def _po_source_lines(session: Session, ids: set[int]) -> dict[int, tuple[int, int, int]]:
+    """원천 PO 라인 id → (라인 번호, 수량, 배정 가능량[살아 있는 수입선적 전부 반영 후]) — 원가 열 0, 질의 3회(라인 수 무관)."""
+    if not ids:
+        return {}
+    numbers = {
+        int(r[0]): int(r[1])
+        for r in session.execute(
+            select(_PURCHASE_ORDER_LINES.c.id, _PURCHASE_ORDER_LINES.c.line_no).where(
+                _PURCHASE_ORDER_LINES.c.id.in_(ids)
+            )
+        ).all()
+    }
+    assignable = open_quantity(session, "PO_LINE", sorted(ids), kinds=ASSIGNABLE_KINDS)
+    return {
+        line_id: (numbers.get(line_id, 0), q.ordered, q.open) for line_id, q in assignable.items()
+    }
+
+
+def _line_bodies(
+    session: Session, row: Shipment, lines: list[ShipmentLine], dg: dict[int, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """라인 응답 — 수출 = SO 라인 잔량·판매가 축 금액, 수입 = PO 라인 배정 가능량·**금액·단가·통화·무상 키 없음**(G3)."""
+    bodies: list[dict[str, Any]] = []
+    if is_import(row):
+        po_sources = _po_source_lines(
+            session, {line.po_line_id for line in lines if line.po_line_id is not None}
+        )
+        for line in lines:
+            assert (
+                line.po_line_id is not None
+            )  # CHECK one_source + 구분 = 원천(수입 라인은 PO 라인만 — 생성 경로가 보증)
+            src_no, src_qty, src_assignable = po_sources.get(line.po_line_id, (0, 0, 0))
+            bodies.append(
+                {
+                    "id": line.id,
+                    "line_no": line.line_no,
+                    "po_line_id": line.po_line_id,
+                    "sku": sku_body(line),
+                    "quantity": line.quantity,
+                    "source_line": {
+                        "id": line.po_line_id,
+                        "line_no": src_no,
+                        "quantity": src_qty,
+                        "remaining_after": src_assignable,
+                    },
+                    "dg": dg.get(line.sku_id, _NO_DG),
+                    "availability": availability_of(),
+                }
+            )
+        return bodies
     so_line_ids = {line.so_line_id for line in lines if line.so_line_id is not None}
     sources = _source_lines(session, so_line_ids)
     remaining = (
@@ -146,25 +208,10 @@ def detail_body(session: Session, row: Shipment, roles: frozenset[RoleCode]) -> 
         if so_line_ids
         else {}
     )
-    dg = dg_map(session, {line.sku_id for line in lines})
-    parties = list(
-        session.execute(
-            select(ShipmentParty)
-            .where(ShipmentParty.shipment_id == row.id, ShipmentParty.deleted_at.is_(None))
-            .order_by(ShipmentParty.id)
-        ).scalars()
-    )
     cur = row.currency
-    assembled = assemble(
-        session, row
-    )  # 마일스톤 보드 + 통관 수리일(요약 재사용) — 고정 질의 수(PR-4a)
-    line_bodies: list[dict[str, Any]] = []
-    dg_lines = 0
     for line in lines:
-        line_dg = dg.get(line.sku_id, {"flag": False, "un_number": None, "dg_class": None})
-        dg_lines += 1 if line_dg["flag"] else 0
         src_no, src_qty = sources.get(line.so_line_id or 0, (0, 0))
-        line_bodies.append(
+        bodies.append(
             {
                 "id": line.id,
                 "line_no": line.line_no,
@@ -178,16 +225,38 @@ def detail_body(session: Session, row: Shipment, roles: frozenset[RoleCode]) -> 
                 "line_amount": line.line_amount,
                 "line_amount_text": money_text(line.line_amount, cur),
                 "source_line": {
-                    "id": line.so_line_id or line.po_line_id,
+                    "id": line.so_line_id,
                     "line_no": src_no,
                     "quantity": src_qty,
                     "remaining_after": remaining.get(line.so_line_id or 0, 0),
                 },
-                "dg": line_dg,
+                "dg": dg.get(line.sku_id, _NO_DG),
                 "availability": availability_of(),
             }
         )
-    return {
+    return bodies
+
+
+_NO_DG: dict[str, Any] = {"flag": False, "un_number": None, "dg_class": None}
+
+
+def detail_body(session: Session, row: Shipment, roles: frozenset[RoleCode]) -> dict[str, Any]:
+    """상세 응답 dict — 수입선적은 금액·통화 계열 키(통화·소수 자릿수·환율·합계·라인 단가/금액/무상)를 **만들지 않는다**(G3·R-3c-2)."""
+    lines = live_lines(session, row.id)
+    dg = dg_map(session, {line.sku_id for line in lines})
+    parties = list(
+        session.execute(
+            select(ShipmentParty)
+            .where(ShipmentParty.shipment_id == row.id, ShipmentParty.deleted_at.is_(None))
+            .order_by(ShipmentParty.id)
+        ).scalars()
+    )
+    assembled = assemble(
+        session, row
+    )  # 마일스톤 보드 + 통관 수리일(요약 재사용) — 고정 질의 수(PR-4a)
+    line_bodies = _line_bodies(session, row, lines, dg)
+    dg_lines = sum(1 for line in line_bodies if line["dg"]["flag"])
+    body: dict[str, Any] = {
         "id": row.id,
         "doc_number": row.doc_number,
         "doc_date": row.doc_date.isoformat(),
@@ -199,14 +268,8 @@ def detail_body(session: Session, row: Shipment, roles: frozenset[RoleCode]) -> 
         "counterparty": {"partner_id": row.counterparty_partner_id, "name": row.counterparty_name},
         "origin_country_code": row.origin_country_code,
         "dest_country_code": row.dest_country_code,
-        "currency": cur,
-        "minor_units": minor_units(cur),
-        "fx_rate": rate_text(row.fx_rate),
-        "fx_rate_date": row.fx_rate_date.isoformat() if row.fx_rate_date else None,
         "payment_terms": payment_terms_body(row),
         "incoterm": incoterm_body(row),
-        "total_amount": row.total_amount,
-        "total_text": money_text(row.total_amount, cur),
         "internal_note": row.internal_note,
         "assignee": _assignee(session, row.assignee_id),
         "last_line_no": row.last_line_no,
@@ -230,6 +293,19 @@ def detail_body(session: Session, row: Shipment, roles: frozenset[RoleCode]) -> 
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
+    if not is_import(row):  # 수출만 — 통화·고정 환율·판매가 합계(수입은 키 자체를 만들지 않는다)
+        cur = row.currency
+        body.update(
+            {
+                "currency": cur,
+                "minor_units": minor_units(cur),
+                "fx_rate": rate_text(row.fx_rate),
+                "fx_rate_date": row.fx_rate_date.isoformat() if row.fx_rate_date else None,
+                "total_amount": row.total_amount,
+                "total_text": money_text(row.total_amount, cur),
+            }
+        )
+    return body
 
 
 def get_shipment(shipment_id: int, roles: frozenset[RoleCode]) -> dict[str, Any]:
@@ -336,28 +412,34 @@ def list_shipments(
                     "status": po_status,
                 }
             )
-            items.append(
-                {
-                    "id": row.id,
-                    "doc_number": row.doc_number,
-                    "doc_date": row.doc_date.isoformat(),
-                    "status": row.status,
-                    "shipment_kind": row.shipment_kind,
-                    "source": source,
-                    "counterparty_name": row.counterparty_name,
-                    "origin_country_code": row.origin_country_code,
-                    "dest_country_code": row.dest_country_code,
-                    "currency": row.currency,
-                    "total_amount": row.total_amount,
-                    "total_text": money_text(row.total_amount, row.currency),
-                    "line_count": int(count),
-                    "etd": dates[row.id]["etd"],
-                    "eta": dates[row.id]["eta"],
-                    "assignee": {"id": row.assignee_id, "display_name": name},
-                    "created_at": row.created_at.isoformat(),
-                    "updated_at": row.updated_at.isoformat(),
-                }
-            )
+            item: dict[str, Any] = {
+                "id": row.id,
+                "doc_number": row.doc_number,
+                "doc_date": row.doc_date.isoformat(),
+                "status": row.status,
+                "shipment_kind": row.shipment_kind,
+                "source": source,
+                "counterparty_name": row.counterparty_name,
+                "origin_country_code": row.origin_country_code,
+                "dest_country_code": row.dest_country_code,
+                "line_count": int(count),
+                "etd": dates[row.id]["etd"],
+                "eta": dates[row.id]["eta"],
+                "assignee": {"id": row.assignee_id, "display_name": name},
+                "created_at": row.created_at.isoformat(),
+                "updated_at": row.updated_at.isoformat(),
+            }
+            if not is_import(
+                row
+            ):  # 수출만 — 통화·판매가 합계(수입 행은 키 자체가 없다 — 상세·CSV 빈칸과 같은 판정)
+                item.update(
+                    {
+                        "currency": row.currency,
+                        "total_amount": row.total_amount,
+                        "total_text": money_text(row.total_amount, row.currency),
+                    }
+                )
+            items.append(item)
         return items, int(total)
 
 

@@ -32,6 +32,8 @@ from app.modules.shipments.schemas import (
     ShipmentUpdateRequest,
     ShipmentVersionRequest,
     StatusLogOut,
+    shipment_detail_out,
+    shipment_list_item_out,
 )
 from app.modules.trade_chain import shipment_flow, shipment_view
 from app.modules.trade_docs.constants import DocKind
@@ -82,7 +84,7 @@ def create_shipment(
         actor=current, idempotency_key=key, so_id=so_id, payload=payload.model_dump()
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 # ── 조회 ───────────────────────────────────────────────────────────────────
@@ -122,7 +124,7 @@ def list_shipments(
         limit=params.limit,
         **filters,  # type: ignore[arg-type]
     )
-    return Page.of([ShipmentListItem.model_validate(item) for item in items], total, params)
+    return Page.of([shipment_list_item_out(item) for item in items], total, params)
 
 
 @router.get(
@@ -137,7 +139,7 @@ def export_shipments_csv(current: CurrentUser, filters: Filters) -> StreamingRes
 # ★ `/{shipment_id}`는 `/export.csv`보다 **뒤에** 선언해야 한다(앞에 두면 int 경로 검증이 먼저 잡아 422).
 @router.get("/{shipment_id}", summary="선적 상세 (헤더·라인·당사자·가용 자리 — 전 역할)")
 def get_shipment(shipment_id: Annotated[int, Path(ge=1)], current: CurrentUser) -> ShipmentDetail:
-    return ShipmentDetail.model_validate(shipment_view.get_shipment(shipment_id, current.roles))
+    return shipment_detail_out(shipment_view.get_shipment(shipment_id, current.roles))
 
 
 @router.get("/{shipment_id}/status-log", summary="선적 상태 이력 (페이지 — 불변)")
@@ -166,7 +168,7 @@ def update_shipment(
     body = shipment_flow.update_shipment(
         actor=current, shipment_id=shipment_id, payload=payload.model_dump(exclude_unset=True)
     )
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.post(
@@ -186,7 +188,7 @@ def add_shipment_line(
         actor=current, idempotency_key=key, shipment_id=shipment_id, payload=payload.model_dump()
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.patch(
@@ -203,7 +205,7 @@ def update_shipment_line(
     body = shipment_flow.update_line(
         actor=current, shipment_id=shipment_id, line_id=line_id, payload=payload.model_dump()
     )
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.delete(
@@ -220,7 +222,7 @@ def remove_shipment_line(
     body = shipment_flow.remove_line(
         actor=current, shipment_id=shipment_id, line_id=line_id, version=version
     )
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 # ── 출고지시·취소 ──────────────────────────────────────────────────────────────
@@ -242,7 +244,7 @@ def release_shipment_order(
         actor=current, idempotency_key=key, shipment_id=shipment_id, version=payload.version
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.post(
@@ -266,7 +268,7 @@ def transition_shipment(
         reason=payload.reason,
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 # ── 당사자 ───────────────────────────────────────────────────────────────────
@@ -289,7 +291,7 @@ def add_shipment_party(
         actor=current, idempotency_key=key, shipment_id=shipment_id, payload=payload.model_dump()
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.delete(
@@ -306,4 +308,4 @@ def remove_shipment_party(
     body = shipment_flow.remove_party(
         actor=current, shipment_id=shipment_id, party_id=party_id, version=version
     )
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)

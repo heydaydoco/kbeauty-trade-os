@@ -191,8 +191,10 @@ def test_shipment_responses_carry_no_cost_fields() -> None:
         return found
 
     for model in (
-        schemas.ShipmentDetail,
-        schemas.ShipmentListItem,
+        schemas.ExportShipmentDetail,
+        schemas.ImportShipmentDetail,
+        schemas.ExportShipmentListItem,
+        schemas.ImportShipmentListItem,
         schemas.ShipmentPreview,
         schemas.MilestoneBoardOut,
         schemas.MilestoneWriteOut,
