@@ -182,7 +182,7 @@ def test_lc_shipments_show_the_presentation_deadline_as_unknown_not_hidden(
 @pytest.mark.golden
 def test_gc_a20_rollover_history_reason_and_same_key_same_change(trade: TestClient) -> None:
     """GC-A20 — ETD 계획 11-05(PLAN_SET) → 11-12 사유 없음 422 → 사유와 함께 롤오버(PLAN_CHANGED) → **같은 키 재요청 = 같은 change.id·이력 1행**
-    → 이력 2행(최신순)·롤오버 1회·통보 미연결 1. 같은 값 재입력은 no-op(change = null, 이력 0)"""
+    → 이력 2행(최신순)·롤오버 1회·통보 미연결 1. 같은 값 재입력은 no-op(change = null, 이력 0), 이전 값으로의 재유입 = 새 이력 행(J)"""
     shipment = _shipment(trade)
     sid = shipment["id"]
     first = _plan(trade, sid, "ETD", {"planned_on": "2026-11-05"})
@@ -220,6 +220,17 @@ def test_gc_a20_rollover_history_reason_and_same_key_same_change(trade: TestClie
     assert [e["payload"]["change_kind"] for e in events] == ["PLAN_SET", "PLAN_CHANGED"]
     assert events[1]["payload"]["old"]["on"] == "2026-11-05"
     assert not {k for e in events for k in e["payload"] if "amount" in k or "cost" in k}
+    # 재유입 = 신규(J) — 이전 값(11-05)으로 되돌리는 롤오버도 새 키면 새 이력 행·새 change.id(과거 행 재사용·중복 제거 없음)
+    back = _plan(
+        trade,
+        sid,
+        "ETD",
+        {"planned_on": "2026-11-05", "version": _version(trade, sid, "ETD"), "reason": "선사 원복"},
+    )
+    assert back.status_code == 200 and back.json()["change"]["change_kind"] == "PLAN_CHANGED"
+    earlier = {first.json()["change"]["id"], rolled.json()["change"]["id"]}
+    assert back.json()["change"]["id"] not in earlier
+    assert _changes(sid) == 3 and _rows(trade, sid)["ETD"]["rollover_count"] == 2
 
 
 def test_change_history_filters_and_404_for_unknown_shipment(trade: TestClient) -> None:
@@ -347,6 +358,8 @@ def test_customs_cleared_actual_comes_only_from_customs_records(trade: TestClien
     sid = _shipment(trade)["id"]
     response = _actual(trade, sid, "CUSTOMS_CLEARED", {"actual_on": _day(0)})
     assert _code(response) == "SHIPMENTS.MILESTONE.ACTUAL_FROM_CUSTOMS_RECORD"
+    # 서비스 1차 검사(입력처 안내 동반) — DB CHECK `customs_actual_from_records` 번역(2차 방어선, detail 없음)에 기대지 않는다
+    assert "milestone_type" in response.json()["error"]["detail"]
     assert _plan(trade, sid, "CUSTOMS_CLEARED", {"planned_on": _day(3)}).status_code == 200
 
 
@@ -710,6 +723,30 @@ def test_notices_and_changes_are_scoped_to_their_shipment(trade: TestClient) -> 
     )
     assert response.status_code == 404
     assert scalar("SELECT count(*) FROM comm_logs WHERE subject_type = 'SHIPMENT'") == 0
+
+
+@pytest.mark.group_k
+def test_an_unknown_shipment_is_404_before_any_input_error(trade: TestClient) -> None:
+    """ADR-0079 ⑧(401→403→404→409→422) — 없는 선적이면 파생 종류·미래 실적·빈 요지·구분 불일치·공백 든 신고번호 본문이어도
+    전부 404(입력 422가 존재 판정을 앞지르지 않는다)"""
+    missing = 999999
+    assert _plan(trade, missing, "PAYMENT_DUE", {"planned_on": "2026-11-05"}).status_code == 404
+    assert _actual(trade, missing, "ETD", {"actual_on": "2999-01-01"}).status_code == 404
+    assert _actual(trade, missing, "CUSTOMS_CLEARED", {"actual_on": _day(0)}).status_code == 404
+    draft = trade.post(f"{SHIPMENTS}/{missing}/milestones/plan-draft", json={}, headers=idem())
+    assert draft.status_code == 404
+    notice = trade.post(
+        f"{SHIPMENTS}/{missing}/milestone-changes/1/notices",
+        json={"occurred_on": "2999-01-01", "summary": " "},
+        headers=idem(),
+    )
+    assert notice.status_code == 404
+    customs = trade.post(
+        f"{SHIPMENTS}/{missing}/customs-records",
+        json={"declaration_kind": "IMPORT", "declaration_no": "a b", "declared_on": "2999-01-01"},
+        headers=idem(),
+    )
+    assert customs.status_code == 404
 
 
 @pytest.mark.group_k

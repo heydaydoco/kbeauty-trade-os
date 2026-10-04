@@ -146,6 +146,9 @@ def test_input_rules_are_422_and_store_nothing(trade: TestClient) -> None:
     for override, code in cases:
         response = _record(trade, sid, **override)
         assert response.status_code == 422 and _code(response) == code, override
+    # 수리일 < 신고일은 서비스 1차 검사(필드 안내 동반)에서 나온다 — DB CHECK 번역(2차 방어선, detail 없음)에 기대지 않는다
+    before = _record(trade, sid, accepted_on=_day(-6))
+    assert "accepted_on" in before.json()["error"]["detail"]
     assert scalar("SELECT count(*) FROM customs_records") == 0
 
 

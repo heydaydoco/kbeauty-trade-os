@@ -345,9 +345,8 @@ def _derived_row(
     due = schedule.payment_due(row, context, None)
     body["derived"] = _due_body(due)
     if due.value is not None:
-        body["days_left"] = (
-            due.value - today
-        ).days  # 도과 판정은 입금 충족 신호(S3-3) 전이라 하지 않는다
+        # 도과 판정은 입금 충족 신호(S3-3) 전이라 하지 않는다(is_overdue = null)
+        body["days_left"] = (due.value - today).days
     return body
 
 

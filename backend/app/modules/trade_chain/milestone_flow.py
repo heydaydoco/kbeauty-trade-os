@@ -374,7 +374,10 @@ def record_milestone_actual(
         _require_owner_active(row)
         _require_type_writable(row, milestone_type)
         if milestone_type == MilestoneType.CUSTOMS_CLEARED.value:
-            raise AppError(ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD)
+            raise AppError(
+                ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD,
+                detail={"milestone_type": "신고수리 실적은 통관 기록의 수리일로 입력합니다."},
+            )
         milestone = shipments.find_milestone(session, row.id, milestone_type, for_update=True)
         _require_version(milestone, payload.get("version"))
         if "actual_on" not in payload and "actual_at" not in payload:
@@ -542,7 +545,7 @@ def record_milestone_notice(
                 int(partner_id),
                 NOTICE_PARTNER_TYPES,
                 field="counterpart_partner_id",
-                type_label="포워더·관세사·3PL·바이어·공급사",
+                type_label="포워더·관세사·3PL·바이어·공급사·OEM",
                 lock=True,  # partners FOR KEY SHARE — 선적 잠금보다 먼저(R-08)
             )
         row = _lock_shipment_for_share(session, shipment_id)
