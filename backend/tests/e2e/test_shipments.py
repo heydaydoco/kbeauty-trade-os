@@ -323,6 +323,22 @@ def test_party_add_remove_rules_and_audit(trade: TestClient) -> None:
         headers=idem(),
     )
     assert closed.status_code == 409 and _code(closed) == "SHIPMENTS.SHIPMENT.NOT_ACTIVE"
+    # 취소된 선적의 당사자 제외도 409 NOT_ACTIVE — 행·감사 그대로(변이 점검에서 생존한 가드를 고정)
+    kept = next(p for p in again.json()["parties"] if p["role"] == "NOTIFY")
+    frozen_out = trade.delete(
+        f"{SHIPMENTS}/{shipment['id']}/parties/{kept['id']}", params={"version": kept["version"]}
+    )
+    assert frozen_out.status_code == 409 and _code(frozen_out) == "SHIPMENTS.SHIPMENT.NOT_ACTIVE"
+    assert "NOTIFY" in {
+        p["role"] for p in trade.get(f"{SHIPMENTS}/{shipment['id']}").json()["parties"]
+    }
+    assert (
+        scalar(
+            "SELECT count(*) FROM audit_log WHERE entity_type = 'shipments' AND entity_id = :i",
+            i=shipment["id"],
+        )
+        == 3
+    )
 
 
 # ── 라인 편집·출고지시(동결)·취소 ────────────────────────────────────────────────
