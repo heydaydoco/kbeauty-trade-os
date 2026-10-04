@@ -60,9 +60,17 @@ class ConsumerSpec:
     qty_col: str
     child_header_table: str
     child_header_fk: str
-    #: FULFILL만 잔량을 줄인다(다른 소비 성격은 후속 세션이 정의).
+    #: 소비 성격 — `CONSUMER_KINDS` 중 하나. 잔량(`open_quantity` 기본)은 FULFILL만 줄인다(S3-2 PR-2a / ADR-0077).
     kind: str = "FULFILL"
 
+
+#: 소비 성격의 폐쇄 집합 (S3-2 PR-2a / ADR-0077 / design-A A4).
+#: FULFILL = 원천 잔량을 줄이는 이행 소비(PI·SO·수출선적·S4-1 입고). IN_TRANSIT = 수입선적(PR-3a 등록) — PO 잔량은 입고에서만 줄고
+#: 수입선적은 **배정 가능량**(`open_quantity(..., kinds=frozenset({"IN_TRANSIT"}))`)만 줄인다. S4-1 입고 FULFILL과 겹쳐 세지 않는다.
+CONSUMER_KINDS: frozenset[str] = frozenset({"FULFILL", "IN_TRANSIT"})
+
+#: `open_quantity`의 기본 kind 필터 — 잔량 = 주문량 − FULFILL 소비(기존 4종 전표 동작 그대로).
+DEFAULT_OPEN_KINDS: frozenset[str] = frozenset({"FULFILL"})
 
 #: 원천 라인 종류별 소비자. S3-1 등록 3건(X-19) — 선적·입고 소비(S3-2·S4-1)는 각 세션이 더한다.
 #: 소비 = 살아 있는 후속 전표(취소·만료 아님)의 라인 수량 합이다 — 만료·취소 PI의 수량은 QT로 **환원**된다(파생이라 자동).
@@ -116,9 +124,22 @@ class OpenQuantity:
 
 
 def open_quantity(
-    session: Session, line_kind: LineKind, line_ids: list[int]
+    session: Session,
+    line_kind: LineKind,
+    line_ids: list[int],
+    *,
+    kinds: frozenset[str] = DEFAULT_OPEN_KINDS,
 ) -> dict[int, OpenQuantity]:
-    """원천 라인별 (주문량, 소비량) — 소비량은 소비자 레지스트리 위의 SUM 파생(살아 있는 행만)."""
+    """원천 라인별 (주문량, 소비량) — 소비량은 소비자 레지스트리 위의 SUM 파생(살아 있는 행만).
+
+    `kinds`(S3-2 PR-2a / ADR-0077): 합산할 소비 성격. 기본은 FULFILL만 — 수입선적(IN_TRANSIT)이 등록돼도 PO 잔량은
+    줄지 않는다. 배정 가능량은 `kinds=frozenset({"IN_TRANSIT"})`로 같은 함수에서 파생한다(§8.3 "시그니처 하나").
+    빈 집합·모르는 kind는 ValueError(조용히 0 소비로 읽히면 초과 소비가 통과한다 — fail-closed).
+    """
+    if not kinds or not kinds <= CONSUMER_KINDS:
+        raise ValueError(
+            f"open_quantity kinds는 {sorted(CONSUMER_KINDS)}의 비지 않은 부분집합이어야 합니다: {kinds!r}"
+        )
     if not line_ids:
         return {}
     doc_kind, qty_name = LINE_KINDS[line_kind]
@@ -131,6 +152,8 @@ def open_quantity(
     }
     consumed = dict.fromkeys(ordered, 0)
     for spec in LINE_CONSUMERS[line_kind]:
+        if spec.kind not in kinds:
+            continue  # 다른 소비 성격(예: 수입선적 IN_TRANSIT는 PO 잔량을 줄이지 않는다 — ADR-0077)
         if spec.child_line_table in PENDING_CONSUMER_TABLES:
             continue  # 아직 만들어지지 않은 후속(PR-7 이전의 SO 라인) — 소비량 0
         child = table(

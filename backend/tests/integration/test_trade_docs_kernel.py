@@ -183,6 +183,58 @@ def test_multiple_consumers_are_summed(monkeypatch: pytest.MonkeyPatch) -> None:
         assert _open(line).consumed == 4  # 같은 표를 두 소비자가 각각 센다 — 합산 경로 확인
 
 
+def test_open_quantity_kind_filter_defaults_to_fulfill_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3-2 PR-2a(ADR-0077) — kind 필터: 기본 잔량은 FULFILL만 줄이고 IN_TRANSIT 소비(수입선적 자리)는 잔량을 줄이지 않는다.
+    배정 가능량은 같은 함수의 `kinds={"IN_TRANSIT"}`로 파생되고, 두 kind를 함께 주면 합산된다. 빈 집합·모르는 kind는 ValueError"""
+    _qt, line = _make_qt_line()
+    with fake_consumer(monkeypatch):
+        fulfill = quantities.LINE_CONSUMERS["QT_LINE"][0]
+        in_transit = ConsumerSpec(
+            name="scratch-in-transit",
+            child_line_table=fulfill.child_line_table,
+            line_fk_col=fulfill.line_fk_col,
+            qty_col=fulfill.qty_col,
+            child_header_table=fulfill.child_header_table,
+            child_header_fk=fulfill.child_header_fk,
+            kind="IN_TRANSIT",
+        )
+        _consume(line, 4)
+        # 같은 행을 FULFILL·IN_TRANSIT 두 소비자가 각각 센다 — 어느 kind가 합산되는지 값으로 구분된다
+        monkeypatch.setitem(quantities.LINE_CONSUMERS, "QT_LINE", (in_transit,))
+        assert _open(line) == OpenQuantity(
+            10, 0
+        )  # 기본(FULFILL만) — IN_TRANSIT 등록만으로 잔량이 줄면 실패
+        with unit_of_work() as uow:
+            assigned = quantities.open_quantity(
+                uow.session, "QT_LINE", [line], kinds=frozenset({"IN_TRANSIT"})
+            )[line]
+            assert assigned == OpenQuantity(10, 4) and assigned.open == 6  # 배정 가능량
+            assert quantities.open_quantity(
+                uow.session, "QT_LINE", [line], kinds=frozenset({"FULFILL"})
+            )[line] == OpenQuantity(10, 0)
+        monkeypatch.setitem(quantities.LINE_CONSUMERS, "QT_LINE", (fulfill, in_transit))
+        assert _open(line) == OpenQuantity(10, 4)  # 기본은 FULFILL 4만
+        with unit_of_work() as uow:
+            both = quantities.open_quantity(
+                uow.session, "QT_LINE", [line], kinds=frozenset({"FULFILL", "IN_TRANSIT"})
+            )[line]
+            assert both == OpenQuantity(10, 8)
+            for bad in (frozenset(), frozenset({"RESERVE"}), frozenset({"FULFILL", "x"})):
+                with pytest.raises(ValueError):
+                    quantities.open_quantity(uow.session, "QT_LINE", [line], kinds=bad)
+
+
+def test_open_quantity_default_is_unchanged_for_registered_consumers() -> None:
+    """S3-2 PR-2a 회귀 — 기본 필터는 FULFILL이고 현재 등록 소비자는 전부 FULFILL·kind는 폐쇄 집합 안이다(기존 4종 전표 잔량 동작 불변)"""
+    assert frozenset({"FULFILL"}) == quantities.DEFAULT_OPEN_KINDS
+    assert frozenset({"FULFILL", "IN_TRANSIT"}) == quantities.CONSUMER_KINDS
+    specs = [spec for group in quantities.LINE_CONSUMERS.values() for spec in group]
+    assert specs and all(spec.kind in quantities.CONSUMER_KINDS for spec in specs)
+    assert all(spec.kind == "FULFILL" for spec in specs)
+
+
 @pytest.fixture
 def consumable_qt(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[int, list[int]]]:
     """QT를 임시로 '소비 가능 문서'로 취급해 소비 잠금 계약(헤더 SHARE→라인 FOR UPDATE id순)을 실제 표로 시험한다."""
