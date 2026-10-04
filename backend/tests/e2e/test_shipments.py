@@ -255,6 +255,14 @@ def test_consignee_is_the_buyer_snapshot_and_requested_parties_are_typed(trade: 
         assert (
             response.status_code == 422 and _code(response) == "SHIPMENTS.PARTY.ROLE_NOT_ALLOWED"
         ), role
+        # 추가 경로도 같다 — 수하인(자동 스냅샷)·송하인(자사)은 POST /parties로 만들 수 없다(변이 점검에서 생존한 가드를 고정)
+        added = trade.post(
+            f"{SHIPMENTS}/{body['id']}/parties",
+            json={"role": role, "partner_id": so["buyer"]},
+            headers=idem(),
+        )
+        assert added.status_code == 422 and _code(added) == "SHIPMENTS.PARTY.ROLE_NOT_ALLOWED", role
+    assert scalar("SELECT count(*) FROM shipment_parties WHERE shipment_id = :i", i=body["id"]) == 2
 
 
 def test_missing_english_name_is_fail_visible(trade: TestClient) -> None:
