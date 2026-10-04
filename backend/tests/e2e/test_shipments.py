@@ -682,3 +682,38 @@ def test_detail_query_count_is_fixed_regardless_of_line_count(trade: TestClient)
             event.remove(engine, "before_cursor_execute", _count)
         counts.append(len(statements))
     assert counts[0] == counts[1] and counts[0] <= 20, counts
+
+
+@pytest.mark.group_h
+def test_handover_moves_shipment_assignees_without_touching_version_or_history(
+    trade: TestClient,
+) -> None:
+    """H(담당 이관 — ADR-0078 ④·0079 ⑨) — 일괄 이관이 선적 담당(assignee_id)만 옮기고 version·상태 이력·작성자는 건드리지 않는다(동결·취소 선적 포함)"""
+    from app.modules.handover import service as handover
+    from app.modules.handover.targets import ASSIGNMENT_TARGETS
+    from tests.support.factories import create_user
+
+    labels = [t.label for t in ASSIGNMENT_TARGETS]
+    assert labels.index("shipments") == labels.index("purchase_orders") + 1  # LOCK_ORDER 순서
+    so = confirmed_so((10,))
+    planned = created(trade, so["id"], [(so["line_ids"][0], 2)])
+    frozen = created(trade, so["id"], [(so["line_ids"][0], 3)])
+    assert release(trade, frozen["id"]).status_code == 200
+    dead = created(trade, so["id"], [(so["line_ids"][0], 1)])
+    assert cancel(trade, dead["id"]).status_code == 200
+    old_owner = planned["assignee"]["id"]
+    new_owner = create_user(f"{unique('ship-new')}@example.com", roles=(RoleCode.LOGISTICS,))
+    before = rows(
+        "SELECT id, version, created_by_id FROM shipments WHERE so_id = :s ORDER BY id", s=so["id"]
+    )
+    logs = scalar("SELECT count(*) FROM shipment_status_log")
+    result = handover.reassign_all(
+        from_user_id=old_owner, to_user_id=new_owner, actor_user_id=new_owner
+    )
+    assert result.moved["shipments"] == 3
+    for shipment in (planned, frozen, dead):
+        assert trade.get(f"{SHIPMENTS}/{shipment['id']}").json()["assignee"]["id"] == new_owner
+    after = rows(
+        "SELECT id, version, created_by_id FROM shipments WHERE so_id = :s ORDER BY id", s=so["id"]
+    )
+    assert after == before and scalar("SELECT count(*) FROM shipment_status_log") == logs

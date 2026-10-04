@@ -97,6 +97,7 @@ def _assert_convergence_invariant(so_id: int) -> None:
 
 
 @pytest.mark.golden
+@pytest.mark.group_h  # 검증 지시 'H(동시 선적 생성 경합·초과 거부)' — 파일 표식 J와 함께
 def test_gc_f4_concurrent_partial_shipments_7_plus_7_on_10() -> None:
     """GC-F4 — SO 라인 10에 다른 키로 7+7 동시 선적 → 정확히 1 성공·1 × 409 EXCEEDS_OPEN, 잔량 3, 500·40P01 0, SO 선적중"""
     so = confirmed_so((10,))
@@ -142,6 +143,7 @@ def test_double_click_from_six_threads_creates_one_shipment() -> None:
     assert _open(so["line_ids"][0]) == 7
 
 
+@pytest.mark.group_h
 def test_twenty_users_racing_for_fifteen_units() -> None:
     """J-03 — SO 라인 15에 20명이 1개씩 동시 선적 → 성공 15·EXCEEDS_OPEN 5·잔량 0·교착 0·번호 15개 중복 0"""
     so = confirmed_so((15,))
