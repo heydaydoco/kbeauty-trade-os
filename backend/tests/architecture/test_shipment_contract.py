@@ -246,11 +246,11 @@ def _cost_name_uses(tree: ast.Module) -> set[str]:
 
 @pytest.mark.group_g
 def test_shipment_code_cannot_select_po_cost_columns() -> None:
-    """GC-G3 구조 — 선적 모듈·오케스트레이션(수입선적 생성·응답 조립 포함)은 **PO 모델·서비스를 임포트하지 않고**
+    """GC-G3 구조 — 선적 모듈·오케스트레이션(수입선적 생성·응답 조립 포함)과 PO 라인 입고예정 조회(L0 `receipts`)는 **PO 모델·서비스를 임포트하지 않고**
     PO 원가 열 이름(`unit_cost`·`line_cost`·`total_cost`·`price_basis`)을 식별자·열 이름 상수로 쓰지 않는다 — 원가를 복사·조인하는 문장이
     구조적으로 생길 수 없다(ADR-0024 10번째 채널 미개설). PO는 테이블 이름으로 원가 아닌 열만 고른다"""
     sources = app_sources()
-    targets = sorted(SHIPMENT_FILES)
+    targets = sorted(SHIPMENT_FILES | {"modules/trade_docs/receipts.py"})
     for rel in targets:
         tree = sources[rel]
         assert "purchase_orders" not in imported_modules(tree), rel

@@ -233,10 +233,13 @@ def test_import_shipment_copies_the_po_header_but_never_its_cost(trade: TestClie
     assert body["incoterm"] == {"code": "EXW", "place": "Seoul", "year": 2020}
     assert body["assignee"]["id"] == po_row["assignee_id"]
     assert body["internal_note"] == "1차"
-    assert [(line["po_line_id"], line["quantity"]) for line in body["lines"]] == [
-        (po["lines"][0]["id"], 7),
-        (po["lines"][1]["id"], 5),
-    ]  # 요청 순서가 아니라 원천(PO) 라인 번호 순으로 선적 라인 번호가 매겨진다(수출 SO 라인과 같은 규칙)
+    assert (
+        [(line["po_line_id"], line["quantity"]) for line in body["lines"]]
+        == [
+            (po["lines"][0]["id"], 7),
+            (po["lines"][1]["id"], 5),
+        ]
+    )  # 요청 순서가 아니라 원천(PO) 라인 번호 순으로 선적 라인 번호가 매겨진다(수출 SO 라인과 같은 규칙)
     shipper = [p for p in body["parties"] if p["auto"]]
     assert shipper == [
         {
@@ -626,3 +629,158 @@ def test_a_live_import_shipment_blocks_cancelling_the_po_until_it_is_cancelled(
     assert blocked.json()["error"]["detail"] == {"successors": [shipment["doc_number"]]}
     assert cancel(trade, shipment["id"]).status_code == 200
     assert cancel_po().status_code == 200
+
+
+# ── PO 상세 — 배정 가능량·입고예정(계산값, 열 없음 — design-D X4 / design-B B17 / ADR-0085) ─────────────
+
+
+def _po_lines(client: TestClient, po_id: int) -> dict[int, dict[str, Any]]:
+    response = client.get(f"{PO}/{po_id}")
+    assert response.status_code == 200, response.text
+    return {line["id"]: line for line in response.json()["lines"]}
+
+
+def _receipt(
+    status: str, value: str | None, basis: str | None, count: int, unscheduled: int
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "value": value,
+        "basis": basis,
+        "shipment_count": count,
+        "unscheduled_count": unscheduled,
+    }
+
+
+def _plan_eta(client: TestClient, shipment_id: int, on: str, *, reason: str | None = None) -> None:
+    board = client.get(f"{SHIPMENTS}/{shipment_id}/milestones").json()
+    row = next(r for r in board["rows"] if r["milestone_type"] == "ETA")
+    body: dict[str, Any] = {"planned_on": on}
+    if row["version"] is not None:
+        body["version"] = row["version"]
+    if reason is not None:
+        body["reason"] = reason
+    response = client.post(
+        f"{SHIPMENTS}/{shipment_id}/milestones/ETA/plan", json=body, headers=idem()
+    )
+    assert response.status_code == 200, response.text
+
+
+def _actual_eta(client: TestClient, shipment_id: int, on: str) -> None:
+    board = client.get(f"{SHIPMENTS}/{shipment_id}/milestones").json()
+    row = next(r for r in board["rows"] if r["milestone_type"] == "ETA")
+    response = client.post(
+        f"{SHIPMENTS}/{shipment_id}/milestones/ETA/actual",
+        json={"actual_on": on, "version": row["version"]},
+        headers=idem(),
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_po_detail_lines_carry_the_assignable_quantity_and_the_latest_eta_receipt(
+    trade: TestClient,
+) -> None:
+    """design-D X4·B17 — PO 상세 라인마다 `assignable_quantity`(배정 가능량 — 409 판정과 같은 함수)·`expected_receipt`(살아 있는 수입선적 ETA 중
+    **가장 늦은 날**, ETA 없는 선적이 있으면 UNSCHEDULED·값 없음, 선적 없으면 NONE, 전 선적 실적이면 basis ACTUAL). 취소 선적은 빠진다"""
+    from datetime import timedelta
+
+    today = today_kst()
+    po = sentinel_po(trade, quantities=(10, 5))
+    a, b = (line["id"] for line in po["lines"])
+    assert {
+        k: (v["assignable_quantity"], v["expected_receipt"])
+        for k, v in _po_lines(trade, po["id"]).items()
+    } == {
+        a: (10, _receipt("NONE", None, None, 0, 0)),
+        b: (5, _receipt("NONE", None, None, 0, 0)),
+    }  # 생성 응답·상세 모두 같은 계산(생성 직후는 선적 없음)
+    assert {ln["id"]: ln["assignable_quantity"] for ln in po["lines"]} == {a: 10, b: 5}
+    s1 = created_import(trade, po["id"], [(a, 4)])
+    lines = _po_lines(trade, po["id"])
+    assert lines[a]["assignable_quantity"] == 6
+    assert lines[a]["expected_receipt"] == _receipt("UNSCHEDULED", None, None, 1, 1)
+    assert lines[b]["expected_receipt"] == _receipt("NONE", None, None, 0, 0)
+    _plan_eta(trade, s1["id"], (today + timedelta(days=10)).isoformat())
+    assert _po_lines(trade, po["id"])[a]["expected_receipt"] == _receipt(
+        "SCHEDULED", (today + timedelta(days=10)).isoformat(), "PLANNED", 1, 0
+    )
+    s2 = created_import(trade, po["id"], [(a, 3), (b, 5)])
+    _plan_eta(trade, s2["id"], (today + timedelta(days=20)).isoformat())
+    lines = _po_lines(trade, po["id"])
+    late = (today + timedelta(days=20)).isoformat()
+    assert (lines[a]["assignable_quantity"], lines[b]["assignable_quantity"]) == (3, 0)
+    assert lines[a]["expected_receipt"] == _receipt("SCHEDULED", late, "PLANNED", 2, 0)
+    assert lines[b]["expected_receipt"] == _receipt("SCHEDULED", late, "PLANNED", 1, 0)
+    s3 = created_import(trade, po["id"], [(a, 1)])  # ETA 없는 셋째 선적 — 가장 늦은 날을 알 수 없다
+    assert _po_lines(trade, po["id"])[a]["expected_receipt"] == _receipt(
+        "UNSCHEDULED", None, None, 3, 1
+    )
+    assert cancel(trade, s3["id"]).status_code == 200  # 취소 선적은 빠진다
+    assert _po_lines(trade, po["id"])[a]["expected_receipt"] == _receipt(
+        "SCHEDULED", late, "PLANNED", 2, 0
+    )
+    for shipment in (s1, s2):
+        assert release(trade, shipment["id"]).status_code == 200
+    _actual_eta(trade, s1["id"], (today - timedelta(days=1)).isoformat())
+    assert _po_lines(trade, po["id"])[a]["expected_receipt"] == _receipt(
+        "SCHEDULED", late, "PLANNED", 2, 0
+    )  # 하나만 도착 — 늦은 쪽(계획)이 대표, 기준은 PLANNED
+    _actual_eta(trade, s2["id"], today.isoformat())
+    assert _po_lines(trade, po["id"])[a]["expected_receipt"] == _receipt(
+        "SCHEDULED", today.isoformat(), "ACTUAL", 2, 0
+    )  # 전 선적 도착 실적 — 실적 중 가장 늦은 날·ACTUAL
+    assert _po_row(po["id"])["status"] == "ISSUED"
+
+
+@pytest.mark.group_g
+def test_po_detail_receipt_fields_are_the_same_for_cost_hidden_roles(trade: TestClient) -> None:
+    """G — 배정 가능량·입고예정은 원가와 무관한 수량·날짜라 원가 비열람 역할(조회)도 같은 값을 본다(CostHidden 라인에도 실린다), 원가 키는 여전히 0"""
+    po = sentinel_po(trade, quantities=(8,))
+    shipment = created_import(trade, po["id"], [(po["lines"][0]["id"], 3)])
+    _plan_eta(trade, shipment["id"], today_kst().isoformat())
+    full = _po_lines(trade, po["id"])[po["lines"][0]["id"]]
+    with logged_in(RoleCode.VIEWER) as viewer:
+        detail = viewer.get(f"{PO}/{po['id']}")
+        hidden = detail.json()["lines"][0]
+        assert {k for k in scan_keys(detail.json()) if COST_KEY.search(k)} == set()
+        for sentinel in SENTINELS:
+            assert sentinel not in detail.text
+    assert (
+        (hidden["assignable_quantity"], hidden["expected_receipt"])
+        == (
+            full["assignable_quantity"],
+            full["expected_receipt"],
+        )
+        == (5, _receipt("SCHEDULED", today_kst().isoformat(), "PLANNED", 1, 0))
+    )
+
+
+@pytest.mark.group_k
+def test_po_detail_query_count_does_not_grow_with_lines_or_import_shipments(
+    trade: TestClient,
+) -> None:
+    """K(렌즈 7) — PO 상세의 배정 가능량·입고예정은 질의 수가 라인·수입선적 수와 무관한 상수다(N+1 0 — 배정 가능량 2·입고예정 1)"""
+    from sqlalchemy import event
+
+    from app.core.db.session import engine
+
+    small = sentinel_po(trade, quantities=(5,))
+    big = sentinel_po(trade, quantities=(5, 5, 5, 5))
+    for line in big["lines"]:
+        shipment = created_import(trade, big["id"], [(line["id"], 2)])
+        _plan_eta(trade, shipment["id"], today_kst().isoformat())
+    created_import(trade, big["id"], [(big["lines"][0]["id"], 1)])
+    counts: list[int] = []
+    for po_id in (small["id"], big["id"]):
+        statements: list[str] = []
+
+        def _count(*_args: Any, sink: list[str] = statements) -> None:
+            sink.append("q")
+
+        event.listen(engine, "before_cursor_execute", _count)
+        try:
+            assert trade.get(f"{PO}/{po_id}").status_code == 200
+        finally:
+            event.remove(engine, "before_cursor_execute", _count)
+        counts.append(len(statements))
+    assert counts[0] == counts[1], counts

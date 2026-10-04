@@ -1,8 +1,11 @@
-"""선적 요청·응답 (S3-2 PR-3a / design-D D2-1 S1~S4·S7~S15·D3 / design-integrated §2.9·§9 R-15).
+"""선적 요청·응답 (S3-2 PR-3a·PR-5a / design-D D2-1 S1~S15·D3 / design-integrated §2.9·§9 R-15).
 
 요청 스키마는 전부 `extra="forbid"`이고 **SKU·단가·통화·환율·거래처·Incoterms·결제조건·구분·상태·번호·증빙일 필드가 구조적으로 없다**
 (원천 사본 — 재입력 금지 `D:175` ①, 증빙일은 생성 시 서버가 KST 오늘로 1회 설정 — R-15). 생성 본문은 원천 라인 id·수량·국가 2개·
 선택적 당사자·내부 메모뿐이다. 범용 전이의 `to_status`는 `Literal["CANCELLED"]` 1값이다(출고지시는 전용 경로 `release-order`).
+
+응답(S3-2 PR-5a): 상세·목록은 **구분 판별자 합집합**(`shipment_kind` EXPORT|IMPORT)이다. 수입선적 변형에는 통화·소수 자릿수·환율·합계·라인
+단가/금액/통화/무상 필드가 **아예 없다**(PO 원가 비복사 — 원가 열람 역할로도 0, GC-G3·R-3c-2). 수입 미리보기도 같다.
 """
 
 from __future__ import annotations
@@ -314,7 +317,7 @@ class ShipmentPartyOut(BaseModel):
     partner_id: int
     name_en: str
     address_en: str | None
-    #: 원천 거래처 자동 스냅샷 행(수출 CONSIGNEE) — 삭제·교체 불가.
+    #: 원천 거래처 자동 스냅샷 행(수출 CONSIGNEE = SO 바이어·수입 SHIPPER = PO 공급사) — 삭제·교체 불가.
     auto: bool
     version: int
 
