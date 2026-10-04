@@ -505,7 +505,8 @@ function ShipmentsSection({ so, canCreate, onReload }: { so: SalesOrderDetail; c
           </table>
         </ListState>
       </div>
-      {creating && showCreate && (
+      {/* 열린 대화상자는 잔량이 0이 되어도(409 뒤 재조회) 닫지 않는다 — 서버 안내를 읽고 사람이 닫는다. 여는 버튼만 조건부. */}
+      {creating && canCreate && (
         <ShipmentCreateDialog
           so={so}
           onClose={() => setCreating(false)}

@@ -180,9 +180,22 @@ describe("선적 만들기 2단 대화상자", () => {
     expect(creates[0]!.headers["Idempotency-Key"]).toMatch(/^key-/);
   });
 
-  it("생성 409 EXCEEDS_OPEN(다른 선적이 먼저 가져감) → 1단으로 돌아가 그 라인 칸 아래 '서버 확인: 남은 수량 N', 본문이 바뀌면 새 키", async () => {
+  it("생성 409 EXCEEDS_OPEN(다른 선적이 먼저 가져감) → 1단으로 돌아가 그 라인 칸 아래 '서버 확인: 남은 수량 N'·'남은 잔량'도 서버 값으로 갱신, 본문이 바뀌면 새 키", async () => {
     let creates = 0;
     const { calls, dialog } = await openDialog([
+      // 409 뒤 수주 재조회 — 경쟁 선적이 가져가 라인 1 잔량이 1로 줄어 있다(입력값 4는 그대로 남는다).
+      [
+        "/v1/sales-orders/9",
+        "GET",
+        () =>
+          jsonResponse(
+            confirmed(
+              creates > 0
+                ? { status: "IN_SHIPMENT", lines: [{ ...SO_LINE, shipment_open_quantity: 1 }, { ...TONER, shipment_open_quantity: 0 }] }
+                : {},
+            ),
+          ),
+      ],
       ["/v1/sales-orders/9/shipments/preview", "POST", () => jsonResponse(shipmentPreview())],
       [
         "/v1/sales-orders/9/shipments",
@@ -207,6 +220,9 @@ describe("선적 만들기 2단 대화상자", () => {
     const hint = document.getElementById(input.getAttribute("aria-describedby") ?? "") as HTMLElement;
     expect(hint).toHaveTextContent("서버 확인: 남은 수량 1 — 수량을 1 이하로 고쳐 주세요.");
     expect(within(dialog).getByText(/다른 선적이 먼저 가져가 남은 수량이 줄었습니다/)).toBeInTheDocument();
+    const card = input.closest("li") as HTMLElement;
+    await waitFor(() => expect(card).toHaveTextContent("남은 잔량 1"));
+    expect(input).toHaveValue("4");
 
     // 고친 수량으로 다시 미리보기 → 확정: 본문이 다르므로 새 키(결과를 모르는 실패 뒤 같은 본문이면 같은 키).
     fireEvent.change(input, { target: { value: "1" } });
@@ -238,6 +254,39 @@ describe("선적 만들기 2단 대화상자", () => {
     await waitFor(() => expect(sent(calls, "/v1/sales-orders/9/shipments", "POST")).toHaveLength(3));
     const keys = sent(calls, "/v1/sales-orders/9/shipments", "POST").map((c) => c.headers["Idempotency-Key"]);
     expect(new Set(keys).size).toBe(1);
+  });
+
+  it("409 뒤 재조회로 잔량이 모두 0이 되어도 대화상자는 닫히지 않고 칸별 안내가 남는다", async () => {
+    let previews = 0;
+    const { dialog } = await openDialog([
+      [
+        "/v1/sales-orders/9",
+        "GET",
+        () =>
+          jsonResponse(
+            confirmed(
+              previews > 0
+                ? { status: "IN_SHIPMENT", lines: [{ ...SO_LINE, shipment_open_quantity: 0 }, { ...TONER, shipment_open_quantity: 0 }] }
+                : {},
+            ),
+          ),
+      ],
+      [
+        "/v1/sales-orders/9/shipments/preview",
+        "POST",
+        () => {
+          previews += 1;
+          return jsonResponse(apiErrorResponse("TRADE_DOCS.QUANTITY.EXCEEDS_OPEN", "원천 남은 수량을 넘습니다.", { open_quantity: { "41": 0 } }), 409);
+        },
+      ],
+    ]);
+    fireEvent.change(within(dialog).getByLabelText("라인 1 이번 선적 수량"), { target: { value: "2" } });
+    fireEvent.change(within(dialog).getByLabelText("출발국 (필수)"), { target: { value: "KR" } });
+    fireEvent.change(within(dialog).getByLabelText("도착국 (필수)"), { target: { value: "US" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "다음: 미리보기" }));
+    expect(await within(dialog).findByText("서버 확인: 남은 수량 0 — 수량을 0 이하로 고쳐 주세요.")).toBeInTheDocument();
+    await waitFor(() => expect(within(shipSection()).queryByRole("button", { name: "선적 만들기" })).toBeNull());
+    expect(screen.getByRole("dialog", { name: /선적 만들기/ })).toBeInTheDocument();
   });
 
   it("미리보기 409 EXCEEDS_OPEN도 칸별 잔량으로(1단 유지)", async () => {

@@ -82,6 +82,9 @@ export function ShipmentCreateDialog({ so, onClose, onReload }: Props) {
     if (open.size > 0) {
       setServerOpen(open);
       setPreview(null); // 1단으로 돌아가 칸별 잔량을 보인다
+      // 화면의 '남은 잔량'도 서버 값으로 다시 받는다 — 옛 잔량(경쟁 선적 전)이 칸 옆에 남아 서버 안내와 엇갈리지 않게
+      // (실브라우저 관통 발견: 409 뒤 '남은 잔량 4' 옆에 '서버 확인: 남은 수량 2'). 입력값은 라인 id로 묶여 그대로 남는다.
+      void client.invalidateQueries({ queryKey: salesOrderDetailKey(so.id), exact: true });
     }
   }
 
