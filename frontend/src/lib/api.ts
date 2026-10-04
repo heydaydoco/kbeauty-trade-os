@@ -126,13 +126,19 @@ export async function apiUpload<T>(
   return (await response.json()) as T;
 }
 
-/** 204 응답용 삭제 요청 — 본문이 없어 apiFetch의 json() 고정을 못 쓴다. */
-export async function apiDelete(path: string): Promise<void> {
+/**
+ * 204 응답용 삭제 요청 — 응답 본문이 없어 apiFetch의 json() 고정을 못 쓴다.
+ * `body`는 삭제에 version·사유를 싣는 경로용(예: 통관 기록 삭제 `{version, reason}` — S3-2 PR-4b). 없으면 종전과 같은 요청.
+ */
+export async function apiDelete(path: string, options: { body?: unknown } = {}): Promise<void> {
+  const headers: Record<string, string> = { Accept: "application/json", "Idempotency-Key": newIdempotencyKey() };
+  if (options.body !== undefined) headers["Content-Type"] = "application/json";
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
       method: "DELETE",
-      headers: { Accept: "application/json", "Idempotency-Key": newIdempotencyKey() },
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
   } catch {
     throw new ApiError(0, NETWORK_ERROR);

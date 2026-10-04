@@ -3,13 +3,14 @@
 // ★ 버튼 노출은 서버가 준 `allowed_actions`만 따른다(PROGRESS 'S3-2 PR-3a' 인계 계약) — 화면이 역할·상태로 다시 판정하지 않는다.
 // ★ 금액은 서버 문자열(*_text) 그대로, 날짜(`doc_date`·`fx_rate_date`)는 'YYYY-MM-DD' 문자열 그대로(시각 객체로 바꾸지 않는다 —
 //   UTC 자정 해석으로 하루 밀림). 시각(`created_at`·`updated_at`·`frozen_at`·`occurred_at`)만 `toKstDisplay`로 KST 표시.
-// ★ 마일스톤(ETD·ETA)·통관은 PR-4a/4b — 이 응답에는 그 필드가 없다(화면도 만들지 않는다).
+// ★ 마일스톤 보드·통관 요약(PR-4a 응답 — 상세 `milestones`·`customs_summary`, 목록 `etd`·`eta`)의 타입·라벨은 lib/milestone.ts(PR-4b).
 
 import type { QueryClient } from "@tanstack/react-query";
 import { ApiError } from "./api";
 import { ORDER_BOARD_QUERY_KEY } from "./order-board";
 import { QUANTITY_EXCEEDS_OPEN_CODE, type Incoterm, type PaymentTerms } from "./proforma";
 import { DOCUMENT_FLOW_QUERY_KEY, salesOrderDetailKey } from "./sales-order";
+import type { CustomsSummary, EffectiveValue, MilestoneBoard } from "./milestone";
 
 export interface ShipmentSource {
   kind: "SALES_ORDER" | "PURCHASE_ORDER";
@@ -37,6 +38,9 @@ export interface ShipmentListItem {
   total_amount: number;
   total_text: string;
   line_count: number;
+  /** ETD·ETA 유효값(실적 우선 — 'YYYY-MM-DD' 현지 날짜, 행·값 없으면 null) — 목록 열(부채 R-3b-3, PR-4a ⑨). */
+  etd: EffectiveValue | null;
+  eta: EffectiveValue | null;
   assignee: ShipmentAssignee;
   created_at: string;
   updated_at: string;
@@ -112,6 +116,9 @@ export interface ShipmentDetail {
   dg_line_count: number;
   lines: ShipmentLine[];
   parties: ShipmentParty[];
+  /** 마일스톤 보드(PR-4a — `GET /shipments/{id}/milestones`와 같은 모양). 쓰기 응답의 `board`로 이 칸만 바꾼다. */
+  milestones: MilestoneBoard;
+  customs_summary: CustomsSummary;
   allowed_actions: string[];
   created_at: string;
   updated_at: string;
@@ -208,7 +215,17 @@ export const SHIPMENT_STATUS_FILTERS = ["PLANNED", "RELEASE_ORDERED", "CANCELLED
 
 // ── 서버가 준 동작(allowed_actions) ──
 
-export type ShipmentAction = "RELEASE_ORDER" | "CANCEL" | "EDIT_LINES" | "EDIT_COUNTRIES" | "EDIT_META" | "EDIT_PARTIES";
+/** 서버 `shipment_view.allowed_actions` 9종 — PR-4a가 EDIT_MILESTONES(계획·실적·통보)·PLAN_DRAFT(초안 1클릭)·EDIT_CUSTOMS(통관)를 더했다. */
+export type ShipmentAction =
+  | "RELEASE_ORDER"
+  | "CANCEL"
+  | "EDIT_LINES"
+  | "EDIT_COUNTRIES"
+  | "EDIT_META"
+  | "EDIT_PARTIES"
+  | "EDIT_MILESTONES"
+  | "PLAN_DRAFT"
+  | "EDIT_CUSTOMS";
 export const can = (detail: Pick<ShipmentDetail, "allowed_actions">, action: ShipmentAction): boolean =>
   detail.allowed_actions.includes(action);
 

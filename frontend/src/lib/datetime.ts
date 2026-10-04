@@ -79,3 +79,75 @@ export function toZonedPairDisplay(isoUtc: string, timeZone: string): string {
     return `${kst} · 현지 시각 확인 불가 (${timeZone})`;
   }
 }
+
+// ── 시각형 마일스톤 입력(서류마감·Cargo Closing — S3-2 PR-4b, design-D D12) ──
+// 사람은 '그 시간대의 벽시계 시각'을 넣고, 서버는 UTC 오프셋이 붙은 시각 + IANA 시간대를 받는다(UTC 저장 — 렌즈 6).
+// 변환은 이 파일에서만 한다(화면·마일스톤 컴포넌트는 시각 객체를 만들지 않는다 — 소스 계약).
+
+const WALL_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+const HOUR_MS = 3_600_000;
+
+/** 그 시각(ms)의 tz 벽시계를 UTC 기준 ms로 — 오프셋 계산용(분 단위 — 2000~2999년 오프셋은 분 단위다). */
+function wallMs(instantMs: number, timeZone: string): number {
+  const parts = Object.fromEntries(
+    zonedFormatter(timeZone)
+      .formatToParts(new Date(instantMs))
+      .map((part) => [part.type, part.value]),
+  );
+  return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute));
+}
+
+export type WallTimeResult = { ok: true; iso: string; ambiguous: boolean } | { ok: false; problem: string };
+
+/**
+ * 벽시계 시각('YYYY-MM-DDTHH:mm' — datetime-local 값) + IANA 시간대 → UTC ISO 시각.
+ * 서머타임으로 **없는 시각**(앞당김 구간)은 거부(문구), **두 번 있는 시각**(되돌림 구간)은 더 이른 시각을 고르고 `ambiguous`로 알린다
+ * (이른 쪽 = 기한을 더 일찍 잡는 쪽 — design-B B3 ④ '더 일찍 경고'와 같은 방향). 저장 전 미리보기로 사람이 확인한다.
+ */
+export function zonedWallTimeToUtc(wall: string, timeZone: string): WallTimeResult {
+  const match = WALL_TIME.exec(wall);
+  if (match === null) return { ok: false, problem: "날짜와 시각을 모두 입력해 주세요." };
+  const target = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]));
+  if (Number.isNaN(target)) return { ok: false, problem: "날짜와 시각을 모두 입력해 주세요." };
+  try {
+    zonedFormatter(timeZone);
+  } catch {
+    return { ok: false, problem: "시간대를 확인할 수 없습니다. 목록에서 다시 골라 주세요." };
+  }
+  const candidates = new Set<number>();
+  for (const probe of [target - 24 * HOUR_MS, target, target + 24 * HOUR_MS]) {
+    const offset = wallMs(probe, timeZone) - probe;
+    const candidate = target - offset;
+    if (wallMs(candidate, timeZone) === target) candidates.add(candidate);
+  }
+  if (candidates.size === 0) {
+    return { ok: false, problem: "그 시각은 이 시간대에 없습니다(서머타임 전환 구간). 다른 시각을 입력해 주세요." };
+  }
+  const chosen = Math.min(...candidates);
+  return { ok: true, iso: new Date(chosen).toISOString(), ambiguous: candidates.size > 1 };
+}
+
+/** UTC ISO 시각 → 그 시간대의 벽시계 'YYYY-MM-DDTHH:mm'(datetime-local 초기값). 날짜 문자열·해석 불가면 null. */
+export function utcToZonedWallTime(isoUtc: string, timeZone: string): string | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoUtc)) return null;
+  const instant = new Date(isoUtc);
+  if (Number.isNaN(instant.getTime())) return null;
+  try {
+    return formatZoned(instant, timeZone).replace(" ", "T");
+  } catch {
+    return null;
+  }
+}
+
+/** 시간대 선택지 — 런타임이 아는 IANA 이름(국가→대표 시간대 표는 두지 않는다 — design-D D12). 저장된 값(`extra`)이 목록에 없으면 앞에 더한다. */
+export function timeZoneChoices(extra: string | null = null): string[] {
+  let names: string[];
+  try {
+    names = [...Intl.supportedValuesOf("timeZone")];
+  } catch {
+    names = [];
+  }
+  if (!names.includes("Asia/Seoul")) names = ["Asia/Seoul", ...names];
+  if (extra !== null && extra !== "" && !names.includes(extra)) names = [extra, ...names];
+  return names;
+}
