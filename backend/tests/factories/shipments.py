@@ -212,6 +212,7 @@ def raw_shipment(
     frozen: bool | None = None,
     kind: str = "EXPORT",
     doc_date: date | None = None,
+    po_id: int | None = None,
 ) -> int:
     """원시 SQL 선적 헤더(라인 없음 — 제약·사슬 시험용). 거래 상대·통화·조건은 SO에서 읽는다."""
     so = rows("SELECT * FROM sales_orders WHERE id = :i", i=so_id)[0]
@@ -235,6 +236,7 @@ def raw_shipment(
         "assignee_id": so["assignee_id"],
         "shipment_kind": kind,
         "so_id": so_id if kind == "EXPORT" else None,
+        "po_id": po_id,
         "counterparty_partner_id": so["buyer_partner_id"],
         "counterparty_name": so["buyer_name"],
         "origin_country_code": "KR",

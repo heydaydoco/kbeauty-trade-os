@@ -14,7 +14,8 @@
 잠금 순서: 멱등 → 바이어(KEY SHARE) → QT(id 오름차순) → 라인 → 채번(마지막).
 ■ SO 전이(보류·재개·취소) — `lock_chain`(QT→PI→SO)+version 대조 후 `record_transition`. **재개 목표는 `confirmed_at`이 원천**이다(NULL=직전 RECEIVED,
   NOT NULL=직전 CONFIRMED — 목표가 어긋나면 409 RESUME_TARGET_MISMATCH, 재개는 게이트를 다시 평가하지 않는다). 취소는 순서를 고정한다:
-  잠금 → 상태 검사(RECEIVED·CONFIRMED·ON_HOLD) → 살아 있는 후속 검사(역순 취소) → 열린 승인 무효화(`void_for_target` 훅 — PR-12a) → `AllocationPort.on_cancelled` → `record_transition(CANCELLED)` → 부모 QT 수렴(`converge_parent`). 어느 단계든 실패하면 전체 롤백이다.
+  잠금 → **살아 있는 후속 검사(역순 취소 — S3-2 PR-3a R-02: 상태 검사보다 먼저, `record_transition` 원칙과 정렬)** → 상태 검사(RECEIVED·CONFIRMED·ON_HOLD)
+  → 열린 승인 무효화(`void_for_target` 훅 — PR-12a) → `AllocationPort.on_cancelled` → `record_transition(CANCELLED)` → 부모 QT 수렴(`converge_parent`). 어느 단계든 실패하면 전체 롤백이다.
   **확정은 이 파일에 없다**(`trade_chain/confirm.py` — PR-12a) — RECEIVED→CONFIRMED는 동결 액션 엣지라 이 통로로 못 넘는다.
 """
 
@@ -345,17 +346,23 @@ SO_CANCELLABLE = ("RECEIVED", "CONFIRMED", "ON_HOLD")
 def _cancel_sales_order(
     session: Any, actor: AuthenticatedUser, row: Any, reason: str | None
 ) -> None:
-    """SO 취소 트랜잭션 순서(design-B B3) — 위 모듈 독스트링. 호출자가 사슬 잠금을 이미 잡았다."""
+    """SO 취소 트랜잭션 순서(design-B B3) — 위 모듈 독스트링. 호출자가 사슬 잠금을 이미 잡았다.
+
+    S3-2 PR-3a(R-02·GC-A14) — **후속 생존 검사가 상태 검사보다 먼저**다: 선적이 살아 있는 SO는 IN_SHIPMENT라 상태 검사를 먼저 하면
+    '전이 불가'(NOT_ALLOWED)가 되고 "먼저 취소할 선적" 안내(`SUCCESSOR_ALIVE`+`detail.successors=[SH-…]`)가 사라진다. 이미 취소된
+    SO(종결)는 후속이 있을 수 없어(취소 가드) 검사를 건너뛴다 — 커널 `record_transition`과 같은 원칙.
+    """
     so_kind = DocKind.SALES_ORDER
+    if row.status != "CANCELLED":
+        successors = live_children_numbers(session, so_kind, row.id)
+        if successors:  # 살아 있는 선적(CHILD_LINKS SO→shipments) — 선적을 먼저 취소하면 SO가 CONFIRMED로 복귀한 뒤 취소된다
+            raise AppError(
+                ErrorCode.TRADE_DOCS_CANCEL_SUCCESSOR_ALIVE, detail={"successors": successors}
+            )
     if row.status not in SO_CANCELLABLE:
         raise AppError(
             ErrorCode.TRADE_DOCS_TRANSITION_NOT_ALLOWED,
             detail={"from": row.status, "to": "CANCELLED"},
-        )
-    successors = live_children_numbers(session, so_kind, row.id)
-    if successors:  # S3-1에는 후속이 없다 — S3-2가 선적을 CHILD_LINKS에 등록하면 여기서 막힌다
-        raise AppError(
-            ErrorCode.TRADE_DOCS_CANCEL_SUCCESSOR_ALIVE, detail={"successors": successors}
         )
     # 열린(요청됨·승인됨) 여신 초과 승인 무효화(TARGET_CANCELLED) — 이미 소비된 승인은 CONSUMED 종결이라 건드리지 않는다.
     # 잠금 순서: 사슬(QT→PI→SO)을 이미 잡았다 → approvals (7). 전표 취소가 실패하면 이 무효화도 같은 트랜잭션이라 함께 롤백된다.
