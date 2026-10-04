@@ -441,6 +441,8 @@ def test_csv_preview_reports_row_problems_and_saves_nothing(admin: TestClient) -
         "2026-10-01,중복\n"
         "2026-10-03,\n"
         "2026-10-04,a,b\n"
+        "2026-W02-1,주차표기\n"
+        "20260105T0,기본형\n"
         "\n"
     ).encode()
     response = admin.post(
@@ -460,6 +462,8 @@ def test_csv_preview_reports_row_problems_and_saves_nothing(admin: TestClient) -
         (4, "holiday_on"),
         (5, "name"),
         (6, "row"),
+        (7, "holiday_on"),  # ISO 주차 표기 — 다른 날짜로 정규화되지 않는다
+        (8, "holiday_on"),  # 기본형+시각 꼬리
     }
     assert _live("CN", 2026) == [] and _audits() == []
 

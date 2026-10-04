@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -80,6 +81,9 @@ CONSTRAINT_ERRORS: dict[str, ErrorCode] = {
     "pk_holidays": ErrorCode.INTERNAL_UNEXPECTED,
     CALENDAR_YEAR_KEY: ErrorCode.INTERNAL_UNEXPECTED,
 }
+
+
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
 
 
 def _constraint_of(exc: IntegrityError) -> str | None:
@@ -516,9 +520,11 @@ def preview_csv(*, country: str, year: int, raw: bytes) -> dict[str, Any]:
             record[1].strip(" ")
         )  # 원문 검사(탭·줄바꿈을 strip으로 숨기지 않는다)
         try:
-            day = date.fromisoformat(raw_day)
-            if len(raw_day) != 10:
+            if (
+                _ISO_DAY.fullmatch(raw_day) is None
+            ):  # ISO 주차·기본형('2026-W02-1'·'20260105T0')이 다른 날짜로 정규화되지 않게
                 raise ValueError
+            day = date.fromisoformat(raw_day)
         except ValueError:
             problems.append(
                 {

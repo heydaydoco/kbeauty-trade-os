@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from app.core.time import KST
 from app.modules.trade_docs.constants import BalanceAnchor, PaymentType
@@ -195,9 +195,19 @@ def effective(planned: date | None, actual: date | None) -> DateValue | None:
     return None
 
 
+_IANA_ZONES: frozenset[str] = frozenset(available_timezones()) - {
+    "localtime",
+    "Factory",
+    "posixrules",
+}
+
+
 def zone(tz: str) -> ZoneInfo:
     """IANA 시간대 — 모르는 이름은 ValueError(서비스가 422 `TIMEZONE_INVALID`로 번역 — PR-4a)."""
     if not isinstance(tz, str) or not tz or tz != tz.strip():
+        raise ValueError(f"IANA 시간대 이름이 아닙니다: {tz!r}")
+    if tz not in _IANA_ZONES:
+        # 'localtime'·'Factory'·'posixrules' 같은 비지역 키는 호스트 설정에 따라 오프셋이 바뀐다 — 순수성 보존을 위해 거부
         raise ValueError(f"IANA 시간대 이름이 아닙니다: {tz!r}")
     try:
         return ZoneInfo(tz)
@@ -278,6 +288,7 @@ def payment_due(terms: TermsLike | None, ctx: AnchorContext, lc: LcInputs | None
         ptype = PaymentType(terms.payment_type)
     except ValueError:
         raise ValueError(f"알 수 없는 결제유형: {terms.payment_type!r}") from None
+    _require_terms_shape(ptype, terms.advance_pct_bp)
     if ptype is PaymentType.LC:
         if lc is None:
             return DueResult.unknown(DueReason.LC_TERMS_NOT_REGISTERED)
@@ -294,6 +305,15 @@ def payment_due(terms: TermsLike | None, ctx: AnchorContext, lc: LcInputs | None
     if isinstance(resolved, DueResult):
         return resolved
     return DueResult.ok(resolved.value + timedelta(days=days), resolved.basis)
+
+
+def _require_terms_shape(ptype: PaymentType, advance_pct_bp: int | None) -> None:
+    """DB CHECK `payment_terms_shape`와 같은 형태 검사 — 모순된 조건으로 만기를 만들어 내지 않는다(위반 = ValueError)."""
+    if ptype is PaymentType.TT_ADVANCE:
+        if advance_pct_bp is None or not (1 <= advance_pct_bp <= FULL_ADVANCE_BP):
+            raise ValueError("선수금 T/T는 선수율(1~10000bp)이 있어야 합니다.")
+    elif advance_pct_bp is not None:
+        raise ValueError("선수금 T/T가 아닌 결제조건에는 선수율을 둘 수 없습니다.")
 
 
 # ── L/C 제시기한·tolerance (B6 — 수출·수입 L/C 공통, R-11) ─────────────────────

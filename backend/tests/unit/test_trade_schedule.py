@@ -397,3 +397,33 @@ def test_gc_a19_a_due_date_on_a_holiday_is_not_moved() -> None:
         HolidayFlag.HOLIDAY,
         "국경절 연휴",
     )
+
+
+# ── 검토 반영(PR #55): 비지역 시간대 키·결제조건 형태 ─────────────────────────
+
+
+@pytest.mark.parametrize("tz", ["localtime", "Factory", "posixrules"])
+def test_zone_rejects_host_dependent_keys(tz: str) -> None:
+    """'localtime' 등은 호스트 /etc/localtime에 따라 오프셋이 바뀐다 — 순수 함수 계약상 거부"""
+    with pytest.raises(ValueError):
+        s.zone(tz)
+    assert s.zone("Asia/Seoul").key == "Asia/Seoul"
+
+
+@pytest.mark.parametrize(
+    "terms",
+    [
+        Terms("TT_ADVANCE", None, "ETD_DATE", 5),
+        Terms("TT_ADVANCE", 0, "ETD_DATE", 5),
+        Terms("TT_ADVANCE", 10001, "ETD_DATE", 5),
+        Terms("TT_DEFERRED", 3000, "BL_DATE", 30),
+        Terms("LC", 3000, None, None),
+    ],
+)
+def test_payment_due_rejects_terms_that_violate_the_db_shape(terms: Terms) -> None:
+    """DB CHECK payment_terms_shape와 같은 형태 검사 — 모순된 조건으로 만기를 만들지 않는다"""
+    ctx = AnchorContext(
+        etd=s.effective(None, date(2026, 11, 5)), bl=s.effective(None, date(2026, 11, 5))
+    )
+    with pytest.raises(ValueError):
+        s.payment_due(terms, ctx, None)
