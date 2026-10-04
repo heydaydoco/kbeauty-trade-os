@@ -1,7 +1,7 @@
-"""선적 엔드포인트 — 목록·상세·상태이력·SO 참조 생성(미리보기·생성)·헤더·라인·출고지시·취소·당사자 (S3-2 PR-3a / design-D D2-1 / ADR-0079).
+"""선적 엔드포인트 — 목록·CSV·상세·상태이력·SO 참조 생성(미리보기·생성)·헤더·라인·출고지시·취소·당사자 (S3-2 PR-3a·PR-3c / design-D D2-1 S1~S20 / ADR-0079).
 
 권한은 **경로 단위**다(라우터 가드만으로 403이 존재 검사 전에 성립 — 401→403→404→409→422, `D:370`):
-  조회 = 전 역할 / 생성·미리보기·라인·취소 = 무역(SO 잔량 소비·SO 수렴 = 상업 사실) / 헤더(메모·담당·국가)·출고지시·당사자 = 무역 + **물류**
+  조회(목록·CSV·상세·이력) = 전 역할 / 생성·미리보기·라인·취소 = 무역(SO 잔량 소비·SO 수렴 = 상업 사실) / 헤더(메모·담당·국가)·출고지시·당사자 = 무역 + **물류**
   (물류 첫 전표 쓰기 — ADR-0079). 관리자는 `require_roles`에서 상시 통과한다.
 쓰기는 전부 사람 1클릭이고 생성·라인 추가·출고지시·취소·당사자 추가는 `Idempotency-Key` 필수, 기존 행 수정은 `version` 필수(409).
 이 라우터가 `create_shipment_from_sales_order`·`release_shipment_order`·`transition_shipment`의 **유일한 호출처**다(자동 선적·자동 출고지시 0 —
@@ -13,8 +13,10 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, IdempotencyKey, require_roles
+from app.core.csv_export import csv_response
 from app.core.pagination import Page, PageParams
 from app.modules.identity.models import RoleCode
 from app.modules.shipments.schemas import (
@@ -123,6 +125,16 @@ def list_shipments(
     return Page.of([ShipmentListItem.model_validate(item) for item in items], total, params)
 
 
+@router.get(
+    "/export.csv",
+    summary="선적 목록 CSV 내보내기 (UTF-8 BOM·목록과 같은 필터 — 전 역할, 원가 열 0)",
+)
+def export_shipments_csv(current: CurrentUser, filters: Filters) -> StreamingResponse:
+    rows = shipment_view.export_rows(**filters)  # type: ignore[arg-type]
+    return csv_response("선적목록.csv", shipment_view.EXPORT_HEADER, rows)
+
+
+# ★ `/{shipment_id}`는 `/export.csv`보다 **뒤에** 선언해야 한다(앞에 두면 int 경로 검증이 먼저 잡아 422).
 @router.get("/{shipment_id}", summary="선적 상세 (헤더·라인·당사자·가용 자리 — 전 역할)")
 def get_shipment(shipment_id: Annotated[int, Path(ge=1)], current: CurrentUser) -> ShipmentDetail:
     return ShipmentDetail.model_validate(shipment_view.get_shipment(shipment_id, current.roles))
