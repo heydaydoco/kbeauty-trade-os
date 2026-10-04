@@ -332,7 +332,8 @@ def test_year_mismatch_duplicate_date_and_bad_names_are_422(admin: TestClient) -
     dup = _put(admin, "CN", 2026, _body([("2026-10-01", "a"), ("2026-10-01", "b")]), key="m-2")
     assert dup.status_code == 422
     assert dup.json()["error"]["code"] == "HOLIDAYS.CALENDAR.DUPLICATE_DATE"
-    for index, name in enumerate(("   ", "탭\t휴일", "줄\n바꿈", "제로폭​")):
+    assert dup.json()["error"]["detail"] == {"holiday_on": ["2026-10-01"]}  # 화면이 칸에 붙일 날짜
+    for index, name in enumerate(("   ", "탭\t휴일", "줄\n바꿈", "제로폭\u200b")):
         bad = _put(admin, "CN", 2026, _body([("2026-10-01", name)]), key=f"m-n{index}")
         assert bad.status_code == 422, name
     assert admin.get(BASE, params={"country": "CN", "year": 2026}).json()["calendar"] is None

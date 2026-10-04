@@ -103,6 +103,19 @@ def test_gc_a16_missing_anchor_is_unknown_not_today_or_zero() -> None:
         assert got == _unknown(DueReason.ANCHOR_PENDING), anchor
     receipt = s.payment_due(Terms("TT_DEFERRED", None, "RECEIPT_DATE", 30), AnchorContext(), None)
     assert receipt == _unknown(DueReason.RECEIPT_NOT_RECORDED)
+    # 다른 앵커의 날짜가 있어도 자기 앵커가 없으면 UNKNOWN — 이웃 마일스톤으로 대체하지 않는다
+    other = DateValue(date(2026, 11, 1), ACT)
+    neighbours = {
+        "ETD_DATE": AnchorContext(order_at=datetime(2026, 10, 1, tzinfo=UTC), bl=other, eta=other),
+        "BL_DATE": AnchorContext(order_at=datetime(2026, 10, 1, tzinfo=UTC), etd=other, eta=other),
+        "ARRIVAL_DATE": AnchorContext(
+            order_at=datetime(2026, 10, 1, tzinfo=UTC), etd=other, bl=other
+        ),
+        "ORDER_DATE": AnchorContext(etd=other, bl=other, eta=other),
+    }
+    for anchor, ctx in neighbours.items():
+        got = s.payment_due(Terms("TT_DEFERRED", None, anchor, 0), ctx, None)
+        assert got == _unknown(DueReason.ANCHOR_PENDING), anchor
 
 
 @pytest.mark.golden
@@ -153,6 +166,13 @@ def test_gc_a16_lc_sight_is_the_negotiation_date() -> None:
 def test_gc_a16_lc_usance_is_acceptance_plus_n_and_missing_is_unknown() -> None:
     """GC-A16 / B20-10 — USANCE 90·인수 2027-01-31 → 2027-05-01 / 인수일 없음 → UNKNOWN / 지원 밖 형태 → UNKNOWN"""
     assert s.lc_payment_due("USANCE", None, date(2027, 1, 31), 90) == _ok(date(2027, 5, 1), ACT)
+    # 네고일이 함께 있어도 USANCE 기산은 인수일(네고일+90 = 04-10이면 실패) / SIGHT는 인수일을 보지 않는다
+    assert s.lc_payment_due("USANCE", date(2027, 1, 10), date(2027, 1, 31), 90) == _ok(
+        date(2027, 5, 1), ACT
+    )
+    assert s.lc_payment_due("SIGHT", date(2027, 2, 10), date(2027, 3, 1), 90) == _ok(
+        date(2027, 2, 10), ACT
+    )
     assert s.lc_payment_due("USANCE", date(2027, 1, 1), None, 90) == _unknown(
         DueReason.LC_INPUT_MISSING
     )
