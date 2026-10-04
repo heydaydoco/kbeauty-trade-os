@@ -17,7 +17,7 @@ from sqlalchemy import text
 from app.core.db.session import owner_engine
 from app.modules.identity.models import RoleCode
 from tests.factories.shipments import SHIPMENTS, confirmed_so, created, rows, scalar
-from tests.factories.trade import idem, logged_in, unique
+from tests.factories.trade import idem, logged_in, unique, user_id_of
 from tests.support.factories import create_item_profile
 
 pytestmark = pytest.mark.group_k
@@ -70,11 +70,6 @@ def test_admin_builds_a_set_in_flow_order_and_everyone_reads_it(admin: TestClien
     page = admin.get(f"{PROFILES}/{profile}/milestone-types").json()
     assert page["size"] == 50 and page["total"] == 3
     assert [item["milestone_type"] for item in page["items"]] == ["DOC_CUTOFF", "ETD", "ETA"]
-    actor = scalar(
-        "SELECT count(DISTINCT created_by_id) FROM item_profile_milestone_types WHERE profile_id = :p",
-        p=profile,
-    )
-    assert actor == 1
     for role in (RoleCode.TRADE, RoleCode.LOGISTICS, RoleCode.CERT, RoleCode.VIEWER):
         with logged_in(role) as client:
             assert _types(client, profile) == ["DOC_CUTOFF", "ETD", "ETA"]
@@ -203,3 +198,35 @@ def test_sets_written_through_the_api_narrow_the_plan_draft(admin: TestClient) -
         assert (
             scalar("SELECT count(*) FROM milestones WHERE shipment_id = :s", s=shipment["id"]) == 7
         )
+
+
+def test_the_set_rows_record_the_requesting_admin_as_actor() -> None:
+    """행위자 기록(§2 감사 열 — 세트는 audit·아웃박스 없이 행위자 열과 soft delete 행이 이력) — 추가 행의 `created_by_id`·`updated_by_id` =
+    요청한 관리자, 다른 관리자가 제거하면 `updated_by_id` = 제거한 관리자(`created_by_id`는 그대로)"""
+    adder_email = f"{unique('set-add')}@example.com"
+    remover_email = f"{unique('set-del')}@example.com"
+    profile = create_item_profile(unique("PRF"))
+    with logged_in(RoleCode.ADMIN, email=adder_email) as adder:
+        link = _add(adder, profile, "ETD").json()["id"]
+    adder_id = user_id_of(adder_email)
+    row = rows(
+        "SELECT created_by_id, updated_by_id, deleted_at FROM item_profile_milestone_types"
+        " WHERE id = :i",
+        i=link,
+    )[0]
+    assert (row["created_by_id"], row["updated_by_id"], row["deleted_at"]) == (
+        adder_id,
+        adder_id,
+        None,
+    )
+    with logged_in(RoleCode.ADMIN, email=remover_email) as remover:
+        assert remover.delete(f"{PROFILES}/{profile}/milestone-types/{link}").status_code == 204
+    remover_id = user_id_of(remover_email)
+    assert remover_id != adder_id
+    row = rows(
+        "SELECT created_by_id, updated_by_id, deleted_at FROM item_profile_milestone_types"
+        " WHERE id = :i",
+        i=link,
+    )[0]
+    assert (row["created_by_id"], row["updated_by_id"]) == (adder_id, remover_id)
+    assert row["deleted_at"] is not None

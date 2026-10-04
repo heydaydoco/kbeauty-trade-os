@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import timedelta
 from typing import Any
 
@@ -28,11 +29,19 @@ from tests.factories.trade import (
     raw_po,
     unique,
 )
+from tests.support.kst import pin_today_kst
 
 pytestmark = pytest.mark.group_a
 
 PO = "/api/v1/purchase-orders"
 OEM_ORDER = ["RAW_MATERIAL_READY", "FILLING", "PACKING", "OUTGOING_INSPECTION"]
+
+
+@pytest.fixture(autouse=True)
+def _pin_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KST 자정 경계 고정(4a 적대 검토 반영 ⑩ 승계 — PR-4c 적대 검토 반영 ①) — 시험마다 base 날짜를 한 번 잡아 앱 import 지점(마일스톤·
+    통관·선적 흐름·보드)과 이 시험 모듈의 `today_kst`를 같은 날로 맞춘다(`_day(n)`·D-N·미래 실적 판정이 자정을 넘겨도 같은 날 기준)."""
+    pin_today_kst(monkeypatch, sys.modules[__name__])
 
 
 @pytest.fixture
@@ -385,25 +394,25 @@ def test_oem_types_take_dates_only(trade: TestClient) -> None:
 
 
 @pytest.mark.group_k
-def test_the_oem_board_query_count_does_not_grow_with_rows_or_history(trade: TestClient) -> None:
-    """K(렌즈 7) — OEM 보드 질의 수는 행·이력 수와 무관한 상수(PO 1·마일스톤 1·롤오버 통계 1 — N+1 0)"""
+def test_the_oem_board_takes_exactly_two_queries_whatever_the_row_count(trade: TestClient) -> None:
+    """K(렌즈 7) — OEM 보드 질의 수 = **정확히 2**(PO 판정 열 1·마일스톤 행 1), 행 0·1·4개 모두 같다. OEM 4종은 ROLLOVER_TYPES 밖이라
+    롤오버 통계 질의는 없다(대상 0이면 생략 — N+1 0). 롤오버가 OEM 종류에 생겨도 질의 수는 그대로"""
     from tests.support.sqlcount import count_statements
 
-    small = _oem_po(trade)["id"]
-    big = _oem_po(trade)["id"]
-    _plan(trade, small, "FILLING", {"planned_on": _day(5)})
+    empty = _oem_po(trade)["id"]
+    one = _oem_po(trade)["id"]
+    four = _oem_po(trade)["id"]
+    _plan(trade, one, "FILLING", {"planned_on": _day(5)})
     for milestone_type in OEM_ORDER:
-        _plan(trade, big, milestone_type, {"planned_on": _day(5)})
-    for offset in (6, 7, 8):
-        version = _row(trade, big, "FILLING")["version"]
-        _plan(
-            trade,
-            big,
-            "FILLING",
-            {"planned_on": _day(offset), "version": version, "reason": "롤오버"},
-        )
+        _plan(trade, four, milestone_type, {"planned_on": _day(5)})
+    version = _row(trade, four, "FILLING")["version"]
+    rolled = _plan(
+        trade, four, "FILLING", {"planned_on": _day(6), "version": version, "reason": "롤오버"}
+    )
+    assert rolled.json()["change"]["change_kind"] == "PLAN_CHANGED"
     roles = frozenset({RoleCode.TRADE})
     counts = [
-        count_statements(lambda p=po: milestone_view.get_oem_board(p, roles)) for po in (small, big)
+        count_statements(lambda p=po: milestone_view.get_oem_board(p, roles))
+        for po in (empty, one, four)
     ]
-    assert counts[0] == counts[1] and 0 < counts[0] <= 3, counts
+    assert counts == [2, 2, 2], counts

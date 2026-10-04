@@ -1,17 +1,21 @@
 """J. OEM 생산 일정(T13)·품목군 마일스톤 세트 동시성 — 잠금 순서 계측·PO 취소와의 직렬화·같은 키 더블클릭·최초 계획 경합·세트 중복 경합
 (S3-2 PR-4c / design-integrated N-07·§2.11 / ADR-0078 / design-C C2·C14 J-01·J-07·J-10).
 
-★ 순차 실행은 증거가 아니다 — 실제 스레드(각자 세션)를 Barrier로 동시에 출발시키거나, 다른 연결이 잠금을 쥔 채로 상대를 실제로 기다리게 한다.
+★ 순차 실행은 증거가 아니다 — 실제 스레드(각자 세션)를 Barrier로 동시에 출발시키거나, 한쪽이 잠금을 쥔 채 멈춘 동안 상대가 **실제로 잠금을
+  기다리는 것을 `pg_locks`(미부여 행 — 대기 pid 특정)로 관측**한 뒤 풀어 준다(sleep·is_alive 추정 0 — test_order_board_saved_filters 선례).
   T13 = 멱등 → `purchase_orders FOR SHARE`(PO 무수정) → `milestones FOR UPDATE`. PO 취소는 PO를 `FOR UPDATE`로 잡으므로, 진행 중인 취소가 있으면
-  OEM 쓰기는 기다렸다가 커밋된 취소를 보고 409 OWNER_NOT_ACTIVE를 낸다(잠금 없이 읽었다면 취소 전 스냅샷으로 기록이 새어 들어간다). 500·교착 0.
+  OEM 쓰기는 기다렸다가 커밋된 취소를 보고 409 OWNER_NOT_ACTIVE를 내고, OEM 쓰기가 PO를 쥔 동안에는 취소가 기다린다. 500·교착 0.
+  (PR-4c 적대 검토 반영 — KST 고정·달력 무관 롤오버 값·J-10 번역 경로 결정화·대기 증거 pg_locks·두 순서 결정적 분리.)
 """
 
 from __future__ import annotations
 
 import re
+import sys
 import threading
 import time
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -20,7 +24,9 @@ from sqlalchemy import event, text
 from app.core.db.session import engine
 from app.core.errors.exceptions import AppError
 from app.core.time import today_kst
+from app.modules.idempotency import service as idempotency_service
 from app.modules.identity.models import RoleCode
+from app.modules.shipments import service as shipments_service
 from app.modules.trade_chain import lifecycle, milestone_flow, milestone_set_flow
 from app.modules.trade_docs.locking import LOCK_ORDER
 from tests.factories.approvals import make_user
@@ -28,10 +34,19 @@ from tests.factories.shipments import scalar
 from tests.factories.trade import raw_po, unique
 from tests.support.concurrency import Outcome, run_concurrently
 from tests.support.factories import create_item_profile
+from tests.support.kst import pin_today_kst
 
 pytestmark = [pytest.mark.group_j, pytest.mark.concurrency]
 
 ROUNDS = 5
+#: 잠금 대기 관측 상한(초) — 앱 역할 lock_timeout(5s)보다 짧게 끝나야 대기 쪽이 55P03으로 죽지 않는다.
+WAIT_OBSERVE_SECONDS = 4.0
+
+
+@pytest.fixture(autouse=True)
+def _pin_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KST 자정 경계 고정(PR-4c 적대 검토 반영 ①) — 앱 import 지점과 이 시험 모듈의 `today_kst`를 같은 날로(스레드 공유 — 모듈 속성)."""
+    pin_today_kst(monkeypatch, sys.modules[__name__])
 
 
 def _code(outcome: Outcome) -> str:
@@ -125,15 +140,24 @@ def test_t13_locks_idempotency_then_po_for_share_then_the_milestone_row() -> Non
     ], first
     _assert_follows_lock_order(first)
     version = int(scalar("SELECT version FROM milestones WHERE po_id = :p", p=po_id))
-    rolled = _lock_trace(
-        lambda: _plan(
+    holder: dict[str, Any] = {}
+
+    def rollover() -> None:
+        holder["body"] = _plan(
             actor,
             po_id,
             "FILLING",
-            {"planned_on": today_kst().replace(day=1), "version": version, "reason": "롤오버"},
-        )
-    )
+            {
+                "planned_on": today_kst()
+                + timedelta(days=1),  # 늘 다른 날(달력 무관 — 같은 날이면 no-op)
+                "version": version,
+                "reason": "롤오버",
+            },
+        )[1]
+
+    rolled = _lock_trace(rollover)
     assert rolled == first, rolled
+    assert holder["body"]["change"]["change_kind"] == "PLAN_CHANGED"
     version = int(scalar("SELECT version FROM milestones WHERE po_id = :p", p=po_id))
     actual = _lock_trace(
         lambda: milestone_flow.record_oem_milestone_actual(
@@ -175,78 +199,234 @@ def _hold_cancel_in_flight(po_id: int) -> Any:
     return connection, transaction
 
 
-def test_an_oem_write_waits_for_an_in_flight_po_cancel_and_then_refuses() -> None:
-    """N-07 — 취소 TX가 PO를 `FOR UPDATE`로 쥔 동안 OEM 계획은 **기다리고**(잠금 없는 읽기면 취소 전 스냅샷으로 바로 기록된다), 취소가 커밋되면
-    잠금 뒤 읽은 최신 상태로 409 OWNER_NOT_ACTIVE — 취소된 PO에 새 생산 일정 0"""
+def _record_pid_of(monkeypatch: pytest.MonkeyPatch, key: str) -> dict[str, int]:
+    """멱등 키 `key`로 들어온 트랜잭션의 백엔드 pid를 기록한다(claim은 TX 첫 문장 — 그 연결이 뒤의 잠금도 잡는다)."""
+    pids: dict[str, int] = {}
+    original = idempotency_service.claim
+
+    def recording(session: Any, **kwargs: Any) -> Any:
+        if kwargs.get("key") == key:
+            pids["pid"] = int(session.execute(text("SELECT pg_backend_pid()")).scalar_one())
+        return original(session, **kwargs)
+
+    monkeypatch.setattr(idempotency_service, "claim", recording)
+    return pids
+
+
+def _observe_lock_wait(pids: dict[str, int]) -> bool:
+    """기록된 pid가 **부여되지 않은 잠금**을 기다리는 것을 pg_locks로 본다(대기 증거 — 추정 아님). 상한 안에 못 보면 False."""
+    deadline = time.monotonic() + WAIT_OBSERVE_SECONDS
+    while time.monotonic() < deadline:
+        if "pid" in pids:
+            with engine.connect() as connection:
+                waiting = connection.execute(
+                    text("SELECT count(*) FROM pg_locks WHERE pid = :p AND NOT granted"),
+                    {"p": pids["pid"]},
+                ).scalar_one()
+            if waiting:
+                return True
+        time.sleep(0.05)
+    return False
+
+
+def _run_in_thread(work: Callable[[], Any]) -> tuple[threading.Thread, dict[str, Any]]:
+    holder: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            holder["value"] = work()
+        except BaseException as exc:  # 결과로 판정한다
+            holder["error"] = exc
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread, holder
+
+
+def test_a_first_oem_plan_waits_for_an_in_flight_po_cancel_and_then_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N-07 — 취소 TX가 PO를 `FOR UPDATE`로 쥔 동안 OEM **최초 계획**(INSERT 경로)은 잠금을 실제로 기다리고(pg_locks 미부여 관측), 취소가
+    커밋되면 잠금 뒤 읽은 최신 상태로 409 OWNER_NOT_ACTIVE — 취소된 PO에 새 생산 일정 0. (INSERT는 FK 검사도 PO 행을 잡으므로 대기 자체는
+    FOR SHARE 누락을 구분하지 못한다 — 이 변형이 잡는 결함은 '잠금 뒤 상태 재판정 누락'이고, FOR SHARE 누락은 아래 UPDATE 변형이 잡는다)"""
     actor = make_user(RoleCode.TRADE)
-    for _ in range(3):
+    for round_no in range(3):
         po_id = raw_po(po_kind="OEM_PRODUCTION")
+        key = f"inflight-insert-{po_id}-{round_no}"
+        pids = _record_pid_of(monkeypatch, key)
         connection, transaction = _hold_cancel_in_flight(po_id)
-        holder: dict[str, Any] = {}
-
-        def write(po_id: int = po_id, holder: dict[str, Any] = holder) -> None:
-            try:
-                holder["value"] = _plan(actor, po_id, "PACKING", {"planned_on": today_kst()})
-            except BaseException as exc:
-                holder["error"] = exc
-
-        worker = threading.Thread(target=write)
-        worker.start()
-        time.sleep(1.0)
-        waiting = worker.is_alive()
-        transaction.commit()
-        connection.close()
-        worker.join(timeout=10)
-        assert waiting, "OEM 쓰기가 진행 중인 PO 취소를 기다리지 않았다(PO FOR SHARE 누락)"
+        try:
+            thread, holder = _run_in_thread(
+                lambda po_id=po_id, key=key: _plan(
+                    actor, po_id, "PACKING", {"planned_on": today_kst()}, key
+                )
+            )
+            waited = _observe_lock_wait(pids)
+        finally:
+            transaction.commit()
+            connection.close()
+        thread.join(15)
+        assert waited, "OEM 최초 계획이 진행 중인 PO 취소의 잠금을 기다리지 않았다"
         error = holder.get("error")
-        assert isinstance(error, AppError), holder
+        assert isinstance(error, AppError), (
+            "취소 커밋 뒤에도 기록됐다 — 잠금 뒤 PO 상태를 다시 판정하지 않는다",
+            holder,
+        )
         assert str(error.code) == "SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE"
         assert scalar("SELECT count(*) FROM milestones WHERE po_id = :p", p=po_id) == 0
 
 
-def test_an_oem_actual_and_a_po_cancel_race_without_errors() -> None:
-    """실제 동시 — OEM 실적 vs PO 취소(사람 전이 lifecycle) 5라운드: 취소는 늘 성공(OEM 기록은 PO 취소를 막지 않는다 — 설계 침묵, 부채),
-    실적은 먼저 잡으면 성공·늦으면 409 OWNER_NOT_ACTIVE. 500·교착 0, 실패한 실적은 이력 0"""
+def test_an_oem_rollover_waits_for_an_in_flight_po_cancel_and_then_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N-07 — 행이 이미 있는 **롤오버(UPDATE 경로 — FK 검사 없음)**도 진행 중 취소의 PO `FOR UPDATE`를 실제로 기다린다(pg_locks 관측) — 이 대기의
+    유일한 원천이 T13 `purchase_orders FOR SHARE`다(빼면 기다리지 않고 취소 전 스냅샷으로 롤오버가 기록된다). 커밋 뒤 409 OWNER_NOT_ACTIVE,
+    계획 값·이력 무변경"""
     actor = make_user(RoleCode.TRADE)
-    seen: set[str] = set()
-    for _ in range(ROUNDS):
+    for round_no in range(3):
         po_id = raw_po(po_kind="OEM_PRODUCTION")
-        _plan(actor, po_id, "OUTGOING_INSPECTION", {"planned_on": today_kst()})
-        milestone_version = int(scalar("SELECT version FROM milestones WHERE po_id = :p", p=po_id))
-        po_version = int(scalar("SELECT version FROM purchase_orders WHERE id = :p", p=po_id))
-
-        def work(
-            index: int, po_id: int = po_id, mv: int = milestone_version, pv: int = po_version
-        ) -> Any:
-            if index == 0:
-                return milestone_flow.record_oem_milestone_actual(
-                    actor=actor,
-                    idempotency_key=unique("ra"),
-                    po_id=po_id,
-                    milestone_type="OUTGOING_INSPECTION",
-                    payload={"actual_on": today_kst(), "version": mv},
+        _plan(actor, po_id, "PACKING", {"planned_on": today_kst()})
+        version = int(scalar("SELECT version FROM milestones WHERE po_id = :p", p=po_id))
+        key = f"inflight-update-{po_id}-{round_no}"
+        pids = _record_pid_of(monkeypatch, key)
+        connection, transaction = _hold_cancel_in_flight(po_id)
+        try:
+            thread, holder = _run_in_thread(
+                lambda po_id=po_id, key=key, version=version: _plan(
+                    actor,
+                    po_id,
+                    "PACKING",
+                    {
+                        "planned_on": today_kst() + timedelta(days=3),
+                        "version": version,
+                        "reason": "포장 지연",
+                    },
+                    key,
                 )
-            return lifecycle.transition_purchase_order(
-                actor=actor,
-                idempotency_key=unique("rc"),
-                po_id=po_id,
-                to="CANCELLED",
-                version=pv,
-                reason="동시성",
             )
+            waited = _observe_lock_wait(pids)
+        finally:
+            transaction.commit()
+            connection.close()
+        thread.join(15)
+        assert waited, (
+            "롤오버(UPDATE)가 진행 중인 PO 취소를 기다리지 않았다 — T13 PO FOR SHARE 누락"
+        )
+        error = holder.get("error")
+        assert isinstance(error, AppError), holder
+        assert str(error.code) == "SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE"
+        assert scalar("SELECT planned_on FROM milestones WHERE po_id = :p", p=po_id) == today_kst()
+        assert _changes(po_id) == 1
 
-        outcomes = run_concurrently(work, workers=2)
-        _no_db_errors(outcomes)
-        assert outcomes[1].ok, repr(outcomes[1].error)
-        if outcomes[0].ok:
-            seen.add("actual-first")
-            assert _changes(po_id) == 2
-        else:
-            seen.add("cancel-first")
-            assert _code(outcomes[0]) == "SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE"
-            assert _changes(po_id) == 1
-        assert scalar("SELECT status FROM purchase_orders WHERE id = :p", p=po_id) == "CANCELLED"
-    assert seen
+
+def test_a_po_cancel_waits_while_an_oem_actual_holds_the_po_then_both_land(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """순서 ① 실적 먼저 — OEM 실적 TX가 PO `FOR SHARE`를 쥔 채 멈춘 동안 PO 취소(lifecycle `FOR UPDATE`)가 실제로 기다리고(pg_locks 관측),
+    실적이 커밋되면 취소가 이어서 성공한다(OEM 실적은 PO 취소를 막지 않는다 — 설계 침묵, 부채 R-4c-1). 이력 2(설정·실적)·PO CANCELLED·500 0"""
+    actor = make_user(RoleCode.TRADE)
+    po_id = raw_po(po_kind="OEM_PRODUCTION")
+    _plan(actor, po_id, "OUTGOING_INSPECTION", {"planned_on": today_kst()})
+    milestone_version = int(scalar("SELECT version FROM milestones WHERE po_id = :p", p=po_id))
+    po_version = int(scalar("SELECT version FROM purchase_orders WHERE id = :p", p=po_id))
+    cancel_key = f"cancel-after-actual-{po_id}"
+    pids = _record_pid_of(monkeypatch, cancel_key)
+    holding, release = threading.Event(), threading.Event()
+    original = milestone_flow._require_po_active
+
+    def pausing(po: Any) -> None:
+        original(po)  # PO FOR SHARE를 쥔 뒤 — 취소가 잠금 대기에 들어갈 때까지 멈춘다
+        holding.set()
+        assert release.wait(10)
+
+    monkeypatch.setattr(milestone_flow, "_require_po_active", pausing)
+    actual_thread, actual = _run_in_thread(
+        lambda: milestone_flow.record_oem_milestone_actual(
+            actor=actor,
+            idempotency_key=unique("ra"),
+            po_id=po_id,
+            milestone_type="OUTGOING_INSPECTION",
+            payload={"actual_on": today_kst(), "version": milestone_version},
+        )
+    )
+    assert holding.wait(10)
+    cancel_thread, cancel = _run_in_thread(
+        lambda: lifecycle.transition_purchase_order(
+            actor=actor,
+            idempotency_key=cancel_key,
+            po_id=po_id,
+            to="CANCELLED",
+            version=po_version,
+            reason="동시성",
+        )
+    )
+    waited = _observe_lock_wait(pids)
+    release.set()
+    actual_thread.join(15)
+    cancel_thread.join(15)
+    assert waited, "PO 취소가 OEM 실적의 PO FOR SHARE를 기다리지 않았다"
+    assert "error" not in actual, actual
+    assert actual["value"][1]["change"]["change_kind"] == "ACTUAL_RECORDED"
+    assert "error" not in cancel, cancel
+    assert scalar("SELECT status FROM purchase_orders WHERE id = :p", p=po_id) == "CANCELLED"
+    assert _changes(po_id) == 2
+
+
+def test_an_oem_actual_waits_for_an_in_flight_lifecycle_cancel_and_then_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """순서 ② 취소 먼저 — 실제 PO 취소(lifecycle)가 PO `FOR UPDATE`를 쥔 채 멈춘 동안 OEM 실적이 잠금을 실제로 기다리고(pg_locks 관측), 취소가
+    커밋되면 409 OWNER_NOT_ACTIVE — 이력은 설정 1건 그대로·PO CANCELLED·500 0"""
+    actor = make_user(RoleCode.TRADE)
+    po_id = raw_po(po_kind="OEM_PRODUCTION")
+    _plan(actor, po_id, "OUTGOING_INSPECTION", {"planned_on": today_kst()})
+    milestone_version = int(scalar("SELECT version FROM milestones WHERE po_id = :p", p=po_id))
+    po_version = int(scalar("SELECT version FROM purchase_orders WHERE id = :p", p=po_id))
+    actual_key = f"actual-after-cancel-{po_id}"
+    pids = _record_pid_of(monkeypatch, actual_key)
+    holding, release = threading.Event(), threading.Event()
+    original = lifecycle.record_transition
+
+    def pausing(*args: Any, **kwargs: Any) -> Any:
+        result = original(*args, **kwargs)  # PO FOR UPDATE + CANCELLED 대입 뒤, 커밋 전에 멈춘다
+        holding.set()
+        assert release.wait(10)
+        return result
+
+    monkeypatch.setattr(lifecycle, "record_transition", pausing)
+    cancel_thread, cancel = _run_in_thread(
+        lambda: lifecycle.transition_purchase_order(
+            actor=actor,
+            idempotency_key=unique("rc"),
+            po_id=po_id,
+            to="CANCELLED",
+            version=po_version,
+            reason="동시성",
+        )
+    )
+    assert holding.wait(10)
+    actual_thread, actual = _run_in_thread(
+        lambda: milestone_flow.record_oem_milestone_actual(
+            actor=actor,
+            idempotency_key=actual_key,
+            po_id=po_id,
+            milestone_type="OUTGOING_INSPECTION",
+            payload={"actual_on": today_kst(), "version": milestone_version},
+        )
+    )
+    waited = _observe_lock_wait(pids)
+    release.set()
+    cancel_thread.join(15)
+    actual_thread.join(15)
+    assert waited, (
+        "OEM 실적이 진행 중인 PO 취소(lifecycle)를 기다리지 않았다 — T13 PO FOR SHARE 누락"
+    )
+    assert "error" not in cancel, cancel
+    error = actual.get("error")
+    assert isinstance(error, AppError), actual
+    assert str(error.code) == "SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE"
+    assert scalar("SELECT status FROM purchase_orders WHERE id = :p", p=po_id) == "CANCELLED"
+    assert _changes(po_id) == 1
 
 
 # ── 같은 키 더블클릭·최초 계획 경합 (J-01·J-10) ─────────────────────────────────────────
@@ -258,7 +438,7 @@ def test_a_double_click_oem_rollover_writes_one_history_row_with_one_change_id()
     po_id = raw_po(po_kind="OEM_PRODUCTION")
     _plan(actor, po_id, "RAW_MATERIAL_READY", {"planned_on": today_kst()})
     version = int(scalar("SELECT version FROM milestones WHERE po_id = :p", p=po_id))
-    moved = today_kst().replace(day=2 if today_kst().day == 1 else 1)
+    moved = today_kst() + timedelta(days=1)  # 늘 다른 날(달력 무관)
     key = unique("dbl")
     outcomes = run_concurrently(
         lambda _i: _plan(
@@ -273,6 +453,7 @@ def test_a_double_click_oem_rollover_writes_one_history_row_with_one_change_id()
     _no_db_errors(outcomes)
     assert all(o.ok for o in outcomes), [repr(o.error) for o in outcomes]
     assert len({o.value[1]["change"]["id"] for o in outcomes}) == 1
+    assert {o.value[1]["change"]["change_kind"] for o in outcomes} == {"PLAN_CHANGED"}
     assert _changes(po_id) == 2  # PLAN_SET 1 + PLAN_CHANGED 1
     assert (
         scalar(
@@ -284,24 +465,42 @@ def test_a_double_click_oem_rollover_writes_one_history_row_with_one_change_id()
     )
 
 
-def test_two_first_oem_plans_on_the_same_type_leave_one_row() -> None:
-    """J-10(T13) — PO `FOR SHARE`는 공유 잠금이라 최초 계획 2건(다른 키)이 함께 들어온다: (PO, 종류) 부분 유니크가 둘째를 409 DUPLICATE_TYPE으로
-    거른다(번역표 — 500 0). 행 1·이력 1"""
+def test_two_first_oem_plans_on_the_same_type_leave_one_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """J-10(T13) — PO `FOR SHARE`는 공유 잠금이라 최초 계획 2건(다른 키)이 함께 들어온다. 두 스레드가 **모두 '행 없음'을 본 뒤**(Barrier)에야
+    INSERT하게 해 번역 경로를 결정적으로 밟는다: (PO, 종류) 부분 유니크 위반이 둘째를 정확히 409 DUPLICATE_TYPE으로(500·VERSION_CONFLICT 아님).
+    행 1·이력 1"""
     actor = make_user(RoleCode.TRADE)
+    original = shipments_service.find_milestone
     for _ in range(ROUNDS):
         po_id = raw_po(po_kind="OEM_PRODUCTION")
+        barrier = threading.Barrier(2, timeout=10)
+
+        def both_see_none(
+            session: Any,
+            owner: Any,
+            milestone_type: str,
+            *,
+            for_update: bool,
+            barrier: threading.Barrier = barrier,
+        ) -> Any:
+            found = original(session, owner, milestone_type, for_update=for_update)
+            assert found is None
+            barrier.wait()  # 두 스레드가 모두 '없음'을 본 뒤 INSERT로 간다
+            return found
+
+        monkeypatch.setattr(shipments_service, "find_milestone", both_see_none)
         outcomes = run_concurrently(
             lambda i, po_id=po_id: _plan(
-                actor, po_id, "FILLING", {"planned_on": today_kst().replace(day=10 + i)}
+                actor, po_id, "FILLING", {"planned_on": today_kst() + timedelta(days=10 + i)}
             ),
             workers=2,
         )
+        monkeypatch.setattr(shipments_service, "find_milestone", original)
         _no_db_errors(outcomes)
         assert sum(o.ok for o in outcomes) == 1, [repr(o.error) for o in outcomes]
-        assert _code(next(o for o in outcomes if not o.ok)) in {
-            "SHIPMENTS.MILESTONE.DUPLICATE_TYPE",
-            "COMMON.CONCURRENCY.VERSION_CONFLICT",
-        }
+        assert _code(next(o for o in outcomes if not o.ok)) == "SHIPMENTS.MILESTONE.DUPLICATE_TYPE"
         assert scalar("SELECT count(*) FROM milestones WHERE po_id = :p", p=po_id) == 1
         assert _changes(po_id) == 1
 
