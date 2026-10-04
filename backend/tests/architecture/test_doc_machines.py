@@ -1,6 +1,6 @@
 """K. 전표 상태 기계 — 총수·도달성·RESERVED·3자 대사 (S3-1 ADR-0051 / design-B B1).
 
-허용 28방향(사람 18 + 자동 10) / 미허용 154 / 총 182쌍(S3-2 PR-3a 선적 편입 — 8상태·사람 3엣지·RESERVED 5) — 전이를 더하거나 빼면
+허용 30방향(사람 18 + 자동 12) / 미허용 152 / 총 182쌍(S3-2 PR-3a 선적 편입 — 8상태·사람 3엣지·RESERVED 5, SO 자동 수렴 2엣지) — 전이를 더하거나 빼면
 EXPECTED와 machine.py 독스트링을 함께 고친다(ADR-0038 관용). 공회전 방지: 5종이 전부 검사에 들어오고 각 검사가 자기 자신을 시험한다.
 """
 
@@ -36,20 +36,20 @@ pytestmark = pytest.mark.group_k
 EXPECTED: dict[DocKind, tuple[int, int, int, int]] = {
     DocKind.QUOTATION: (6, 14, 3, 3),
     DocKind.PROFORMA_INVOICE: (8, 12, 1, 7),
-    DocKind.SALES_ORDER: (8, 48, 8, 0),
+    DocKind.SALES_ORDER: (10, 46, 8, 2),  # S3-2 PR-3a — CONFIRMED↔IN_SHIPMENT 자동 수렴 2(ADR-0075)
     DocKind.PURCHASE_ORDER: (3, 27, 3, 0),
     DocKind.SHIPMENT: (3, 53, 3, 0),
 }
 
 
 def test_all_five_documents_are_covered() -> None:
-    """검사 대상이 5종 전부(선적 포함)이고 총합이 28/154/182다(빈 검사로 초록을 사지 않는다)"""
+    """검사 대상이 5종 전부(선적 포함)이고 총합이 30/152/182다(빈 검사로 초록을 사지 않는다)"""
     assert set(EXPECTED) == set(DocKind) == set(STATUSES)
     assert len(DocKind) == 5
-    assert sum(v[0] for v in EXPECTED.values()) == 28
-    assert sum(v[1] for v in EXPECTED.values()) == 154
+    assert sum(v[0] for v in EXPECTED.values()) == 30
+    assert sum(v[1] for v in EXPECTED.values()) == 152
     assert sum(v[2] for v in EXPECTED.values()) == 18
-    assert sum(v[3] for v in EXPECTED.values()) == 10
+    assert sum(v[3] for v in EXPECTED.values()) == 12
     assert sum(v[0] + v[1] for v in EXPECTED.values()) == 182
 
 
@@ -122,10 +122,35 @@ def test_pi_payment_convergence_is_the_six_directions_among_three_states() -> No
     assert HUMAN_TRANSITIONS[DocKind.PROFORMA_INVOICE] == {("ISSUED", "CANCELLED")}
 
 
-def test_po_and_so_have_no_automatic_edges() -> None:
-    """PO·SO는 자동 엣지가 0이다 — 발주·확정은 사람 1클릭 단일 경로(4금 ①)"""
+def test_po_has_no_automatic_edges_and_so_auto_edges_are_only_the_shipping_convergence() -> None:
+    """PO 자동 엣지 0(발주는 사람 1클릭 — 4금 ①) / SO 자동 엣지는 **CONFIRMED↔IN_SHIPMENT 선적 수렴 2개뿐**(S3-2 PR-3a·ADR-0075 —
+    이행 진행·복귀이지 약정 진입이 아니다). 어느 자동 엣지도 RECEIVED에서 CONFIRMED로 가지 않는다(확정 = 사람 동결 액션 전용)"""
     assert AUTO_TRANSITIONS[DocKind.PURCHASE_ORDER] == frozenset()
-    assert AUTO_TRANSITIONS[DocKind.SALES_ORDER] == frozenset()
+    assert AUTO_TRANSITIONS[DocKind.SALES_ORDER] == {
+        ("CONFIRMED", "IN_SHIPMENT"),
+        ("IN_SHIPMENT", "CONFIRMED"),
+    }
+    for kind in DocKind:
+        assert ("RECEIVED", "CONFIRMED") not in AUTO_TRANSITIONS[kind]
+    # IN_SHIPMENT의 사람 엣지 0 — 보류·취소는 선적을 먼저 취소해 CONFIRMED로 복귀한 뒤(역순)
+    assert not any("IN_SHIPMENT" in pair for pair in HUMAN_TRANSITIONS[DocKind.SALES_ORDER])
+    # SO 공개 전이 대상은 사람 엣지만 센다 — 자동 2엣지는 Literal 값 공간을 바꾸지 않는다(R-23, 라우터 assert 무변경)
+    assert "IN_SHIPMENT" not in public_transition_targets(DocKind.SALES_ORDER)
+
+
+def test_so_completed_stays_reserved_while_the_receivable_provider_is_the_default() -> None:
+    """ADR-0076 결속 — 미수 provider가 기본값(`is_default_provider()`)인 동안 SO COMPLETED는 RESERVED이고 COMPLETED로 들어가는 엣지는 0이다.
+    노출 술어가 COMPLETED를 통째로 빼므로(credit/exposure.py) provider 전에 열면 노출 공백 — COMPLETED는 S3-3 provider PR에서만 연다"""
+    from app.modules.credit.exposure import CLOSED_STATUSES
+    from app.modules.credit.providers import is_default_provider
+
+    completed_edges = [
+        pair for pair in allowed_transitions(DocKind.SALES_ORDER) if pair[1] == "COMPLETED"
+    ]
+    if is_default_provider():
+        assert "COMPLETED" in RESERVED[DocKind.SALES_ORDER]
+        assert completed_edges == []
+    assert "COMPLETED" in CLOSED_STATUSES  # exposure 무변경(P-01) — 이 시험이 지키는 전제
 
 
 def test_freeze_action_edges_are_human_edges_excluded_from_the_public_targets() -> None:

@@ -91,8 +91,8 @@ def _walk_keys(value: Any) -> list[str]:
     return []
 
 
-def test_the_board_is_one_object_with_four_fixed_columns(client: TestClient) -> None:
-    """보드는 최상위 객체(columns·generated_at)이고 열은 고정 4개(대기·접수·보류·확정 순)·한국어 이름·빈 보드도 4열이다"""
+def test_the_board_is_one_object_with_five_fixed_columns(client: TestClient) -> None:
+    """보드는 최상위 객체(columns·generated_at)이고 열은 고정 5개(대기·접수·보류·확정·선적중 순 — S3-2 PR-3a)·한국어 이름·빈 보드도 5열이다"""
     body = _board(client)
     assert set(body) == {"columns", "generated_at"}
     assert [c["stage"] for c in body["columns"]] == [s.value for s in STAGE_ORDER]
@@ -101,6 +101,7 @@ def test_the_board_is_one_object_with_four_fixed_columns(client: TestClient) -> 
         "수주 접수",
         "수주 보류",
         "수주 확정",
+        "선적중",
     ]
     for col in body["columns"]:
         assert col == {
@@ -181,7 +182,7 @@ def test_cards_carry_sales_side_fields_only_with_derived_counts_and_kst_age(
 def test_cancelled_rejected_confirmed_intakes_and_reserved_states_stay_off_the_board(
     client: TestClient,
 ) -> None:
-    """취소 SO·확정/거부 인테이크·예약 상태(완료 등)·soft delete는 보드에 없다 — 보드는 접수 이후~확정까지만"""
+    """취소 SO·확정/거부 인테이크·예약 상태(완료 등)·soft delete는 보드에 없다 — 보드는 접수 이후~선적중까지만(선적중 SO는 5번째 열)"""
     buyer, owner = world_ids()
     seed_so("CANCELLED", buyer=buyer, assignee=owner)
     seed_so("COMPLETED", buyer=buyer, assignee=owner)
@@ -197,9 +198,11 @@ def test_cancelled_rejected_confirmed_intakes_and_reserved_states_stay_off_the_b
         reject_reason="합성 거부 사유",
     )
     kept = seed_so("CONFIRMED", buyer=buyer, assignee=owner)
+    shipping = seed_so("IN_SHIPMENT", buyer=buyer, assignee=owner)
     body = _board(client)
-    assert [c["total"] for c in body["columns"]] == [0, 0, 0, 1]
+    assert [c["total"] for c in body["columns"]] == [0, 0, 0, 1, 1]
     assert column(body, "SO_CONFIRMED")["items"][0]["id"] == kept
+    assert column(body, "SO_IN_SHIPMENT")["items"][0]["id"] == shipping
 
 
 def test_confirmed_column_is_newest_confirmed_first_and_the_others_oldest_first(

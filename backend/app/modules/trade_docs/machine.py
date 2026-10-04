@@ -4,8 +4,8 @@
 존재하지 않고, 상태를 대입하는 코드는 `transition.py`의 두 함수(`record_birth`·`record_transition`)뿐이다(아키텍처 테스트가
 고정 — 전이 통로 스캔).
 
-■ 총수 고정 — 허용 28방향(사람 18 + 자동 10) / 미허용 154 / 총 182쌍(자기전이 제외)
-  QT 6(사람 3·자동 3)·PI 8(사람 1·자동 7)·SO 8(사람 8)·PO 3(사람 3)·선적 3(사람 3). 총수는
+■ 총수 고정 — 허용 30방향(사람 18 + 자동 12) / 미허용 152 / 총 182쌍(자기전이 제외)
+  QT 6(사람 3·자동 3)·PI 8(사람 1·자동 7)·SO 10(사람 8·자동 2)·PO 3(사람 3)·선적 3(사람 3). 총수는
   tests/architecture/test_doc_machines.py의 EXPECTED가 집계로 고정한다 — 전이를 더하거나 빼면 그 테스트와
   이 독스트링을 함께 고친다(ADR-0038 관용).
 ■ 선적 8상태 중 활성은 PLANNED·RELEASE_ORDERED·CANCELLED뿐이다 — 피킹·검수완료·출고·선적·종결 5값은 RESERVED(S4-2,
@@ -14,9 +14,13 @@
 ■ 자동 전이 = 대상 상태를 **사람이 고르지 않고 규칙이 도출한** 전이(행위자는 NULL[스윕]이거나 유발자[입금
   기록자·후속 전표 생성자]일 수 있다). 공개 API의 `to`로는 요청할 수 없다.
 
-■ RESERVED — SO 후반 4값(PARTIALLY_ALLOCATED·ALLOCATED·IN_SHIPMENT·COMPLETED)과 PO 후반 3값(PARTIALLY_RECEIVED·
+■ RESERVED — SO 후반 3값(PARTIALLY_ALLOCATED·ALLOCATED·COMPLETED)과 PO 후반 3값(PARTIALLY_RECEIVED·
   FULLY_RECEIVED·CLOSED)은 §7.2 문면·WBS "그대로 열거"로 근거가 있어 CHECK·StrEnum에 지금 싣지만 **엣지는 0**이다
-  (ADR-0041 "죽은 열거" 아님 — 소비 세션 S3-2·S4-2·S4-1이 엣지를 더한다).
+  (ADR-0041 "죽은 열거" 아님 — 소비 세션 S4-2·S4-1·S3-3이 엣지를 더한다).
+■ SO IN_SHIPMENT(S3-2 PR-3a / ADR-0075) — CONFIRMED↔IN_SHIPMENT **자동 수렴 2엣지**만 연다(선적 생성·라인 삭제·취소와 같은 TX,
+  판정 함수 하나 `trade_chain.chain_ops.converge_sales_order_shipping` — 불변식 "확정 SO의 IN_SHIPMENT ⇔ 살아 있는 선적 ≥ 1").
+  도착 상태는 이행 진행·복귀이지 약정 진입(확정)이 아니다(§15 4금 밖 — 자동 확정 0). IN_SHIPMENT의 보류·취소 엣지는 없다(선적 선취소).
+  **SO COMPLETED는 RESERVED 유지**(ADR-0076 — 기본 미수 provider인 동안 열면 노출 공백, 아키텍처 시험이 결속).
 """
 
 from __future__ import annotations
@@ -110,7 +114,7 @@ RESERVED: dict[DocKind, frozenset[str]] = {
         {
             SalesOrderStatus.PARTIALLY_ALLOCATED.value,
             SalesOrderStatus.ALLOCATED.value,
-            SalesOrderStatus.IN_SHIPMENT.value,
+            # IN_SHIPMENT은 S3-2 PR-3a가 자동 수렴 2엣지로 열었다(ADR-0075). COMPLETED는 S3-3 미수 provider PR까지 예약(ADR-0076).
             SalesOrderStatus.COMPLETED.value,
         }
     ),
@@ -190,7 +194,7 @@ HUMAN_TRANSITIONS: dict[DocKind, frozenset[Pair]] = {
     ),
 }
 
-#: 자동 전이 — 규칙 도출(연쇄·스윕·입금 수렴). 10방향. 공개 API로 요청할 수 없다.
+#: 자동 전이 — 규칙 도출(연쇄·스윕·입금 수렴·선적 수렴). 12방향. 공개 API로 요청할 수 없다.
 AUTO_TRANSITIONS: dict[DocKind, frozenset[Pair]] = {
     DocKind.QUOTATION: frozenset(
         {
@@ -203,7 +207,18 @@ AUTO_TRANSITIONS: dict[DocKind, frozenset[Pair]] = {
         {("ISSUED", "EXPIRED")}
         | {(a, b) for a in _PI_PAYMENT_STATES for b in _PI_PAYMENT_STATES if a != b}
     ),
-    DocKind.SALES_ORDER: frozenset(),
+    DocKind.SALES_ORDER: frozenset(
+        {
+            (
+                "CONFIRMED",
+                "IN_SHIPMENT",
+            ),  # 살아 있는 선적 ≥ 1(첫 선적 생성과 같은 TX — 행위자 = 선적 생성자)
+            (
+                "IN_SHIPMENT",
+                "CONFIRMED",
+            ),  # 살아 있는 선적 0(마지막 선적 취소·복귀 대칭 — 행위자 = 취소자)
+        }
+    ),
     DocKind.PURCHASE_ORDER: frozenset(),
     DocKind.SHIPMENT: frozenset(),  # 선적 자동 엣지 0 — ETD 실적이 상태를 바꾸지 않는다(출고 RESERVED 우회 금지)
 }

@@ -165,9 +165,19 @@ def test_the_re_evaluation_is_bounded_to_one_extra_pass() -> None:
 # ── SO를 CONFIRMED로 만드는 길은 하나 ──────────────────────────────────────────────────────
 
 
+def _keyword_is_true(node: ast.Call, name: str) -> bool:
+    return any(
+        k.arg == name and isinstance(k.value, ast.Constant) and k.value.value is True
+        for k in node.keywords
+    )
+
+
 def test_only_the_confirm_channel_names_confirmed_when_transitioning_an_order() -> None:
-    """`record_transition(…, "CONFIRMED", …)`을 리터럴로 부르는 파일은 확정 통로 하나뿐이다(재개 전이는 `to` 변수로 받는다) — 동결 액션 엣지의 호출처 1곳"""
-    found = set()
+    """`record_transition(…, "CONFIRMED", …)`을 리터럴로 부르는 **사람 통로** 파일은 확정 통로 하나뿐이다(재개 전이는 `to` 변수로 받는다) — 동결 액션 엣지의 호출처 1곳.
+    S3-2 PR-3a — SO 선적 수렴의 자동 복귀(IN_SHIPMENT→CONFIRMED, `automatic=True`)는 chain_ops 1곳이고 동결 액션 통로(`via_freeze_action`)를 쓰지 않는다
+    (record_transition이 자동 집합·동결 불일치를 거부하므로 이 호출로 RECEIVED→CONFIRMED 확정은 구조적으로 불가능하다)"""
+    human: set[str] = set()
+    automatic: set[str] = set()
     for rel, tree in app_sources().items():
         for node in ast.walk(tree):
             if (
@@ -181,8 +191,13 @@ def test_only_the_confirm_channel_names_confirmed_when_transitioning_an_order() 
                 )
                 and any(isinstance(a, ast.Constant) and a.value == "CONFIRMED" for a in node.args)
             ):
-                found.add(rel)
-    assert found == {CONFIRM}
+                if _keyword_is_true(node, "automatic"):
+                    assert not _keyword_is_true(node, "via_freeze_action"), rel
+                    automatic.add(rel)
+                else:
+                    human.add(rel)
+    assert human == {CONFIRM}
+    assert automatic == {"modules/trade_chain/chain_ops.py"}
 
 
 _EVIDENCE_COLUMNS = frozenset({"credit_verdict", "credit_approval_id", "pi_gate_verdict"})

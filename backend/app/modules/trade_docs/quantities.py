@@ -39,8 +39,9 @@ LINE_KINDS: dict[str, tuple[DocKind, str]] = {
 }
 
 #: 소비(선적·입고 등)를 받을 수 있는 원천 문서 상태 — 그 외는 409 DOCUMENT_NOT_CONSUMABLE.
+#: S3-2 PR-3a — SO는 IN_SHIPMENT도 소비 가능(두 번째 부분선적 — 첫 선적이 SO를 IN_SHIPMENT로 수렴시킨다). ON_HOLD는 넣지 않는다(보류 중 선적 금지).
 CONSUMABLE_STATUSES: dict[DocKind, frozenset[str]] = {
-    DocKind.SALES_ORDER: frozenset({"CONFIRMED"}),
+    DocKind.SALES_ORDER: frozenset({"CONFIRMED", "IN_SHIPMENT"}),
     DocKind.PURCHASE_ORDER: frozenset({"ISSUED", "SUPPLIER_CONFIRMED"}),
 }
 

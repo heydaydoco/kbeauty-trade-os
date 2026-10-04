@@ -7,6 +7,10 @@
   EXPIRED)로 맞춘다(수주전환=SO 확정 시점, X-18). 호출 시점: SO 확정·SO/PI 취소·만료. 후속이 부모를 붙잡는다 —
   살아 있는 후속(PI·SO)이 있으면 유효기간이 지나도 EXPIRED로 닫지 않는다. 전이는 전부 자동(`automatic=True`, 행위자=
   유발자)이고 `record_transition` 통로를 거친다.
+■ `converge_sales_order_shipping`(S3-2 PR-3a / ADR-0075) — SO를 **살아 있는 선적 ≥ 1 → IN_SHIPMENT / 0 → CONFIRMED**로 맞춘다(자동 2엣지,
+  행위자 = 선적 생성자·취소자, payload `cause_shipment_id`). 판정 정의는 `has_live_children(SO, child_table="shipments")` 하나(X-13) —
+  선적 생성·라인 삭제·선적 취소가 **같은 함수**를 같은 TX에서 부른다(라인 삭제는 마지막 라인 409라 결과가 항상 no-op — 정의 공유 검증).
+  호출자는 SO를 `FOR UPDATE`로 이미 잡았다(선점 — SHARE→UPDATE 승격 교착 차단, ADR-0078). 확정(RECEIVED→CONFIRMED)은 만들지 않는다.
 """
 
 from __future__ import annotations
@@ -121,6 +125,46 @@ def converge_quotation(
     return changed
 
 
+#: SO 선적 수렴의 대상 상태 — 이 밖의 SO 상태(접수·보류·취소·예약)는 건드리지 않는다.
+SO_SHIPPING_STATES = ("CONFIRMED", "IN_SHIPMENT")
+SHIPMENT_TABLE = "shipments"
+
+
+def converge_sales_order_shipping(
+    session: Session, so_id: int, *, actor_user_id: int, cause_shipment_id: int
+) -> str | None:
+    """SO 선적 수렴 — 바꿨으면 도달 상태, 아니면 None. 호출자는 SO를 `FOR UPDATE`로 이미 잡았다(같은 TX)."""
+    so = lock_document(
+        session, SalesOrder, so_id
+    )  # 기보유 FOR UPDATE — 대기 없이 통과, 최신 행으로 재적재
+    if so.status not in SO_SHIPPING_STATES:
+        return None
+    live = has_live_children(session, DocKind.SALES_ORDER, so_id, child_table=SHIPMENT_TABLE)
+    if live and so.status == "CONFIRMED":
+        record_transition(
+            session,
+            so,
+            "IN_SHIPMENT",
+            actor_user_id=actor_user_id,
+            reason="살아 있는 선적 발생(자동 수렴)",
+            automatic=True,
+            cause_shipment_id=cause_shipment_id,
+        )
+        return "IN_SHIPMENT"
+    if not live and so.status == "IN_SHIPMENT":
+        record_transition(
+            session,
+            so,
+            "CONFIRMED",
+            actor_user_id=actor_user_id,
+            reason="살아 있는 선적 없음(자동 복귀)",
+            automatic=True,
+            cause_shipment_id=cause_shipment_id,
+        )
+        return "CONFIRMED"
+    return None
+
+
 def converge_parent(
     session: Session,
     child_kind: DocKind,
@@ -129,7 +173,21 @@ def converge_parent(
     actor_user_id: int | None,
     today: date | None = None,
 ) -> str | None:
-    """후속 전표(PI·SO)의 생성·확정·취소·만료 뒤 부모 QT를 수렴시킨다(PR-6 PI 취소·PR-7·12가 호출)."""
+    """후속 전표(PI·SO)의 생성·확정·취소·만료 뒤 부모 QT를 수렴시킨다(PR-6 PI 취소·PR-7·12가 호출).
+
+    S3-2 PR-3a — 후속이 선적(SHIPMENT)이면 부모 SO의 선적 수렴(CONFIRMED↔IN_SHIPMENT)이다(수입선적은 PO를 바꾸지 않는다 — None).
+    """
+    if child_kind is DocKind.SHIPMENT:
+        so_id = getattr(child, "so_id", None)
+        if so_id is None:
+            return None  # 수입선적 — PO 상태·잔량 무변경(4금 ① 발주 확정 무접촉)
+        if actor_user_id is None:
+            raise TypeError(
+                "선적 수렴은 사람 동작(생성·라인 삭제·취소)의 같은 TX에서만 — 행위자가 필요하다."
+            )
+        return converge_sales_order_shipping(
+            session, so_id, actor_user_id=actor_user_id, cause_shipment_id=child.id
+        )
     qt_id = getattr(child, "qt_id", None)
     if child_kind not in (DocKind.PROFORMA_INVOICE, DocKind.SALES_ORDER) or qt_id is None:
         return None

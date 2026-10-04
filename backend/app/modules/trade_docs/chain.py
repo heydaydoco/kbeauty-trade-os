@@ -124,9 +124,16 @@ def links_for(parent: DocKind) -> list[ChildLink]:
     return [link for link in CHILD_LINKS if link.parent == parent]
 
 
-def has_live_children(session: Session, parent: DocKind, doc_id: int) -> bool:
-    """살아 있는 후속 전표가 있는가(취소 가드 — 삭제·취소·만료 후속은 세지 않는다)."""
+def has_live_children(
+    session: Session, parent: DocKind, doc_id: int, *, child_table: str | None = None
+) -> bool:
+    """살아 있는 후속 전표가 있는가(취소 가드 — 삭제·취소·만료 후속은 세지 않는다).
+
+    `child_table`을 주면 그 후속 테이블만 본다(S3-2 PR-3a SO 선적 수렴 판정 — "살아 있는 선적 ≥ 1", X-13 단일 정의).
+    """
     for link in links_for(parent):
+        if child_table is not None and link.child_table != child_table:
+            continue
         table = _table(link.child_table)
         if table is None:
             continue

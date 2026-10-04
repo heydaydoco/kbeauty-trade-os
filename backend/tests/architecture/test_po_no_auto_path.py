@@ -288,12 +288,14 @@ def _automatic_transition_functions(
 
 
 def test_functions_that_create_automatic_transitions_never_touch_po() -> None:
-    """`automatic=True` 전이를 만드는 함수(QT 수렴·PI 입금 수렴·만료 스윕)는 PO 이름을 언급하지 않는다 — PO는 자동 전이의 대상이 될 수 없다. 대상 함수 집합도 고정한다(새 자동 전이 함수는 이 목록을 갱신하며 PO 무관을 증명해야 한다)"""
+    """`automatic=True` 전이를 만드는 함수(QT 수렴·PI 입금 수렴·만료 스윕·SO 선적 수렴)는 PO 이름을 언급하지 않는다 — PO는 자동 전이의 대상이 될 수 없다. 대상 함수 집합도 고정한다(새 자동 전이 함수는 이 목록을 갱신하며 PO 무관을 증명해야 한다)"""
     functions = _automatic_transition_functions(app_sources())
     assert set(functions) == {
         ("modules/trade_chain/chain_ops.py", "converge_quotation"),
         ("modules/trade_chain/payment_status.py", "converge_payment_status"),
         ("modules/trade_chain/expiry_sweep.py", "_expire_one"),
+        # S3-2 PR-3a — SO 선적 수렴(CONFIRMED↔IN_SHIPMENT). 수입선적(PO 원천)은 converge_parent가 None으로 돌려보낸다(PO 상태 무변경)
+        ("modules/trade_chain/chain_ops.py", "converge_sales_order_shipping"),
     }
     for key, function in functions.items():
         names = referenced_names(ast.Module(body=[function], type_ignores=[]))
