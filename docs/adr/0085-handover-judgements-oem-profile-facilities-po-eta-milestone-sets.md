@@ -13,3 +13,5 @@
 **기각한 대안** — 프로파일 마스터+`profile_id` 지금 신설, facilities 신설, `purchase_order_lines.expected_receipt_on`+FREE 확장(FREE 핀 ADR·원천 이중화), 세트를 구분 축에만(§4.8 미이행), SO 확정 시 계획 자동 생성(확정 통로 부작용), 세트 쓰기 = CERT.
 
 **되돌리기 비용** — 전부 **낮음**: `profile_id`·ETA 열은 nullable 가산, facilities는 트리거 시 신설, 세트 쓰기 역할은 권한 행 1줄. WBS 문면 '판정'의 결과라 PROGRESS에 자율 확정으로 표기.
+
+**부기(2026-10-04 — S3-2 PR-4a 이행: 표 선생성·계획 초안)** — M15에 `milestones`의 PO 소유 열(`po_id` — OEM 4종 ⇔ PO 소유 CHECK)과 `item_profile_milestone_types`(품목군 × 선적 저장형 8종 CHECK, 살아 있는 (품목군, 종류) 유일 — 409 `MILESTONE.DUPLICATE_TYPE`)를 만들었다. **쓰기 경로는 0**(① OEM API·④ 세트 쓰기는 PR-4c — 표는 비어 있다). 계획 초안 `POST /shipments/{id}/milestones/plan-draft`(사람 1클릭, A·T·L)는 구분별 적용 집합 ∩ 라인 SKU 품목군 세트 합집합이고, **품목군이 없거나 세트가 빈 SKU가 하나라도 있으면 구분별 전부**(누락보다 과다 — 자율 확정), 이미 있는 종류는 건너뛴다(값 없는 행 — 이력 0).
