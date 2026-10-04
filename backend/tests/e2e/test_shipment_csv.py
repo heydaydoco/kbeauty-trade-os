@@ -101,10 +101,10 @@ def test_csv_is_bom_crlf_with_a_fixed_header_and_no_cost_or_price_column(
         "라인수": "1",
         "Incoterms": "FOB Busan",
         "출고지시일": "",
-        "담당자": record["담당자"],
+        "담당자": trade.get(f"{SHIPMENTS}/{shipment['id']}").json()["assignee"]["display_name"],
         "생성일": today_kst().isoformat(),
     }
-    assert record["담당자"]  # 담당자 표시명(SO 담당 승계)
+    assert record["담당자"]  # 담당자 표시명(SO 담당 승계 — 상세 API의 담당자와 같은 사람)
     assert "12.34" not in response.text  # 라인 단가 채널 0
     assert release(trade, shipment["id"]).status_code == 200
     [after] = _records(_table(trade.get(EXPORT)))
@@ -137,9 +137,33 @@ def test_import_rows_leave_the_amount_blank_and_never_carry_the_po_cost(trade: T
             [record] = _records(_table(response))
             assert record["구분"] == "IMPORT"
             assert record["원천전표"] == po["doc_number"] and record["원천상태"] == "ISSUED"
-            assert record["합계"] == ""
+            assert (
+                record["합계"] == "" and record["통화"] == ""
+            )  # PO 통화도 PO 필드 — 원가 비열람 역할에게 가려진 값(G3)
             for leaked in ("7777.77", "77777.7", "777777"):
                 assert leaked not in response.text, (role, leaked)
+
+
+@pytest.mark.parametrize(
+    ("utc_instant", "kst_day"),
+    [("2026-03-09 15:30:00+00", "2026-03-10"), ("2026-03-09 14:59:59+00", "2026-03-09")],
+)
+def test_created_and_released_dates_are_kst_dates_not_utc_dates(
+    trade: TestClient, utc_instant: str, kst_day: str
+) -> None:
+    """G(렌즈 6 시간) — 생성일·출고지시일은 UTC 시각의 **KST 날짜**다. 실행 시각과 무관하게 경계를 고정해 단언한다(UTC 15:30 = KST 다음 날 00:30,
+    UTC 14:59 = KST 같은 날 23:59 — UTC 날짜로 바꾸는 회귀는 첫 칸에서 실패)"""
+    so = confirmed_so((10,))
+    shipment = created(trade, so["id"], [(so["line_ids"][0], 1)])
+    assert release(trade, shipment["id"]).status_code == 200
+    _exec(
+        "UPDATE shipments SET created_at = CAST(:t AS timestamptz), frozen_at = CAST(:t AS timestamptz)"
+        " WHERE id = :i",
+        t=utc_instant,
+        i=shipment["id"],
+    )
+    [record] = _records(_table(trade.get(EXPORT)))
+    assert record["생성일"] == kst_day and record["출고지시일"] == kst_day
 
 
 # ── K. 전 역할·필터·상한·쿼리 수 ──────────────────────────────────────────────
@@ -171,7 +195,9 @@ def test_the_export_takes_exactly_the_list_filters(trade: TestClient) -> None:
     assert release(trade, a2["id"]).status_code == 200
     assert cancel(trade, b1["id"]).status_code == 200
     imported = raw_shipment(b["id"], kind="IMPORT", po_id=raw_po("ISSUED"))
-    reassigned = create_user(f"{unique('owner')}@example.com", roles=(RoleCode.LOGISTICS,))
+    reassigned = create_user(
+        f"{unique('owner')}@example.com", display_name="이관 담당 물류", roles=(RoleCode.LOGISTICS,)
+    )
     _exec("UPDATE shipments SET assignee_id = :u WHERE id = :i", u=reassigned, i=a2["id"])
     _exec("UPDATE shipments SET counterparty_name = 'Zeta Partial Name' WHERE id = :i", i=b1["id"])
     cases: list[dict[str, Any]] = [
@@ -207,6 +233,14 @@ def test_the_export_takes_exactly_the_list_filters(trade: TestClient) -> None:
     assert exported_by_case[1] == [a1["doc_number"], a2["doc_number"]]
     assert exported_by_case[2] == [a1["doc_number"], b1["doc_number"], imported_no]
     assert exported_by_case[3] == exported_by_case[6] == [a2["doc_number"]]
+    # 담당 이관 뒤 CSV '담당자' 셀 = 새 담당의 표시명(작성자·SO 담당 조인 오류를 잡는다 — 목록 API와 대조)
+    [moved] = _records(_table(trade.get(EXPORT, params={"assignee_id": reassigned})))
+    [listed_moved] = trade.get(SHIPMENTS, params={"assignee_id": reassigned}).json()["items"]
+    assert moved["담당자"] == listed_moved["assignee"]["display_name"] == "이관 담당 물류"
+    assert (
+        moved["담당자"]
+        != _records(_table(trade.get(EXPORT, params={"q": a1["doc_number"]})))[0]["담당자"]
+    )
     assert exported_by_case[4] == [imported_no]
     assert exported_by_case[7] == exported_by_case[8] == [b1["doc_number"]]
     assert exported_by_case[9] == [a1["doc_number"]] and exported_by_case[10] == []

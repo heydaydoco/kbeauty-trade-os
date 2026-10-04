@@ -61,7 +61,7 @@ def _node(
 def _root_qt_id(session: Session, kind: DocKind, doc_id: int) -> tuple[int | None, Any]:
     """(뿌리 QT id 또는 None[직접 수주가 뿌리], 직접 수주 뿌리일 때 쓸 행) — 없거나 삭제된 전표·수입선적은 404. 쿼리 1회.
 
-    선적이면 원천 SO를 **내부 조인**으로 함께 읽는다 — 수입선적(`so_id` NULL)·삭제 선적은 행이 없어 404가 된다(수출만 흐름에 든다).
+    선적이면 원천 SO를 **내부 조인**으로 함께 읽는다 — 수입선적(`so_id` NULL)·삭제 선적·삭제 SO의 선적은 행이 없어 404가 된다(수출만 흐름에 든다).
     돌려주는 행은 선적이 아니라 그 SO다(직접 수주 뿌리 노드).
     """
     if kind is DocKind.SHIPMENT:
@@ -72,6 +72,9 @@ def _root_qt_id(session: Session, kind: DocKind, doc_id: int) -> tuple[int | Non
                 Shipment.id == doc_id,
                 Shipment.deleted_at.is_(None),
                 Shipment.shipment_kind == ShipmentKind.EXPORT.value,
+                SalesOrder.deleted_at.is_(
+                    None
+                ),  # 삭제 SO의 선적 진입도 SO 진입과 같은 404(PR-3c 적대 검토)
             )
         ).scalar_one_or_none()
         if found is None:

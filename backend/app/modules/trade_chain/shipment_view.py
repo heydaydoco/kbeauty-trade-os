@@ -383,7 +383,10 @@ def export_rows(
     assignee_id: int | None = None,
     q: str | None = None,
 ) -> list[tuple[Any, ...]]:
-    """CSV 행(선적 헤더 단위, id 오름차순) — 필터는 목록(S1)과 같은 조건 함수(`_list_conditions`)를 쓴다. 쿼리 2회(건수·본문)."""
+    """CSV 행(선적 헤더 단위, id 오름차순) — 필터는 목록(S1)과 같은 조건 함수(`_list_conditions`)를 쓴다.
+
+    쿼리 1회: CSV에 쓰는 열만 고르고(ORM 엔티티·미사용 `internal_note` 적재 0) `상한 + 1`행까지만 읽어 넘치면 422 — 건수·본문 사이 경합도 없다
+    (PR-3c 적대 검토). 수입선적 행은 원천 PO 번호·상태만 — **합계·통화 모두 빈칸**(PO 통화는 원가 비열람 역할에게 가려진 PO 필드 — G3)."""
     conditions = _list_conditions(
         statuses=statuses,
         shipment_kind=shipment_kind,
@@ -394,55 +397,65 @@ def export_rows(
     )
     with unit_of_work() as uow:
         session = uow.session
-        total = session.execute(
-            select(func.count()).select_from(Shipment).where(*conditions)
-        ).scalar_one()
-        if total > EXPORT_MAX_ROWS:
-            raise invalid(
-                "size",
-                f"내보낼 자료가 너무 많습니다({total:,}건). {EXPORT_MAX_ROWS:,}건 이하가 되도록 조건을 좁혀 주세요.",
-            )
         rows = session.execute(
             select(
-                Shipment,
-                SalesOrder.doc_number,
-                SalesOrder.status,
-                _PURCHASE_ORDERS.c.doc_number,
-                _PURCHASE_ORDERS.c.status,
-                User.display_name,
-                _line_count(),
+                Shipment.doc_number,
+                Shipment.doc_date,
+                Shipment.status,
+                Shipment.shipment_kind,
+                Shipment.so_id,
+                Shipment.counterparty_name,
+                Shipment.origin_country_code,
+                Shipment.dest_country_code,
+                Shipment.currency,
+                Shipment.total_amount,
+                Shipment.incoterm_code,
+                Shipment.incoterm_place,
+                Shipment.frozen_at,
+                Shipment.created_at,
+                SalesOrder.doc_number.label("so_number"),
+                SalesOrder.status.label("so_status"),
+                _PURCHASE_ORDERS.c.doc_number.label("po_number"),
+                _PURCHASE_ORDERS.c.status.label("po_status"),
+                User.display_name.label("assignee_name"),
+                _line_count().label("line_count"),
             )
             .outerjoin(SalesOrder, SalesOrder.id == Shipment.so_id)
             .outerjoin(_PURCHASE_ORDERS, _PURCHASE_ORDERS.c.id == Shipment.po_id)
             .outerjoin(User, User.id == Shipment.assignee_id)
             .where(*conditions)
             .order_by(Shipment.id)
+            .limit(EXPORT_MAX_ROWS + 1)
         ).all()
-        return [
-            (
-                r.doc_number,
-                r.doc_date.isoformat(),
-                r.status,
-                r.shipment_kind,
-                (so_no if r.so_id is not None else po_no) or "",
-                (so_status if r.so_id is not None else po_status) or "",
-                r.counterparty_name,
-                r.origin_country_code,
-                r.dest_country_code,
-                r.currency,
-                (
-                    money_text(r.total_amount, r.currency) or ""
-                    if r.shipment_kind == ShipmentKind.EXPORT
-                    else ""
-                ),
-                int(count),
-                f"{r.incoterm_code} {r.incoterm_place}" if r.incoterm_code else "",
-                _kst_date(r.frozen_at),
-                name or "",
-                _kst_date(r.created_at),
+        if len(rows) > EXPORT_MAX_ROWS:
+            raise invalid(
+                "size",
+                f"내보낼 자료가 {EXPORT_MAX_ROWS:,}건을 넘습니다. {EXPORT_MAX_ROWS:,}건 이하가 되도록 조건을 좁혀 주세요.",
             )
-            for r, so_no, so_status, po_no, po_status, name, count in rows
-        ]
+        result: list[tuple[Any, ...]] = []
+        for r in rows:
+            exported = r.shipment_kind == ShipmentKind.EXPORT
+            result.append(
+                (
+                    r.doc_number,
+                    r.doc_date.isoformat(),
+                    r.status,
+                    r.shipment_kind,
+                    (r.so_number if r.so_id is not None else r.po_number) or "",
+                    (r.so_status if r.so_id is not None else r.po_status) or "",
+                    r.counterparty_name,
+                    r.origin_country_code,
+                    r.dest_country_code,
+                    r.currency if exported else "",
+                    (money_text(r.total_amount, r.currency) or "") if exported else "",
+                    int(r.line_count),
+                    f"{r.incoterm_code} {r.incoterm_place}" if r.incoterm_code else "",
+                    _kst_date(r.frozen_at),
+                    r.assignee_name or "",
+                    _kst_date(r.created_at),
+                )
+            )
+        return result
 
 
 def list_status_log(

@@ -177,6 +177,30 @@ def test_a_soft_deleted_shipment_is_neither_an_entry_nor_a_node(trade: TestClien
         assert [n["id"] for n in _flow(trade, kind, doc_id)["nodes"]] == [so["id"], kept["id"]]
 
 
+def test_a_shipment_of_a_soft_deleted_sales_order_is_not_an_entry(trade: TestClient) -> None:
+    """A — 원천 SO가 삭제(soft delete)됐으면 그 SO의 살아 있는 선적으로 들어와도 SO 진입과 같은 404다(QT 사슬·직접 수주 모두 — 현재 전표 강조가
+    없는 트리나 삭제 SO 뿌리를 내보내지 않는다. SO 헤더 삭제 API는 없고 원시 UPDATE로만 만든다 — PR-3c 적대 검토)"""
+    chain = _chain(trade)
+    direct = confirmed_so((10,))
+    direct_shipment = created(trade, direct["id"], [(direct["line_ids"][0], 1)])
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE sales_orders SET deleted_at = now() WHERE id IN (:a, :b)"),
+            {"a": chain["so_pi"]["id"], "b": direct["id"]},
+        )
+    for so_id, shipment_id in (
+        (chain["so_pi"]["id"], chain["a"]["id"]),
+        (direct["id"], direct_shipment["id"]),
+    ):
+        assert trade.get(f"{FLOW}/SALES_ORDER/{so_id}").status_code == 404
+        response = trade.get(f"{FLOW}/SHIPMENT/{shipment_id}")
+        assert response.status_code == 404, response.text
+        assert response.json()["error"]["code"] == "COMMON.RESOURCE.NOT_FOUND"
+    # 살아 있는 SO의 선적은 그대로 들어온다(필터가 과하게 막지 않는다)
+    flow = _flow(trade, "SHIPMENT", chain["c"]["id"])
+    assert [n["id"] for n in flow["nodes"] if n["is_current"]] == [chain["c"]["id"]]
+
+
 # ── K. 쿼리 수 상한 ─────────────────────────────────────────────────────────────
 
 
