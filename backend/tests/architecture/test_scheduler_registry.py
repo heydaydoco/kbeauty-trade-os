@@ -70,6 +70,9 @@ _NEVER_SEEDED = (
     "order_intakes",  # S3-1 PR-13a — 바이어 PO 스테이징: 업무 행위의 기록(시드 불가·users FK 보유)
     "order_intake_lines",
     "board_saved_filters",  # S3-1 PR-15a — 개인 설정(사용자 FK 소유 — 시드 불가)
+    # S3-2 PR-2a — 휴일 캘린더: 근거 링크·확인일을 사람이 확인한 선언만(시드 0 — ADR-0082, 함정 ⑩·외부 자동 수집 0)
+    "holiday_calendar_years",
+    "holidays",
 )
 
 

@@ -157,6 +157,10 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         "order_intake_lines",
         # S3-1 PR-15a — 오더 보드 저장 필터(ADR-0066). 사용자가 화면에서 이름·조건을 고치고 지우는 개인 설정이다(soft delete·낙관 잠금).
         "board_saved_filters",
+        # S3-2 PR-2a — 휴일 캘린더 2표(ADR-0082). 원자 교체 PUT이 연도 선언을 갱신(근거·확인일·version)하고 기존 휴일을 soft delete하는
+        # 것이 앱 계정의 정상 UPDATE다. 변경 이력의 정본은 audit_log(`holidays.calendar.replaced`)다.
+        "holiday_calendar_years",
+        "holidays",
     }
 )
 

@@ -16,6 +16,7 @@ from app.modules.certifications import models as certifications_models
 from app.modules.collaboration import models as collaboration_models
 from app.modules.documents import models as documents_models
 from app.modules.gates import models as gates_models
+from app.modules.holidays import models as holidays_models
 from app.modules.idempotency import models as idempotency_models
 from app.modules.identity import models as identity_models
 from app.modules.imports import models as imports_models
@@ -49,6 +50,7 @@ __all__ = [
     "collaboration_models",
     "documents_models",
     "gates_models",
+    "holidays_models",
     "idempotency_models",
     "identity_models",
     "imports_models",
