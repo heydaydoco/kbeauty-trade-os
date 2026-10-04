@@ -13,3 +13,5 @@
 **기각한 대안** — S3-2에서 `lc_terms` 선신설(S3-3 범위 침범·화면·권한 동반), DoD를 S3-3으로 이관(WBS 문면 미이행 — 함수는 지금 만들 수 있다), 넓은 쪽·사사오입 반올림(허용 과대), 제시기한 '수출+LC' 한정(문면 구분 없음 — R-11).
 
 **되돌리기 비용** — **낮음**(S3-3 배선 가산). WBS 문면 해석이라 **오너 확인 권장 4순위** — 번복(운영 L/C를 S3-2에서 열기)은 P-10·`lc_terms`를 당겨오는 범위 변경이다.
+
+**부기(2026-10-04 — S3-2 PR-2a 이행: L/C·제시기한·tolerance 순수 함수 — WBS DoD ①·검증 K green)** — `lc_payment_due(tenor, negotiated_on, accepted_on, usance_days)`(SIGHT = 네고일 / USANCE = 인수일+usance[1~365] / 결측 `LC_INPUT_MISSING` / 그 밖 형태 `LC_TENOR_UNSUPPORTED`), `payment_due(…, lc=None)` = **UNKNOWN `LC_TERMS_NOT_REGISTERED`**(운영 경로), `presentation_deadline(bl, expiry_on, presentation_days=21)` = MIN(B/L+N, 유효기일)·결측 `BL_MISSING`/`EXPIRY_MISSING`(B/L+21 대체 금지)·basis는 B/L 승계·N은 1~365 정수, `tolerance_bounds(amount, plus_bp, minus_bp)` = (올림 하한, 내림 상한) 파이썬 정수·bp 0~10000·`within_tolerance` 경계 포함. 지급 형태 열거 `LcTenor{SIGHT, USANCE}`(B/L 기준 usance 등은 S3-3 `lc_terms` 설계 시 가산). GC-A16(L/C 줄)·GC-A17 전 줄을 `golden`·`group_k`로 고정했고 변이(MIN→MAX·+21→+20·반올림 방향 반전 2종·USANCE 기산 바꿔치기·운영 UNKNOWN 해제) 전원 kill. 운영 L/C 배선·플래그 공급은 S3-3 그대로(P-10).

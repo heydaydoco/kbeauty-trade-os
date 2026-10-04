@@ -13,3 +13,5 @@
 **기각한 대안** — 수입선적을 FULFILL로 등록(PO 잔량이 선적 시점에 줄어 §7.1과 정면 충돌), 수입선적 초과 방지 없음(PO 초과 선적), 별도 함수 `assignable_quantity`(§8.3 "시그니처 하나" 위반), 같은 409 코드 공유(잔량·배정 가능량 오독).
 
 **되돌리기 비용** — **중간**. S4-1이 입고 소비 의미를 재정의하면 IN_TRANSIT·필터를 함께 재판정(소비자 등록·기대값 테스트 갱신). 필터 기본값 변경은 기존 4종 전표 기대값 회귀 테스트가 지킨다.
+
+**부기(2026-10-04 — S3-2 PR-2a 이행: kind 필터 선행)** — ③을 구현했다: `open_quantity(session, line_kind, line_ids, *, kinds=DEFAULT_OPEN_KINDS)`(기본 `frozenset({"FULFILL"})`), 소비 성격 폐쇄 집합 `CONSUMER_KINDS = {FULFILL, IN_TRANSIT}`(`trade_docs/quantities.py`). 필터 밖 kind의 소비자는 합산하지 않고, **빈 집합·모르는 kind는 `ValueError`**(조용히 소비 0으로 읽혀 초과 소비가 통과하는 길을 닫는 더 엄격한 쪽 — 자율 확정). 현재 등록 소비자 3건은 전부 FULFILL이라 기존 4종 전표 잔량 동작 불변(회귀 시험 `test_open_quantity_default_is_unchanged_for_registered_consumers`·QT/PI/SO e2e 무변경 통과). IN_TRANSIT 임시 소비자로 "기본 = FULFILL만 / `kinds={IN_TRANSIT}` = 배정 가능량 / 둘 다 = 합"을 실측 고정했다(`test_open_quantity_kind_filter_defaults_to_fulfill_only` — 변이 "kind 필터 제거"·"kinds 검증 제거" kill). ①·②·④(소비자 등록·배정 가능량 409)는 PR-3a·PR-5a 몫 그대로. **되돌리기 비용**: 낮음(필터 1줄 — FULFILL만 등록된 동안 무해).
