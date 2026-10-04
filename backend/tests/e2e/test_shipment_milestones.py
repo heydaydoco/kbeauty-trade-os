@@ -928,3 +928,32 @@ def test_the_board_query_count_does_not_grow_with_rows_or_history(trade: TestCli
         )
     counts = [count_statements(lambda s=sid: milestone_view.get_board(s)) for sid in (small, big)]
     assert counts[0] == counts[1] and 0 < counts[0] <= 8, counts
+
+
+@pytest.mark.group_k
+def test_the_shipment_list_carries_etd_and_eta_with_a_fixed_query_count(trade: TestClient) -> None:
+    """적대 검토 반영 ②(design-D D3 `ShipmentListItem.etd/eta` — PR-3b 부채 R-3b-3) — 목록 행의 ETD·ETA = 유효값(실적 우선)·없으면 null,
+    질의 수는 페이지 행 수·마일스톤 수와 무관(현재 페이지 id들로 1회 — N+1 0)"""
+    from app.modules.trade_chain import shipment_view
+    from tests.support.sqlcount import count_statements
+
+    dated = _shipment(trade, released=True)
+    sid = dated["id"]
+    _plan(trade, sid, "ETD", {"planned_on": "2026-11-05"})
+    _plan(trade, sid, "ETA", {"planned_on": "2026-12-05"})
+    etd_version = _version(trade, sid, "ETD")
+    assert (
+        _actual(trade, sid, "ETD", {"actual_on": _day(0), "version": etd_version}).status_code
+        == 200
+    )
+    bare = _shipment(trade)
+    item = trade.get(SHIPMENTS, params={"so_id": dated["so_id"]}).json()["items"][0]
+    assert item["etd"] == {"value": _day(0), "basis": "ACTUAL"}
+    assert item["eta"] == {"value": "2026-12-05", "basis": "PLANNED"}
+    empty = trade.get(SHIPMENTS, params={"so_id": bare["so_id"]}).json()["items"][0]
+    assert empty["etd"] is None and empty["eta"] is None
+    counts = [
+        count_statements(lambda n=size: shipment_view.list_shipments(offset=0, limit=n))
+        for size in (1, 50)
+    ]
+    assert counts[0] == counts[1] and counts[0] > 0, counts

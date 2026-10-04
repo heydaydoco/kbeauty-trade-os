@@ -358,6 +358,32 @@ def _derived_row(
     return body
 
 
+def etd_eta_by_shipment(
+    session: Session, shipment_ids: list[int]
+) -> dict[int, dict[str, dict[str, str] | None]]:
+    """선적 목록 열(design-D D3 `ShipmentListItem.etd/eta: EffectiveDate|null`) — 현재 페이지 선적들의 ETD·ETA 저장 행을
+    **질의 1회**로 읽어 유효값(실적 우선 — `schedule.effective`)으로 조립한다(N+1 0, 적대 검토 반영 ②)."""
+    found: dict[int, dict[str, dict[str, str] | None]] = {
+        sid: {"etd": None, "eta": None} for sid in shipment_ids
+    }
+    if not shipment_ids:
+        return found
+    for m in session.execute(
+        select(Milestone).where(
+            Milestone.shipment_id.in_(shipment_ids),
+            Milestone.milestone_type.in_((MilestoneType.ETD.value, MilestoneType.ETA.value)),
+            Milestone.deleted_at.is_(None),
+        )
+    ).scalars():
+        value = _effective_date(m.planned_on, m.actual_on)
+        if value is not None and m.shipment_id is not None:
+            found[m.shipment_id][m.milestone_type.lower()] = {
+                "value": value.value.isoformat(),
+                "basis": value.basis.value,
+            }
+    return found
+
+
 def board_body(session: Session, row: Shipment) -> dict[str, Any]:
     return assemble(session, row).board
 

@@ -474,6 +474,9 @@ class ShipmentListItem(BaseModel):
     total_amount: int
     total_text: str
     line_count: int
+    #: ETD·ETA 유효값(실적 우선, 없으면 계획 — 'YYYY-MM-DD' 현지 날짜, `new Date()` 금지). 행이 없거나 값이 없으면 null(design-D D3).
+    etd: EffectiveOut | None
+    eta: EffectiveOut | None
     assignee: AssigneeOut
     created_at: datetime
     updated_at: datetime

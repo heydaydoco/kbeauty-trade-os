@@ -27,7 +27,12 @@ from app.modules.sales_orders.models import SalesOrder, SalesOrderLine
 from app.modules.sales_orders.ports import AllocationStatus
 from app.modules.shipments.models import Shipment, ShipmentLine, ShipmentParty
 from app.modules.shipments.service import live_lines, require_shipment
-from app.modules.trade_chain.milestone_view import RECORD_EDITABLE_STATES, assemble, customs_summary
+from app.modules.trade_chain.milestone_view import (
+    RECORD_EDITABLE_STATES,
+    assemble,
+    customs_summary,
+    etd_eta_by_shipment,
+)
 from app.modules.trade_docs.constants import DocKind, ShipmentKind
 from app.modules.trade_docs.machine import EDITABLE_STATES, TERMINAL_STATUSES
 from app.modules.trade_docs.models import ShipmentStatusLog
@@ -317,6 +322,8 @@ def list_shipments(
             .offset(offset)
             .limit(limit)
         ).all()
+        # ETD·ETA 유효값 — 현재 페이지 선적 id들로 질의 1회(행 수와 무관, design-D D3 — 적대 검토 반영 ②)
+        dates = etd_eta_by_shipment(session, [r[0].id for r in rows])
         items = []
         for row, so_no, so_status, po_no, po_status, name, count in rows:
             source = (
@@ -344,6 +351,8 @@ def list_shipments(
                     "total_amount": row.total_amount,
                     "total_text": money_text(row.total_amount, row.currency),
                     "line_count": int(count),
+                    "etd": dates[row.id]["etd"],
+                    "eta": dates[row.id]["eta"],
                     "assignee": {"id": row.assignee_id, "display_name": name},
                     "created_at": row.created_at.isoformat(),
                     "updated_at": row.updated_at.isoformat(),
