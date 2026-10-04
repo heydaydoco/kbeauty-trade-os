@@ -457,7 +457,7 @@ def test_a_double_click_oem_rollover_writes_one_history_row_with_one_change_id()
     assert _changes(po_id) == 2  # PLAN_SET 1 + PLAN_CHANGED 1
     assert (
         scalar(
-            "SELECT count(*) FROM events WHERE event_type = 'shipments.milestone.changed'"
+            "SELECT count(*) FROM events WHERE event_type = 'purchase_orders.milestone.changed'"
             " AND aggregate_type = 'purchase_orders' AND aggregate_id = :p",
             p=po_id,
         )

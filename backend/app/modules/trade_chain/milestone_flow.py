@@ -1,7 +1,8 @@
 """마일스톤 쓰기 — 선적 계획(롤오버)·실적·계획 초안·통보 기록 + OEM 생산 일정 계획·실적
 (S3-2 PR-4a·PR-4c / ADR-0078·0079·0080·0083·0085 / design-C T6·T7·T8 + design-integrated N-07 T13 / design-B B8·B9·B15·B16).
 
-모든 동작은 **사람 1클릭 + 한 트랜잭션**이다(외부 호출 0 — 알림은 아웃박스 `shipments.milestone.changed`뿐, 통보는 기록이지 발송이 아니다).
+모든 동작은 **사람 1클릭 + 한 트랜잭션**이다(외부 호출 0 — 알림은 아웃박스 `shipments.milestone.changed`(선적)·
+`purchase_orders.milestone.changed`(OEM)뿐, 통보는 기록이지 발송이 아니다).
 
 ■ 잠금 순서(ADR-0078 LOCK_ORDER): 계획·실적·초안 = 멱등 claim → 선적 `FOR UPDATE`(헤더 version 대조 없음 — 헤더 내용 불변) → 마일스톤 행
   `FOR UPDATE`(shipment_children) + **행 version** 대조. 통보 = 멱등 → (상대 거래처) partners `FOR KEY SHARE` → 선적 `FOR SHARE`(R-08).
@@ -85,6 +86,14 @@ OEM_ACTUAL_ENDPOINT = "POST /api/v1/purchase-orders/{id}/milestones/{type}/actua
 
 #: 아웃박스 이벤트(`<도메인>.<대상>.<사건>`) — payload 화이트리스트: 소유자·종류·변경 종류·전후 값(금액·원가 0).
 CHANGED_EVENT = "shipments.milestone.changed"
+#: OEM 생산 일정 변경 이벤트 — 선적과 **다른 event_type**(PR-4c 적대 검토 반영 ⑤ / N-07 정정). 알림 규칙은 event_type으로만 매칭하므로
+#: 같은 이름이면 선적용 규칙이 OEM 변경에도 발화해 B15 'OEM 알림 없음'을 어긴다 — 이름을 갈라 선적 규칙이 OEM에 절대 닿지 않게 한다(fail-closed).
+OEM_CHANGED_EVENT = "purchase_orders.milestone.changed"
+#: 소유자 종류 → 변경 이벤트 이름(아웃박스 aggregate_type은 소유 전표 표 이름 — DOC_TABLES).
+CHANGED_EVENTS: dict[str, str] = {
+    DocKind.SHIPMENT.value: CHANGED_EVENT,
+    DocKind.PURCHASE_ORDER.value: OEM_CHANGED_EVENT,
+}
 #: ETD·B/L·ETA 실적을 받는 선적 상태(R-01 — 출고지시 뒤에만). S4-2가 피킹~종결을 열면 함께 재판정(인계 계약).
 ACTUAL_RELEASE_STATES = frozenset({"RELEASE_ORDERED"})
 #: 날짜형 실적의 미래 여유(현지 날짜가 KST보다 하루 앞설 수 있는 UTC+10 이상 지역 — B8 ④). 시각형은 여유 0(R-18).
@@ -279,10 +288,11 @@ def _publish(
     old: MilestoneValue,
     new: MilestoneValue,
 ) -> None:
-    """aggregate = 소유 전표(선적 = shipments, OEM = purchase_orders) — payload `owner_type`·`owner_id`(design-integrated §2.7)."""
+    """event_type·aggregate = 소유자별(선적 = `shipments.milestone.changed`·shipments / OEM = `purchase_orders.milestone.changed`·
+    purchase_orders) — payload `owner_type`·`owner_id`(design-integrated §2.7, OEM 이름 분리 = 적대 검토 반영 ⑤)."""
     outbox.publish(
         session,
-        event_type=CHANGED_EVENT,
+        event_type=CHANGED_EVENTS[owner.owner_type],
         aggregate_type=DOC_TABLES[DocKind(owner.owner_type)],
         aggregate_id=owner.owner_id,
         payload={

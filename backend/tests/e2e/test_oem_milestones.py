@@ -200,14 +200,73 @@ def test_plan_rollover_actual_and_correction_on_an_oem_po(trade: TestClient) -> 
     assert filtered.json()["total"] == 1
     events = rows(
         "SELECT aggregate_type, aggregate_id, payload FROM events"
-        " WHERE event_type = 'shipments.milestone.changed' AND aggregate_id = :p"
+        " WHERE event_type = 'purchase_orders.milestone.changed' AND aggregate_id = :p"
         " AND aggregate_type = 'purchase_orders' ORDER BY id",
         p=po_id,
     )
     assert len(events) == 4
+    # OEM 변경은 선적 이벤트 이름으로 나가지 않는다(선적 알림 규칙이 OEM에 발화 0 — 적대 검토 반영 ⑤)
+    assert (
+        scalar("SELECT count(*) FROM events WHERE event_type = 'shipments.milestone.changed'") == 0
+    )
     assert {e["payload"]["owner_type"] for e in events} == {"PURCHASE_ORDER"}
     assert {e["payload"]["owner_id"] for e in events} == {po_id}
     assert not {k for e in events for k in e["payload"] if "cost" in k or "amount" in k}
+
+
+@pytest.mark.group_h
+def test_a_shipment_milestone_alert_rule_never_fires_on_oem_changes(trade: TestClient) -> None:
+    """B15 'OEM 알림 없음'(PR-4c 적대 검토 반영 ⑤ — N-07 정정) — 알림 규칙은 event_type으로만 매칭한다. 선적 마일스톤 변경 규칙
+    (`shipments.milestone.changed`)이 있어도 OEM 생산 일정 변경(`purchase_orders.milestone.changed`)으로는 알림 0, 같은 규칙이 선적 변경에는
+    발화한다(양성 대조 — 규칙·디스패처가 살아 있다)"""
+    from sqlalchemy import select
+
+    from app.core.db.uow import unit_of_work
+    from app.modules.notifications import dispatcher
+    from app.modules.worklist.models import Alert, AlertRule
+    from tests.factories.trade import user_id_of
+
+    watcher_email = f"{unique('watch')}@example.com"
+    with logged_in(RoleCode.TRADE, email=watcher_email):
+        pass
+    watcher = user_id_of(watcher_email)
+    with unit_of_work() as uow:
+        uow.session.add(
+            AlertRule(
+                code=unique("RULE-SHIP-MS"),
+                name_ko="선적 마일스톤 변경",
+                event_type="shipments.milestone.changed",
+                recipient_user_id=watcher,
+            )
+        )
+    po_id = _oem_po(trade)["id"]
+    assert _plan(trade, po_id, "FILLING", {"planned_on": _day(5)}).status_code == 200
+    dispatcher.dispatch_pending()
+
+    def alerts(entity_type: str) -> int:
+        with unit_of_work() as uow:
+            return len(
+                list(
+                    uow.session.execute(
+                        select(Alert.id).where(
+                            Alert.recipient_user_id == watcher, Alert.entity_type == entity_type
+                        )
+                    ).scalars()
+                )
+            )
+
+    assert alerts("purchase_orders") == 0
+    so = confirmed_so((5,))
+    shipment = created(trade, so["id"], [(so["line_ids"][0], 1)])
+    planned = trade.post(
+        f"{SHIPMENTS}/{shipment['id']}/milestones/ETD/plan",
+        json={"planned_on": _day(5)},
+        headers=idem(),
+    )
+    assert planned.status_code == 200
+    dispatcher.dispatch_pending()
+    assert alerts("shipments") == 1
+    assert alerts("purchase_orders") == 0
 
 
 def test_the_same_key_replays_the_same_change(trade: TestClient) -> None:

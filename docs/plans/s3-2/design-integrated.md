@@ -85,7 +85,7 @@
 | **N-04** | 마일스톤 시간대 오류(sD M2 "422 tz 미지원")·값 형태 불일치(날짜형 종류에 시각 값)의 **코드가 없다** | `SHIPMENTS.MILESTONE.TIMEZONE_INVALID`(422, `zoneinfo` 검증 실패), `SHIPMENTS.MILESTONE.VALUE_SHAPE_MISMATCH`(422) 신설 | 카탈로그 1:1(`test:unit/test_error_catalog.py:19-49`) | 없음 |
 | **N-05** | 마일스톤 쓰기 시 소유자(선적·PO)가 취소 상태일 때 코드가 sD에 "NOT_ACTIVE"로만 있고 PO 소유분 코드가 없다 | `SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE`(409) 1개로 통일(선적 CANCELLED·PO CANCELLED). 당사자·통관은 `SHIPMENTS.SHIPMENT.NOT_ACTIVE` 유지 | — | 없음 |
 | **N-06** | sA §A9는 선적 5표만 table_policy·`_NEVER_SEEDED`·users FK 분류를 적었고, sB의 6표(마일스톤 계열 4·휴일 2)는 분류가 없다 | §2.3 표로 **11표 전량** 분류 | `test:integration/test_table_policy.py:35-64`, `test:architecture/test_scheduler_registry.py:56-73`, `test:architecture/test_user_fk_classification.py:39-48` | 없음 |
-| **N-07** | OEM 마일스톤 쓰기의 잠금 순서·TX가 sC §C1 표에 없다 | **T13**: 멱등 → `purchase_orders` `FOR SHARE`(상태 확인, PO 무수정) → `milestones` 행 `FOR UPDATE`+행 version → UPDATE + `milestone_changes` INSERT + outbox `shipments.milestone.changed`(payload `owner_type=PURCHASE_ORDER`). PO 취소(`FOR UPDATE`)와 직렬화 | `D:340`, `D:344` ② | 낮음 |
+| **N-07** | OEM 마일스톤 쓰기의 잠금 순서·TX가 sC §C1 표에 없다 | **T13**: 멱등 → `purchase_orders` `FOR SHARE`(상태 확인, PO 무수정) → `milestones` 행 `FOR UPDATE`+행 version → UPDATE + `milestone_changes` INSERT + outbox ~~`shipments.milestone.changed`~~ **[PR-4c 적대 검토 정정] `purchase_orders.milestone.changed`**(payload `owner_type=PURCHASE_ORDER` — 알림 규칙은 event_type으로만 매칭하므로 선적과 같은 이름이면 선적 규칙이 OEM에 발화해 B15 'OEM 알림 없음'을 어긴다 → 이름 분리, fail-closed). PO 취소(`FOR UPDATE`)와 직렬화 | `D:340`, `D:344` ② | 낮음 |
 
 ### 1.6 부록 최소 수정 내역(이 통합에서 고친 문면)
 
@@ -287,7 +287,8 @@ DESIGN §17.5 확장 3표(`D:356` "상태 변경 이력 성격 — 신설 세션
 | `shipments.shipment.created` | T1·T2 | shipment_id·doc_number·shipment_kind·so_id/po_id·partner_id·assignee_id |
 | `shipments.shipment.<전이>`(커널 `EVENT_PREFIX`) | T5·출고지시 | 커널 `PAYLOAD_KEYS` |
 | 기존 `sales_orders.sales_order.*` | 자동 수렴 | 기존 + `cause_shipment_id` |
-| `shipments.milestone.changed` | T6·T7·T13 | owner_type·owner_id·milestone_type·change_kind·전후 날짜 |
+| `shipments.milestone.changed` | T6·T7 ~~·T13~~ | owner_type·owner_id·milestone_type·change_kind·전후 날짜 |
+| **[PR-4c 적대 검토 정정 — N-07]** `purchase_orders.milestone.changed` | T13(OEM 생산 일정) | 같은 화이트리스트(owner_type=PURCHASE_ORDER, aggregate = purchase_orders) — 선적 이벤트와 이름을 갈라 선적용 알림 규칙이 OEM 변경에 발화하지 않게 한다(B15 'OEM 알림 없음' — 규칙 매칭은 event_type 일치뿐). 소비자 0(PR-6 스캔은 이벤트가 아니라 `milestones` 표를 읽고 OEM은 스캔 대상 밖) |
 | `shipments.customs.recorded` | T9 | shipment_id·declaration_kind·수리일 유무 |
 
 audit_log(`AuditAction` 상수): `shipments.customs.corrected`·`shipments.customs.deleted`(사유 필수) · `shipments.party.added`·`shipments.party.removed` · `holidays.calendar.replaced`(국가·연도·건수·근거) · 기존 `identity.role.*`·handover. 기본 `alert_rules` 시드 0. 대외 채널 0.
