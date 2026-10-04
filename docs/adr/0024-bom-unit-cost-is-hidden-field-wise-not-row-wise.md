@@ -15,3 +15,5 @@
 **되돌리기 비용** — 낮다. 스키마 2개와 라우터 분기 1곳. 단 방식을 행 단위로 바꾸면 조회·인증 역할의 화면·판정 경로가 함께 움직인다.
 
 **부기(2026-09-30 — S3-1 계획)** — (자율 확정 — 사후 번복 가능. 위 원문 결정은 고치지 않는다.) **PO 적용 — 부재 방식의 대상 판정.** 구매 발주(PO)는 상태·공급사·품목·수량·요청납기·OC 일자가 물류·조회 업무 데이터이고 원가는 `unit_cost`·`line_cost`·`total_cost`·`currency`·`price_basis` 몇 칸뿐인 **혼합 목적 행**이므로 행 단위(ADR-0018)가 아니라 이 ADR의 **필드 부재 방식**을 적용한다: 응답 스키마 2종(`PurchaseOrderDetail`/`PurchaseOrderCostHiddenDetail` 등 목록·상세·라인 각각), `response_model=None`+`may_see_cost`(`COST_VISIBLE_ROLES` 단일 출처)로 라우터 경계 1곳에서 선택하며 VIEWER는 200으로 행·건수·상태를 보고 원가 키만 없다. 정렬·CSV·에러·로그·audit·이벤트·멱등 저장·첨부·집계까지 9채널을 봉쇄하고 PO 원가 컬럼은 `_cost` 접미로 지어 로그 마스킹에 자동 편입한다(ADR-0057). 근거: design-F.md F5 / design-A.md A12.
+
+**부기(2026-10-04 — S3-2 계획)** — (자율 확정 — 사후 번복 가능. 위 원문 결정은 고치지 않는다.) **수입선적은 10번째 원가 채널을 열지 않는다**: 수입선적은 PO 라인을 참조 생성하지만 **단가·금액을 복사하지 않는다**(선적 라인 단가 NULL·금액 0 — CHECK `import_no_price`). 그래서 위 부기의 PO 원가 9채널 봉쇄는 선적 응답·CSV(`/shipments/export.csv`)·outbox·감사·마일스톤 어디로도 확장되지 않고, 원가 열람 역할로 조회해도 수입선적 응답에 원가 키가 0이다(GC-G3 — 필드 부재로 고정, 마스킹 분기 자체가 없다). PO 상세의 `assignable_quantity`·`expected_receipt`는 수량·날짜뿐이다. 근거: ADR-0074·0077 / design-integrated.md §2.1(b)·R-12.

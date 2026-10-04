@@ -15,3 +15,5 @@
 **되돌리기 비용** — 중간~높음. 참조 요청 계약과 수주전환 시점은 프런트·테스트가 즉시 의존한다(수주전환 시점을 SO 접수로 앞당기는 것은 서비스 1곳이나 QT 상태 의미가 바뀐다). PI→SO를 1:N으로 푸는 것은 부분 유니크 1개 제거+입금 귀속 재정의(중간). 라인 통화 복합 FK 철거나 PI 라인 신설/제거는 S3-2 소비 시작 후 높아지므로 첫 PR 전에 확정한다. 잔량 표현 교체는 시그니처가 유지되면 소비자 무영향(낮음).
 
 **영향 세션** — S3-1 PR-5~8·12(구현) / S3-2(shipment 라인이 `LINE_CONSUMERS['SO_LINE']`·`CHILD_LINKS`에 등록 — 누락은 K 테스트가 실패로 알림·SO 후반 엣지) / S3-3(QT·PI 서류가 스냅샷을 소비) / S4-1(PO 후반·잔량 표현 ADR) / S4-2(`AllocationPort` 실구현) / S3-4(백오더=open−allocated 파생).
+
+**부기(2026-10-04 — S3-2 계획)** — (자율 확정 — 사후 번복 가능. 위 원문 결정은 고치지 않는다.) **S3-2 소비분**: ① `CHILD_LINKS` += (SO, shipments, so_id)·(PO, shipments, po_id) — 선적이 살아 있으면 SO·PO 취소 409 `SUCCESSOR_ALIVE`(SO 취소는 후속 생존 검사를 상태 검사보다 먼저 — R-02). ② `LINE_CONSUMERS['SO_LINE']` += 선적 라인 FULFILL, `['PO_LINE']` += 선적 라인 **IN_TRANSIT** — 이에 맞춰 `open_quantity`에 **kind 필터**(기본 FULFILL)를 더하고 시그니처는 하나로 유지한다(PO 잔량은 입고에서만 감소). ③ `NON_CHILD_FK_ALLOWLIST`에 선적 하위 표·`milestones.po_id`(OEM — 후속 전표 아님)를 사유와 함께 등재한다. ④ 선적 원천은 정확히 하나(다중 SO 합적 없음). 근거: ADR-0074·0075·0077 / design-A.md A4·A6.

@@ -1,4 +1,4 @@
-# kbeauty-trade-os — WBS(세션 태스크 분해서) v1.5
+# kbeauty-trade-os — WBS(세션 태스크 분해서) v1.6
 
 > **용도**: `DESIGN.md` §19 로드맵을 Claude Code(Opus) 한 세션 크기의 태스크로 분해한 실행 레일. 구현 모델은 이 문서의 태스크 ID 순서대로 진행한다.
 > **우선순위**: 이 문서 ↔ `DESIGN.md` 충돌 시 **DESIGN.md 우선**, 충돌 발견 시 구현 중단 후 보고(CLAUDE.md 수칙).
@@ -114,18 +114,28 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 - 산출물: shipments(+lines/parties·환율 고정·구분 4종)/milestones, 자동 계산(대금만기 결제유형 분기·적재의무 수리일+30·L/C 제시기한 MIN(B/L+21, 유효)), 실적 입력 후속 재계산, 롤오버 이력+통보 기록, 국가별 휴일 경고; **(v1.5 추가 — 인계 판정)** 수입선적의 PO 참조(`po_line_id`)·`customs_records`(PO 후반 전이와 별개), 이에 따른 `CHILD_LINKS`·`LINE_CONSUMERS`·RESERVED 상태 엣지(SO IN_SHIPMENT·COMPLETED) 추가와 상태 총수 테스트 갱신, `open_order_amount`(여신 노출)의 선적분 차감은 **S3-3 미수 provider `reflected=True` 등록 릴리스와 같은 PR에서만**, SO 부분출하 후 잔량 종결(short-close) 판정, OEM 마일스톤 프로파일(`profile_id`)·PO 라인 ETA 슬롯 판정, QT/PI 만료 임박(D-N) 알림 판정(기일 엔진 착수 시)
 - DoD: T/T와 L/C 만기 계산 분기 테스트 / ETA 현지 연휴 → 경고 / 부분선적 1:N 잔량 정확
 - 검증: A(부분선적 잔량 0·초과 거부), K(L/C 제시기한 MIN·tolerance)
+- **(v1.6 주석 — S3-2 계획 자율 확정 2026-10-04, ADR-0074~0087 — 위 문면은 원본 유지, 아래가 판정 결과)**
+  - ① **"RESERVED 상태 엣지(SO … COMPLETED) 추가"는 S3-2에서 이행하지 않고 S3-3 미수 provider PR로 이관**한다 — 여신 노출 술어가 COMPLETED를 제외하므로 미수 반영(`reflected=True`) 없이 열면 노출 공백(ADR-0076). S3-2가 여는 SO 엣지는 **CONFIRMED↔IN_SHIPMENT 자동 수렴 2개**(ADR-0075). SO short-close도 **판정 결과 미개방**(같은 S3-3 PR).
+  - ② **DoD "T/T와 L/C 만기 계산 분기"·검증 "K(L/C 제시기한 MIN·tolerance)"는 순수 함수(`trade_docs/schedule.py`) 단위·K 테스트로 충족**한다 — L/C 입력 원천 `lc_terms`가 S3-3이고 L/C 선택이 닫혀 있어(P-10) 운영 경로는 UNKNOWN(`LC_TERMS_NOT_REGISTERED`), S3-3이 같은 함수에 배선한다(ADR-0081).
+  - ③ **OEM 마일스톤 프로파일 `profile_id`는 판정 결과 미신설**(DESIGN 프로파일 1종 — OEM 4종은 PO 소유 마일스톤, 재트리거 = 두 번째 프로파일 요구). **PO 라인 ETA 슬롯도 미신설**(입고예정 = 수입선적 ETA 계산값). facilities 미신설 유지(ADR-0085).
+  - ④ **구분 4종 중 채널입고·샘플무상은 값만 싣고 생성 경로를 열지 않는다**(DB CHECK 거부 — S4-3·S5-2·무상 SO 판정 몫, ADR-0074).
+  - ⑤ (통합) **승인 무결성 대사 잡 `approval-integrity-check` 배선**(S3-1 PR-9a 부채 ① — 트리거 'S3-2 이전' 도과분, S3-2 PR-1b, ADR-0087) / QT/PI 만료 임박 D-N = 구현(잡 `trade-deadline-scan`, ADR-0084) / 마일스톤 세트 `item_profile_milestone_types` = 구현(ADR-0021 마일스톤 몫 종결) / 사용자 역할 화면 = S3-2(PR-16 부채 ③, ADR-0086).
+  - ⑥ **통관 이슈 임시 규칙(DESIGN §19 P3 '임시 규칙: … 통관 이슈=태스크+메모')은 S3-2 PR-8 runbook 안내로만**(기존 `tasks` 활용 — 코드 0, 부채).
+  - 검증 매핑 보강: §20 P3 그룹 **A·B·G·H·I·K + J**(E 해당 없음 — 비용 코어 S3-4) + **GC-A14~A21·F4·G3**(GC v1.5 — 10건). PR 15개(1 → 1b → 2a → 2b → 7 → 3a → 3c → 3b → 4a → 4c → 4b → 5a → 5b → 6 → 8)·마이그레이션 3건(M13~M15)은 `docs/plans/s3-2-plan.md`가 정본.
 
 **S3-3 | 서류 생성기·채권/입금**
 - 범위: §7.6·7.10
 - 산출물: QT·PI·CI·PL·S/I 템플릿 렌더링(PDF·엑셀·언어 변형), 저장 전 검증 강제(금액 정합·G.W.≥N.W.·Incoterms 완전성·CI↔PL 교차), receivables(만기 자동·aging 30/60/90)/payments(부분), lc_terms(feature flag·하자 체크리스트 화면); **(v1.5 수정·추가)** `payments`는 **S3-1이 신설한 테이블의 확장**(채권 연결[`receivable_id`]·`pi_id` 완화·잔금·선수금 초과분 — 기존 컬럼·CHECK·kind 값 변경 금지), 미수 provider 등록(S3-1 기본 구현 `reflected=False`의 잔존 금지 아키텍처 테스트 포함), L/C feature flag 행 공급·토글 경로(`lc_terms`와 함께 — S3-1 프로덕션에서 L/C 선택은 닫혀 있음), 자사 레터헤드 마스터, EXPIRED/CANCELLED PI에 도착한 입금 처리 재판정, documents 전표 첨부(`owner_type` 확폭 경고), 선수금 미차감 노출·통화 불일치 입금의 재판정
 - DoD: 교차 불일치 서류 저장 거부 / 무상(금액 0) 생성 가능 / aging 정확 / **(v1.5 추가)** 미수 provider 등록 후 "선적 확정~미수 발생 구간의 노출 공백 0·이중 계산 0" 테스트
 - 검증: B(교차 일치·G.W.·무상·한글 CSV), A(일부입금 전환)
+- **(v1.6 주석 — S3-2 판정)** `lc_terms`는 S3-2 산식 순수 함수(L/C 대금만기·제시기한·tolerance — ADR-0081)에 **배선**한다(산식 재정의 금지). **SO COMPLETED 엣지·short-close는 미수 provider `reflected=True` 등록·선적분 노출 차감과 같은 PR**에서 연다("provider 기본값 동안 COMPLETED ∈ RESERVED" 아키텍처 테스트를 그 PR이 개정 — ADR-0076). 대금만기·제시기한 **알림**(충족 신호 = 입금·제시)도 이 세션 판정 대상(S3-2 부채).
 
 **S3-4 | 협정·판정·계산기·비용 코어·백오더**
 - 범위: §6.1~6.3·6.6 자율발급 게이트, §10.1 코어, §11 백오더
 - 산출물: agreements(+countries·신고문안 원형·HS 버전)/origin_determinations(BOM 스냅샷 동결·hs_version)/계산기(CTC 전수 대조·RVC 공제/집적·±5%p 플래그·미소기준)/신고문안 생성(자구 고정·6,000유로+인증수출자 게이트), expense_types/expenses(단계 4종·Incoterms 부담자 기본값), 백오더 보드(가용일 추종은 P4 연결), FTA 시드(발효 협정 전체 [발효 확인 필요] 마킹), DG 임시 수동 체크리스트 태스크; **(v1.5 추가)** 승인 유형 `EXPENSE_OVER_THRESHOLD` 소비(S3-1 승인 코어의 `TargetSpec` 등록)
 - DoD: **GC-B1**(RVC 62% 충족) / **GC-B2**(미상=역외) / **GC-B3**(hs_version 스냅샷) / **GC-G1**(관세 533.00·부가세 873.30 — Decimal, float 금지) / CTC 1개 미충족=전체 불충족 / 신고문안 자구 일치
 - 검증: C(CTC 전수·RVC 경계·스냅샷 불변), B(신고문안·6,000유로), E(부담자) + **Phase 3 리허설**: 실제 수주 1건(익명화) QT→채권 관통
+- **(v1.6 주석 — S3-2 판정)** S3-2~S3-4 구간의 DG 선적은 선적 상세 **배지·runbook 경고만**(차단 0) — 이 세션의 DG 임시 수동 체크리스트가 그 공백(S3-2 부채)을 닫는다.
 
 ## Phase 4 — 재고·로트 (4세션) · 테스트 A·C·D·J
 
@@ -134,12 +144,14 @@ DESIGN.md의 해당 절을 읽은 뒤 계획(구현 순서·테스트 계획)을
 - 산출물: **ADR 1건 확정 문서(세션 첫 작업)** → locations(격리 포함)/lots(CoA)/stock_movements 전 이동유형, DB 계정 UPDATE/DELETE GRANT 제거(또는 금지 트리거), CHECK 제약(수량≠0 등), OPENING 이월 실행+검산, BOX 화면 환산(원장 EA 단일); **(v1.5 추가)** ADR에 ① PO 후반(입고 문서·PO 잔량 차감·후반 상태 전이 PARTIALLY_RECEIVED·FULLY_RECEIVED·CLOSED·IN_PO ref 소유) ② `lock_buyer_for_credit`(S3-1 선행 결정) 교체 여부와 §17.2 전역 잠금 순서표 승계 ③ S3-1 잔량 SUM 파생 표현의 최종 확정(시그니처 `open_quantity` 유지 하 대체 가능) ④ 자재 PO(SKU 전용인 S3-1의 가산 확장 — 사급 수율 항목과 함께)를 포함
 - DoD: **GC-A1**(음수 차단) / **GC-A2**(수불 120) / **GC-A4**(불변+역기록) / 앱 계정 원장 UPDATE → DB 거부 / OPENING 합계 검산
 - 검증: J(원장 UPDATE 거부·롤백), A(OPENING), D(BOX 환산)
+- **(v1.6 주석 — S3-2 판정)** 착수 ADR은 **수입선적 IN_TRANSIT 소비와 입고 FULFILL 소비의 비중첩 계약**(`open_quantity` kind 필터 — PO 잔량은 입고에서만 감소, ADR-0077)과 S3-2가 개정한 LOCK_ORDER(…PO → shipments → shipment_children → approvals …, ADR-0078)를 승계·재판정한다.
 
 **S4-2 | 할당·가용재고·피킹·검수**
 - 범위: §8.3·8.4, §7.2 선적 상태 연동
 - 산출물: allocations(SO 확정 시 생성·검수 시 소진·취소 시 해제), 가용재고 산식(현재고−유효할당−격리), 직렬화 잠금(ADR 확정 방식), 피킹 리스트 자동 생성→검수 화면(로트 대조·차이 차단·FEFO 내 교체+사유)→OUT_SHIP 기록, 검수 미완료 CI/PL 차단; **(v1.5 추가)** `AllocationPort` 실구현(S3-1은 NOT_IMPLEMENTED를 확정 응답에 노출)·SET 구성 변경 드리프트 가드
 - DoD: **GC-F1**(동시 7+6 → 1건만, 실제 동시 실행 테스트) / 피킹과 다른 로트 검수 입력 차단 / 검수 전 CI 생성 시도 거부
 - 검증: J(동시 출고), D(검수·로트), B(검수 미완료 차단)
+- **(v1.6 주석 — S3-2 판정)** 선적 RESERVED 5상태(PICKING·INSPECTED·RELEASED·SHIPPED·CLOSED)의 엣지·출고 원장 시점·검수 미완료 CI/PL 차단 본체는 이 세션이다(S3-2는 진입 0을 B 테스트로 고정 — ADR-0074). 선적 라인 응답의 가용재고 '자리'(`availability.status=NOT_IMPLEMENTED`)를 `AllocationPort` 실구현으로 교체한다.
 
 **S4-3 | 세트·사급·채널입고 2단·FEFO·실사·리콜**
 - 범위: §8.2 ASSEMBLY 계열·§8.5~8.8
@@ -220,15 +232,24 @@ SMTP 자동 발송, 이카운트 API·UNI-PASS, 슬랙 인터랙티브·조회 �
 | A6·A7·A8·A9 | S3-1 | A10·A11·A12·A13 | S3-1 |
 | F2·F3 | S3-1 | G2 | S3-1 |
 | H3·H4·H5·H6 | S3-1 | | |
+| A14·A15·A16·A17 | S3-2 | A18·A19·A20·A21 | S3-2 |
+| F4 | S3-2 | G3 | S3-2 |
 
 > C3~C7=S1-2(v1.1)·C8=S2-1(v1.2)·C9·C10=S2-2(v1.3) — 세션 종결 후 등재분은 GC 문서 변경 이력이 정본.
 > A6~A13·F2·F3·G2·H3~H6=S3-1(v1.5 — GC v1.4, S3-1 배정 0건 해소). PR 단위 배정(PR-5~PR-15)은 GC 문서 v1.4 각 케이스와 S3-1 계획서(`docs/plans/s3-1-plan.md` — PR-1 등재 완료)가 정본. **(S3-1 종결 대사 2026-10-04, PR-16)** 15건 전부 pytest `golden` 마커로 고정 — 위치는 GC 문서 v1.4 부기.
+> A14~A21·F4·G3=S3-2(v1.6 — GC v1.5, S3-2 배정 0건 해소 — 10건). 무역 기일 케이스는 C(인증·규제) 대신 A 연번, 수입선적 원가 단언은 G(수입원가)로 분리했다(GC 삭제 금지라 등재 전 확정 — 적대 R-12). PR 단위 배정은 GC 문서 v1.5 각 케이스와 S3-2 계획서가 정본. `pytest -m golden` 대사 기준 = S3-1 종결 43건 + 10건 → **53건 이상**(S3-2 PR-8).
 
 ## 버전 규칙
 - 태스크 완료 표시는 이 파일이 아니라 PROGRESS.md에 기록(이 파일은 계획의 원본으로 불변에 가깝게).
 - 순서 변경·태스크 분할이 필요하면 사유와 함께 v1.1로 갱신 + ADR 5줄(§21).
 
 ## 변경 이력
+
+**v1.6 (2026-10-04)** — S3-2 계획 통합(부록 A~E + 통합 정합 + 적대 검토 3렌즈 정정 R-01~R-30, 오너 지시 2026-09-29에 따른 **자율 확정** — ADR-0011 부기, 사후 번복 가능). → **ADR-0074~0087**(+기존 ADR 부기 14파일)
+1. **S3-2 판정 주석(WBS 문면 대비 4건)** — ① RESERVED 엣지 COMPLETED 추가 → S3-3 미수 provider PR로 이관(노출 공백 — ADR-0076) ② DoD L/C 분기·검증 K = 순수 함수 단위·K 테스트로 충족, 운영 경로 UNKNOWN(ADR-0081) ③ OEM `profile_id` = 판정 결과 미신설(ADR-0085) ④ 구분 4종 중 채널입고·샘플무상 = 값만·경로 미개방(ADR-0074). 함께: short-close·PO 라인 ETA 미개방·계산값, 승인 무결성 대사 잡 배선(PR-9a 부채 ①), 통관 이슈 임시 규칙 = runbook 안내(코드 0). S3-2 원 문면은 고치지 않고 주석으로 단다(원본 유지 원칙).
+2. **후속 세션 주석** — **S3-3**: `lc_terms` → S3-2 산식 배선, SO COMPLETED·short-close를 provider `reflected=True`·선적분 차감과 같은 PR. **S3-4**: S3-2~S3-4 구간 DG 선적 = 배지·runbook 경고만. **S4-1**: 입고 FULFILL ↔ 수입선적 IN_TRANSIT 비중첩 계약·LOCK_ORDER 승계. **S4-2**: 선적 RESERVED 5상태 엣지·출고 원장 시점·검수 미완료 CI/PL 차단·가용 '자리' 교체.
+3. **골든 케이스 매핑** — GC v1.5의 A14~A21·F4·G3(10건)을 S3-2에 배정(S3-2 배정 0건 실측 해소). `golden` 마커 대사 기준 53건 이상.
+4. 세션 분할·순서 변경 없음(S3-2 내부 PR 분할은 계획서 몫 — 버전 규칙의 '태스크 분할' 대상 아님).
 
 **v1.5 (2026-09-30)** — S3-1 통합 계획 판정(6개 묶음 A~F 통합, 오너 지시 2026-09-29에 따른 **자율 확정** — ADR-0011 부기, 사후 번복 가능). → **ADR-0051~0067**(+기존 ADR 부기 10건)
 1. **S3-1 산출물 명시 보강** — `payments`(선수금 입금 최소형)·`policy_settings`·`bank_accounts`·상태이력 4표·오더 보드 벌크·`users/lookup`·검색형 선택·정책 화면을 산출물에 명시했다. **S3-1 검증란 H를 2항→4항으로 정정**(승인 우회 차단·승인 후 불변·결재선 매핑·대결 기간+이력)하고 DESIGN §20 헤더의 P3 매핑을 A·B·E→A·B·E·G·H·I·K로 보강했다. DoD 4항(참조 관통·중복 PO 0건·여신 초과 승인 게이트·확정 후 단가·환율 불변)은 불변.
