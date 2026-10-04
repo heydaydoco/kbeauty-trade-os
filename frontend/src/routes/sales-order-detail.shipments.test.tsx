@@ -219,6 +219,27 @@ describe("선적 만들기 2단 대화상자", () => {
     expect(posts[1]!.headers["Idempotency-Key"]).not.toBe(posts[0]!.headers["Idempotency-Key"]);
   });
 
+  it("결과를 모르는 실패(503) 뒤 같은 본문 재확정은 같은 키 — 중복 선적 방지(뒤로 갔다 같은 값으로 다시 와도 같은 키)", async () => {
+    const { calls, dialog } = await openDialog([
+      ["/v1/sales-orders/9/shipments/preview", "POST", () => jsonResponse(shipmentPreview())],
+      ["/v1/sales-orders/9/shipments", "POST", () => jsonResponse(apiErrorResponse("COMMON.SERVER.UNAVAILABLE", "잠시 후 다시 시도해 주세요."), 503)],
+    ]);
+    fireEvent.change(within(dialog).getByLabelText("라인 1 이번 선적 수량"), { target: { value: "2" } });
+    fireEvent.change(within(dialog).getByLabelText("출발국 (필수)"), { target: { value: "KR" } });
+    fireEvent.change(within(dialog).getByLabelText("도착국 (필수)"), { target: { value: "US" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "다음: 미리보기" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "생성 확정" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("잠시 후 다시 시도해 주세요.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "생성 확정" }));
+    await waitFor(() => expect(sent(calls, "/v1/sales-orders/9/shipments", "POST")).toHaveLength(2));
+    fireEvent.click(within(dialog).getByRole("button", { name: "뒤로" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "다음: 미리보기" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "생성 확정" }));
+    await waitFor(() => expect(sent(calls, "/v1/sales-orders/9/shipments", "POST")).toHaveLength(3));
+    const keys = sent(calls, "/v1/sales-orders/9/shipments", "POST").map((c) => c.headers["Idempotency-Key"]);
+    expect(new Set(keys).size).toBe(1);
+  });
+
   it("미리보기 409 EXCEEDS_OPEN도 칸별 잔량으로(1단 유지)", async () => {
     const { dialog } = await openDialog([
       [
