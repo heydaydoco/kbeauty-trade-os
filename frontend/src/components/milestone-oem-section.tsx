@@ -4,6 +4,7 @@
 // ★ 버튼은 보드의 서버 `allowed_actions`(EDIT_MILESTONES)로만 — 역할·발주 상태를 화면이 다시 판정하지 않는다.
 // ★ 행 모양은 선적 보드와 같다 → 같은 타임라인·대화상자 재사용. 전부 날짜형, 휴일·통관·롤오버 배지 0(서버가 0을 준다 — 표시만, 알림 없음).
 // ★ 계획 변경은 사유 필수(빈칸 제출 불가), 실적 정정도 사유 필수. 통보 통로는 선적 전용이라 여기엔 없다(이력만).
+// ★ 발주에 붙는 자유 텍스트(계획 변경·실적 정정 사유)에는 원가 금지 안내를 단다(ADR-0057 — 적대 검토 med ③).
 // ★ 쓰기 응답 `{board, change}`의 보드로 캐시를 바꾸고(진행 중 재조회 취소 — 늦은 응답 폐기), 이력은 다시 받는다.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,6 +15,7 @@ import { MilestoneValueDialog } from "./milestone-dialogs";
 import { MilestoneTimeline, type MilestoneEditMode } from "./milestone-timeline";
 import { apiFetch } from "../lib/api";
 import { milestoneChangesKey, oemBoardKey, type MilestoneRow, type OemMilestoneBoard } from "../lib/milestone";
+import { NO_COST_IN_FREE_TEXT } from "../lib/purchase-order";
 
 const NOUN = "발주";
 
@@ -88,6 +90,7 @@ export function OemScheduleSection({ poId }: { poId: number }) {
             setEditing(null);
             reloadBoard();
           }}
+          reasonHint={NO_COST_IN_FREE_TEXT}
         />
       )}
     </section>

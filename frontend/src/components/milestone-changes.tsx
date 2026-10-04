@@ -153,6 +153,10 @@ export function MilestoneChangesSection({
             void client.invalidateQueries({ queryKey: milestoneChangesKey(owner, ownerId) });
             onNoticeSaved?.();
           }}
+          onRefresh={() => {
+            void client.invalidateQueries({ queryKey: milestoneChangesKey(owner, ownerId) });
+            onNoticeSaved?.();
+          }}
           onClose={() => setNoticeTarget(null)}
         />
       )}

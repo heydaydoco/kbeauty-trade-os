@@ -13,7 +13,7 @@ import { ListPager } from "./list-pager";
 import { ListState } from "./list-state";
 import { DialogShell, writeErrorText } from "./milestone-dialogs";
 import { SearchSelect } from "./search-select";
-import { apiDelete, apiFetch } from "../lib/api";
+import { ApiError, apiDelete, apiFetch } from "../lib/api";
 import { isVersionConflict } from "../lib/api-errors";
 import {
   DATE_MIN,
@@ -24,7 +24,7 @@ import {
   type CustomsRecord,
 } from "../lib/milestone";
 import { usePagedList } from "../lib/paging";
-import { can, createKeyKeeper, type ShipmentDetail } from "../lib/shipment";
+import { can, createKeyKeeper, isResultUnknown, type ShipmentDetail } from "../lib/shipment";
 
 const NOUN = "통관 기록";
 const inputClass = "rounded border border-gray-300 px-3 py-2 text-sm";
@@ -39,6 +39,15 @@ interface BrokerChoice {
 
 export const CUSTOMS_SECTION_ID = "shipment-customs";
 export const CUSTOMS_HEADING_ID = "shipment-customs-title";
+
+/**
+ * '최신 내용 불러오기'가 필요한 통관 오류 — version 충돌·결과 불명(0·5xx)·없는 기록(404)·취소된 선적(409 NOT_ACTIVE).
+ * version 경로(정정·삭제)는 같은 키 재시도가 없으므로 결과 불명이면 다시 불러와 확인한다(적대 검토 low ⑨).
+ */
+export const customsNeedsReload = (error: unknown): boolean =>
+  isVersionConflict(error) ||
+  isResultUnknown(error) ||
+  (error instanceof ApiError && (error.status === 404 || error.code === "SHIPMENTS.SHIPMENT.NOT_ACTIVE"));
 
 /** 신고번호 입력 문제(서버 규칙과 같은 사전 검사 — 서버가 최종). */
 export function declarationNoProblem(raw: string): string | null {
@@ -89,6 +98,9 @@ export function CustomsSection({ shipment, onChanged }: { shipment: ShipmentDeta
     onSuccess: () => {
       setRemoveTarget(null);
       refreshAll();
+    },
+    onError: (error) => {
+      if (customsNeedsReload(error)) refreshAll(); // 결과 불명·404 — 목록·보드부터 다시 받는다
     },
   });
 
@@ -188,6 +200,7 @@ export function CustomsSection({ shipment, onChanged }: { shipment: ShipmentDeta
             setDialog(null);
             refreshAll();
           }}
+          onRefresh={refreshAll}
         />
       )}
       {removeTarget !== null && canEdit && (
@@ -203,9 +216,9 @@ export function CustomsSection({ shipment, onChanged }: { shipment: ShipmentDeta
             </p>
           }
           pending={remove.isPending}
-          error={remove.error ? writeErrorText(remove.error, NOUN) : null}
+          error={remove.error ? writeErrorText(remove.error, NOUN, "version") : null}
           onReload={
-            isVersionConflict(remove.error)
+            customsNeedsReload(remove.error)
               ? () => {
                   remove.reset();
                   setRemoveTarget(null);
@@ -235,6 +248,7 @@ function CustomsRecordDialog({
   onSaved,
   onClose,
   onReload,
+  onRefresh,
 }: {
   shipment: ShipmentDetail;
   /** null = 추가, 값 = 정정(연 순간의 version 고정). */
@@ -243,6 +257,8 @@ function CustomsRecordDialog({
   onSaved: () => void;
   onClose: () => void;
   onReload: () => void;
+  /** 닫지 않고 목록·보드 재조회(결과 불명·404). */
+  onRefresh: () => void;
 }) {
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const firstRef = useRef<HTMLInputElement | null>(null);
@@ -302,6 +318,9 @@ function CustomsRecordDialog({
       }
     },
     onSuccess: onSaved,
+    onError: (error) => {
+      if (customsNeedsReload(error)) onRefresh();
+    },
   });
 
   const blocked = save.isPending || numberProblem !== null || dateProblem !== null || nothingChanged || reasonMissing;
@@ -458,8 +477,8 @@ function CustomsRecordDialog({
         {nothingChanged && <p className="text-xs text-gray-500">바뀐 내용이 없습니다.</p>}
         {save.error && (
           <div role="alert" className="break-keep text-sm text-signal-red">
-            <p>{writeErrorText(save.error, NOUN)}</p>
-            {isVersionConflict(save.error) && (
+            <p>{writeErrorText(save.error, NOUN, record === null ? "key" : "version")}</p>
+            {customsNeedsReload(save.error) && (
               <button
                 type="button"
                 onClick={onReload}

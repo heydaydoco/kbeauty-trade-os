@@ -206,3 +206,27 @@ describe("통관 기록 — 정정·삭제", () => {
     await waitFor(() => expect(sent(stub.calls, SH, "GET").length).toBeGreaterThan(1));
   });
 });
+
+describe("통관 기록 — 적대 검토 반영 low ⑨", () => {
+  it("정정 결과 불명(503) → '같은 키' 문구 없이 '결과를 알 수 없습니다 — 최신 내용을 불러와 확인' + 재조회 버튼, 목록 재조회", async () => {
+    const stub = open([customsRecord()], [[`${SH}/customs-records/301`, "PATCH", () => jsonResponse(apiErrorResponse("COMMON.SERVER.ERROR", "일시 오류입니다."), 503)]]);
+    const region = await screen.findByRole("region", { name: "통관 기록" });
+    fireEvent.click(await within(region).findByRole("button", { name: "정정" }));
+    fireEvent.change(within(dialog()).getByLabelText("메모 (선택)"), { target: { value: "메모" } });
+    const before = sent(stub.calls, `${SH}/customs-records`, "GET").length;
+    fireEvent.click(within(dialog()).getByRole("button", { name: "정정 저장" }));
+    expect(await within(dialog()).findByText(/결과를 알 수 없습니다 — 최신 내용을 불러와 확인해 주세요/)).toBeInTheDocument();
+    expect(within(dialog()).queryByText(/같은 키/)).not.toBeInTheDocument();
+    await waitFor(() => expect(sent(stub.calls, `${SH}/customs-records`, "GET").length).toBeGreaterThan(before));
+    expect(within(dialog()).getByRole("button", { name: "최신 내용 불러오기" })).toBeInTheDocument();
+  });
+
+  it("삭제 404(이미 삭제됨) → 재조회 버튼", async () => {
+    open([customsRecord()], [[`${SH}/customs-records/301`, "DELETE", () => jsonResponse(apiErrorResponse("COMMON.RESOURCE.NOT_FOUND", "찾을 수 없습니다."), 404)]]);
+    const region = await screen.findByRole("region", { name: "통관 기록" });
+    fireEvent.click(await within(region).findByRole("button", { name: "삭제" }));
+    fireEvent.change(screen.getByLabelText("삭제 사유 (필수)"), { target: { value: "중복" } });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "삭제" }));
+    expect(await within(dialog()).findByRole("button", { name: "최신 내용 불러오기" })).toBeInTheDocument();
+  });
+});

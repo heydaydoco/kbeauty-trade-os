@@ -32,6 +32,7 @@ import {
   derivedChanges,
   milestoneChangesKey,
   milestoneTypeLabel,
+  needsBoardReload,
   type MilestoneBoard,
   type MilestoneRow,
 } from "../lib/milestone";
@@ -357,7 +358,7 @@ function ShipmentDetailView() {
       {notice !== null && (
         <div role="alert" className="mt-4 rounded border border-signal-red p-3 text-sm text-signal-red">
           <p className="break-keep">{shipmentError(notice)}</p>
-          {isVersionConflict(notice) && (
+          {(isVersionConflict(notice) || needsBoardReload(notice)) && (
             <button type="button" onClick={reload} className="cell-nowrap mt-2 rounded border border-signal-red px-3 py-1">
               최신 내용 불러오기
             </button>

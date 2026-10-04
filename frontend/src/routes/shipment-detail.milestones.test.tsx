@@ -191,7 +191,8 @@ describe("계획 입력·롤오버", () => {
     fireEvent.click(within(dialog()).getByLabelText("통보도 지금 기록"));
     fireEvent.change(within(dialog()).getByLabelText("요지 (필수)"), { target: { value: "전화로 알림" } });
     fireEvent.click(within(dialog()).getByRole("button", { name: "변경 + 통보 기록 저장" }));
-    expect(await screen.findByText(/롤오버는 기록됐고 통보 기록은 실패했습니다/)).toBeInTheDocument();
+    expect(await screen.findByText(/롤오버 기록은 남았고 통보 기록은 결과를 알 수 없습니다/)).toBeInTheDocument();
+    expect(screen.getByText(/변경 이력을 먼저 확인하세요/)).toBeInTheDocument();
     expect(await within(card("ETA")).findByText("2026-11-05")).toBeInTheDocument(); // 롤오버는 화면에 반영
     await waitFor(() => expect(document.activeElement).toHaveTextContent("ETA — 통보 기록 실패"));
     fail = false;
@@ -497,5 +498,139 @@ describe("마일스톤 변경 이력·통보", () => {
     expect(await within(history).findByText("선사 스케줄 변경")).toBeInTheDocument();
     expect(within(history).queryByRole("button", { name: "통보 기록" })).not.toBeInTheDocument();
     server.changes = [];
+  });
+});
+
+describe("적대 검토 반영 (PR-4b)", () => {
+  it("med ① 409 OWNER_NOT_ACTIVE(그 사이 선적 취소) → '최신 내용 불러오기' → 재조회 뒤 allowed_actions가 비어 버튼이 사라진다", async () => {
+    const stub = open(detail(), TRADER, [
+      [
+        `${SH}/milestones/ETA/plan`,
+        "POST",
+        () => {
+          server.detail = detail({}, { status: "CANCELLED", allowed_actions: [] });
+          return jsonResponse(apiErrorResponse("SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE", "취소된 선적·발주의 마일스톤은 수정할 수 없습니다."), 409);
+        },
+      ],
+    ]);
+    await heading();
+    fireEvent.click(within(card("ETA")).getByRole("button", { name: "계획 입력" }));
+    fireEvent.change(within(dialog()).getByLabelText(/계획일/), { target: { value: "2026-11-01" } });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "저장" }));
+    expect(await within(dialog()).findByText(/취소된 선적·발주의 마일스톤은 수정할 수 없습니다/)).toBeInTheDocument();
+    fireEvent.click(within(dialog()).getByRole("button", { name: "최신 내용 불러오기" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByRole("list", { name: "마일스톤" })).queryAllByRole("button")).toHaveLength(0));
+    expect(sent(stub.calls, SH, "GET").length).toBeGreaterThan(1);
+  });
+
+  it("med ① 계획 초안 409 OWNER_NOT_ACTIVE → 배너에 '최신 내용 불러오기'", async () => {
+    open(detail(), TRADER, [
+      [`${SH}/milestones/plan-draft`, "POST", () => jsonResponse(apiErrorResponse("SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE", "취소된 선적입니다."), 409)],
+    ]);
+    await heading();
+    fireEvent.click(screen.getByRole("button", { name: "계획 초안 만들기" }));
+    const banner = await screen.findByRole("alert");
+    expect(within(banner).getByRole("button", { name: "최신 내용 불러오기" })).toBeInTheDocument();
+  });
+
+  it("med ② 통보 실패 화면을 닫으면(Esc) 보드·이력을 다시 받는다 / low ⑧ 4xx 실패는 '다시 시도' 없이 '변경 이력에서 다시 기록'", async () => {
+    const stub = open(detail({ ETA: ROLLED }), TRADER, [
+      [`${SH}/milestones/ETA/plan`, "POST", written(detail({ ETA: { ...ROLLED, planned: "2026-11-05" } }).milestones, { id: 905, change_kind: "PLAN_CHANGED" })],
+      [`${SH}/milestone-changes/905/notices`, "POST", () => jsonResponse(apiErrorResponse("COMMON.VALIDATION.INVALID_FIELD", "요지를 확인해 주세요."), 422)],
+    ]);
+    await heading();
+    fireEvent.click(within(card("ETA")).getByRole("button", { name: "계획 변경" }));
+    fireEvent.change(within(dialog()).getByLabelText(/계획일/), { target: { value: "2026-11-05" } });
+    fireEvent.change(within(dialog()).getByLabelText("변경 사유 (필수)"), { target: { value: "선사 변경" } });
+    fireEvent.click(within(dialog()).getByLabelText("통보도 지금 기록"));
+    fireEvent.change(within(dialog()).getByLabelText("요지 (필수)"), { target: { value: "알림" } });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "변경 + 통보 기록 저장" }));
+    expect(await screen.findByText(/롤오버 기록은 남았고 통보 기록은 실패했습니다/)).toBeInTheDocument();
+    expect(screen.getByText(/변경 이력'에서 다시 기록해 주세요/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "다시 시도" })).not.toBeInTheDocument();
+    const before = sent(stub.calls, SH, "GET").length;
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(sent(stub.calls, SH, "GET").length).toBeGreaterThan(before));
+  });
+
+  it("low ④ 변경 이력의 통보 422 NOTICE_LIMIT_REACHED(동시 통보) → 서버 문구 + 이력 재조회 + '최신 내용 불러오기'", async () => {
+    server.changes = [milestoneChange()];
+    const stub = open(detail(), TRADER, [
+      [`${SH}/milestone-changes/900/notices`, "POST", () => jsonResponse(apiErrorResponse("SHIPMENTS.MILESTONE.NOTICE_LIMIT_REACHED", "변경 1건에는 통보 기록을 20건까지 남길 수 있습니다."), 422)],
+    ]);
+    await heading();
+    const history = screen.getByRole("region", { name: "마일스톤 변경 이력" });
+    fireEvent.click(await within(history).findByRole("button", { name: "통보 기록" }));
+    fireEvent.change(within(dialog()).getByLabelText("요지 (필수)"), { target: { value: "알림" } });
+    const before = sent(stub.calls, `${SH}/milestone-changes`, "GET").length;
+    fireEvent.click(within(dialog()).getByRole("button", { name: "통보 기록 저장" }));
+    expect(await within(dialog()).findByText(/20건까지/)).toBeInTheDocument();
+    await waitFor(() => expect(sent(stub.calls, `${SH}/milestone-changes`, "GET").length).toBeGreaterThan(before));
+    fireEvent.click(within(dialog()).getByRole("button", { name: "최신 내용 불러오기" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    server.changes = [];
+  });
+
+  it("low ⑤ 롤오버+통보인데 서버 no-op(change null) → 대화상자 유지 + '바뀐 값이 없어 … 통보는 변경 이력에서'", async () => {
+    const stub = open(detail({ ETA: ROLLED }), TRADER, [[`${SH}/milestones/ETA/plan`, "POST", written(detail({ ETA: ROLLED }).milestones, null)]]);
+    await heading();
+    fireEvent.click(within(card("ETA")).getByRole("button", { name: "계획 변경" }));
+    fireEvent.change(within(dialog()).getByLabelText(/계획일/), { target: { value: "2026-11-05" } });
+    fireEvent.change(within(dialog()).getByLabelText("변경 사유 (필수)"), { target: { value: "사유" } });
+    fireEvent.click(within(dialog()).getByLabelText("통보도 지금 기록"));
+    fireEvent.change(within(dialog()).getByLabelText("요지 (필수)"), { target: { value: "알림" } });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "변경 + 통보 기록 저장" }));
+    expect(await within(dialog()).findByText(/바뀐 값이 없어 롤오버 기록이 생기지 않았습니다 — 통보는 변경 이력에서 기록하세요/)).toBeInTheDocument();
+    expect(stub.calls.filter((c) => c.url.includes("/notices"))).toHaveLength(0);
+  });
+
+  it("low ⑥ 시각형 범위는 UTC 변환 결과로 — 2000-01-01 05:00 KST(= 1999-12-31Z)는 저장 불가", async () => {
+    open();
+    await heading();
+    fireEvent.click(within(card("서류마감")).getByRole("button", { name: "계획 입력" }));
+    fireEvent.change(within(dialog()).getByLabelText(/계획 시각/), { target: { value: "2000-01-01T05:00" } });
+    expect(within(dialog()).getByRole("button", { name: "저장" })).toBeDisabled();
+    expect(within(dialog()).getByRole("alert")).toHaveTextContent(/UTC 기준 2000-01-01 00:00/);
+  });
+
+  it("low ⑦ TZ_UNRESOLVED 행은 벽시계 초기값을 비우고 시간대도 다시 고르게 한다", async () => {
+    open(
+      detail({
+        DOC_CUTOFF: {
+          // 브라우저는 아는 이름이지만 서버(앱 고정 tzdata)가 해석 못 한 행 — 초기값을 브라우저 해석으로 채우지 않는다
+          planned: { at_utc: "2026-10-11T03:00:00Z", tz: "Asia/Tokyo" },
+          unknown_reason: "TZ_UNRESOLVED",
+          milestone_id: 70,
+          version: 2,
+        },
+      }),
+    );
+    await heading();
+    fireEvent.click(within(card("서류마감")).getByRole("button", { name: "계획 변경" }));
+    expect(within(dialog()).getByLabelText(/계획 시각/)).toHaveValue("");
+    expect(within(dialog()).getByLabelText("시간대 (IANA, 필수)")).toHaveValue("");
+  });
+
+  it("low ⑩ 롤오버 대상이 아닌 종류(PSI)의 계획 변경에는 '통보도 지금 기록'이 없고 제목은 '계획 변경'", async () => {
+    open(detail({ PSI: { planned: "2026-10-20", milestone_id: 62, version: 1 } }));
+    await heading();
+    fireEvent.click(within(card("수출 전 검사")).getByRole("button", { name: "계획 변경" }));
+    expect(within(dialog()).getByRole("heading", { name: "계획 변경 — 수출 전 검사" })).toBeInTheDocument();
+    expect(within(dialog()).queryByLabelText("통보도 지금 기록")).not.toBeInTheDocument();
+  });
+
+  it("low ⑪ 시각형 대화상자를 열자마자 빨간 경고 0 — 안내는 sr-only로 연결, 건드린 뒤에만 alert", async () => {
+    open();
+    await heading();
+    fireEvent.click(within(card("서류마감")).getByRole("button", { name: "계획 입력" }));
+    expect(within(dialog()).queryByRole("alert")).not.toBeInTheDocument();
+    const input = within(dialog()).getByLabelText(/계획 시각/);
+    const describedBy = input.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(describedBy)).toHaveClass("sr-only");
+    fireEvent.change(input, { target: { value: "2026-03-08T02:30" } });
+    fireEvent.change(within(dialog()).getByLabelText("시간대 (IANA, 필수)"), { target: { value: "America/New_York" } });
+    expect(within(dialog()).getByRole("alert")).toHaveTextContent(/서머타임/);
   });
 });

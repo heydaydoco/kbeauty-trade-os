@@ -169,6 +169,9 @@ export const DATE_MIN = "2000-01-01";
 export const DATE_MAX = "2999-12-31";
 export const DATETIME_MIN = "2000-01-01T00:00";
 export const DATETIME_MAX = "2999-12-31T23:59";
+/** 시각형 값의 서버 범위 — [2000-01-01T00:00Z, 3000-01-01T00:00Z)(UTC 변환 결과로 비교 — 적대 검토 low ⑥). */
+export const INSTANT_MIN_ISO = "2000-01-01T00:00:00.000Z";
+export const INSTANT_END_ISO = "3000-01-01T00:00:00.000Z";
 /** 변경 1건당 통보 기록 상한(서버 NOTICE_LIMIT_PER_CHANGE) — 이 수에 닿으면 '통보 기록' 버튼을 끈다(21번째는 서버 422). */
 export const NOTICE_LIMIT_PER_CHANGE = 20;
 /** 통보 상대 거래처 유형(서버 NOTICE_PARTNER_TYPES) — 유형을 먼저 고르고 그 유형만 검색한다(불일치는 서버 422). */
@@ -194,7 +197,10 @@ export const DECLARATION_DUPLICATE_CODE = "SHIPMENTS.CUSTOMS.DECLARATION_DUPLICA
 export const needsBoardReload = (error: unknown): boolean =>
   error instanceof ApiError &&
   error.status === 409 &&
-  (error.code === "COMMON.CONCURRENCY.VERSION_CONFLICT" || error.code === DUPLICATE_TYPE_CODE);
+  (error.code === "COMMON.CONCURRENCY.VERSION_CONFLICT" ||
+    error.code === DUPLICATE_TYPE_CODE ||
+    // 그 사이 소유 선적·발주가 취소됨(적대 검토 med ①) — 재조회하면 allowed_actions에서 버튼이 사라진다(막다른 길 0).
+    error.code === MILESTONE_OWNER_NOT_ACTIVE_CODE);
 
 /** 선적 취소 409의 `detail` 목록(통관 = declaration_nos, 실적 = milestone_types). 다른 오류·모양이면 빈 목록. */
 export function cancelBlockers(error: unknown): { customs: string[]; actuals: string[] } {

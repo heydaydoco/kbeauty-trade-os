@@ -123,3 +123,42 @@ describe("OEM 생산 일정 섹션", () => {
     expect(within(history).queryByRole("button", { name: "통보 기록" })).not.toBeInTheDocument();
   });
 });
+
+describe("OEM 생산 일정 — 적대 검토 반영", () => {
+  it("med ① 409 OWNER_NOT_ACTIVE(그 사이 발주 취소) → '최신 내용 불러오기' → 보드 재조회 뒤 버튼 0", async () => {
+    let board = oemBoard({ po_id: 9 });
+    const stub = stubGateFetch(TRADER, [
+      [
+        `${PO}/milestones/FILLING/plan`,
+        "POST",
+        () => {
+          board = oemBoard({ po_id: 9, allowed_actions: [] });
+          return jsonResponse(apiErrorResponse("SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE", "취소된 발주입니다."), 409);
+        },
+      ],
+      [`${PO}/status-log`, "GET", () => jsonResponse(PO_LOG)],
+      ["/v1/users/lookup?size=200", "GET", () => jsonResponse(page([]))],
+      [`${PO}/milestones`, "GET", () => jsonResponse(board)],
+      [`${PO}/milestone-changes`, "GET", () => jsonResponse(page([]))],
+      [PO, "GET", () => jsonResponse(OEM_PO)],
+    ]);
+    renderWithProviders(<AppRoutes />, { route: "/purchase-orders/9" });
+    await screen.findByRole("list", { name: "생산 일정" });
+    fireEvent.click(within(card("충진")).getByRole("button", { name: "계획 입력" }));
+    fireEvent.change(within(dialog()).getByLabelText(/계획일/), { target: { value: "2026-10-20" } });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "저장" }));
+    fireEvent.click(await within(dialog()).findByRole("button", { name: "최신 내용 불러오기" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByRole("list", { name: "생산 일정" })).queryAllByRole("button")).toHaveLength(0));
+    expect(sent(stub.calls, `${PO}/milestones`, "GET").length).toBeGreaterThan(1);
+  });
+
+  it("med ③ 사유 칸 아래 원가 금지 안내(ADR-0057) — aria-describedby로 연결", async () => {
+    render(OEM_PO, oemBoard({ po_id: 9 }, { PACKING: { planned: "2026-10-25", milestone_id: 82, version: 2 } }));
+    await screen.findByRole("list", { name: "생산 일정" });
+    fireEvent.click(within(card("포장")).getByRole("button", { name: "계획 변경" }));
+    const reason = within(dialog()).getByLabelText("변경 사유 (필수)");
+    const hint = document.getElementById(reason.getAttribute("aria-describedby") ?? "");
+    expect(hint).toHaveTextContent("원가(단가·금액)를 적지 마세요 — 원가 열람 권한이 없는 사용자에게도 보입니다.");
+  });
+});
