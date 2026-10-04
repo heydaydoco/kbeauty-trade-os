@@ -427,3 +427,19 @@ def test_payment_due_rejects_terms_that_violate_the_db_shape(terms: Terms) -> No
     )
     with pytest.raises(ValueError):
         s.payment_due(terms, ctx, None)
+
+
+@pytest.mark.group_k
+def test_calendar_overflow_is_unknown_not_an_exception() -> None:
+    """적대 검토 반영 ⑤(보조 방어선) — 달력 끝 근처 산술은 OverflowError(응답 500) 대신 UNKNOWN `DATE_OUT_OF_RANGE`.
+    입력·DB는 2000~2999로 막으므로 이 경로는 우회 데이터에서만 열린다"""
+    edge = date(9999, 12, 20)
+    unknown = _unknown(DueReason.DATE_OUT_OF_RANGE)
+    assert s.loading_deadline(edge) == unknown
+    ctx = AnchorContext(bl=s.effective(None, edge))
+    assert s.payment_due(Terms("TT_DEFERRED", None, "BL_DATE", 30), ctx, None) == unknown
+    assert s.presentation_deadline(DateValue(edge, ACT), date(9999, 12, 31)) == unknown
+    assert s.lc_payment_due("USANCE", None, edge, 90) == unknown
+    early = AnchorContext(etd=s.effective(None, date(1, 1, 3)))
+    assert s.payment_due(Terms("TT_ADVANCE", 3000, "ETD_DATE", -7), early, None) == unknown
+    assert s.loading_fulfilment(unknown, None, None, date(2026, 10, 1)) is LoadingState.UNKNOWN

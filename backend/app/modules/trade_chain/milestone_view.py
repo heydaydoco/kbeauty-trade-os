@@ -227,6 +227,7 @@ def _empty_row(milestone_type: str, *, kind: str, applicable: bool) -> dict[str,
         "customs_pending_count": None,
         "days_left": None,
         "is_overdue": None,
+        "unknown_reason": None,
         "fulfilment": None,
         "holiday": None,
         "rollover_count": 0,
@@ -269,9 +270,16 @@ def _stored_row(
         if instant is not None and m is not None and m.tz:
             basis = "ACTUAL" if actual.at is not None else "PLANNED"
             body["effective"] = {"value": instant.astimezone(UTC).isoformat(), "basis": basis}
-            scan_date = schedule.cutoff_scan_date(instant, m.tz)
+            try:
+                local_date = instant.astimezone(schedule.zone(m.tz)).date()
+                scan_date = schedule.cutoff_scan_date(instant, m.tz)
+            except (ValueError, OverflowError):
+                # 저장된 tz를 앱 버전 고정 tzdata가 모른다(또는 달력 범위 밖) — 읽기는 절대 raise하지 않는다.
+                # 현지 날짜·D-N·도과를 KST로 추정하지 않고 UNKNOWN 사유로 드러낸다(fail-visible — 적대 검토 반영 ①)
+                body["unknown_reason"] = schedule.DueReason.TZ_UNRESOLVED.value
+                return body
             body["scan_date"] = scan_date.isoformat()
-            body["local_date"] = instant.astimezone(schedule.zone(m.tz)).date().isoformat()
+            body["local_date"] = local_date.isoformat()
             if actual.at is None:
                 # 도과 = UTC 시각 비교(R-20 — 날짜 비교면 기한 전 최대 ~16시간 '도과' 오표시)
                 overdue = now > instant

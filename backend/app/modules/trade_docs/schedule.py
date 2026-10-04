@@ -20,9 +20,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
+from zoneinfo import ZoneInfo
 
 from app.core.time import KST
+from app.core.tzdb import bundled_zone
 from app.modules.trade_docs.constants import BalanceAnchor, PaymentType
 
 #: 적재의무 기한 = 수리일 + 30 달력일(DESIGN §7.5).
@@ -69,6 +70,10 @@ class DueReason(StrEnum):
     EXPIRY_MISSING = "EXPIRY_MISSING"  # 제시기한 — L/C 유효기일 없음(B/L+21로 대체 금지)
     NOT_CLEARED = "NOT_CLEARED"  # 적재기한 — 수리 실적 없음(계획 수리일 미사용)
     NO_BALANCE = "NO_BALANCE"  # 100% 선수금 — 잔금 없음(NOT_APPLICABLE)
+    # 날짜 산술이 달력 범위를 넘는다(보조 방어선 — 입력·DB는 2000~2999로 막는다, PR-4a 적대 검토 반영 ⑤)
+    DATE_OUT_OF_RANGE = "DATE_OUT_OF_RANGE"
+    # 저장된 시간대를 앱 버전 고정 tzdata가 모른다 — 현지 날짜·D-N·도과를 KST로 추정하지 않는다(PR-4a 적대 검토 반영 ①)
+    TZ_UNRESOLVED = "TZ_UNRESOLVED"
 
 
 class LcTenor(StrEnum):
@@ -183,6 +188,15 @@ def _require_aware(value: datetime) -> datetime:
     return value
 
 
+def _shifted(value: DateValue, days: int) -> DueResult:
+    """달력일 산술 → OK, 달력 범위(0001~9999)를 넘으면 UNKNOWN `DATE_OUT_OF_RANGE`(OverflowError로 응답 500을 내지 않는다 —
+    입력·DB는 2000~2999로 막으므로 보조 방어선, PR-4a 적대 검토 반영 ⑤)."""
+    try:
+        return DueResult.ok(value.value + timedelta(days=days), value.basis)
+    except OverflowError:
+        return DueResult.unknown(DueReason.DATE_OUT_OF_RANGE)
+
+
 # ── 유효값·시각형 기준일 ──────────────────────────────────────────────────────
 
 
@@ -195,23 +209,18 @@ def effective(planned: date | None, actual: date | None) -> DateValue | None:
     return None
 
 
-_IANA_ZONES: frozenset[str] = frozenset(available_timezones()) - {
-    "localtime",
-    "Factory",
-    "posixrules",
-}
-
-
 def zone(tz: str) -> ZoneInfo:
-    """IANA 시간대 — 모르는 이름은 ValueError(서비스가 422 `TIMEZONE_INVALID`로 번역 — PR-4a)."""
+    """IANA 시간대 — **앱 버전에 고정된 tzdata**(`app.core.tzdb`)에서만 연다. 모르는 이름은 ValueError
+    (쓰기는 422 `TIMEZONE_INVALID`로 번역, 읽기 조립은 UNKNOWN `TZ_UNRESOLVED`로 표시 — PR-4a 적대 검토 반영).
+
+    호스트 OS 시간대 데이터로 대체하지 않는다(이미지마다 이름 집합이 달라 같은 행이 어디서는 해석되고 어디서는 500이 되던 구멍).
+    'localtime'·'Factory'·'posixrules' 같은 비지역 키는 받지 않는다(`tzdb.zone_names`가 뺀다).
+    """
     if not isinstance(tz, str) or not tz or tz != tz.strip():
         raise ValueError(f"IANA 시간대 이름이 아닙니다: {tz!r}")
-    if tz not in _IANA_ZONES:
-        # 'localtime'·'Factory'·'posixrules' 같은 비지역 키는 호스트 설정에 따라 오프셋이 바뀐다 — 순수성 보존을 위해 거부
-        raise ValueError(f"IANA 시간대 이름이 아닙니다: {tz!r}")
     try:
-        return ZoneInfo(tz)
-    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return bundled_zone(tz)
+    except (KeyError, ValueError, OSError):
         raise ValueError(f"IANA 시간대 이름이 아닙니다: {tz!r}") from None
 
 
@@ -269,7 +278,7 @@ def lc_payment_due(
         if accepted_on is None or usance_days is None:
             return DueResult.unknown(DueReason.LC_INPUT_MISSING)
         days = _require_int("usance_days", usance_days, *USANCE_DAYS_RANGE)
-        return DueResult.ok(accepted_on + timedelta(days=days), Basis.ACTUAL)
+        return _shifted(DateValue(accepted_on, Basis.ACTUAL), days)
     return DueResult.unknown(DueReason.LC_TENOR_UNSUPPORTED)
 
 
@@ -304,7 +313,7 @@ def payment_due(terms: TermsLike | None, ctx: AnchorContext, lc: LcInputs | None
     resolved = resolve_anchor(anchor, ctx)
     if isinstance(resolved, DueResult):
         return resolved
-    return DueResult.ok(resolved.value + timedelta(days=days), resolved.basis)
+    return _shifted(resolved, days)
 
 
 def _require_terms_shape(ptype: PaymentType, advance_pct_bp: int | None) -> None:
@@ -333,7 +342,10 @@ def presentation_deadline(
         return DueResult.unknown(DueReason.BL_MISSING)
     if expiry_on is None:
         return DueResult.unknown(DueReason.EXPIRY_MISSING)
-    return DueResult.ok(min(bl.value + timedelta(days=days), expiry_on), bl.basis)
+    shifted = _shifted(bl, days)
+    if shifted.value is None:
+        return shifted
+    return DueResult.ok(min(shifted.value, expiry_on), bl.basis)
 
 
 def tolerance_bounds(amount_minor: int, plus_bp: int, minus_bp: int) -> tuple[int, int]:
@@ -382,7 +394,7 @@ def loading_deadline(cleared_actual_on: date | None) -> DueResult:
     """적재의무 기한 = 수리일 + 30 달력일. 수리 실적이 없으면 UNKNOWN `NOT_CLEARED`(계획 수리일로 계산하지 않는다)."""
     if cleared_actual_on is None:
         return DueResult.unknown(DueReason.NOT_CLEARED)
-    return DueResult.ok(cleared_actual_on + timedelta(days=LOADING_OBLIGATION_DAYS), Basis.ACTUAL)
+    return _shifted(DateValue(cleared_actual_on, Basis.ACTUAL), LOADING_OBLIGATION_DAYS)
 
 
 def loading_fulfilment(

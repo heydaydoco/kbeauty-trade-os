@@ -315,6 +315,92 @@ def test_value_shapes_and_time_zones(trade: TestClient) -> None:
     assert scalar("SELECT count(*) FROM milestones WHERE shipment_id = :s", s=sid) == 1
 
 
+def test_alias_time_zones_are_stored_under_their_canonical_name(trade: TestClient) -> None:
+    """적대 검토 반영 ① — 별칭·폐지 이름은 정규 이름으로 저장(Asia/Saigon → Asia/Ho_Chi_Minh), 국가 대표 이름은 그대로(Europe/Amsterdam)"""
+    sid = _shipment(trade)["id"]
+    at = "2026-11-05T02:00:00Z"
+    assert (
+        _plan(trade, sid, "DOC_CUTOFF", {"planned_at": at, "tz": "Asia/Saigon"}).status_code == 200
+    )
+    assert _rows(trade, sid)["DOC_CUTOFF"]["planned"]["tz"] == "Asia/Ho_Chi_Minh"
+    assert (
+        scalar(
+            "SELECT tz FROM milestones WHERE shipment_id = :s AND milestone_type = 'DOC_CUTOFF'",
+            s=sid,
+        )
+        == "Asia/Ho_Chi_Minh"
+    )
+    assert (
+        _plan(trade, sid, "CARGO_CLOSING", {"planned_at": at, "tz": "Europe/Amsterdam"}).status_code
+        == 200
+    )
+    assert _rows(trade, sid)["CARGO_CLOSING"]["planned"]["tz"] == "Europe/Amsterdam"
+
+
+def _set_stored_tz(shipment_id: int, milestone_type: str, tz: str) -> None:
+    """서비스 우회 — 이미지 tzdata에서 이름이 빠진 상황을 흉내 낸다(`tz_format` CHECK는 통과하는 모르는 이름)."""
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE milestones SET tz = :z WHERE shipment_id = :s AND milestone_type = :t"),
+            {"z": tz, "s": shipment_id, "t": milestone_type},
+        )
+
+
+@pytest.mark.group_a
+def test_an_unresolvable_stored_time_zone_never_breaks_reads_writes_or_cancel(
+    trade: TestClient,
+) -> None:
+    """적대 검토 반영 ① — 저장된 tz를 앱 tzdata가 모르면 그 행만 UNKNOWN `TZ_UNRESOLVED`(scan_date·local_date·days_left·is_overdue null —
+    KST 추정 0), 상세·보드·다른 쓰기·취소는 200. 새 tz로 계획을 다시 쓰면(롤오버 사유) 해석된다 — 탈출로"""
+    sid = _shipment(trade)["id"]
+    assert (
+        _plan(
+            trade,
+            sid,
+            "DOC_CUTOFF",
+            {"planned_at": "2026-11-05T09:00:00+09:00", "tz": "Asia/Seoul"},
+        ).status_code
+        == 200
+    )
+    _set_stored_tz(sid, "DOC_CUTOFF", "Mars/Olympus_Mons")
+    row = _rows(trade, sid)["DOC_CUTOFF"]
+    assert row["unknown_reason"] == "TZ_UNRESOLVED"
+    assert row["planned"] == {"at_utc": "2026-11-05T00:00:00Z", "tz": "Mars/Olympus_Mons"}
+    assert row["effective"]["value"].startswith("2026-11-05T00:00:00")
+    assert (row["scan_date"], row["local_date"], row["days_left"], row["is_overdue"]) == (
+        None,
+        None,
+        None,
+        None,
+    )
+    detail = trade.get(f"{SHIPMENTS}/{sid}")
+    assert detail.status_code == 200, detail.text
+    assert _plan(trade, sid, "ETD", {"planned_on": "2026-11-10"}).status_code == 200
+    # 탈출로 — 같은 시각을 해석되는 tz로 다시 쓰면(계획 변경 = 사유) 행이 정상 판정으로 돌아온다
+    fixed = _plan(
+        trade,
+        sid,
+        "DOC_CUTOFF",
+        {
+            "planned_at": "2026-11-05T09:00:00+09:00",
+            "tz": "Asia/Seoul",
+            "version": _version(trade, sid, "DOC_CUTOFF"),
+            "reason": "시간대 정정",
+        },
+    )
+    assert fixed.status_code == 200, fixed.text
+    assert _rows(trade, sid)["DOC_CUTOFF"]["unknown_reason"] is None
+    # 해석 불가 행이 있어도 취소는 된다(취소 응답도 상세 = 보드 조립)
+    other = _shipment(trade)["id"]
+    _plan(trade, other, "CARGO_CLOSING", {"planned_at": "2026-11-05T00:00:00Z", "tz": "Asia/Seoul"})
+    _set_stored_tz(other, "CARGO_CLOSING", "Atlantis/Lost_City")
+    cancelled = cancel(trade, other)
+    assert cancelled.status_code == 200, cancelled.text
+    assert {r["milestone_type"]: r for r in cancelled.json()["milestones"]["rows"]}[
+        "CARGO_CLOSING"
+    ]["unknown_reason"] == "TZ_UNRESOLVED"
+
+
 def test_a_stale_or_missing_row_version_is_a_conflict(trade: TestClient) -> None:
     """J-10 — 행이 있으면 그 version을 보내야 한다(누락·옛 version = 409), 없는 행에 version을 보내도 409(화면이 본 상태와 다름)"""
     sid = _shipment(trade)["id"]

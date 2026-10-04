@@ -330,6 +330,9 @@ class MilestoneRowOut(BaseModel):
     days_left: int | None
     #: 날짜형 = KST 오늘 > 유효일, **시각형 = 현재 UTC > 유효 시각**(R-20). 대금만기·제시기한은 충족 신호가 S3-3이라 null.
     is_overdue: bool | None
+    #: 저장형 행의 판정 불가 사유 — `TZ_UNRESOLVED`(저장된 시간대를 앱의 tzdata가 모름)면 scan_date·local_date·days_left·is_overdue가
+    #: 전부 null이다(KST 추정 계산 금지 — "판정 불가" 배지). 정상 행은 null.
+    unknown_reason: Literal["TZ_UNRESOLVED"] | None
     #: 적재기한만 — MET·MET_LATE·OPEN·OVERDUE·UNKNOWN(이행일 = ETD·B/L 실적 MAX — R-10).
     fulfilment: str | None
     holiday: HolidayFlagOut | None

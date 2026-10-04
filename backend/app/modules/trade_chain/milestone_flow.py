@@ -26,6 +26,7 @@ from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError, VersionConflictError
 from app.core.text import invisible_char_problem, is_invisible_char
 from app.core.time import today_kst, utcnow
+from app.core.tzdb import canonical_zone_name
 from app.modules.catalog.models import Sku
 from app.modules.collaboration import service as collaboration
 from app.modules.idempotency import service as idempotency
@@ -130,14 +131,18 @@ def _shape_error(field: str, milestone_type: str) -> AppError:
 
 
 def _zone_name(raw: object) -> str:
+    """시간대 이름 검증(앱 버전 고정 tzdata) + **정규 이름으로 저장**(폐지·별칭 이름 → 국가 대표 이름 — 예: Asia/Saigon → Asia/Ho_Chi_Minh).
+
+    정규 이름은 tzdb가 오래 유지하는 쪽이라, tzdata 갱신으로 별칭이 빠져도 저장 행이 해석 불가(UNKNOWN `TZ_UNRESOLVED`)가 될 여지를 줄인다.
+    """
     try:
         schedule.zone(str(raw) if raw is not None else "")
-    except ValueError:
+        return canonical_zone_name(str(raw))
+    except (ValueError, KeyError):
         raise AppError(
             ErrorCode.SHIPMENTS_MILESTONE_TIMEZONE_INVALID,
             detail={"tz": "IANA 시간대 이름이 아닙니다(예: Asia/Seoul)."},
         ) from None
-    return str(raw)
 
 
 def _value(
@@ -165,14 +170,26 @@ def _value(
 def _require_shared_zone(
     milestone: Milestone | None, value: MilestoneValue, *, other_at: Any
 ) -> None:
-    """시각형 계획·실적은 시간대 열 하나를 공유한다(같은 장소의 사건) — 다른 쪽 값이 있으면 같은 tz만(422)."""
+    """시각형 계획·실적은 시간대 열 하나를 공유한다(같은 장소의 사건) — 다른 쪽 값이 있으면 같은 tz만(422).
+
+    예외: 저장된 tz를 앱의 tzdata가 해석하지 못하면(UNKNOWN `TZ_UNRESOLVED` 행) 새 tz로 갈아끼우는 것을 막지 않는다 — 탈출로
+    (시각 값은 UTC 절대 시각이라 tz 교체는 현지 날짜 표시만 바꾼다).
+    """
     if milestone is None or value.at is None or other_at is None:
         return
-    if milestone.tz != value.tz:
+    if milestone.tz != value.tz and _resolvable(milestone.tz):
         raise AppError(
             ErrorCode.SHIPMENTS_MILESTONE_TIMEZONE_INVALID,
             detail={"tz": f"계획·실적은 같은 시간대여야 합니다(현재 {milestone.tz})."},
         )
+
+
+def _resolvable(tz: str | None) -> bool:
+    try:
+        schedule.zone(tz or "")
+    except ValueError:
+        return False
+    return True
 
 
 def _same(old: MilestoneValue, new: MilestoneValue) -> bool:
