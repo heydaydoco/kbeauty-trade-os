@@ -26,6 +26,7 @@ from tests.factories.shipments import (
     scalar,
     shipment_version,
     so_status,
+    so_version,
 )
 from tests.factories.trade import (
     create_buyer,
@@ -188,6 +189,48 @@ def test_only_a_confirmed_or_shipping_so_can_be_consumed(trade: TestClient, stat
     )
     assert so_status(so["id"]) == status
     assert scalar("SELECT count(*) FROM shipments WHERE so_id = :s", s=so["id"]) == 0
+
+
+def test_error_priority_puts_404_and_409_before_422(trade: TestClient) -> None:
+    """ADR-0079 ⑧(404→409→422, PR-3a 적대 검토 반영) — 잠금 전 무잠금 peek가 존재·상태를 먼저 판정한다:
+    없는 선적 + 유형 불일치 당사자 = 404 / 취소 선적 + 유형 불일치·자동 역할 = 409 NOT_ACTIVE / 보류 SO + 유형 불일치 당사자로 생성·미리보기 = 409 /
+    없는 SO + 유형 불일치 = 404 / 취소 선적의 자동 수하인 제외 = 409(422 아님) — 전부 저장 0"""
+    supplier = create_supplier()  # SUPPLIER 유형 — FORWARDER 자리에 넣으면 422 유형 불일치
+    wrong = [{"role": "FORWARDER", "partner_id": supplier}]
+    missing = trade.post(f"{SHIPMENTS}/999999999/parties", json=wrong[0], headers=idem())
+    assert missing.status_code == 404, missing.text
+    so = confirmed_so((10,))
+    shipment = created(trade, so["id"], [(so["line_ids"][0], 1)])
+    assert cancel(trade, shipment["id"]).status_code == 200
+    for body in (wrong[0], {"role": "CONSIGNEE", "partner_id": so["buyer"]}):
+        closed = trade.post(f"{SHIPMENTS}/{shipment['id']}/parties", json=body, headers=idem())
+        assert closed.status_code == 409 and _code(closed) == "SHIPMENTS.SHIPMENT.NOT_ACTIVE", body
+    auto = next(p for p in shipment["parties"] if p["auto"])
+    removed = trade.delete(
+        f"{SHIPMENTS}/{shipment['id']}/parties/{auto['id']}", params={"version": auto["version"]}
+    )
+    assert removed.status_code == 409 and _code(removed) == "SHIPMENTS.SHIPMENT.NOT_ACTIVE"
+    held = confirmed_so((10,))
+    hold = trade.post(
+        f"{SO}/{held['id']}/transitions",
+        json={"to": "ON_HOLD", "version": so_version(held["id"]), "reason": "바이어 요청 보류"},
+        headers=idem(),
+    )
+    assert hold.status_code == 200, hold.text
+    line = held["line_ids"][0]
+    for response in (
+        create_shipment(trade, held["id"], [(line, 1)], parties=wrong),
+        trade.post(
+            f"{SO}/{held['id']}/shipments/preview", json=create_body([(line, 1)], parties=wrong)
+        ),
+    ):
+        assert (
+            response.status_code == 409
+            and _code(response) == "TRADE_DOCS.QUANTITY.DOCUMENT_NOT_CONSUMABLE"
+        ), response.text
+    assert create_shipment(trade, 999_999_999, [(line, 1)], parties=wrong).status_code == 404
+    assert scalar("SELECT count(*) FROM shipments") == 1  # 취소된 첫 선적뿐
+    assert scalar("SELECT count(*) FROM shipment_parties WHERE deleted_at IS NULL") == 1
 
 
 def test_source_line_mismatch_duplicates_and_bad_quantities_are_422(trade: TestClient) -> None:

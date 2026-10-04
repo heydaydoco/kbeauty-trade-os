@@ -218,10 +218,17 @@ def _plan(
     session: Session, actor: AuthenticatedUser, so_id: int, payload: dict[str, Any], *, lock: bool
 ) -> _Plan:
     requested_parties = list(payload.get("parties") or [])
-    _check_party_roles(requested_parties)
+    # 오류 우선순위(ADR-0079 ⑧ 404→409→422) — 잠금 순서(거래처 → SO, R-08)는 그대로 두고 거래처를 잠그기 전에 **무잠금 peek**로
+    # SO 존재(404)·소비 가능 상태(409 DOCUMENT_NOT_CONSUMABLE)를 먼저 판정한다. 잠근 뒤 `lock_lines_for_consumption`이 상태를 다시 본다(TOCTOU).
     peek = _require_source_so(
         session, so_id
     )  # 거래처는 ORIGIN(불변)이라 잠금 전 무잠금 조회로 얻어도 안전하다
+    if peek.status not in CONSUMABLE_STATUSES[SO_KIND]:
+        raise AppError(
+            ErrorCode.TRADE_DOCS_QUANTITY_DOCUMENT_NOT_CONSUMABLE,
+            log_context={"doc_kind": SO_KIND.value, "status": peek.status},
+        )
+    _check_party_roles(requested_parties)
     buyer, partner_rows = _lock_partners(
         session, peek.buyer_partner_id, requested_parties, lock=lock
     )
@@ -626,10 +633,12 @@ def _require_party_editable(row: Shipment) -> None:
 def add_party(
     *, actor: AuthenticatedUser, idempotency_key: str, shipment_id: int, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:
-    """당사자 추가 — 역할별 거래처 유형 검증(KEY SHARE, 선적 잠금보다 먼저 — R-08)·영문명 스냅샷·(선적, 역할) 유일(409)·audit."""
+    """당사자 추가 — 역할별 거래처 유형 검증(KEY SHARE, 선적 잠금보다 먼저 — R-08)·영문명 스냅샷·(선적, 역할) 유일(409)·audit.
+
+    오류 우선순위(ADR-0079 ⑧ 404→409→422): 잠금 순서(거래처 → 선적)는 그대로 두고, 거래처를 잠그기 전에 **무잠금 peek**로 선적 존재(404)·
+    활성(409 NOT_ACTIVE)을 먼저 판정한다 — 그 뒤 역할(422)·거래처 유형(422). 선적 `FOR UPDATE` 뒤 활성을 다시 본다(TOCTOU).
+    """
     role = str(payload["role"])
-    if role in AUTO_PARTY_ROLES:
-        raise _role_not_allowed("role", role)
     with unit_of_work() as uow:
         session = uow.session
         claim = idempotency.claim(
@@ -641,6 +650,9 @@ def add_party(
         )
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
+        _require_party_editable(shipments.require_shipment(session, shipment_id))  # 무잠금 peek
+        if role in AUTO_PARTY_ROLES:
+            raise _role_not_allowed("role", role)
         partner = partners.require_partner_of_any_type(
             session,
             int(payload["partner_id"]),
@@ -650,7 +662,7 @@ def add_party(
             lock=True,
         )
         row = lock_document(session, Shipment, shipment_id)
-        _require_party_editable(row)
+        _require_party_editable(row)  # 잠금 뒤 재확인(peek와 잠금 사이 취소 — TOCTOU)
         name_en = shipments.require_english_name(partner.name_en, field="partner_id")
         party = ShipmentParty(
             shipment_id=row.id,
@@ -681,18 +693,21 @@ def add_party(
 def remove_party(
     *, actor: AuthenticatedUser, shipment_id: int, party_id: int, version: int
 ) -> dict[str, Any]:
-    """당사자 제외(soft delete) — 자동 스냅샷 행은 422 ROLE_NOT_ALLOWED, 취소된 선적은 409 NOT_ACTIVE, 당사자 version 대조(409)·audit."""
+    """당사자 제외(soft delete) — 취소된 선적은 409 NOT_ACTIVE, 당사자 version 대조(409), 자동 스냅샷 행은 422 ROLE_NOT_ALLOWED·audit.
+
+    오류 우선순위(ADR-0079 ⑧): 선적·당사자 404 → 선적 활성 409 → 당사자 version 409 → 자동 행 422.
+    """
     with unit_of_work() as uow:
         session = uow.session
         row = lock_document(session, Shipment, shipment_id)
         party = shipments.require_party(
             session, row.id, party_id
         )  # shipment_children — 선적 뒤(LOCK_ORDER)
+        _require_party_editable(row)
         if party.version != version:
             raise VersionConflictError(log_context={"party_id": party_id})
         if party.is_auto:
             raise _role_not_allowed("party_id", party.role)
-        _require_party_editable(row)
         shipments.remove_party(party, actor_id=actor.id)
         session.flush()
         audit.record(
