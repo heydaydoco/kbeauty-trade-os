@@ -371,6 +371,22 @@ class MilestoneWriteOut(BaseModel):
     change: ChangeRefOut | None
 
 
+class OemMilestoneBoardOut(MilestoneBoardOut):
+    """OEM 생산 일정 보드(M7 — S3-2 PR-4c / design-D D7) — 원료수급 → 충진 → 포장 → 출하검사 4행(날짜형·파생 없음).
+    행 모양은 선적 보드와 같다(화면 타임라인 컴포넌트 재사용). 알림·휴일 배지 없음(`holiday_summary`는 늘 0), 통보 통로 없음(미연결 0)."""
+
+    po_id: int
+    #: 표시 편의(서버가 쓰기 시 다시 검사한다) — EDIT_MILESTONES(무역·관리자, 발주가 발행·공급사 확인 중일 때).
+    allowed_actions: list[str]
+
+
+class OemMilestoneWriteOut(BaseModel):
+    """M8 응답 — M2·M3과 같은 `{board, change}`(R-19 승계: no-op = null, 같은 Idempotency-Key 재요청 = 같은 change.id)."""
+
+    board: OemMilestoneBoardOut
+    change: ChangeRefOut | None
+
+
 class NoticeOut(BaseModel):
     comm_log_id: int
     occurred_on: date

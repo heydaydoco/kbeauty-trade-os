@@ -496,20 +496,20 @@ def test_totals_and_numbers_have_a_single_creator_per_document() -> None:
 
 def test_document_headers_are_never_soft_deleted_and_doc_number_is_never_reassigned() -> None:
     """전표 삭제 경로 0 — `.deleted_at =`의 수신자는 라인(line)·선적 당사자(party — 헤더 구성 행, S3-2 PR-3a)·통관 기록(customs — 선적 하위
-    사실 기록, PR-4a)뿐이다 · doc_number는 생성자에서만 (B9)"""
+    사실 기록, PR-4a)·품목군 마일스톤 세트 행(profile_type — 마스터 연결 행, PR-4c)뿐이다 · doc_number는 생성자에서만 (B9)"""
     receivers: set[str] = set()
     for rel, tree in _doc_module_sources().items():
         for line, receiver in attribute_assignments(tree, "deleted_at"):
-            assert receiver in {"line", "party", "customs"}, (
+            assert receiver in {"line", "party", "customs", "profile_type"}, (
                 f"{rel}:{line} 헤더 soft delete 의심(수신자 {receiver})"
             )
             receivers.add(receiver)
-            if receiver in {"party", "customs"}:
+            if receiver in {"party", "customs", "profile_type"}:
                 assert rel == SH_SERVICE, (
-                    f"{rel}:{line} 당사자·통관 기록 soft delete는 선적 서비스 착지 1곳"
+                    f"{rel}:{line} 당사자·통관 기록·세트 행 soft delete는 선적 서비스 착지 1곳"
                 )
         assert attribute_assignments(tree, "doc_number") == [], rel
-    assert receivers == {"line", "party", "customs"}
+    assert receivers == {"line", "party", "customs", "profile_type"}
     users = [
         rel
         for rel, tree in _doc_module_sources().items()

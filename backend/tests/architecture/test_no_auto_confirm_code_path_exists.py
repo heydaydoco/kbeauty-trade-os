@@ -762,6 +762,9 @@ REGISTRY: tuple[Entry, ...] = (
             "record_milestone_actual",
             "draft_milestone_plan",
             "record_milestone_notice",
+            # S3-2 PR-4c — OEM 생산 일정 쓰기(T13 — 무역 1클릭, 자동 일정 0: PO 생성·전이·스케줄러가 부르지 않는다)
+            "record_oem_milestone_plan",
+            "record_oem_milestone_actual",
         )
     ),
     *(

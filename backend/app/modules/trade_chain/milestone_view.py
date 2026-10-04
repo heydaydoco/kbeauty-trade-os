@@ -8,6 +8,10 @@
 ■ 시각형(서류마감·Cargo Closing): D-N 기준일 = `cutoff_scan_date`(min(현지, KST)), **도과 = 현재 UTC > 유효 시각**(R-20), 현지 날짜 별도(R-25).
 ■ 보드는 **고정 질의 수**다(마일스톤 1·롤오버 통계 1·통관 1·ORDER_DATE 앵커 0~1·휴일 0~2) — 행 수와 무관(N+1 0).
 ■ L/C 운영 경로: `lc_terms`(S3-3) 미공급이라 대금만기·제시기한은 UNKNOWN `LC_TERMS_NOT_REGISTERED`(ADR-0081 — 대체 금지).
+■ **OEM 생산 일정 보드**(S3-2 PR-4c / design-D M7 / design-B B15): OEM 생산 PO(`po_kind=OEM_PRODUCTION`) 소유 4행(원료수급 → 충진 → 포장 →
+  출하검사), 행 모양은 선적 보드와 같다(`_stored_row` 재사용 — 화면 컴포넌트 재사용). 알림·휴일 배지 없음(표시만), 롤오버 배지 대상 아님
+  (ROLLOVER_TYPES 밖 — 롤오버 횟수·미통보 0).
+  PO는 원가 열을 품은 모델이라 임포트하지 않고 테이블 이름으로 판정 열(상태·구분)만 읽는다(원가 9채널 봉쇄 — ADR-0024).
 """
 
 from __future__ import annotations
@@ -16,15 +20,17 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Integer, column, exists, func, select, table
+from sqlalchemy import DateTime, Integer, String, column, exists, func, select, table
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
+from app.core.errors.codes import ErrorCode
+from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.time import today_kst, utcnow
 from app.modules.collaboration.models import CommLog
 from app.modules.holidays import calc as holiday_calc
 from app.modules.holidays import service as holidays
-from app.modules.identity.models import User
+from app.modules.identity.models import RoleCode, User
 from app.modules.partners.models import Partner
 from app.modules.sales_orders.models import SalesOrder
 from app.modules.shipments import service as shipments
@@ -35,10 +41,12 @@ from app.modules.shipments.models import (
     MilestoneChangeNotice,
     Shipment,
 )
+from app.modules.shipments.service import MilestoneOwner
 from app.modules.trade_docs import schedule
 from app.modules.trade_docs.constants import (
     DATETIME_MILESTONES,
     DERIVED_MILESTONES,
+    OEM_BOARD_ORDER,
     ROLLOVER_TYPES,
     SHIPMENT_BOARD_ORDER,
     SHIPMENT_MILESTONES_BY_KIND,
@@ -46,6 +54,7 @@ from app.modules.trade_docs.constants import (
     MilestoneChangeKind,
     MilestoneType,
     PaymentType,
+    PoKind,
     ShipmentKind,
 )
 
@@ -56,6 +65,21 @@ RECORD_EDITABLE_STATES = frozenset({"PLANNED", "RELEASE_ORDERED"})
 #: PO는 원가 열을 품은 모델이라 임포트하지 않고 테이블 이름으로 `frozen_at`만 읽는다(원가 9채널 봉쇄 — ADR-0024, shipment_view 선례).
 _PURCHASE_ORDERS = table(
     "purchase_orders", column("id", Integer), column("frozen_at", DateTime(timezone=True))
+)
+
+#: OEM 생산 마일스톤을 쓸 수 있는 PO 상태 — S3-2 활성(발행·공급사 확인). 취소는 409 OWNER_NOT_ACTIVE(N-05 — 선적과 같은 코드).
+#: 입고·종결(PARTIALLY_RECEIVED·FULLY_RECEIVED·CLOSED — RESERVED, S4-1)은 지금 닿을 수 없는 상태라 거부 쪽에 둔다(S4-1이 엣지를 열 때 재판정 — 인계).
+OEM_RECORD_EDITABLE_STATES = frozenset({"ISSUED", "SUPPLIER_CONFIRMED"})
+#: OEM 생산 마일스톤 쓰기 역할 — 무역(관리자 상시 통과). PO는 무역 소관이라 물류의 PO 쓰기 0 유지(X-16 / ADR-0079 ④).
+OEM_WRITERS = frozenset({RoleCode.ADMIN, RoleCode.TRADE})
+
+#: OEM 소유 판정 열(상태·구분·삭제)만 — 원가·통화 열은 읽지 않는다(ADR-0024).
+_PO_OWNERS = table(
+    "purchase_orders",
+    column("id", Integer),
+    column("status", String),
+    column("po_kind", String),
+    column("deleted_at", DateTime(timezone=True)),
 )
 
 
@@ -406,6 +430,98 @@ def get_board(shipment_id: int) -> dict[str, Any]:
         return board_body(uow.session, shipments.require_shipment(uow.session, shipment_id))
 
 
+# ── OEM 생산 일정 보드(M7 — PO 소유 4행) ────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class PoOwner:
+    """OEM 마일스톤 소유 PO의 판정 열(원가 열 없음)."""
+
+    id: int
+    status: str
+    po_kind: str
+
+    @property
+    def owner(self) -> MilestoneOwner:
+        return MilestoneOwner.of_po(self.id)
+
+
+def po_owner(session: Session, po_id: int, *, lock: bool) -> PoOwner:
+    """경로의 PO(살아 있는 행) — 없으면 404. `lock` = T13 `purchase_orders FOR SHARE`(상태 확인용, PO 무수정 — PO 취소의
+    `FOR UPDATE`와 직렬화되어 잠금 뒤 읽은 상태가 커밋된 최신이다 — N-07)."""
+    stmt = select(_PO_OWNERS.c.id, _PO_OWNERS.c.status, _PO_OWNERS.c.po_kind).where(
+        _PO_OWNERS.c.id == po_id, _PO_OWNERS.c.deleted_at.is_(None)
+    )
+    if lock:
+        stmt = stmt.with_for_update(read=True)
+    found = session.execute(stmt).one_or_none()
+    if found is None:
+        raise NotFoundError(log_context={"purchase_order_id": po_id})
+    return PoOwner(int(found[0]), str(found[1]), str(found[2]))
+
+
+def require_oem(po: PoOwner) -> None:
+    """OEM 4종 ⇔ OEM 생산 PO(design-B B15 — 교차 표 규칙이라 서비스가 판정, DB는 `owner_type_scope`로 'PO 소유'까지만 강제)."""
+    if po.po_kind != PoKind.OEM_PRODUCTION.value:
+        raise AppError(
+            ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_OEM,
+            detail={
+                "po_kind": "OEM 생산 발주가 아닙니다 — 생산 일정은 OEM 생산 발주에만 있습니다."
+            },
+            log_context={"purchase_order_id": po.id, "po_kind": po.po_kind},
+        )
+
+
+def oem_allowed_actions(po: PoOwner, roles: frozenset[RoleCode]) -> list[str]:
+    """표시 편의(서버가 쓰기 시 다시 검사) — 무역·관리자 + 발행·공급사 확인 중이면 EDIT_MILESTONES(계획·실적·롤오버)."""
+    if po.status in OEM_RECORD_EDITABLE_STATES and roles & OEM_WRITERS:
+        return ["EDIT_MILESTONES"]
+    return []
+
+
+def oem_board_body(session: Session, po: PoOwner, roles: frozenset[RoleCode]) -> dict[str, Any]:
+    """OEM 생산 일정 4행(고정 질의 — PO 1·마일스톤 1, 롤오버 통계 0[대상 종류 없음]). 행 모양 = 선적 보드 저장형 행(`_stored_row`)."""
+    today = today_kst()
+    now = utcnow()
+    stored = {m.milestone_type: m for m in shipments.live_milestones(session, po.owner)}
+    # 롤오버 배지는 ROLLOVER_TYPES(ETD·ETA·CARGO_CLOSING — design-B B9)만 — OEM 4종은 그 밖이라 롤오버 횟수·'통보 기록 없음' 수가 늘 0이다
+    # (통보 통로 M6도 선적 전용). 선적 보드와 같은 규칙을 그대로 적용한다(OEM 특례 0). 계획 변경 이력은 M9에 그대로 남는다.
+    stats = _rollover_stats(
+        session, sorted(m.id for m in stored.values() if m.milestone_type in ROLLOVER_TYPES)
+    )
+    no_customs = schedule.customs_clearance([])
+    rows = [
+        _stored_row(
+            stored.get(milestone_type),
+            milestone_type,
+            applicable=True,
+            today=today,
+            now=now,
+            clearance=no_customs,
+            stats=stats,
+        )
+        for milestone_type in OEM_BOARD_ORDER
+    ]
+    return {
+        "today_kst": today.isoformat(),
+        "holiday_summary": {
+            "holiday": 0,
+            "unverified": 0,
+        },  # OEM 일정은 휴일 경고 대상이 아니다(B15 — 표시만)
+        "rows": rows,
+        "po_id": po.id,
+        "allowed_actions": oem_allowed_actions(po, roles),
+    }
+
+
+def get_oem_board(po_id: int, roles: frozenset[RoleCode]) -> dict[str, Any]:
+    """M7 — 404(없는 PO) → 422 OWNER_NOT_OEM(일반 구매 PO) → 보드. 취소된 OEM PO도 읽기는 된다(쓰기 버튼 0)."""
+    with unit_of_work() as uow:
+        po = po_owner(uow.session, po_id, lock=False)
+        require_oem(po)
+        return oem_board_body(uow.session, po, roles)
+
+
 # ── 변경 이력(M5) ────────────────────────────────────────────────────────────
 
 
@@ -469,6 +585,43 @@ def change_body(session: Session, change: MilestoneChange) -> dict[str, Any]:
     )
 
 
+def _page_changes(
+    session: Session,
+    owner: MilestoneOwner,
+    *,
+    milestone_type: str | None,
+    change_kind: str | None,
+    offset: int,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """소유자(선적·OEM PO)의 마일스톤 변경 이력 한 페이지(최신순) — 통보 기록 내장(질의 1회, N+1 0)."""
+    conditions = [owner.clause()]
+    if milestone_type is not None:
+        conditions.append(Milestone.milestone_type == milestone_type)
+    if change_kind is not None:
+        conditions.append(MilestoneChange.change_kind == change_kind)
+    total = session.execute(
+        select(func.count())
+        .select_from(MilestoneChange)
+        .join(Milestone, Milestone.id == MilestoneChange.milestone_id)
+        .where(*conditions)
+    ).scalar_one()
+    rows = session.execute(
+        select(MilestoneChange, Milestone.milestone_type, User.display_name)
+        .join(Milestone, Milestone.id == MilestoneChange.milestone_id)
+        .outerjoin(User, User.id == MilestoneChange.actor_user_id)
+        .where(*conditions)
+        .order_by(MilestoneChange.id.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    notices = _notices(session, [change.id for change, _, _ in rows])
+    return [
+        _change_body(change, str(kind), name, notices.get(change.id, []))
+        for change, kind, name in rows
+    ], int(total)
+
+
 def list_changes(
     *,
     shipment_id: int,
@@ -481,31 +634,37 @@ def list_changes(
     with unit_of_work() as uow:
         session = uow.session
         shipments.require_shipment(session, shipment_id)
-        conditions = [Milestone.shipment_id == shipment_id]
-        if milestone_type is not None:
-            conditions.append(Milestone.milestone_type == milestone_type)
-        if change_kind is not None:
-            conditions.append(MilestoneChange.change_kind == change_kind)
-        total = session.execute(
-            select(func.count())
-            .select_from(MilestoneChange)
-            .join(Milestone, Milestone.id == MilestoneChange.milestone_id)
-            .where(*conditions)
-        ).scalar_one()
-        rows = session.execute(
-            select(MilestoneChange, Milestone.milestone_type, User.display_name)
-            .join(Milestone, Milestone.id == MilestoneChange.milestone_id)
-            .outerjoin(User, User.id == MilestoneChange.actor_user_id)
-            .where(*conditions)
-            .order_by(MilestoneChange.id.desc())
-            .offset(offset)
-            .limit(limit)
-        ).all()
-        notices = _notices(session, [change.id for change, _, _ in rows])
-        return [
-            _change_body(change, str(kind), name, notices.get(change.id, []))
-            for change, kind, name in rows
-        ], int(total)
+        return _page_changes(
+            session,
+            MilestoneOwner.of_shipment(shipment_id),
+            milestone_type=milestone_type,
+            change_kind=change_kind,
+            offset=offset,
+            limit=limit,
+        )
+
+
+def list_po_changes(
+    *,
+    po_id: int,
+    milestone_type: str | None,
+    change_kind: str | None,
+    offset: int,
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """M9 — OEM PO의 생산 마일스톤 변경 이력(Page). 404(없는 PO) → 422 OWNER_NOT_OEM(일반 구매 PO — 빈 목록으로 숨기지 않는다)."""
+    with unit_of_work() as uow:
+        session = uow.session
+        po = po_owner(session, po_id, lock=False)
+        require_oem(po)
+        return _page_changes(
+            session,
+            po.owner,
+            milestone_type=milestone_type,
+            change_kind=change_kind,
+            offset=offset,
+            limit=limit,
+        )
 
 
 # ── 통관 기록(S16) ───────────────────────────────────────────────────────────

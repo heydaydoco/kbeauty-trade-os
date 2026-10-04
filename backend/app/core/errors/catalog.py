@@ -559,11 +559,11 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE: ErrorSpec(
         422,
-        "이 선적 구분에는 쓰지 않는 마일스톤 종류입니다. 선적 상세의 마일스톤 목록에서 종류를 다시 선택해 주세요.",
+        "이 대상(선적 구분·OEM 생산 발주·품목군 세트)에는 쓰지 않는 마일스톤 종류입니다. 마일스톤 목록에서 종류를 다시 선택해 주세요.",
     ),
     ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE: ErrorSpec(
         409,
-        "취소된 선적의 마일스톤은 수정할 수 없습니다. 필요하면 수주에서 새 선적을 만들어 주세요.",
+        "취소된 선적·발주의 마일스톤은 수정할 수 없습니다. 필요하면 새 선적·발주를 만들어 주세요.",
     ),
     ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD: ErrorSpec(
         422,
@@ -584,6 +584,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.SHIPMENTS_MILESTONE_NOTICE_LIMIT_REACHED: ErrorSpec(
         422,
         "변경 1건에는 통보 기록을 20건까지 남길 수 있습니다. 기존 통보 기록을 확인해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_OEM: ErrorSpec(
+        422,
+        "OEM 생산 일정(원료수급·충진·포장·출하검사)은 OEM 생산 발주에만 기록할 수 있습니다. 발주 구분을 확인해 주세요.",
     ),
 }
 

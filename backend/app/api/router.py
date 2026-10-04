@@ -70,6 +70,7 @@ api_router.include_router(shipment_router.router)
 api_router.include_router(shipment_router.so_router)
 # S3-2 PR-4a — 선적 마일스톤(보드·계획·실적·초안)·변경 이력·통보·통관 기록
 api_router.include_router(milestone_router.router)
+api_router.include_router(milestone_router.oem_router)  # S3-2 PR-4c — OEM 생산 일정(M7~M9)
 api_router.include_router(sales_orders_router.router)
 api_router.include_router(proforma_invoices_router.router)
 api_router.include_router(purchase_orders_router.router)

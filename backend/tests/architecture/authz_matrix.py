@@ -598,4 +598,34 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         C: DENY,
         V: DENY,
     },
+    # S3-2 PR-4c — OEM 생산 일정(M7~M9, PO 소유 4종 — design-integrated §2.9 / ADR-0079 ④). 조회 = 전 역할(원가 키 없음),
+    # 계획·실적 = 무역(관리자 상시 통과) — PO는 무역 소관이라 **물류 쓰기 0**(X-16, 선적 마일스톤과 다르다). `/api/v1/purchase-orders` 접두어가 통제.
+    ("GET", "/api/v1/purchase-orders/{po_id}/milestones"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("POST", "/api/v1/purchase-orders/{po_id}/milestones/{milestone_type}/plan"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/purchase-orders/{po_id}/milestones/{milestone_type}/actual"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("GET", "/api/v1/purchase-orders/{po_id}/milestone-changes"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
 }
