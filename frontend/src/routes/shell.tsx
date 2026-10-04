@@ -24,7 +24,9 @@ const NAV = [
   { to: "/orders/intakes", label: "주문 접수(인테이크)" },
   { to: "/sales-orders", label: "수주" },
   { to: "/purchase-orders", label: "발주" },
-  // 휴일 캘린더 — 열람은 전 역할(design-D §D5: "선적" 다음 자리 — 선적 메뉴가 생기면 그 뒤에 둔다).
+  // 선적 — 열람은 전 역할(design-D §D5 "발주" 다음). 쓰기 버튼은 화면 안에서 서버 allowed_actions로만 보인다(S3-2 PR-3b).
+  { to: "/shipments", label: "선적" },
+  // 휴일 캘린더 — 열람은 전 역할(design-D §D5: "선적" 다음 자리).
   { to: "/holidays", label: "휴일 캘린더" },
   { to: "/documents", label: "문서보관소" },
   { to: "/imports", label: "엑셀 임포트" },

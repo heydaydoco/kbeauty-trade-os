@@ -21,6 +21,12 @@ describe("알림 이동 표", () => {
     expect(alertRoute("purchase_orders", null)).toBeNull();
   });
 
+  it("shipments 알림(선적 이벤트·기일)은 선적 상세로 이동한다 — 마일스톤 id 행은 없다", () => {
+    expect(alertRoute("shipments", 3)).toBe("/shipments/3");
+    expect(alertRoute("shipments", null)).toBeNull();
+    expect(alertRoute("milestones", 3)).toBeNull();
+  });
+
   it("order_intakes 알림(생성·상태 변경)은 인테이크 상세로 이동한다", () => {
     expect(alertRoute("order_intakes", 21)).toBe("/orders/intakes/21");
     expect(alertRoute("order_intakes", null)).toBeNull();

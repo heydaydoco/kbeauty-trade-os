@@ -24,11 +24,21 @@ function open(me: unknown = TRADER, extra: GateHandler[] = []) {
 const columnOf = (label: string) => screen.getByRole("region", { name: `${label} 열` });
 
 describe("오더 보드 — 열·카드", () => {
-  it("서버가 준 4열을 순서대로, 열 제목에 total, 카드에 번호 링크·바이어·PO·합계(서버 문자열)·경과일·담당자", async () => {
+  it("서버가 준 5열을 순서대로(선적중이 마지막), 열 제목에 total, 카드에 번호 링크·바이어·PO·합계(서버 문자열)·경과일·담당자", async () => {
     open();
     await screen.findByRole("link", { name: "IN-21" });
     const regions = screen.getAllByRole("region").filter((r) => r.getAttribute("aria-label")?.endsWith(" 열"));
-    expect(regions.map((r) => r.getAttribute("aria-label"))).toEqual(["인테이크 대기 열", "수주 접수 열", "수주 보류 열", "수주 확정 열"]);
+    expect(regions.map((r) => r.getAttribute("aria-label"))).toEqual([
+      "인테이크 대기 열",
+      "수주 접수 열",
+      "수주 보류 열",
+      "수주 확정 열",
+      "선적중 열",
+    ]);
+    // 선적중 카드도 다른 SO 카드처럼 수주 상세로 이어진다(보드에서 조용히 사라지지 않는다 — S3-2 PR-3a 5열).
+    const shipping = within(columnOf("선적중"));
+    expect(shipping.getByRole("link", { name: "SO-2026-0014" })).toHaveAttribute("href", "/sales-orders/14");
+    expect(shipping.getByText("Ship Co")).toBeInTheDocument();
 
     expect(screen.getByRole("link", { name: "IN-21" })).toHaveAttribute("href", "/orders/intakes/21");
     expect(screen.getByRole("link", { name: "SO-2026-0011" })).toHaveAttribute("href", "/sales-orders/11");

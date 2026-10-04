@@ -24,6 +24,7 @@ import {
   canReviseQuotation,
   proformaStatusLabel,
   quotationStatusLabel,
+  shipmentStatusLabel,
   statusBadgeClass,
 } from "./doc-status";
 
@@ -160,5 +161,31 @@ describe("PO 상태별 가능 동작 (서버 전이표와 같아야 한다)", ()
   it("입고 확정일 기산점은 PO 전용 표에만 있다(판매 전표 선택지에 섞이지 않는다)", () => {
     expect(PO_BALANCE_ANCHOR_LABEL.RECEIPT_DATE).toBe("입고 확정일");
     expect(BALANCE_ANCHOR_LABEL).not.toHaveProperty("RECEIPT_DATE");
+  });
+});
+
+describe("선적 상태 라벨 (S3-2 PR-3b — 프런트 단일 표, 모르는 값은 '기타')", () => {
+  it.each([
+    ["PLANNED", "계획"],
+    ["RELEASE_ORDERED", "출고지시"],
+    ["PICKING", "피킹"],
+    ["INSPECTED", "검수완료"],
+    ["RELEASED", "출고"],
+    ["SHIPPED", "선적"],
+    ["CLOSED", "종결"],
+    ["CANCELLED", "취소"],
+  ])("%s → %s", (code, label) => {
+    expect(shipmentStatusLabel(code)).toBe(label);
+  });
+
+  it("모르는 상태는 원문이 아니라 '기타', 문서 흐름의 SHIPMENT 노드도 같은 표를 쓴다", () => {
+    expect(shipmentStatusLabel("WEIRD")).toBe("기타");
+    expect(docStatusLabel("SHIPMENT", "RELEASE_ORDERED")).toBe("출고지시");
+    expect(docStatusLabel("SHIPMENT", "WEIRD")).toBe("기타");
+    expect(statusBadgeClass("RELEASE_ORDERED")).toContain("bg-gray-900");
+  });
+
+  it("SO 선적중 라벨은 '선적중'(보드·필터·배지 공용)", () => {
+    expect(salesOrderStatusLabel("IN_SHIPMENT")).toBe("선적중");
   });
 });

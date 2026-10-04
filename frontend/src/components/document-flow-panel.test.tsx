@@ -93,6 +93,50 @@ describe("문서 흐름 패널", () => {
     expect(flowRoute("QUOTATION", 1)).toBe("/quotations/1");
     expect(flowRoute("PROFORMA_INVOICE", 2)).toBe("/proforma-invoices/2");
     expect(flowRoute("SALES_ORDER", 3)).toBe("/sales-orders/3");
+    expect(flowRoute("SHIPMENT", 5)).toBe("/shipments/5");
     expect(flowRoute("PURCHASE_ORDER", 4)).toBeNull();
+  });
+
+  // S3-2 PR-3b(design-D D8) — 서버(PR-3c)는 SO 노드 바로 뒤에 그 SO의 수출선적 노드를 준다(부모 = SO, 취소 선적 포함).
+  it("SHIPMENT 노드: SO 아래 한 단계 들여쓰기·'선적' 종류·선적 상태 라벨·선적 상세 링크, 선적에서 들어오면 그 선적이 현재 문서", async () => {
+    const flow = chainFlow("PROFORMA_INVOICE");
+    flow.nodes.push(
+      flowNode({
+        kind: "SHIPMENT",
+        id: 31,
+        doc_number: "SH-2026-0001",
+        status: "RELEASE_ORDERED",
+        total_amount: 5000,
+        total_text: "50.00",
+        parent_kind: "SALES_ORDER",
+        parent_id: 9,
+        is_current: true,
+      }),
+      flowNode({
+        kind: "SHIPMENT",
+        id: 32,
+        doc_number: "SH-2026-0002",
+        status: "CANCELLED",
+        total_amount: 2500,
+        total_text: "25.00",
+        parent_kind: "SALES_ORDER",
+        parent_id: 9,
+      }),
+    );
+    flow.nodes[1] = { ...flow.nodes[1]!, is_current: false };
+    const { calls } = stubFetch(TRADER, [["/v1/document-flow/SHIPMENT/31", "GET", () => jsonResponse(flow)]]);
+    renderWithProviders(<DocumentFlowPanel kind="SHIPMENT" id={31} />);
+
+    const current = (await screen.findByText("SH-2026-0001")).closest("li") as HTMLElement;
+    expect(current).toHaveAttribute("aria-current", "true");
+    expect(within(current).getByText("선적")).toBeInTheDocument();
+    expect(within(current).getByText("출고지시")).toBeInTheDocument();
+    expect(within(current).getByText("50.00 USD")).toBeInTheDocument();
+    expect(current.style.marginLeft).toBe("4.5rem"); // QT 0 → PI 1.5 → SO 3 → 선적 4.5
+    // 취소된 선적도 이력으로 보이고, 현재 문서가 아니면 선적 상세로 이동한다.
+    expect(screen.getByRole("link", { name: "SH-2026-0002" })).toHaveAttribute("href", "/shipments/32");
+    expect(within(itemOf("SH-2026-0002")).getByText("취소")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "SO-2026-0001" })).toHaveAttribute("href", "/sales-orders/9");
+    expect(calls.some((c) => c.url.endsWith("/v1/document-flow/SHIPMENT/31"))).toBe(true);
   });
 });

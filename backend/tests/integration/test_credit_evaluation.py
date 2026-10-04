@@ -297,6 +297,25 @@ def test_the_open_exposure_predicate_can_use_the_partial_index() -> None:
     )
     with owner_engine.connect() as connection:
         connection.execute(text("SET LOCAL enable_seqscan = off"))
+        # 경쟁 인덱스를 이 트랜잭션 안에서만 치운다(끝에 롤백). 남겨 두면 플래너가 통계(같은 샤드의 앞선 시험이 남긴 행 수·autoanalyze)에 따라
+        # 비용이 비슷한 다른 부분 인덱스(예: 보드 `ix_sales_orders_board_created` — `WHERE deleted_at IS NULL`)를 고를 수 있어 결과가 실행 순서에
+        # 좌우된다(CI 샤드 재배치로 실측). 제약이 소유한 인덱스(PK·UNIQUE 제약)만 남기므로, 술어가 어긋나면 남은 선택지는 시퀀셜 스캔·제약 인덱스뿐이라
+        # 단언은 여전히 실패한다(시험의 판별력 유지).
+        rivals = (
+            connection.execute(
+                text(
+                    "SELECT i.relname FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid"
+                    " WHERE x.indrelid = 'sales_orders'::regclass"
+                    " AND i.relname <> 'ix_sales_orders_open_exposure'"
+                    " AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = x.indexrelid)"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert "ix_sales_orders_board_created" in rivals  # 치우는 대상이 실제로 잡힌다(공회전 방지)
+        for name in rivals:
+            connection.execute(text(f'DROP INDEX "{name}"'))
         plan = "\n".join(r[0] for r in connection.execute(text(f"EXPLAIN {sql}")))
         connection.rollback()
     assert "ix_sales_orders_open_exposure" in plan, plan

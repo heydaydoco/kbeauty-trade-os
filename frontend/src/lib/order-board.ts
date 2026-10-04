@@ -10,7 +10,8 @@ import { ApiError } from "./api";
 export const ORDER_BOARD_QUERY_KEY = ["order-board"] as const;
 export const SAVED_FILTERS_QUERY_KEY = ["order-board", "saved-filters"] as const;
 
-export type BoardStage = "INTAKE_PENDING" | "SO_RECEIVED" | "SO_ON_HOLD" | "SO_CONFIRMED";
+/** 보드 열(서버 `STAGE_ORDER` 5열 — S3-2 PR-3a가 '선적중'을 5번째로 더했다). 화면은 서버가 준 열을 순서대로 그린다. */
+export type BoardStage = "INTAKE_PENDING" | "SO_RECEIVED" | "SO_ON_HOLD" | "SO_CONFIRMED" | "SO_IN_SHIPMENT";
 export type CardKind = "INTAKE" | "SO";
 export type BulkAction = "CONFIRM_INTAKE" | "CONFIRM_SO" | "ASSIGN";
 export type BulkOutcome = "OK" | "SKIPPED" | "BLOCKED" | "CONFLICT" | "FORBIDDEN" | "FAILED";

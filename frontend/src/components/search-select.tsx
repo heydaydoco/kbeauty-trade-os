@@ -4,9 +4,13 @@
 //   이 컴포넌트는 입력이 멈춘 뒤(300ms) 서버 검색(`q`)으로 한 화면(기본 20건)만 받고,
 //   total보다 적게 받았으면 그 사실을 화면에 말한다(fail-visible).
 // ★ 화면이 막는 것은 편의일 뿐이다 — 선택값의 유효성은 서버가 다시 판정한다.
+// ★ 오선택 차단(S3-1 PR-16 부채 ⑤ → S3-2 PR-3b): 입력 직후~디바운스 만료 전에는 화면의 목록이 **옛 검색어의 결과**다.
+//   예전에는 그 목록을 그대로 그려 빠른 클릭이 다른 항목(예: 검색 전 첫 바이어)을 골랐다(PR-16 워크스루 자동화 실측).
+//   지금은 결과가 **현재 입력어에 대한 응답일 때만** 목록을 그리고 선택을 받는다 — 대기·요청 중에는 "검색 중…"만 보이고,
+//   클릭·Enter 처리 시점에도 최신 입력어(ref)와 결과의 검색어를 다시 대조한다(렌더 사이 경합 방어).
 
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useId, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { ApiError, apiFetch } from "../lib/api";
 import type { Page } from "../lib/paging";
 
@@ -49,6 +53,8 @@ export function SearchSelect<T>({
   const [debounced, setDebounced] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  // 클릭·Enter가 처리되는 순간의 최신 입력어 — 렌더된 목록이 그 입력어의 결과인지 다시 대조한다.
+  const latestText = useRef("");
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(text.trim()), SEARCH_DEBOUNCE_MS);
@@ -66,17 +72,23 @@ export function SearchSelect<T>({
     enabled: open && value === null,
   });
 
-  const items = query.data?.items ?? [];
-  const total = query.data?.total ?? 0;
-  // 입력 직후~디바운스 만료 전에는 옛 검색어의 결과라 "없음"을 단정하지 않는다.
+  // 입력 직후~디바운스 만료 전에는 쿼리 키가 옛 검색어라 data도 옛 검색어의 결과다 — 보이지도, 고를 수도 없게 한다.
   const settling = text.trim() !== debounced;
-  const loading = query.isFetching || settling;
+  // 이 렌더의 결과가 속한 검색어(= 쿼리 키의 q). 현재 입력어와 같을 때만 '신선한' 결과다.
+  const resultQuery = debounced;
+  const fresh = !settling && query.data !== undefined;
+  const items = fresh ? (query.data?.items ?? []) : [];
+  const total = fresh ? (query.data?.total ?? 0) : 0;
+  const searching = !fresh && !query.error;
 
   function choose(item: T) {
+    // 렌더와 이벤트 사이에 입력이 바뀌었다면(경합) 이 목록은 옛 결과다 — 고르지 않는다.
+    if (latestText.current.trim() !== resultQuery) return;
     onChange(item);
     setOpen(false);
     setText("");
     setDebounced("");
+    latestText.current = "";
     setActive(0);
   }
 
@@ -90,7 +102,7 @@ export function SearchSelect<T>({
       setActive((previous) => Math.max(previous - 1, 0));
     } else if (event.key === "Enter") {
       // 목록이 열려 있을 때만 선택으로 쓴다 — 아니면 폼 제출 동작을 막지 않는다.
-      if (open && !loading && items[active] !== undefined) {
+      if (open && fresh && items[active] !== undefined) {
         event.preventDefault();
         choose(items[active]);
       } else if (open) {
@@ -137,6 +149,7 @@ export function SearchSelect<T>({
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onChange={(event) => {
+          latestText.current = event.target.value;
           setText(event.target.value);
           setActive(0);
           setOpen(true);
@@ -155,8 +168,11 @@ export function SearchSelect<T>({
             <p role="alert" className="p-3 text-signal-red">
               {error instanceof ApiError ? error.message : "검색하지 못했습니다."}
             </p>
-          ) : loading && items.length === 0 ? (
-            <p className="p-3 text-gray-500">불러오는 중…</p>
+          ) : searching ? (
+            // 옛 결과를 숨긴다 — 고를 수 있는 항목이 화면에 없어야 빠른 클릭이 엉뚱한 항목을 고르지 못한다.
+            <p role="status" className="p-3 text-gray-500">
+              검색 중…
+            </p>
           ) : items.length === 0 ? (
             <p className="p-3 text-gray-500">검색 결과가 없습니다</p>
           ) : (

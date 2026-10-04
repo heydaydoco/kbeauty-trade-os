@@ -24,6 +24,8 @@ export function statusBadgeClass(code: string): string {
     case "PAID":
     case "CONFIRMED":
     case "SUPPLIER_CONFIRMED":
+    case "IN_SHIPMENT":
+    case "RELEASE_ORDERED":
       return "border-gray-900 bg-gray-900 text-white";
     case "CANCELLED":
     case "EXPIRED":
@@ -162,11 +164,28 @@ export const PO_BALANCE_ANCHOR_LABEL: Record<string, string> = {
   RECEIPT_DATE: "입고 확정일",
 };
 
+// ── 선적(S3-2 PR-3b) — 서버 machine: 사람 엣지는 출고지시(전용 경로)·취소뿐, 피킹~종결 5값은 RESERVED(S4-2) ──
+
+const SHIPMENT_STATUS: Record<string, string> = {
+  PLANNED: "계획",
+  RELEASE_ORDERED: "출고지시",
+  PICKING: "피킹",
+  INSPECTED: "검수완료",
+  RELEASED: "출고",
+  SHIPPED: "선적",
+  CLOSED: "종결",
+  CANCELLED: "취소",
+};
+
+/** 선적 상태 라벨 — 모르는 값은 원문이 아니라 '기타'(design-D D8 · `D:307` "서버가 모르는 값은 '기타'"). */
+export const shipmentStatusLabel = (code: string): string => SHIPMENT_STATUS[code] ?? "기타";
+
 /** 문서 흐름 노드의 종류별 상태 라벨. */
 export function docStatusLabel(kind: string, status: string): string {
   if (kind === "QUOTATION") return quotationStatusLabel(status);
   if (kind === "PROFORMA_INVOICE") return proformaStatusLabel(status);
   if (kind === "SALES_ORDER") return salesOrderStatusLabel(status);
   if (kind === "PURCHASE_ORDER") return purchaseOrderStatusLabel(status);
+  if (kind === "SHIPMENT") return shipmentStatusLabel(status);
   return status;
 }

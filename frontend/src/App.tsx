@@ -42,6 +42,8 @@ import { PurchaseOrderDetailPage } from "./routes/purchase-order-detail";
 import { PurchaseOrderListPage } from "./routes/purchase-orders";
 import { SalesOrderDetailPage } from "./routes/sales-order-detail";
 import { SalesOrderListPage } from "./routes/sales-orders";
+import { ShipmentDetailPage } from "./routes/shipment-detail";
+import { ShipmentListPage } from "./routes/shipments";
 import { ProductDetailPage } from "./routes/product-detail";
 import { ProductsPage } from "./routes/products";
 import { AppShell } from "./routes/shell";
@@ -127,6 +129,9 @@ export function AppRoutes() {
         <Route path="/purchase-orders" element={<PurchaseOrderListPage />} />
         <Route path="/purchase-orders/new" element={<PurchaseOrderCreatePage />} />
         <Route path="/purchase-orders/:purchaseOrderId" element={<PurchaseOrderDetailPage />} />
+        {/* 선적 — 생성은 수주 상세의 '선적 만들기'(SO 참조 2단)뿐, /shipments/new 독립 생성 화면은 두지 않는다(design-D D5). */}
+        <Route path="/shipments" element={<ShipmentListPage />} />
+        <Route path="/shipments/:shipmentId" element={<ShipmentDetailPage />} />
         <Route path="/holidays" element={<HolidaysPage />} />
         <Route path="/approvals" element={<ApprovalsPage />} />
         <Route path="/approvals/:approvalId" element={<ApprovalDetailPage />} />

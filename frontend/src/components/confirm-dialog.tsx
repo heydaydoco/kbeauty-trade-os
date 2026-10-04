@@ -90,7 +90,8 @@ interface ConfirmDialogProps {
   pending?: boolean;
   /** 확인 버튼을 막는 외부 조건(예: 표시에 필요한 정보를 못 불러옴) — 사유는 description에 밝힌다. */
   confirmDisabled?: boolean;
-  error?: string | null;
+  /** 오류 문구 — 보통 문자열, 이어서 할 일(예: 먼저 취소할 선적 링크)이 있으면 요소(S3-2 PR-3b). */
+  error?: ReactNode;
   /** 낙관 잠금 충돌(409)일 때 다이얼로그 안에 '최신 내용 불러오기'를 둔다 — 누르면 호출(보통 닫고 재조회). */
   onReload?: () => void;
   onConfirm: (reason: string) => void;
@@ -123,7 +124,14 @@ export function ConfirmDialog({
   const [reason, setReason] = useState("");
   const firstRef = useRef<HTMLTextAreaElement | HTMLButtonElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
-  useDialogBehavior(boxRef, onCancel, firstRef);
+  // 처리 중(pending)에는 Esc로 닫지 않는다 — 닫기 버튼과 같은 규칙(응답 전 닫으면 결과를 못 보고 재오픈 시 새 키가 된다).
+  useDialogBehavior(
+    boxRef,
+    () => {
+      if (!pending) onCancel();
+    },
+    firstRef,
+  );
 
   const needsReason = reasonLabel !== undefined;
   // 길이는 코드포인트 기준(서버 문자 수와 맞춤 — 이모지 등 서로게이트 쌍이 2로 세어지지 않게).

@@ -1,4 +1,5 @@
-// 문서 흐름 패널 (S3-1 PR-7b — design-integrated G-03 / DESIGN §14 ⑦): QT → PI → SO 계보를 상태 배지·링크로 보인다.
+// 문서 흐름 패널 (S3-1 PR-7b — design-integrated G-03 / DESIGN §14 ⑦): QT → PI → SO → 수출선적 계보를 상태 배지·링크로 보인다.
+// S3-2 PR-3b: 서버(PR-3c)가 SO 노드 바로 뒤에 그 SO의 수출선적 노드(kind "SHIPMENT", 부모 = SO)를 준다 — 화면은 받은 순서대로 그린다.
 //
 // 서버 `GET /v1/document-flow/{kind}/{id}`가 사슬 전체(뿌리 QT 아래 위→아래 순서, 취소·만료 전표 포함)를 준다 — 화면은 그대로 그린다.
 // 금액은 서버 문자열(total_text)만, 프런트 산술 0. 읽기 전용이라 권한별 분기가 없다(원가·마진 필드 없음).
@@ -11,12 +12,13 @@ import { errorMessage } from "../lib/api-errors";
 import { docStatusLabel, statusBadgeClass } from "../lib/doc-status";
 import { documentFlowKey, type DocumentFlow, type FlowNode } from "../lib/sales-order";
 
-export type FlowKind = "QUOTATION" | "PROFORMA_INVOICE" | "SALES_ORDER";
+export type FlowKind = "QUOTATION" | "PROFORMA_INVOICE" | "SALES_ORDER" | "SHIPMENT";
 
 const KIND_LABEL: Record<string, string> = {
   QUOTATION: "견적",
   PROFORMA_INVOICE: "PI",
   SALES_ORDER: "수주",
+  SHIPMENT: "선적",
 };
 
 export function flowRoute(kind: string, id: number): string | null {
@@ -27,6 +29,8 @@ export function flowRoute(kind: string, id: number): string | null {
       return `/proforma-invoices/${id}`;
     case "SALES_ORDER":
       return `/sales-orders/${id}`;
+    case "SHIPMENT":
+      return `/shipments/${id}`;
     default:
       return null;
   }
@@ -61,7 +65,7 @@ export function DocumentFlowPanel({ kind, id }: { kind: FlowKind; id: number }) 
         문서 흐름
       </h2>
       <p className="mt-1 break-keep text-xs text-gray-500">
-        견적 → PI → 수주로 이어진 전표입니다. 취소·만료된 전표도 이력으로 함께 보입니다.
+        견적 → PI → 수주 → 선적으로 이어진 전표입니다. 취소·만료된 전표도 이력으로 함께 보입니다.
       </p>
       {flow.isPending && <p className="mt-3 text-sm text-gray-500">불러오는 중…</p>}
       {flow.error && (
