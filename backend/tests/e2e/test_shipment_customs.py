@@ -389,16 +389,19 @@ def test_customs_dates_stay_inside_the_business_range(trade: TestClient) -> None
     정정(PATCH)도 같다. 상한은 '오늘 이후 422 DATE_IN_FUTURE'가 먼저 막는다(9999-12-31도 422)"""
     sid = _shipment(trade)["id"]
     invalid_field = "COMMON.VALIDATION.INVALID_FIELD"
-    for body in (
-        {"declared_on": "1999-12-31"},
-        {"declared_on": "0001-01-01"},
-        {"declared_on": "2000-01-01", "accepted_on": "1999-12-31"},
+    for body, field in (
+        ({"declared_on": "1999-12-31"}, "declared_on"),
+        ({"declared_on": "0001-01-01"}, "declared_on"),
+        ({"declared_on": "2000-01-01", "accepted_on": "1999-12-31"}, "accepted_on"),
     ):
         response = _record(trade, sid, **body)
         assert response.status_code == 422 and _code(response) == invalid_field, body
+        # 서비스 1차 검사(필드 안내 동반) — DB CHECK `date_range` 번역(2차 방어선, detail 없음)에 기대지 않는다
+        assert field in response.json()["error"]["detail"], body
     far = _record(trade, sid, declared_on="9999-12-31")
     assert far.status_code == 422, far.text
     ok = _record(trade, sid, declared_on="2000-01-01", accepted_on="2000-01-01")
     assert ok.status_code == 201, ok.text
     response = _patch(trade, sid, ok.json(), declared_on="0001-01-01", reason="정정")
     assert response.status_code == 422 and _code(response) == invalid_field
+    assert "declared_on" in response.json()["error"]["detail"]

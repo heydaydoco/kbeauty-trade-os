@@ -516,7 +516,8 @@ def refuse_lossy_downgrade(bind: sa.engine.Connection) -> None:
 
 def downgrade() -> None:
     refuse_lossy_downgrade(op.get_bind())
-    op.drop_constraint(op.f(_COMM_OCCURRED_CHECK), "comm_logs", type_="check")
+    # IF EXISTS — 적대 검토 반영 전 M15(이 CHECK 없음)를 올린 로컬 DB도 내릴 수 있게(같은 리비전 파일 수정의 뒷정리)
+    op.execute(f"ALTER TABLE comm_logs DROP CONSTRAINT IF EXISTS {_COMM_OCCURRED_CHECK}")
     op.drop_constraint(op.f(_COMM_SUMMARY_CHECK), "comm_logs", type_="check")
     op.create_check_constraint(op.f(_COMM_SUMMARY_CHECK), "comm_logs", _COMM_SUMMARY_OLD)
     op.drop_constraint(op.f(_COMM_SUBJECT_CHECK), "comm_logs", type_="check")
