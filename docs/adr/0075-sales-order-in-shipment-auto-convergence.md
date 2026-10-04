@@ -13,3 +13,5 @@
 **기각한 대안** — 사람 엣지 CONFIRMED→IN_SHIPMENT(선적 없는 IN_SHIPMENT), 진입 트리거를 출고·ETD 실적으로(출고는 RESERVED — S3-2에서 도달 불가), 수렴을 별도 TX/잡으로(§17.1 1동작=1TX 위반·거짓 창), SO Literal에 IN_SHIPMENT 추가(사람 엣지가 아니라 값 공간 불변).
 
 **되돌리기 비용** — **중간**. 엣지 제거 시 IN_SHIPMENT 행을 CONFIRMED로 되돌리는 데이터 정정 마이그레이션 1건 + 보드 '선적중' 열·SO 취소 안내 원복. DESIGN 문면 변경이라 **오너 확인 권장 3순위**(번복 시 이 ADR을 "대체" 표기). 검사 순서 변경은 낮음.
+
+**부기(2026-10-04 — S3-2 PR-3a 이행: 수렴 2엣지·검사 순서)** — ①~④를 구현했다. 판정 함수는 하나다 — `trade_chain.chain_ops.converge_sales_order_shipping`(SO `FOR UPDATE` → `has_live_children(SO, child_table="shipments")` → `record_transition(automatic=True, cause_shipment_id=…)`), 선적 생성·라인 삭제(항상 no-op)·선적 취소가 `converge_parent(SHIPMENT)`로 같은 함수를 부른다(X-13). `cause_shipment_id`는 커널 `PAYLOAD_KEYS`에 더했고 자동 전이에서만 받는다(사람 전이에 넘기면 TypeError). 불변식은 실제 동시 시험(J-04 생성 vs SO 취소·J-05 마지막 선적 취소 vs 새 선적·동시 취소 2건 → 복귀 이력 정확히 1행)이 고정한다. ③은 별도 커밋(`_cancel_sales_order` — 종결 아닌 SO는 후속 생존 검사가 먼저, GC-A14 golden). `no_auto_confirm` 엔트리에 생성·출고지시·취소·수렴 함수를 더했고, SO 범용 전이 Literal은 무변경·`ShipmentTarget = Literal["CANCELLED"]`가 `public_transition_targets(SHIPMENT)`와 같음을 라우터 import 시점에 단언한다.
