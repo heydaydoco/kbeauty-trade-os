@@ -31,7 +31,12 @@ L2 = {
 }  # PR-15a: order_board(보드·벌크 — trade_chain·order_intake·L1을 부른다)
 S3_DOMAIN = L0 | L1 | L2
 #: 전표 도메인과 무관해야 하는 S3 공용 모듈(전표를 임포트하면 안 된다).
-S3_PLATFORM = {"policies", "approvals", "gates"}
+S3_PLATFORM = {
+    "policies",
+    "approvals",
+    "gates",
+    "holidays",
+}  # S3-2 PR-2a: holidays(휴일 캘린더·판정 — 전표 무임포트, ADR-0082)
 
 #: L2 안에서도 오케스트레이터(trade_chain)를 거꾸로 임포트하면 안 되는 모듈(trade_chain이 이들을 부른다).
 L2_NO_CHAIN = {"credit", "payments", "order_intake"}
@@ -97,7 +102,8 @@ def test_every_s3_domain_module_directory_is_registered_in_a_layer() -> None:
     """전표 계열 모듈 디렉터리(trade_docs·quotations·trade_chain)는 계층 표에 있다 — 새 전표 모듈은 표에 등록해야 한다"""
     present = {module_of(rel) for rel in app_sources()} - {None}
     known_s3 = {"trade_docs", "quotations", "trade_chain", "proforma_invoices", "sales_orders", "purchase_orders",
-                "bank_accounts", "credit", "payments", "order_intake", "order_board", "approvals", "gates"}  # fmt: skip
+                "bank_accounts", "credit", "payments", "order_intake", "order_board", "approvals", "gates",
+                "holidays"}  # fmt: skip
     assert (present & known_s3) <= (S3_DOMAIN | S3_PLATFORM), (
         f"계층 표에 없는 S3 모듈: {sorted((present & known_s3) - S3_DOMAIN)} — tests/architecture/"
         "test_import_direction.py의 L0·L1·L2 집합에 등록하세요."
