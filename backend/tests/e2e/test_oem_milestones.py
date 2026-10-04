@@ -202,20 +202,26 @@ def test_plan_rollover_actual_and_correction_on_an_oem_po(trade: TestClient) -> 
 
 
 def test_the_same_key_replays_the_same_change(trade: TestClient) -> None:
-    """J(R-19 승계) — 같은 Idempotency-Key 재요청 = 같은 응답·같은 change.id, 이력 1행"""
+    """J(R-19 승계) — 같은 Idempotency-Key 재요청 = 같은 change.id·이력 1행. 재생 응답의 보드는 **지금** 상태로 다시 조립한다(4a 개정 규율 —
+    그사이 다른 종류 계획·PO 취소가 보드·버튼에 보인다)"""
     po_id = _oem_po(trade)["id"]
     key = unique("same")
     first = _plan(trade, po_id, "PACKING", {"planned_on": _day(20)}, key=key)
+    assert _plan(trade, po_id, "FILLING", {"planned_on": _day(15)}).status_code == 200
+    _cancel_po(trade, po_id)
     again = _plan(trade, po_id, "PACKING", {"planned_on": _day(20)}, key=key)
     assert first.status_code == again.status_code == 200
     assert first.json()["change"]["id"] == again.json()["change"]["id"]
+    assert first.json()["board"]["allowed_actions"] == ["EDIT_MILESTONES"]
+    assert again.json()["board"]["allowed_actions"] == []  # 재생 = 지금 보드(취소 반영)
+    assert again.json()["board"]["rows"][1]["planned"] == _day(15)
     assert (
         scalar(
             "SELECT count(*) FROM milestone_changes mc JOIN milestones m ON m.id = mc.milestone_id"
             " WHERE m.po_id = :p",
             p=po_id,
         )
-        == 1
+        == 2
     )
 
 
@@ -319,7 +325,8 @@ def test_only_trade_and_admin_write_oem_schedules_everyone_reads() -> None:
 @pytest.mark.group_k
 def test_error_priority_is_404_then_409_then_422(trade: TestClient) -> None:
     """ADR-0079 ⑧ — 없는 PO + 파생 종류 = 404 / 취소된 일반 구매 PO = 409(OWNER_NOT_OEM 422보다 먼저) / 취소된 OEM PO + 파생 = 409 /
-    일반 구매 PO + 파생 = 422 OWNER_NOT_OEM(소유자 판정이 종류 판정보다 먼저) / 행 version 어긋남 + 미래 실적 = 409(값 422보다 먼저)"""
+    일반 구매 PO + 파생 = 422 OWNER_NOT_OEM(소유자 판정이 종류 판정보다 먼저) / **행 version 409가 소유자·종류 422보다 먼저**(4a 개정 규율 —
+    일반 구매 PO·파생·선적 종류에 version을 보내면 409) / 행 version 어긋남 + 미래 실적 = 409(값 422보다 먼저)"""
     missing = _plan(trade, 99_999_999, "PAYMENT_DUE", {"planned_on": _day(1)})
     assert missing.status_code == 404
     assert trade.get(f"{PO}/99999999/milestones").status_code == 404
@@ -336,7 +343,15 @@ def test_error_priority_is_404_then_409_then_422(trade: TestClient) -> None:
     assert _code(_plan(trade, live_general, "PAYMENT_DUE", {"planned_on": _day(1)})) == (
         "SHIPMENTS.MILESTONE.OWNER_NOT_OEM"
     )
+    stale_general = _plan(trade, live_general, "FILLING", {"planned_on": _day(1), "version": 3})
+    assert (stale_general.status_code, _code(stale_general)) == (
+        409,
+        "COMMON.CONCURRENCY.VERSION_CONFLICT",
+    )
     po_id = _oem_po(trade)["id"]
+    for milestone_type in ("PAYMENT_DUE", "ETD"):
+        stale_kind = _plan(trade, po_id, milestone_type, {"planned_on": _day(1), "version": 2})
+        assert _code(stale_kind) == "COMMON.CONCURRENCY.VERSION_CONFLICT", milestone_type
     assert _plan(trade, po_id, "FILLING", {"planned_on": _day(5)}).status_code == 200
     stale = _actual(trade, po_id, "FILLING", {"actual_on": _day(9), "version": 99})
     assert (stale.status_code, _code(stale)) == (409, "COMMON.CONCURRENCY.VERSION_CONFLICT")
