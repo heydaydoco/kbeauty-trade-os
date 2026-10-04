@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from enum import StrEnum
 
 
@@ -302,6 +303,14 @@ REASON_REQUIRED_CHANGES: frozenset[str] = frozenset(
 ROLLOVER_TYPES: frozenset[str] = frozenset(
     {MilestoneType.ETD.value, MilestoneType.ETA.value, MilestoneType.CARGO_CLOSING.value}
 )
+#: 업무 날짜 범위 — 마일스톤 계획·실적(날짜형 값, 시각형은 이 범위의 UTC 시각)·통관 신고일·수리일·선적 통보의 오간 날.
+#: 휴일 연도 규약(2000~2999 — ADR-0082)과 같다. 범위 밖 = 422, DB CHECK가 같은 범위를 강제(달력 끝 산술 OverflowError 500 방지 —
+#: S3-2 PR-4a 적대 검토 반영 ⑤).
+BUSINESS_DATE_MIN = date(2000, 1, 1)
+BUSINESS_DATE_MAX = date(2999, 12, 31)
+BUSINESS_DATE_MESSAGE = "2000-01-01 ~ 2999-12-31 범위의 날짜만 받습니다."
+#: 통관 신고번호 최대 길이(VARCHAR(40) — 정규화 뒤 길이로 검사한다).
+DECLARATION_NO_MAX = 40
 
 
 class PriceBasis(StrEnum):

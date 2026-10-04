@@ -80,7 +80,9 @@ MILESTONE_CONSTRAINT_ERRORS: dict[str, ErrorCode] = {
     "ck_customs_records_declaration_no_shape": ErrorCode.VALIDATION_INVALID_FIELD,
     "ck_customs_records_accept_after_declare": ErrorCode.SHIPMENTS_CUSTOMS_ACCEPT_BEFORE_DECLARE,
     "ck_customs_records_note_clean": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_customs_records_date_range": ErrorCode.VALIDATION_INVALID_FIELD,
     # 마일스톤 입력 열(경로의 종류·계획/실적 값·시간대) — 덮어쓰기 금지 2중의 DB 층(파생 종류 = type_valid 위반)
+    "ck_milestones_value_range": ErrorCode.VALIDATION_INVALID_FIELD,
     "ck_milestones_type_valid": ErrorCode.SHIPMENTS_MILESTONE_DERIVED_NOT_EDITABLE,
     "ck_milestones_owner_type_scope": ErrorCode.SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE,
     "ck_milestones_date_shape": ErrorCode.SHIPMENTS_MILESTONE_VALUE_SHAPE_MISMATCH,
@@ -95,8 +97,9 @@ MILESTONE_CONSTRAINT_ERRORS: dict[str, ErrorCode] = {
     "ck_milestone_changes_reason_clean": ErrorCode.VALIDATION_INVALID_FIELD,
     # 품목군 세트 종류(PR-4c 쓰기 경로 — 파생·OEM 종류 = R-26 TYPE_NOT_APPLICABLE 재사용)
     "ck_item_profile_milestone_types_type_valid": ErrorCode.SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE,
-    # 선적 통보 기록(comm_logs SHIPMENT 주제)의 요지 — 선적 통로가 같은 flush로 넣는다
+    # 선적 통보 기록(comm_logs SHIPMENT 주제)의 요지·오간 날 — 선적 통로가 같은 flush로 넣는다
     "ck_comm_logs_summary_not_blank": ErrorCode.VALIDATION_INVALID_FIELD,
+    "ck_comm_logs_shipment_occurred_on_range": ErrorCode.VALIDATION_INVALID_FIELD,
 }
 
 

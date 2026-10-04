@@ -16,6 +16,50 @@ from sqlalchemy import CheckConstraint, Index, text
 # 지목하지 못한다 — 잘리기 전에 실패시킨다.
 MAX_IDENTIFIER_LENGTH = 63
 
+# '보이는 글자 1개 이상' CHECK용 PG ARE 괄호식 내용 — `btrim`은 U+0020만 잘라 U+3000·U+00A0·U+2003만의 값이 통과한다(S3-2 PR-4a
+# 적대 검토 반영 ⑥). 쓰는 법: `col ~ '[^<집합>]'`(집합 밖 글자가 하나라도 있다). 글자는 `\\uXXXX` 이스케이프로 만든다(소스·DB 정의문에
+# 보이지 않는 글자를 직접 넣지 않는다). 마이그레이션 M15는 같은 값을 스스로 만든다(앱 상수 비임포트 — 시험이 대사).
+#: 유니코드 공백 — 파이썬 `str.isspace`·`str.strip`이 지우는 집합(서비스 strip을 통과한 기존 행과 호환). 범위는 (시작, 끝).
+SPACE_CODE_POINTS: tuple[int | tuple[int, int], ...] = (
+    0x0085,
+    0x00A0,
+    0x1680,
+    (0x2000, 0x200A),
+    0x2028,
+    0x2029,
+    0x202F,
+    0x205F,
+    0x3000,
+)
+#: 보이지 않는 서식·채움 글자 — 몽골 모음 구분·ZWSP~ZWJ·WJ·BOM·한글 채움 4종.
+INVISIBLE_CODE_POINTS: tuple[int | tuple[int, int], ...] = (
+    0x180E,
+    (0x200B, 0x200D),
+    0x2060,
+    0xFEFF,
+    0x115F,
+    0x1160,
+    0x3164,
+    0xFFA0,
+)
+
+
+def pg_char_class(points: Iterable[int | tuple[int, int]]) -> str:
+    """PG ARE 괄호식 내용 — 글자는 `\\uXXXX`, 범위는 `\\uXXXX-\\uYYYY`(ARE는 괄호식 안의 글자 이스케이프를 받는다)."""
+    parts: list[str] = []
+    for point in points:
+        if isinstance(point, tuple):
+            parts.append(f"\\u{point[0]:04x}-\\u{point[1]:04x}")
+        else:
+            parts.append(f"\\u{point:04x}")
+    return "".join(parts)
+
+
+#: 유니코드 공백(`\\s` = ASCII 공백 + 위 집합).
+SPACE_CHAR_CLASS = "\\s" + pg_char_class(SPACE_CODE_POINTS)
+#: 공백 + 보이지 않는 글자 — 신설 표의 사유·메모·선적 통보 요지.
+BLANK_CHAR_CLASS = SPACE_CHAR_CLASS + pg_char_class(INVISIBLE_CODE_POINTS)
+
 
 def _guard_name(name: str) -> str:
     if len(name) > MAX_IDENTIFIER_LENGTH:

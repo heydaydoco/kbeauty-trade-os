@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
+from app.core.db.constraints import BLANK_CHAR_CLASS, SPACE_CHAR_CLASS
 from app.core.db.session import engine, owner_engine
 from app.modules.shipments.service import CONSTRAINT_ERRORS, MILESTONE_CONSTRAINT_ERRORS
 from app.modules.trade_docs.constants import DERIVED_MILESTONES, STORED_MILESTONES
@@ -153,7 +154,52 @@ _MILESTONE_CASES: list[tuple[str, dict[str, Any], str]] = [
         {"milestone_type": "CUSTOMS_CLEARED", "actual_on": date(2026, 10, 1)},
         "ck_milestones_customs_actual_from_records",
     ),
+    # 업무 날짜 범위 2000~2999(적대 검토 반영 ⑤ — 달력 끝 값의 파생 산술 OverflowError 500 방지)
+    ("planned_before_2000", {"planned_on": date(1999, 12, 31)}, "ck_milestones_value_range"),
+    ("actual_after_2999", {"actual_on": date(3000, 1, 1)}, "ck_milestones_value_range"),
+    (
+        "instant_at_year_3000",
+        {
+            "milestone_type": "DOC_CUTOFF",
+            "planned_on": None,
+            "planned_at": "3000-01-01T00:00:00Z",
+            "tz": "UTC",
+        },
+        "ck_milestones_value_range",
+    ),
+    (
+        "instant_before_2000",
+        {
+            "milestone_type": "CARGO_CLOSING",
+            "planned_on": None,
+            "actual_at": "1999-12-31T23:59:59Z",
+            "tz": "UTC",
+        },
+        "ck_milestones_value_range",
+    ),
 ]
+
+
+def test_business_date_range_boundaries_are_stored(shipment: int) -> None:
+    """양성 경계 — 2000-01-01·2999-12-31(날짜형), 2000-01-01T00:00Z·2999-12-31T23:59:59Z(시각형)는 저장된다"""
+    with owner_engine.begin() as connection:
+        _insert(
+            connection,
+            "milestones",
+            _milestone(shipment, planned_on=date(2000, 1, 1), actual_on=date(2999, 12, 31)),
+        )
+        _insert(
+            connection,
+            "milestones",
+            _milestone(
+                shipment,
+                milestone_type="DOC_CUTOFF",
+                planned_on=None,
+                planned_at="2000-01-01T00:00:00Z",
+                actual_at="2999-12-31T23:59:59Z",
+                tz="UTC",
+            ),
+        )
 
 
 @pytest.mark.parametrize(("case", "override", "constraint"), _MILESTONE_CASES)
@@ -230,8 +276,27 @@ _CUSTOMS_CASES: list[tuple[str, dict[str, Any], str]] = [
     ("number_inner_space", {"declaration_no": "123 45"}, "ck_customs_records_declaration_no_shape"),
     ("number_lowercase", {"declaration_no": "abc-1"}, "ck_customs_records_declaration_no_shape"),
     ("number_control", {"declaration_no": "AB\u00851"}, "ck_customs_records_declaration_no_shape"),
+    # ASCII 패턴(적대 검토 반영 ④) — 비ASCII 대문자·선두 구분자·허용 밖 기호
+    ("number_non_ascii", {"declaration_no": "ÄB-1"}, "ck_customs_records_declaration_no_shape"),
+    ("number_eszett_upper", {"declaration_no": "ẞ1"}, "ck_customs_records_declaration_no_shape"),
+    (
+        "number_leading_hyphen",
+        {"declaration_no": "-AB1"},
+        "ck_customs_records_declaration_no_shape",
+    ),
+    ("number_symbol", {"declaration_no": "AB_1"}, "ck_customs_records_declaration_no_shape"),
     ("note_blank", {"note": "   "}, "ck_customs_records_note_clean"),
+    # 유니코드 공백·보이지 않는 글자만의 메모(btrim은 U+0020만 자른다 — 적대 검토 반영 ⑥)
+    ("note_unicode_spaces", {"note": "　  "}, "ck_customs_records_note_clean"),
+    ("note_zero_width", {"note": "​ㅤ"}, "ck_customs_records_note_clean"),
     ("note_control", {"note": "메모\u0007"}, "ck_customs_records_note_clean"),
+    # 업무 날짜 범위(적대 검토 반영 ⑤)
+    (
+        "declared_before_2000",
+        {"declared_on": date(1999, 12, 31), "accepted_on": None},
+        "ck_customs_records_date_range",
+    ),
+    ("accepted_after_2999", {"accepted_on": date(3000, 1, 1)}, "ck_customs_records_date_range"),
 ]
 
 
@@ -317,6 +382,12 @@ _CHANGE_CASES: list[tuple[str, dict[str, Any], str]] = [
         "ck_milestone_changes_reason_required",
     ),
     ("reason_blank", {"reason": "  "}, "ck_milestone_changes_reason_clean"),
+    # 유니코드 공백만(U+3000·U+00A0·U+2003)·보이지 않는 글자만 — 서비스를 우회해도 DB가 거부(적대 검토 반영 ⑥)
+    ("reason_ideographic_space", {"reason": "　　"}, "ck_milestone_changes_reason_clean"),
+    ("reason_nbsp", {"reason": " "}, "ck_milestone_changes_reason_clean"),
+    ("reason_em_space", {"reason": "   "}, "ck_milestone_changes_reason_clean"),
+    ("reason_zero_width", {"reason": "​﻿"}, "ck_milestone_changes_reason_clean"),
+    ("reason_hangul_filler", {"reason": "ㅤ"}, "ck_milestone_changes_reason_clean"),
     ("reason_control", {"reason": "사유\u0085"}, "ck_milestone_changes_reason_clean"),
     ("reason_too_long", {"reason": "가" * 501}, "ck_milestone_changes_reason_clean"),
     (
@@ -444,6 +515,60 @@ def test_change_log_and_notices_are_immutable_for_the_app_account(milestone: int
     )
 
 
+def _comm_log(**override: Any) -> dict[str, Any]:
+    values: dict[str, Any] = {
+        "subject_type": "SHIPMENT",
+        "subject_id": 1,
+        "occurred_on": date(2026, 9, 1),
+        "summary": "포워더 통보",
+    }
+    values.update(override)
+    return values
+
+
+@pytest.mark.parametrize(
+    ("case", "override", "constraint"),
+    [
+        ("shipment_ideographic", {"summary": "　"}, "ck_comm_logs_summary_not_blank"),
+        ("shipment_nbsp_em", {"summary": "  "}, "ck_comm_logs_summary_not_blank"),
+        ("shipment_zero_width", {"summary": "​"}, "ck_comm_logs_summary_not_blank"),
+        (
+            "generic_ideographic",
+            {"subject_type": "CERTIFICATION", "summary": "　"},
+            "ck_comm_logs_summary_not_blank",
+        ),
+        (
+            "shipment_before_2000",
+            {"occurred_on": date(1999, 12, 31)},
+            "ck_comm_logs_shipment_occurred_on_range",
+        ),
+    ],
+)
+def test_comm_log_summary_needs_a_visible_char_and_shipment_dates_stay_in_range(
+    case: str, override: dict[str, Any], constraint: str
+) -> None:
+    """적대 검토 반영 ⑤·⑥ — comm_logs 요지는 보이는 글자 1개 이상(유니코드 공백만 = 거부, 선적 통보는 보이지 않는 글자만도 거부),
+    선적 통보의 오간 날은 2000~2999(범용 주제 행은 대상 밖 — 기존 데이터 무접촉)"""
+    with pytest.raises(IntegrityError) as caught, engine.begin() as connection:
+        _insert(connection, "comm_logs", _comm_log(**override))
+    assert _state(caught.value) == (CHECK_VIOLATION, constraint), case
+
+
+def test_generic_comm_logs_keep_their_former_space_rule() -> None:
+    """양성 대조 — 범용 주제는 기존 규칙과 호환(보이지 않는 서식 글자만의 요지·2000년 전 날짜는 기존 서비스 규약 밖이라 DB가 막지 않는다),
+    선적 통보는 경계 날짜(2000-01-01)·여러 줄 요지가 저장된다"""
+    with engine.begin() as connection:
+        _insert(connection, "comm_logs", _comm_log(subject_type="CERTIFICATION", summary="​"))
+        _insert(
+            connection,
+            "comm_logs",
+            _comm_log(subject_type="CERTIFICATION", occurred_on=date(1999, 12, 31)),
+        )
+        _insert(
+            connection, "comm_logs", _comm_log(occurred_on=date(2000, 1, 1), summary="1행\n2행")
+        )
+
+
 # ── item_profile_milestone_types ──────────────────────────────────────────────
 
 
@@ -494,6 +619,17 @@ def test_profile_milestone_sets_take_stored_shipment_types_only_and_reenter_as_n
 # ── 정의문·식별자·번역표·downgrade 가드 ──────────────────────────────────────────
 
 
+def _date_range(col: str) -> str:
+    return f"(({col} IS NULL) OR (({col} >= '2000-01-01'::date) AND ({col} <= '2999-12-31'::date)))"
+
+
+def _instant_range(col: str) -> str:
+    return (
+        f"(({col} IS NULL) OR (({col} >= '2000-01-01 00:00:00+00'::timestamp with time zone)"
+        f" AND ({col} < '3000-01-01 00:00:00+00'::timestamp with time zone)))"
+    )
+
+
 @pytest.mark.group_k
 def test_check_definitions_are_pinned() -> None:
     """정의문 고정(함정 ①·⑪) — 저장형 값 공간(파생 0)·신고수리 실적 NULL·OEM 소유 범위·comm_logs 주제(CERTIFICATION·SHIPMENT)"""
@@ -520,7 +656,49 @@ def test_check_definitions_are_pinned() -> None:
         "ck_customs_records_accept_after_declare": (
             "((accepted_on IS NULL) OR (accepted_on >= declared_on))"
         ),
+        # ── 적대 검토 반영 ④·⑤·⑥ ──
+        "ck_customs_records_declaration_no_shape": (
+            "((declaration_no)::text ~ '^[A-Z0-9][A-Z0-9/-]*$'::text)"
+        ),
+        "ck_customs_records_note_clean": (
+            f"((note IS NULL) OR (((note)::text ~ '[^{BLANK_CHAR_CLASS}]'::text) AND"
+            " (translate((note)::text, ((chr(9) || chr(10)) || chr(13)), ''::text)"
+            " !~ '[[:cntrl:]]'::text)))"
+        ),
+        "ck_customs_records_date_range": (
+            "(" + _date_range("declared_on") + " AND " + _date_range("accepted_on") + ")"
+        ),
+        "ck_milestones_value_range": (
+            "("
+            + " AND ".join(
+                [
+                    _date_range("planned_on"),
+                    _date_range("actual_on"),
+                    _instant_range("planned_at"),
+                    _instant_range("actual_at"),
+                ]
+            )
+            + ")"
+        ),
+        "ck_milestone_changes_reason_clean": (
+            "((reason IS NULL) OR (((char_length(reason) >= 1) AND (char_length(reason) <= 500))"
+            f" AND (reason ~ '[^{BLANK_CHAR_CLASS}]'::text) AND (reason !~ '[[:cntrl:]]'::text)))"
+        ),
+        "ck_comm_logs_summary_not_blank": (
+            f"((summary ~ '[^{SPACE_CHAR_CLASS}]'::text) AND (((subject_type)::text <> 'SHIPMENT'::text)"
+            f" OR (summary ~ '[^{BLANK_CHAR_CLASS}]'::text)))"
+        ),
+        "ck_comm_logs_shipment_occurred_on_range": (
+            "(((subject_type)::text <> 'SHIPMENT'::text)"
+            " OR ((occurred_on >= '2000-01-01'::date) AND (occurred_on <= '2999-12-31'::date)))"
+        ),
     }
+    # 마이그레이션은 앱 상수를 임포트하지 않고 같은 집합을 스스로 만든다 — 두 정의가 갈라지지 않음을 대사
+    module = _m15()
+    assert (module._SPACE, module._BLANK) == (SPACE_CHAR_CLASS, BLANK_CHAR_CLASS)
+    assert (
+        "\\u3000" in SPACE_CHAR_CLASS and "\\u200b" in BLANK_CHAR_CLASS
+    )  # 이스케이프 문자열(보이지 않는 글자 직접 기입 0)
     with owner_engine.connect() as connection:
         found = {
             r[0]: r[1]
@@ -599,11 +777,17 @@ def test_the_translation_table_covers_every_unique_index_and_input_check_of_the_
     assert {
         "ck_milestones_type_valid",
         "ck_milestones_customs_actual_from_records",
+        "ck_milestones_value_range",
         "ck_customs_records_accept_after_declare",
+        "ck_customs_records_date_range",
         "ck_milestone_changes_reason_required",
     } <= input_checks  # 공회전 방지 — 대상 CHECK를 실제로 찾는다
     assert "ck_milestones_one_owner" not in input_checks  # 내부 불변식은 입력 유래가 아니다
-    names = uniques | input_checks | {"ck_comm_logs_summary_not_blank"}
+    names = (
+        uniques
+        | input_checks
+        | {"ck_comm_logs_summary_not_blank", "ck_comm_logs_shipment_occurred_on_range"}
+    )
     assert names == set(MILESTONE_CONSTRAINT_ERRORS), names ^ set(MILESTONE_CONSTRAINT_ERRORS)
     assert not set(MILESTONE_CONSTRAINT_ERRORS) & set(CONSTRAINT_ERRORS)  # 두 표는 겹치지 않는다
 

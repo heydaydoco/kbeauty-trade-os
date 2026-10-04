@@ -38,7 +38,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db.base import Base
-from app.core.db.constraints import unique_active, value_in
+from app.core.db.constraints import BLANK_CHAR_CLASS, unique_active, value_in
 from app.core.db.mixins import (
     ActorMixin,
     PkMixin,
@@ -300,6 +300,14 @@ _DATETIME_TYPES = _in_list(DATETIME_MILESTONES)
 #: 여러 줄 자유 텍스트(메모)의 제어문자 규약 — 탭·LF·CR만 허용, 그 밖의 C0·DEL·C1 거부. 서비스가 1차(Cf·Zl·Zp·한글 채움까지
 #: `invisible_char_problem`으로 막는다)이고 DB는 C0·C1만 보는 최후 방어선이다(번역표 등재 — 500 금지).
 _MULTILINE_CLEAN = "translate({col}, chr(9) || chr(10) || chr(13), '') !~ '[[:cntrl:]]'"
+#: '보이는 글자 1개 이상'(`core.db.constraints.BLANK_CHAR_CLASS` — btrim은 U+0020만 자르던 구멍, 적대 검토 반영 ⑥).
+_HAS_VISIBLE = "{col} ~ '[^" + BLANK_CHAR_CLASS + "]'"
+#: 업무 날짜 범위 CHECK(2000-01-01~2999-12-31 — `BUSINESS_DATE_MIN·MAX`, 적대 검토 반영 ⑤).
+_DATE_IN_RANGE = "({col} IS NULL OR {col} BETWEEN DATE '2000-01-01' AND DATE '2999-12-31')"
+_INSTANT_IN_RANGE = (
+    "({col} IS NULL OR ({col} >= TIMESTAMPTZ '2000-01-01 00:00:00+00'"
+    " AND {col} < TIMESTAMPTZ '3000-01-01 00:00:00+00'))"
+)
 
 
 class CustomsRecord(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):
@@ -335,14 +343,21 @@ class CustomsRecord(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, Acto
         CheckConstraint(
             "accepted_on IS NULL OR accepted_on >= declared_on", name="accept_after_declare"
         ),
+        # ASCII 영숫자로 시작, 대문자 영숫자·`-`·`/`만(서비스가 대문자화 전 원문을 같은 규칙으로 422 — 적대 검토 반영 ④)
+        CheckConstraint(r"declaration_no ~ '^[A-Z0-9][A-Z0-9/-]*$'", name="declaration_no_shape"),
         CheckConstraint(
-            "btrim(declaration_no) <> '' AND declaration_no !~ '[[:space:][:cntrl:]]'"
-            " AND declaration_no = upper(declaration_no)",
-            name="declaration_no_shape",
+            "note IS NULL OR ("
+            + _HAS_VISIBLE.format(col="note")
+            + " AND "
+            + _MULTILINE_CLEAN.format(col="note")
+            + ")",
+            name="note_clean",
         ),
         CheckConstraint(
-            "note IS NULL OR (btrim(note) <> '' AND " + _MULTILINE_CLEAN.format(col="note") + ")",
-            name="note_clean",
+            _DATE_IN_RANGE.format(col="declared_on")
+            + " AND "
+            + _DATE_IN_RANGE.format(col="accepted_on"),
+            name="date_range",
         ),
         # (구분, 신고번호) 살아 있는 기록 유일 — 위반 409 DECLARATION_DUPLICATE(soft delete 후 재유입 = 신규).
         unique_active("customs_records", "declaration_kind", "declaration_no"),
@@ -406,6 +421,14 @@ class Milestone(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMix
             "(tz IS NULL) = (planned_at IS NULL AND actual_at IS NULL)", name="tz_iff_instant"
         ),
         CheckConstraint("tz IS NULL OR tz ~ '^[A-Za-z0-9_+/-]{1,64}$'", name="tz_format"),
+        # 업무 날짜 범위(2000~2999) — 달력 끝 값의 파생 산술 OverflowError 방지(적대 검토 반영 ⑤)
+        CheckConstraint(
+            " AND ".join(
+                [_DATE_IN_RANGE.format(col=c) for c in ("planned_on", "actual_on")]
+                + [_INSTANT_IN_RANGE.format(col=c) for c in ("planned_at", "actual_at")]
+            ),
+            name="value_range",
+        ),
         # 신고수리 실적은 통관 기록에서만 파생된다(X-02 — 같은 사실 2곳 저장 금지).
         CheckConstraint(
             "milestone_type <> 'CUSTOMS_CLEARED' OR (actual_on IS NULL AND actual_at IS NULL)",
@@ -451,8 +474,9 @@ class MilestoneChange(PkMixin, Base):
             name="reason_required",
         ),
         CheckConstraint(
-            "reason IS NULL OR (length(btrim(reason)) BETWEEN 1 AND 500"
-            " AND reason !~ '[[:cntrl:]]')",
+            "reason IS NULL OR (char_length(reason) BETWEEN 1 AND 500 AND "
+            + _HAS_VISIBLE.format(col="reason")
+            + " AND reason !~ '[[:cntrl:]]')",
             name="reason_clean",
         ),
         # 값 쌍 규약 — 한 값은 날짜형 또는 시각형 하나, 시각형 값에는 tz가 붙는다.

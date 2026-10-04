@@ -233,6 +233,23 @@ def test_gc_a20_rollover_history_reason_and_same_key_same_change(trade: TestClie
     assert _changes(sid) == 3 and _rows(trade, sid)["ETD"]["rollover_count"] == 2
 
 
+def test_a_reason_of_only_unicode_spaces_is_no_reason(trade: TestClient) -> None:
+    """적대 검토 반영 ⑥ — U+3000·U+00A0·U+2003만의 롤오버 사유 = 사유 없음(422 REASON_REQUIRED)·이력 0. 서비스를 우회한 SQL은
+    DB CHECK `reason_clean`이 거부한다(제약 시험이 고정)"""
+    sid = _shipment(trade)["id"]
+    _plan(trade, sid, "ETD", {"planned_on": "2026-11-05"})
+    blank = "\N{IDEOGRAPHIC SPACE}\N{NO-BREAK SPACE}\N{EM SPACE}"
+    response = _plan(
+        trade,
+        sid,
+        "ETD",
+        {"planned_on": "2026-11-06", "version": _version(trade, sid, "ETD"), "reason": blank},
+    )
+    assert response.status_code == 422
+    assert _code(response) == "SHIPMENTS.MILESTONE.REASON_REQUIRED"
+    assert _changes(sid) == 1
+
+
 def test_rollover_badges_count_only_etd_eta_and_cargo_closing(trade: TestClient) -> None:
     """적대 검토 반영 ③(design-B B9·D6) — '롤오버'는 ETD·ETA·CARGO_CLOSING의 계획 변경만: PSI 계획 변경은 이력(PLAN_CHANGED·사유)은
     남지만 배지(rollover_count·unnotified_rollovers) 0, CARGO_CLOSING 계획 변경은 1"""
@@ -448,6 +465,36 @@ def test_a_stale_or_missing_row_version_is_a_conflict(trade: TestClient) -> None
     assert _plan(trade, sid, "ETA", {**body, "version": current + 1}).status_code == 409
     assert _plan(trade, sid, "ETA", {**body, "version": current}).status_code == 200
     assert _rows(trade, sid)["ETA"]["planned"] == "2026-12-02"
+
+
+@pytest.mark.group_k
+def test_milestone_values_stay_inside_the_business_range(trade: TestClient) -> None:
+    """적대 검토 반영 ⑤ — 날짜형 계획 2000-01-01~2999-12-31 경계 통과·밖(1999-12-31·9999-12-31·0001-01-01) 422 `INVALID_FIELD`,
+    시각형 0001-01-01T00:00+09:00(UTC 변환 OverflowError로 500이던 값)·3000-01-01Z 422, 2999-12-31T23:59:59Z 통과.
+    날짜형 실적 1999-12-31도 422(출고 전 실적 검사보다 값 검증이 먼저 — 500 0)"""
+    sid = _shipment(trade, released=True)["id"]
+    invalid_field = "COMMON.VALIDATION.INVALID_FIELD"
+    for bad in ("1999-12-31", "9999-12-31", "0001-01-01"):
+        response = _plan(trade, sid, "PSI", {"planned_on": bad})
+        assert response.status_code == 422 and _code(response) == invalid_field, bad
+        assert "planned_on" in response.json()["error"]["detail"], bad
+    assert _plan(trade, sid, "PSI", {"planned_on": "2000-01-01"}).status_code == 200
+    edge = {
+        "planned_on": "2999-12-31",
+        "version": _version(trade, sid, "PSI"),
+        "reason": "경계",
+    }
+    assert _plan(trade, sid, "PSI", edge).status_code == 200
+    # 대금만기 산술(ETD + 일수)이 달력 끝을 넘지 않는다 — 범위 경계 값으로도 보드가 200
+    assert _plan(trade, sid, "ETD", {"planned_on": "2999-12-31"}).status_code == 200
+    assert trade.get(f"{SHIPMENTS}/{sid}/milestones").status_code == 200
+    for bad in ("0001-01-01T00:00:00+09:00", "3000-01-01T00:00:00Z", "1999-12-31T23:59:59Z"):
+        response = _plan(trade, sid, "DOC_CUTOFF", {"planned_at": bad, "tz": "Asia/Seoul"})
+        assert response.status_code == 422 and _code(response) == invalid_field, bad
+    ok = _plan(trade, sid, "DOC_CUTOFF", {"planned_at": "2999-12-31T23:59:59Z", "tz": "Asia/Seoul"})
+    assert ok.status_code == 200, ok.text
+    actual = _actual(trade, sid, "ETA", {"actual_on": "1999-12-31"})
+    assert actual.status_code == 422 and _code(actual) == invalid_field
 
 
 # ── 실적 (R-01·R-18·A20) ──────────────────────────────────────────────────────
@@ -823,7 +870,10 @@ def test_a_rollover_notice_is_a_record_not_a_send(trade: TestClient) -> None:
     for bad, field in (
         ({**body, "counterpart_partner_id": cert_agency}, "counterpart_partner_id"),
         ({**body, "occurred_on": _day(1)}, "occurred_on"),
+        ({**body, "occurred_on": "1999-12-31"}, "occurred_on"),  # 업무 날짜 범위(적대 검토 ⑤)
+        ({**body, "occurred_on": "0001-01-01"}, "occurred_on"),
         ({**body, "summary": "   "}, "summary"),
+        ({**body, "summary": "\N{IDEOGRAPHIC SPACE}\N{NO-BREAK SPACE}\N{EM SPACE}"}, "summary"),
         ({**body, "summary": "요지​"}, "summary"),
     ):
         rejected = trade.post(url, json=bad, headers=idem())

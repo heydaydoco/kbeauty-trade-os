@@ -8,17 +8,21 @@ S3-2 PR-4a 마일스톤·롤오버·통보·통관 스키마 — M15 (ADR-0074·
   ① item_profile_milestone_types — 품목군 마일스톤 세트(선적 저장형 8종만 CHECK, (품목군, 종류) 부분 유니크 — 이름은 63자 상한 때문에
      `…_profile_type_active`로 직접 지음). 쓰기 경로는 PR-4c(ADMIN 전용) — 표는 여기서 먼저 선다(계획서 PR-4c 행 "표는 M15에 이미 있음").
   ② customs_records — 통관 기록(R-16: M14 → M15 이동). 선적:통관 = 1:N, (신고 구분, 신고번호) 부분 유니크, **수리일 = 유일 원천**(X-02).
-     CHECK kind_valid·accept_after_declare·declaration_no_shape(비공백·공백/제어문자 없음·대문자)·note_clean(탭·LF·CR만 허용). 세율·HS 열 없음.
+     CHECK kind_valid·accept_after_declare·declaration_no_shape(ASCII `^[A-Z0-9][A-Z0-9/-]*$`)·note_clean(보이는 글자 1개 이상·탭·LF·CR만
+     허용)·date_range(2000~2999). 세율·HS 열 없음.
   ③ milestones — 소유자(선적 또는 OEM PO 정확히 하나) × 저장형 종류 1행, 계획/실적 이중값(날짜형 DATE / 시각형 TIMESTAMPTZ+tz).
      CHECK one_owner·type_valid(**파생 3종 거부**)·owner_type_scope(OEM 4종 ⇔ po_id)·date_shape·datetime_shape·tz_iff_instant·tz_format·
-     **customs_actual_from_records**(신고수리 실적 열 NULL 강제 — X-02). 부분 유니크 (shipment_id, 종류)·(po_id, 종류).
+     value_range(날짜 2000~2999·시각 [2000-01-01Z, 3000-01-01Z))·**customs_actual_from_records**(신고수리 실적 열 NULL 강제 — X-02).
+     부분 유니크 (shipment_id, 종류)·(po_id, 종류).
   ④ milestone_changes — 변경 이력(**IMMUTABLE** — revoke_mutations). CHECK change_kind_valid·reason_required(PLAN_CHANGED·ACTUAL_CORRECTED)·
-     reason_clean·value_pairs·kind_values·changed(무변경 이력 금지).
+     reason_clean(1~500자·보이는 글자 1개 이상·제어문자 0)·value_pairs·kind_values·changed(무변경 이력 금지).
   ⑤ milestone_change_notices — 통보 연결(**IMMUTABLE**), UNIQUE (change_id, comm_log_id).
-  ⑥ comm_logs 주제 CHECK 재정의 — `subject_type IN ('CERTIFICATION', 'SHIPMENT')`(기존 표 변경 1건, 수기 drop→create — 함정 ①·⑪).
+  ⑥ comm_logs 주제 CHECK 재정의 — `subject_type IN ('CERTIFICATION', 'SHIPMENT')`(기존 표 변경, 수기 drop→create — 함정 ①·⑪).
+  ⑦ comm_logs 요지 CHECK 재정의(보이는 글자 1개 이상 — 범용 주제는 유니코드 공백, SHIPMENT는 서식·채움 글자까지 빈 글자) +
+     선적 통보 오간 날 범위 CHECK 신설(SHIPMENT만 2000~2999). 적대 검토 반영 ⑤·⑥(미병합 리비전이라 같은 파일 수정).
 
 체크리스트:
-  ■ 신규 5표 + 기존 표 CHECK 재정의 1건(comm_logs). shipments·SO·PO 스키마 무변경.
+  ■ 신규 5표 + 기존 표 CHECK 재정의 2건·신설 1건(comm_logs — 신설은 SHIPMENT 행만 대상이라 기존 데이터 무접촉). shipments·SO·PO 스키마 무변경.
   ■ CHECK는 create_table 안에 op.f() 최종 이름(alembic check가 CHECK 정의를 못 보므로 정의문 시험
     tests/integration/test_milestone_constraints.py가 pg_get_constraintdef로 고정). 식별자 63자 이내(시험이 실측).
   ■ 멱등·중복 UNIQUE는 부분 인덱스(WHERE deleted_at IS NULL — §17.4). IMMUTABLE 2표는 soft delete 열이 없어 일반 UNIQUE.
@@ -46,6 +50,59 @@ depends_on: str | Sequence[str] | None = None
 _COMM_SUBJECT_CHECK = "ck_comm_logs_subject_type_valid"
 _COMM_SUBJECT_OLD = "subject_type IN ('CERTIFICATION')"
 _COMM_SUBJECT_NEW = "subject_type IN ('CERTIFICATION', 'SHIPMENT')"
+# ── 적대 검토 반영(⑤·⑥) — 이 리비전은 미병합이라 같은 파일을 고쳤다 ─────────────────────────────────────────────
+#: '보이는 글자 1개 이상' 판정 집합(PG ARE 괄호식 내용) — btrim은 U+0020만 잘라 U+3000·U+00A0·U+2003만의 값이 통과하던 구멍.
+#: app/core/db/constraints.py의 SPACE_CHAR_CLASS·BLANK_CHAR_CLASS와 같은 문자열이다(마이그레이션은 앱 상수를 임포트하지 않는다 —
+#: 이력 고정. 대사는 tests/integration/test_milestone_constraints.py).
+_SPACE_POINTS: tuple[int | tuple[int, int], ...] = (
+    0x0085,
+    0x00A0,
+    0x1680,
+    (0x2000, 0x200A),
+    0x2028,
+    0x2029,
+    0x202F,
+    0x205F,
+    0x3000,
+)
+_INVISIBLE_POINTS: tuple[int | tuple[int, int], ...] = (
+    0x180E,
+    (0x200B, 0x200D),
+    0x2060,
+    0xFEFF,
+    0x115F,
+    0x1160,
+    0x3164,
+    0xFFA0,
+)
+
+
+def _char_class(points: tuple[int | tuple[int, int], ...]) -> str:
+    """PG ARE 괄호식 내용(`\\uXXXX`·`\\uXXXX-\\uYYYY`) — 정의문에 보이지 않는 글자를 직접 넣지 않는다."""
+    return "".join(
+        f"\\u{p[0]:04x}-\\u{p[1]:04x}" if isinstance(p, tuple) else f"\\u{p:04x}" for p in points
+    )
+
+
+_SPACE = "\\s" + _char_class(_SPACE_POINTS)
+_BLANK = _SPACE + _char_class(_INVISIBLE_POINTS)
+#: 업무 날짜 범위(2000~2999 — 휴일 연도 규약과 같다). 달력 끝 값의 파생 산술 OverflowError(응답 500)를 입구에서 막는다.
+_DATE_RANGE = "({col} IS NULL OR {col} BETWEEN DATE '2000-01-01' AND DATE '2999-12-31')"
+_INSTANT_RANGE = (
+    "({col} IS NULL OR ({col} >= TIMESTAMPTZ '2000-01-01 00:00:00+00'"
+    " AND {col} < TIMESTAMPTZ '3000-01-01 00:00:00+00'))"
+)
+_COMM_SUMMARY_CHECK = "ck_comm_logs_summary_not_blank"
+_COMM_SUMMARY_OLD = "length(btrim(summary)) > 0"
+#: 범용 주제는 유니코드 공백만 빈 글자로(기존 행 = 파이썬 strip 통과분이라 호환), 선적 통보는 서식·채움 글자까지 빈 글자로.
+_COMM_SUMMARY_NEW = (
+    f"summary ~ '[^{_SPACE}]' AND (subject_type <> 'SHIPMENT' OR summary ~ '[^{_BLANK}]')"
+)
+_COMM_OCCURRED_CHECK = "ck_comm_logs_shipment_occurred_on_range"
+#: 선적 통보의 오간 날 = 업무 날짜 범위(범용 주제 행은 대상 밖 — 기존 데이터 무접촉).
+_COMM_OCCURRED = (
+    "subject_type <> 'SHIPMENT' OR occurred_on BETWEEN DATE '2000-01-01' AND DATE '2999-12-31'"
+)
 #: downgrade 가드가 세는 표(행이 있으면 손실 — soft delete 행 포함).
 _GUARDED_TABLES = (
     "customs_records",
@@ -136,17 +193,20 @@ def upgrade() -> None:
         sa.Column("created_by_id", sa.BigInteger(), nullable=True),
         sa.Column("updated_by_id", sa.BigInteger(), nullable=True),
         sa.CheckConstraint(
-            "btrim(declaration_no) <> '' AND declaration_no !~ '[[:space:][:cntrl:]]'"
-            " AND declaration_no = upper(declaration_no)",
+            r"declaration_no ~ '^[A-Z0-9][A-Z0-9/-]*$'",
             name=op.f("ck_customs_records_declaration_no_shape"),
         ),
         sa.CheckConstraint(
             "declaration_kind IN ('EXPORT', 'IMPORT')", name=op.f("ck_customs_records_kind_valid")
         ),
         sa.CheckConstraint(
-            "note IS NULL OR (btrim(note) <> '' AND translate(note, chr(9) || chr(10) || chr(13), '')"
-            " !~ '[[:cntrl:]]')",
+            f"note IS NULL OR (note ~ '[^{_BLANK}]'"
+            " AND translate(note, chr(9) || chr(10) || chr(13), '') !~ '[[:cntrl:]]')",
             name=op.f("ck_customs_records_note_clean"),
+        ),
+        sa.CheckConstraint(
+            _DATE_RANGE.format(col="declared_on") + " AND " + _DATE_RANGE.format(col="accepted_on"),
+            name=op.f("ck_customs_records_date_range"),
         ),
         sa.CheckConstraint(
             "accepted_on IS NULL OR accepted_on >= declared_on",
@@ -254,6 +314,13 @@ def upgrade() -> None:
             "tz IS NULL OR tz ~ '^[A-Za-z0-9_+/-]{1,64}$'", name=op.f("ck_milestones_tz_format")
         ),
         sa.CheckConstraint(
+            " AND ".join(
+                [_DATE_RANGE.format(col=c) for c in ("planned_on", "actual_on")]
+                + [_INSTANT_RANGE.format(col=c) for c in ("planned_at", "actual_at")]
+            ),
+            name=op.f("ck_milestones_value_range"),
+        ),
+        sa.CheckConstraint(
             "(shipment_id IS NULL) <> (po_id IS NULL)", name=op.f("ck_milestones_one_owner")
         ),
         sa.CheckConstraint(
@@ -333,7 +400,7 @@ def upgrade() -> None:
             name=op.f("ck_milestone_changes_reason_required"),
         ),
         sa.CheckConstraint(
-            "reason IS NULL OR (length(btrim(reason)) BETWEEN 1 AND 500"
+            f"reason IS NULL OR (char_length(reason) BETWEEN 1 AND 500 AND reason ~ '[^{_BLANK}]'"
             " AND reason !~ '[[:cntrl:]]')",
             name=op.f("ck_milestone_changes_reason_clean"),
         ),
@@ -421,6 +488,10 @@ def upgrade() -> None:
     # ⑥ 기존 표 변경 — comm_logs 주제 CHECK 재정의(autogenerate 미감지 — 함정 ①, op.f() 필수 — 함정 ⑪)
     op.drop_constraint(op.f(_COMM_SUBJECT_CHECK), "comm_logs", type_="check")
     op.create_check_constraint(op.f(_COMM_SUBJECT_CHECK), "comm_logs", _COMM_SUBJECT_NEW)
+    # ⑦ comm_logs 요지 CHECK 재정의(보이는 글자 1개 이상) + 선적 통보 오간 날 범위 CHECK 신설(적대 검토 반영 ⑤·⑥)
+    op.drop_constraint(op.f(_COMM_SUMMARY_CHECK), "comm_logs", type_="check")
+    op.create_check_constraint(op.f(_COMM_SUMMARY_CHECK), "comm_logs", _COMM_SUMMARY_NEW)
+    op.create_check_constraint(op.f(_COMM_OCCURRED_CHECK), "comm_logs", _COMM_OCCURRED)
 
 
 def refuse_lossy_downgrade(bind: sa.engine.Connection) -> None:
@@ -445,6 +516,9 @@ def refuse_lossy_downgrade(bind: sa.engine.Connection) -> None:
 
 def downgrade() -> None:
     refuse_lossy_downgrade(op.get_bind())
+    op.drop_constraint(op.f(_COMM_OCCURRED_CHECK), "comm_logs", type_="check")
+    op.drop_constraint(op.f(_COMM_SUMMARY_CHECK), "comm_logs", type_="check")
+    op.create_check_constraint(op.f(_COMM_SUMMARY_CHECK), "comm_logs", _COMM_SUMMARY_OLD)
     op.drop_constraint(op.f(_COMM_SUBJECT_CHECK), "comm_logs", type_="check")
     op.create_check_constraint(op.f(_COMM_SUBJECT_CHECK), "comm_logs", _COMM_SUBJECT_OLD)
     op.drop_index("ix_milestone_change_notices_comm_log_id", table_name="milestone_change_notices")

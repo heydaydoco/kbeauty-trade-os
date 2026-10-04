@@ -341,3 +341,55 @@ def test_logistics_records_customs_and_viewers_cannot() -> None:
             assert _record(client, sid).status_code == 403
             assert client.get(f"{SHIPMENTS}/{sid}/customs-records").status_code == 200
     assert scalar("SELECT count(*) FROM customs_records") == 1
+
+
+# ── 적대 검토 반영 ④·⑤ — 신고번호 ASCII·길이, 날짜 범위 ─────────────────────────────
+
+
+#: 대문자화로 길이가 느는 글자(ß → SS·ﬃ → FFI)·비ASCII·선두 구분자·허용 밖 기호·전각 숫자.
+_BAD_NUMBERS = ("ß" * 21, "ﬃ" * 14, "ÄB-1", "-AB1", "AB_1", "１２３")
+
+
+@pytest.mark.group_k
+def test_declaration_numbers_are_ascii_and_fit_after_normalization(trade: TestClient) -> None:
+    """적대 검토 반영 ④ — 'ß'×21·'ﬃ'×14(대문자화하면 42자 — 종전 VARCHAR(40) DataError 500)·비ASCII·선두 구분자·`_`·전각 숫자는
+    POST·PATCH 모두 422 `INVALID_FIELD`(detail.declaration_no)·저장 0, ASCII 40자·슬래시 번호는 통과(대문자 저장)"""
+    sid = _shipment(trade)["id"]
+    for bad in _BAD_NUMBERS:
+        response = _record(trade, sid, declaration_no=bad)
+        assert response.status_code == 422, (bad, response.text)
+        assert _code(response) == "COMMON.VALIDATION.INVALID_FIELD", bad
+        assert "declaration_no" in response.json()["error"]["detail"], bad
+    assert scalar("SELECT count(*) FROM customs_records WHERE shipment_id = :s", s=sid) == 0
+    longest = "ab/" + "7" * 37
+    ok = _record(trade, sid, declaration_no=longest)
+    assert ok.status_code == 201, ok.text
+    record = ok.json()
+    assert record["declaration_no"] == longest.upper() and len(record["declaration_no"]) == 40
+    for bad in _BAD_NUMBERS:
+        response = _patch(trade, sid, record, declaration_no=bad, reason="번호 정정")
+        assert response.status_code == 422 and _code(response) == "COMMON.VALIDATION.INVALID_FIELD"
+    assert scalar("SELECT declaration_no FROM customs_records WHERE id = :i", i=record["id"]) == (
+        longest.upper()
+    )
+
+
+@pytest.mark.group_k
+def test_customs_dates_stay_inside_the_business_range(trade: TestClient) -> None:
+    """적대 검토 반영 ⑤ — 신고일·수리일 2000-01-01 미만은 422 `INVALID_FIELD`(0001-01-01 포함 — 500 0), 경계 2000-01-01은 통과.
+    정정(PATCH)도 같다. 상한은 '오늘 이후 422 DATE_IN_FUTURE'가 먼저 막는다(9999-12-31도 422)"""
+    sid = _shipment(trade)["id"]
+    invalid_field = "COMMON.VALIDATION.INVALID_FIELD"
+    for body in (
+        {"declared_on": "1999-12-31"},
+        {"declared_on": "0001-01-01"},
+        {"declared_on": "2000-01-01", "accepted_on": "1999-12-31"},
+    ):
+        response = _record(trade, sid, **body)
+        assert response.status_code == 422 and _code(response) == invalid_field, body
+    far = _record(trade, sid, declared_on="9999-12-31")
+    assert far.status_code == 422, far.text
+    ok = _record(trade, sid, declared_on="2000-01-01", accepted_on="2000-01-01")
+    assert ok.status_code == 201, ok.text
+    response = _patch(trade, sid, ok.json(), declared_on="0001-01-01", reason="정정")
+    assert response.status_code == 422 and _code(response) == invalid_field

@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -43,6 +43,9 @@ from app.modules.trade_chain.milestone_view import (
 )
 from app.modules.trade_docs import schedule
 from app.modules.trade_docs.constants import (
+    BUSINESS_DATE_MAX,
+    BUSINESS_DATE_MESSAGE,
+    BUSINESS_DATE_MIN,
     DATETIME_MILESTONES,
     DERIVED_MILESTONES,
     RELEASE_BOUND_ACTUALS,
@@ -75,6 +78,9 @@ NOTICE_PARTNER_TYPES: tuple[str, ...] = (
 )
 #: 통보 요지에서만 허용하는 줄 구분 문자(여러 줄 요지) — 그 밖의 보이지 않는 글자는 422.
 _SUMMARY_LINE_BREAKS = frozenset("\t\n\r")
+#: 시각형 값의 업무 범위 — [2000-01-01T00:00Z, 3000-01-01T00:00Z)(날짜형 BUSINESS_DATE_MIN~MAX와 같은 연도 범위, DB CHECK `value_range`).
+_INSTANT_MIN = datetime(2000, 1, 1, tzinfo=UTC)
+_INSTANT_END = datetime(3000, 1, 1, tzinfo=UTC)
 
 
 # ── 공통 검증 ─────────────────────────────────────────────────────────────────
@@ -159,11 +165,16 @@ def _value(
             if required:
                 raise _shape_error(at_key, milestone_type)
             return MilestoneValue()
+        # 범위 검사는 UTC 변환 **전에**(aware 비교는 변환 없이 안전 — 0001년 값의 astimezone이 OverflowError 500을 내던 구멍)
+        if not _INSTANT_MIN <= at < _INSTANT_END:
+            raise invalid(at_key, BUSINESS_DATE_MESSAGE)
         return MilestoneValue(at=at.astimezone(UTC), tz=_zone_name(tz))
     if at is not None or tz is not None:
         raise _shape_error(at_key if at is not None else "tz", milestone_type)
     if on is None and required:
         raise _shape_error(on_key, milestone_type)
+    if on is not None and not BUSINESS_DATE_MIN <= on <= BUSINESS_DATE_MAX:
+        raise invalid(on_key, BUSINESS_DATE_MESSAGE)
     return MilestoneValue(on=on)
 
 
@@ -552,6 +563,8 @@ def record_milestone_notice(
         change = shipments.require_change(session, peek.id, change_id)  # 부모-자식 404
         _require_owner_active(peek)
         occurred_on: date = payload["occurred_on"]
+        if occurred_on < BUSINESS_DATE_MIN:
+            raise invalid("occurred_on", BUSINESS_DATE_MESSAGE)
         if occurred_on > today_kst():
             raise invalid("occurred_on", "실제로 알린 날은 오늘 이후일 수 없습니다.")
         summary = _summary(payload.get("summary"))

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any
 
@@ -34,6 +35,12 @@ from app.modules.partners import service as partners
 from app.modules.shipments import service as shipments
 from app.modules.shipments.models import CustomsRecord, Shipment
 from app.modules.trade_chain.milestone_view import RECORD_EDITABLE_STATES, customs_body
+from app.modules.trade_docs.constants import (
+    BUSINESS_DATE_MAX,
+    BUSINESS_DATE_MESSAGE,
+    BUSINESS_DATE_MIN,
+    DECLARATION_NO_MAX,
+)
 from app.modules.trade_docs.locking import lock_document
 from app.modules.trade_docs.validation import invalid
 
@@ -42,6 +49,8 @@ RECORDED_EVENT = "shipments.customs.recorded"
 #: 정정 시 사유가 필요한 사실 열(수리일은 '기존 값이 있을 때'만 — 첫 입력은 기록).
 _FACT_FIELDS = ("declaration_no", "declared_on", "accepted_on")
 _NOTE_LINE_BREAKS = frozenset("\t\n\r")
+#: 신고번호 문자 규약(대문자화 전 원문) — ASCII 영숫자로 시작, 영숫자·`-`·`/`만. 명시적 문자 범위라 유니코드 숫자·문자는 들어오지 않는다.
+_DECLARATION_NO = re.compile(r"[A-Za-z0-9][A-Za-z0-9/-]*")
 
 
 def _require_active(row: Shipment) -> None:
@@ -53,15 +62,31 @@ def _require_active(row: Shipment) -> None:
 
 
 def _declaration_no(raw: object) -> str:
-    """신고번호 — strip 전 원문의 보이지 않는 글자는 422, 앞뒤 공백 제거·대문자 정규화(같은 번호의 대소문자 이중 등록 차단), 안쪽 공백 422."""
+    """신고번호 — strip 전 원문의 보이지 않는 글자는 422, 앞뒤 공백 제거, 안쪽 공백 422, **ASCII 영문·숫자·`-`·`/` 40자 이내**(첫 글자 영숫자)
+    아니면 422, 그 뒤 대문자 정규화(같은 번호의 대소문자 이중 등록 차단).
+
+    ASCII 검사를 대문자화 **전에** 한다 — 'ß'·'ﬃ' 같은 글자는 대문자화로 길이가 늘어(ß → SS) VARCHAR(40)을 넘겨 500이 나던 구멍
+    (적대 검토 반영 ④). DB CHECK `declaration_no_shape`가 같은 ASCII 패턴을 강제한다(번역표 → 422).
+    """
     text = str(raw or "")
     problem = invisible_char_problem(text, label="신고번호")
     if problem is not None:
         raise invalid("declaration_no", problem)
-    cleaned = text.strip().upper()
+    cleaned = text.strip()
     if not cleaned or any(ch.isspace() for ch in cleaned):
         raise invalid("declaration_no", "신고번호는 공백 없이 입력해 주세요.")
-    return cleaned
+    if len(cleaned) > DECLARATION_NO_MAX or _DECLARATION_NO.fullmatch(cleaned) is None:
+        raise invalid(
+            "declaration_no",
+            f"신고번호는 영문·숫자·하이픈(-)·슬래시(/)로 {DECLARATION_NO_MAX}자 이내여야 합니다"
+            "(첫 글자는 영문·숫자).",
+        )
+    return cleaned.upper()
+
+
+def _require_in_range(field: str, value: date | None) -> None:
+    if value is not None and not BUSINESS_DATE_MIN <= value <= BUSINESS_DATE_MAX:
+        raise invalid(field, BUSINESS_DATE_MESSAGE)
 
 
 def _note(raw: object) -> str | None:
@@ -87,6 +112,9 @@ def _reason(raw: object) -> str | None:
 
 
 def _check_dates(declared_on: date, accepted_on: date | None) -> None:
+    # 업무 날짜 범위(2000-01-01~2999-12-31 — 휴일 연도 규약과 같다) 밖은 422(달력 끝 산술 500 방지 — 적대 검토 반영 ⑤)
+    _require_in_range("declared_on", declared_on)
+    _require_in_range("accepted_on", accepted_on)
     today = today_kst()
     future = {
         field: "오늘(한국 날짜) 이후일 수 없습니다."
