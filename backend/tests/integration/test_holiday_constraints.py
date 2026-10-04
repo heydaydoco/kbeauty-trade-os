@@ -23,6 +23,7 @@ from app.modules.holidays.models import (
     HOLIDAY_CALENDAR_FK,
     HOLIDAY_DAY_UNIQUE,
 )
+from app.modules.holidays.service import CONSTRAINT_ERRORS
 
 pytestmark = pytest.mark.group_k
 
@@ -218,3 +219,22 @@ def test_definitions_are_registered_and_names_fit_the_identifier_limit() -> None
     assert all(len(name) <= MAX_IDENTIFIER_LENGTH for name in [*found, *indexes])
     # markets FK가 아니다(ADR-0082) — 국가 열은 어떤 FK에도 단독으로 묶이지 않는다
     assert not any("REFERENCES markets" in definition for definition in found.values())
+
+
+def test_every_constraint_has_a_business_error_translation() -> None:
+    """번역표 완결성 — 두 표의 모든 제약·유니크 인덱스가 `service.CONSTRAINT_ERRORS`에 있다(신규 제약이 번역 없이 500으로 새지 않게)"""
+    with owner_engine.connect() as connection:
+        names = {
+            row[0]
+            for row in connection.execute(
+                text(
+                    "SELECT conname FROM pg_constraint"
+                    " WHERE conrelid IN ('holidays'::regclass, 'holiday_calendar_years'::regclass)"
+                    " UNION SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid"
+                    " WHERE i.indisunique AND i.indrelid IN"
+                    " ('holidays'::regclass, 'holiday_calendar_years'::regclass)"
+                )
+            )
+        }
+    assert len(names) >= 15, "스캔이 공회전한다"
+    assert names <= set(CONSTRAINT_ERRORS), sorted(names - set(CONSTRAINT_ERRORS))
