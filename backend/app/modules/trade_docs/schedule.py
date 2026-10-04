@@ -414,3 +414,50 @@ def loading_fulfilment(
         latest = done[-1]  # 존재값의 MAX(전표 모듈은 내장 max 호출 0 — 채번 MAX+1 금지 스캔)
         return LoadingState.MET if latest <= deadline.value else LoadingState.MET_LATE
     return LoadingState.OVERDUE if today > deadline.value else LoadingState.OPEN
+
+
+# ── PO 라인 입고예정 (B17 — 계산값, 열 없음 · S3-2 PR-5a / ADR-0085 · P-05) ─────────────────────
+
+
+class ReceiptStatus(StrEnum):
+    """PO 라인 입고예정 판정 — 살아 있는 수입선적 0건 / ETA 없는 선적 1건↑(판정 불가 — 날짜 없음) / 전 선적 ETA 있음."""
+
+    NONE = "NONE"
+    UNSCHEDULED = "UNSCHEDULED"
+    SCHEDULED = "SCHEDULED"
+
+
+@dataclass(frozen=True, slots=True)
+class ReceiptEstimate:
+    """입고예정 계산값 — `value`는 SCHEDULED일 때만(가장 늦은 ETA), `basis`는 **전 선적이 ETA 실적이면 ACTUAL**(하나라도 계획이면 PLANNED)."""
+
+    status: ReceiptStatus
+    value: date | None
+    basis: Basis | None
+    shipment_count: int
+    unscheduled_count: int
+
+
+def expected_receipt(etas: Iterable[DateValue | None]) -> ReceiptEstimate:
+    """그 PO 라인을 참조하는 **살아 있는 수입선적들의 ETA 유효값**(선적당 1개 — 실적 우선 `effective`, 없으면 None) → 입고예정.
+
+    대표값 = **가장 늦은 ETA**(전량이 도착해야 입고가 완결 — design-B B17 보수값). ETA가 없는 선적이 하나라도 있으면 가장 늦은 날을 알 수
+    없으므로 **UNSCHEDULED·값 없음**이다(아는 날짜 중 가장 늦은 값으로 대신 채우지 않는다 — fail-visible, 자율 확정). 선적이 없으면 NONE
+    ('입고예정 미정'). 배정되지 않은 PO 수량(배정 가능량 > 0)은 이 값이 덮지 않는다 — 화면은 배정 가능량을 함께 보인다(호출자 몫).
+    """
+    values = list(etas)
+    known = sorted((v for v in values if v is not None), key=lambda v: v.value)
+    unscheduled = len(values) - len(known)
+    if not values:
+        return ReceiptEstimate(ReceiptStatus.NONE, None, None, 0, 0)
+    if unscheduled:
+        return ReceiptEstimate(ReceiptStatus.UNSCHEDULED, None, None, len(values), unscheduled)
+    latest = known[-1]  # 존재값의 MAX(전표 모듈은 내장 max 호출 0 — 채번 MAX+1 금지 스캔)
+    all_actual = all(v.basis is Basis.ACTUAL for v in known)
+    return ReceiptEstimate(
+        ReceiptStatus.SCHEDULED,
+        latest.value,
+        Basis.ACTUAL if all_actual else Basis.PLANNED,
+        len(values),
+        0,
+    )

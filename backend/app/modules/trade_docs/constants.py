@@ -168,6 +168,14 @@ class PoKind(StrEnum):
     OEM_PRODUCTION = "OEM_PRODUCTION"
 
 
+#: PO 구분 → 공급사(거래 상대)가 가져야 하는 거래처 유형(하나 이상)과 화면 문구 — **단일 출처**(design-F F3).
+#: PO 생성(공급사 검증)과 수입선적 생성(거래 상대 재검증 — S3-2 PR-5a)이 같은 표를 읽는다(두 곳이 갈리면 한쪽이 다른 유형을 받는다).
+PO_SUPPLIER_TYPES: dict[str, tuple[tuple[str, ...], str]] = {
+    PoKind.PURCHASE.value: (("SUPPLIER", "OEM"), "공급사 또는 OEM"),
+    PoKind.OEM_PRODUCTION.value: (("OEM",), "OEM"),
+}
+
+
 class ShipmentKind(StrEnum):
     """선적 구분 4값(§7.5 문면 — ADR-0074). **채널입고·샘플무상은 값만 싣고 생성 경로가 닫혀 있다** — DB
     `ck_shipments_kind_source`가 두 값의 행을 거부한다(S4-3·S5-2·무상 SO 판정 세션이 CHECK를 재정의하며 연다, 부채 Q-03).

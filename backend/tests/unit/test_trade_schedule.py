@@ -443,3 +443,40 @@ def test_calendar_overflow_is_unknown_not_an_exception() -> None:
     early = AnchorContext(etd=s.effective(None, date(1, 1, 3)))
     assert s.payment_due(Terms("TT_ADVANCE", 3000, "ETD_DATE", -7), early, None) == unknown
     assert s.loading_fulfilment(unknown, None, None, date(2026, 10, 1)) is LoadingState.UNKNOWN
+
+
+# ── PO 라인 입고예정 (S3-2 PR-5a / design-B B17 / ADR-0085 — 계산값, 열 없음) ─────────────────────────
+
+
+def test_expected_receipt_is_the_latest_eta_of_the_live_import_shipments() -> None:
+    """B17 — 대표값 = 살아 있는 수입선적 ETA(유효값) 중 **가장 늦은 날**(전량 도착이 입고 완결 — 보수값). 입력 순서와 무관하다.
+    basis = 전 선적이 ETA 실적이면 ACTUAL, 하나라도 계획이면 PLANNED(하나만 도착한 라인을 '도착 완료'로 보이지 않는다)"""
+    early = DateValue(date(2026, 11, 2), ACT)
+    late = DateValue(date(2026, 11, 20), PLN)
+    for order in ([early, late], [late, early]):
+        got = s.expected_receipt(order)
+        assert got == s.ReceiptEstimate(s.ReceiptStatus.SCHEDULED, date(2026, 11, 20), PLN, 2, 0)
+    # 늦은 쪽이 실적이어도 다른 선적이 계획이면 PLANNED
+    mixed = s.expected_receipt(
+        [DateValue(date(2026, 11, 2), PLN), DateValue(date(2026, 12, 1), ACT)]
+    )
+    assert (mixed.value, mixed.basis) == (date(2026, 12, 1), PLN)
+    arrived = s.expected_receipt(
+        [DateValue(date(2026, 11, 2), ACT), DateValue(date(2026, 11, 3), ACT)]
+    )
+    assert (arrived.status, arrived.value, arrived.basis) == (
+        s.ReceiptStatus.SCHEDULED,
+        date(2026, 11, 3),
+        ACT,
+    )
+
+
+def test_expected_receipt_without_an_eta_on_any_shipment_is_unscheduled_not_the_known_max() -> None:
+    """fail-visible(자율 확정) — ETA가 없는 선적이 하나라도 있으면 UNSCHEDULED·값 없음(아는 날짜 중 가장 늦은 값으로 대신 채우지 않는다),
+    선적이 없으면 NONE('입고예정 미정')"""
+    partly = s.expected_receipt([DateValue(date(2026, 11, 2), PLN), None])
+    assert partly == s.ReceiptEstimate(s.ReceiptStatus.UNSCHEDULED, None, None, 2, 1)
+    assert s.expected_receipt([None]) == s.ReceiptEstimate(
+        s.ReceiptStatus.UNSCHEDULED, None, None, 1, 1
+    )
+    assert s.expected_receipt([]) == s.ReceiptEstimate(s.ReceiptStatus.NONE, None, None, 0, 0)

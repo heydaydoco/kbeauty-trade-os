@@ -487,15 +487,15 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.SHIPMENTS_SOURCE_LINE_MISMATCH: ErrorSpec(
         422,
-        "선택한 라인이 이 수주의 라인이 아닙니다. 수주 상세에서 라인을 다시 선택해 주세요.",
+        "선택한 라인이 이 선적의 원천 전표(수주·발주)의 라인이 아닙니다. 원천 전표 상세에서 라인을 다시 선택해 주세요.",
     ),
     ErrorCode.SHIPMENTS_SHIPMENT_NOT_ACTIVE: ErrorSpec(
         409,
-        "취소된 선적은 수정할 수 없습니다. 필요하면 수주에서 새 선적을 만들어 주세요.",
+        "취소된 선적은 수정할 수 없습니다. 필요하면 원천 전표(수주·발주)에서 새 선적을 만들어 주세요.",
     ),
     ErrorCode.SHIPMENTS_LINE_DUPLICATE_SOURCE: ErrorSpec(
         409,
-        "같은 수주 라인이 이 선적에 이미 있습니다. 기존 라인의 수량을 수정해 주세요.",
+        "같은 원천 라인(수주·발주 라인)이 이 선적에 이미 있습니다. 기존 라인의 수량을 수정해 주세요.",
     ),
     ErrorCode.SHIPMENTS_LINE_LAST_LINE: ErrorSpec(
         409,
@@ -507,11 +507,15 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.SHIPMENTS_PARTY_ROLE_NOT_ALLOWED: ErrorSpec(
         422,
-        "이 역할의 당사자는 직접 지정하거나 삭제할 수 없습니다(수하인 = 수주 바이어 자동, 송하인 = 자사). 통지처·포워더·관세사 역할로 지정해 주세요.",
+        "이 역할의 당사자는 직접 지정하거나 삭제할 수 없습니다(수출: 수하인 = 수주 바이어 자동·송하인 = 자사 / 수입: 송하인 = 발주 공급사 자동·수하인 = 자사). 통지처·포워더·관세사 역할로 지정해 주세요.",
     ),
     ErrorCode.SHIPMENTS_PARTY_ENGLISH_NAME_MISSING: ErrorSpec(
         422,
         "거래처의 영문명이 비어 있어 선적 서류에 쓸 수 없습니다. 거래처 화면에서 영문명을 입력한 뒤 다시 시도해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_QUANTITY_EXCEEDS_ASSIGNABLE: ErrorSpec(
+        409,
+        "요청 수량이 발주 라인의 배정 가능량(발주 수량 − 다른 수입선적에 배정된 수량)을 넘었습니다. 배정 가능량을 확인한 뒤 수량을 줄여 다시 시도해 주세요.",
     ),
     ErrorCode.SHIPMENTS_SHIPMENT_CUSTOMS_RECORD_ALIVE: ErrorSpec(
         409,

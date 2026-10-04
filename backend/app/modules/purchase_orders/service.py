@@ -35,7 +35,13 @@ from app.modules.identity.service import AuthenticatedUser
 from app.modules.partners import service as partners
 from app.modules.purchase_orders.models import PurchaseOrder, PurchaseOrderLine
 from app.modules.trade_docs import editing
-from app.modules.trade_docs.constants import MAX_SAFE_INTEGER, DocKind, PoKind, PriceBasis
+from app.modules.trade_docs.constants import (
+    MAX_SAFE_INTEGER,
+    PO_SUPPLIER_TYPES,
+    DocKind,
+    PoKind,
+    PriceBasis,
+)
 from app.modules.trade_docs.doc_number import issue_document_number
 from app.modules.trade_docs.fx import require_known_currency, resolve_fx
 from app.modules.trade_docs.incoterms import Incoterm, build_incoterm
@@ -261,12 +267,14 @@ def _plan(
     except ValueError:
         raise invalid("po_kind", "발주 구분을 확인해 주세요.") from None
     # 공급사 유형 검증(생성 1회 — F3): PURCHASE=SUPPLIER∨OEM, OEM_PRODUCTION=OEM 필수. FOR KEY SHARE(lock=True).
+    # 유형 표는 커널 단일 출처(`PO_SUPPLIER_TYPES` — 수입선적 생성의 거래 상대 재검증과 같은 표, S3-2 PR-5a).
+    supplier_types, supplier_label = PO_SUPPLIER_TYPES[po_kind]
     partner = partners.require_partner_of_any_type(
         session,
         payload["supplier_partner_id"],
-        ("OEM",) if po_kind == PoKind.OEM_PRODUCTION.value else ("SUPPLIER", "OEM"),
+        supplier_types,
         field="supplier_partner_id",
-        type_label="OEM" if po_kind == PoKind.OEM_PRODUCTION.value else "공급사 또는 OEM",
+        type_label=supplier_label,
         lock=lock,
     )
 
