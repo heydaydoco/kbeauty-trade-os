@@ -212,7 +212,7 @@ export function SettingsUsersPage() {
                     {user.email}
                     {user.id === me?.id && <span className="ml-1 text-xs text-gray-500">(나)</span>}
                   </td>
-                  <td className="break-keep p-2">{user.display_name}</td>
+                  <td className="cell-nowrap p-2">{user.display_name}</td>
                   <td className="cell-nowrap p-2 text-center">
                     {user.is_active ? (
                       <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs font-semibold text-green-800">활성</span>
