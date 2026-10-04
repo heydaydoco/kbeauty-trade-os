@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -603,6 +603,27 @@ def require_change(session: Session, shipment_id: int, change_id: int) -> Milest
     if change is None:
         raise NotFoundError(log_context={"shipment_id": shipment_id, "change_id": change_id})
     return change
+
+
+def lock_notice_slot(session: Session, change: MilestoneChange) -> int:
+    """통보 상한 판정용 — 변경의 소유 마일스톤 행을 `FOR UPDATE`(shipment_children — 선적 잠금 뒤)로 잡고 그 변경의 통보 수를 센다.
+
+    이력·통보 표는 IMMUTABLE(UPDATE 권한 회수)이라 행 잠금을 걸 수 없다 — 같은 마일스톤의 통보 동시 기록을 소유 행 잠금으로 직렬화한다
+    (적대 검토 반영 ⑧). 통보 연결 행만 세므로 질의 2회.
+    """
+    session.execute(
+        select(Milestone.id)
+        .where(Milestone.id == change.milestone_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+    return int(
+        session.execute(
+            select(func.count())
+            .select_from(MilestoneChangeNotice)
+            .where(MilestoneChangeNotice.change_id == change.id)
+        ).scalar_one()
+    )
 
 
 def insert_notice(

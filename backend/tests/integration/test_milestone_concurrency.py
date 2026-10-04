@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -25,8 +26,17 @@ from tests.factories.approvals import make_user
 from tests.factories.shipments import confirmed_so, create_body, scalar
 from tests.factories.trade import create_supplier, unique
 from tests.support.concurrency import Outcome, run_concurrently
+from tests.support.kst import pin_today_kst
 
 pytestmark = [pytest.mark.group_j, pytest.mark.concurrency]
+
+
+@pytest.fixture(autouse=True)
+def _pin_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KST 자정 경계 고정(적대 검토 반영 ⑩) — 시험마다 base 날짜를 한 번 잡아
+    앱 import 지점(마일스톤·통관·선적 흐름·보드)과 이 시험 모듈의 `today_kst`를 같은 날로 맞춘다."""
+    pin_today_kst(monkeypatch, sys.modules[__name__])
+
 
 ROUNDS = 5
 
@@ -190,6 +200,42 @@ def test_a_double_click_rollover_writes_one_history_row_with_one_change_id() -> 
     )
 
 
+def test_concurrent_notices_never_exceed_the_per_change_limit() -> None:
+    """적대 검토 반영 ⑧ — 변경 1건의 통보가 상한-2건일 때 5스레드 동시 통보 → 정확히 2건 성공·3건 422 NOTICE_LIMIT_REACHED·
+    연결 행 = 상한(소유 마일스톤 행 잠금 아래에서 세므로 경합으로 넘치지 않는다)·500·교착 0"""
+    actor = make_user(RoleCode.TRADE)
+    sid = _released_shipment(actor)["id"]
+    _, body = milestone_flow.record_milestone_plan(
+        actor=actor,
+        idempotency_key=unique("np"),
+        shipment_id=sid,
+        milestone_type="ETD",
+        payload={"planned_on": today_kst()},
+    )
+    change_id = int(body["change"]["id"])
+    limit = milestone_flow.NOTICE_LIMIT_PER_CHANGE
+
+    def notice(_index: int) -> object:
+        return milestone_flow.record_milestone_notice(
+            actor=actor,
+            idempotency_key=unique("nt"),
+            shipment_id=sid,
+            change_id=change_id,
+            payload={"occurred_on": today_kst(), "summary": "포워더 통보"},
+        )
+
+    for index in range(limit - 2):
+        notice(index)
+    outcomes = run_concurrently(notice, workers=5)
+    _no_db_errors(outcomes)
+    assert sum(o.ok for o in outcomes) == 2, [repr(o.error) for o in outcomes]
+    assert {_code(o) for o in outcomes if not o.ok} == {"SHIPMENTS.MILESTONE.NOTICE_LIMIT_REACHED"}
+    assert (
+        scalar("SELECT count(*) FROM milestone_change_notices WHERE change_id = :c", c=change_id)
+        == limit
+    )
+
+
 def test_two_first_plans_on_the_same_type_serialize_into_one_row() -> None:
     """J-10 — 같은 종류의 최초 계획 2건(다른 키)이 동시에 오면 선적 `FOR UPDATE`가 직렬화한다: 하나는 PLAN_SET, 다른 하나는 행이 생긴 뒤라
     version 누락 = 409(겹친 편집) — 행 1개·이력 1행, DUPLICATE_TYPE·500 0"""
@@ -264,7 +310,7 @@ def _assert_follows_lock_order(sequence: list[str]) -> None:
 
 
 def test_every_milestone_and_customs_operation_takes_locks_in_the_documented_order() -> None:
-    """J-07 — 계획·실적·초안 = 멱등→선적→하위 행(마일스톤) / 통보 = 멱등→거래처→선적(SHARE) / 통관 추가 = 멱등→거래처(관세사)→선적 /
+    """J-07 — 계획·실적·초안 = 멱등→선적→하위 행(마일스톤) / 통보 = 멱등→거래처→선적(SHARE)→하위 행(상한 판정) / 통관 추가 = 멱등→거래처(관세사)→선적 /
     통관 정정(관세사 변경) = 거래처→선적→하위 행 / 통관 삭제 = 선적→하위 행 / 취소(가드 포함) = 멱등→SO→선적 — 개정 LOCK_ORDER 부분수열"""
     actor = make_user(RoleCode.TRADE)
     sid = _released_shipment(actor)["id"]
@@ -319,7 +365,8 @@ def test_every_milestone_and_customs_operation_takes_locks_in_the_documented_ord
             },
         )
     )
-    assert seen == ["idempotency_keys", "partners", "shipments"], seen
+    # 통보 상한 판정 = 소유 마일스톤 행 FOR UPDATE(shipment_children — 선적 SHARE 뒤, 적대 검토 반영 ⑧)
+    assert seen == ["idempotency_keys", "partners", "shipments", "shipment_children"], seen
     _assert_follows_lock_order(seen)
 
     broker = create_supplier(types=("CUSTOMS_BROKER",))

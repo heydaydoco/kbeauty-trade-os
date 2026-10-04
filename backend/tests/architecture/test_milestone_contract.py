@@ -29,8 +29,17 @@ from app.modules.trade_docs.constants import (
     MilestoneType,
 )
 from tests.support.astscan import app_sources, imported_modules, parse_source, referenced_names
+from tests.support.kst import pin_today_kst
 
 pytestmark = pytest.mark.group_k
+
+
+@pytest.fixture(autouse=True)
+def _pin_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KST 자정 경계 고정(적대 검토 반영 ⑩) — 시험마다 base 날짜를 한 번 잡아
+    앱 import 지점(마일스톤·통관·선적 흐름·보드)의 `today_kst`를 같은 날로 맞춘다."""
+    pin_today_kst(monkeypatch)
+
 
 MILESTONE_FILES = (
     "modules/trade_chain/milestone_flow.py",
@@ -164,11 +173,26 @@ def test_milestone_types_match_the_db_check_and_derived_types_are_outside_it() -
     assert set(SHIPMENT_BOARD_ORDER) == SHIPMENT_STORED_MILESTONES | DERIVED_MILESTONES
     assert {"ETD", "BL_ISSUED", "ETA"} == RELEASE_BOUND_ACTUALS
     assert {"DOC_CUTOFF", "CARGO_CLOSING"} == DATETIME_MILESTONES
-    assert {
-        "ETD",
-        "ETA",
-        "CARGO_CLOSING",
-    } == ROLLOVER_TYPES  # 롤오버 배지 대상(design-B B9 — PR-6 공유)
+    # 롤오버 배지 대상(design-B B9 — PR-6 공유)
+    assert {"ETD", "ETA", "CARGO_CLOSING"} == ROLLOVER_TYPES
     for kind, types in SHIPMENT_MILESTONES_BY_KIND.items():
         assert types < SHIPMENT_STORED_MILESTONES, kind
         assert types >= RELEASE_BOUND_ACTUALS, kind
+
+
+def test_the_today_pin_covers_every_milestone_import_point() -> None:
+    """적대 검토 반영 ⑩ 자기검사 — 마일스톤·통관·선적 흐름 중 `today_kst`를 부르는 trade_chain 모듈은 전부 고정 목록에 있고
+    (새 import 지점이 생기면 이 시험이 지목), autouse 고정이 실제로 같은 날을 돌려준다"""
+    from tests.support.kst import MILESTONE_TODAY_IMPORT_POINTS
+
+    pinned = {module.__name__ for module in MILESTONE_TODAY_IMPORT_POINTS}
+    readers = {
+        "app." + rel.removesuffix(".py").replace("/", ".")
+        for rel, tree in app_sources().items()
+        if rel.startswith("modules/trade_chain/")
+        and rel.split("/")[-1].startswith(("milestone_", "customs_", "shipment_"))
+        and "today_kst" in referenced_names(tree)
+    }
+    assert readers, "공회전 — today_kst를 부르는 모듈을 하나도 못 찾음"
+    assert readers <= pinned, readers - pinned
+    assert len({module.today_kst() for module in MILESTONE_TODAY_IMPORT_POINTS}) == 1

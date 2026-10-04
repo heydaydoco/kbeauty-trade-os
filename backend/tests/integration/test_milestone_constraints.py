@@ -22,8 +22,17 @@ from app.modules.trade_docs.constants import DERIVED_MILESTONES, STORED_MILESTON
 from tests.factories.shipments import confirmed_so, raw_shipment
 from tests.factories.trade import raw_po
 from tests.support.factories import create_item_profile, create_user
+from tests.support.kst import pin_today_kst
 
 pytestmark = pytest.mark.group_a
+
+
+@pytest.fixture(autouse=True)
+def _pin_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KST 자정 경계 고정(적대 검토 반영 ⑩) — 시험마다 base 날짜를 한 번 잡아
+    앱 import 지점(마일스톤·통관·선적 흐름·보드)의 `today_kst`를 같은 날로 맞춘다."""
+    pin_today_kst(monkeypatch)
+
 
 CHECK_VIOLATION = "23514"
 UNIQUE_VIOLATION = "23505"

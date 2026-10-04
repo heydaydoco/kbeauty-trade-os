@@ -581,6 +581,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "ETD·B/L 발행·ETA 실적은 출고지시 뒤에만 기록할 수 있습니다. 출고지시를 먼저 진행해 주세요.",
     ),
+    ErrorCode.SHIPMENTS_MILESTONE_NOTICE_LIMIT_REACHED: ErrorSpec(
+        422,
+        "변경 1건에는 통보 기록을 20건까지 남길 수 있습니다. 기존 통보 기록을 확인해 주세요.",
+    ),
 }
 
 

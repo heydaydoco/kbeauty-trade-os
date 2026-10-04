@@ -6,6 +6,7 @@ DoD② "ETA 현지 연휴 → 경고"를 **API 층**에서 닫는다(화면 배�
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -30,8 +31,16 @@ from tests.factories.shipments import (
     so_status,
 )
 from tests.factories.trade import create_supplier, idem, logged_in, unique
+from tests.support.kst import pin_today_kst
 
 pytestmark = pytest.mark.group_a
+
+
+@pytest.fixture(autouse=True)
+def _pin_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KST 자정 경계 고정(적대 검토 반영 ⑩) — 시험마다 base 날짜를 한 번 잡아
+    앱 import 지점(마일스톤·통관·선적 흐름·보드)과 이 시험 모듈의 `today_kst`를 같은 날로 맞춘다."""
+    pin_today_kst(monkeypatch, sys.modules[__name__])
 
 
 @pytest.fixture
@@ -465,6 +474,79 @@ def test_a_stale_or_missing_row_version_is_a_conflict(trade: TestClient) -> None
     assert _plan(trade, sid, "ETA", {**body, "version": current + 1}).status_code == 409
     assert _plan(trade, sid, "ETA", {**body, "version": current}).status_code == 200
     assert _rows(trade, sid)["ETA"]["planned"] == "2026-12-02"
+
+
+@pytest.mark.group_k
+def test_a_stale_version_is_409_before_the_type_is_refused(trade: TestClient) -> None:
+    """적대 검토 반영 ⑦(ADR-0079 ⑧ 409 → 422) — 신고수리 계획 행이 있을 때 실적 + 낡은 version = 409(ACTUAL_FROM_CUSTOMS_RECORD 아님),
+    행이 없는 파생 종류에 version을 보내도 409(DERIVED_NOT_EDITABLE 아님). version이 맞으면 종류 422가 나온다"""
+    sid = _shipment(trade)["id"]
+    assert _plan(trade, sid, "CUSTOMS_CLEARED", {"planned_on": _day(3)}).status_code == 200
+    current = _version(trade, sid, "CUSTOMS_CLEARED")
+    assert current is not None
+    stale = _actual(trade, sid, "CUSTOMS_CLEARED", {"actual_on": _day(0), "version": current + 1})
+    assert stale.status_code == 409 and _code(stale) == "COMMON.CONCURRENCY.VERSION_CONFLICT"
+    fresh = _actual(trade, sid, "CUSTOMS_CLEARED", {"actual_on": _day(0), "version": current})
+    assert _code(fresh) == "SHIPMENTS.MILESTONE.ACTUAL_FROM_CUSTOMS_RECORD"
+    derived = _plan(trade, sid, "PAYMENT_DUE", {"planned_on": _day(3), "version": 1})
+    assert derived.status_code == 409 and _code(derived) == "COMMON.CONCURRENCY.VERSION_CONFLICT"
+    assert (
+        _code(_plan(trade, sid, "PAYMENT_DUE", {"planned_on": _day(3)}))
+        == "SHIPMENTS.MILESTONE.DERIVED_NOT_EDITABLE"
+    )
+
+
+def test_a_same_key_replay_reassembles_the_board_for_today(
+    trade: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """적대 검토 반영 ⑨ — 멱등 저장 본문은 결정적인 change만: 하루 뒤(today_kst +1) 같은 키 재요청 = 같은 change.id + **지금 시점 보드**
+    (board.today_kst = 새 날짜, D-N 재계산). 계획 초안 재생도 보드를 새로 조립한다"""
+    sid = _shipment(trade)["id"]
+    key = unique("rp")
+    body = {"planned_on": _day(10)}
+    first = _plan(trade, sid, "ETD", body, key=key).json()
+    assert first["board"]["today_kst"] == _day(0)
+    draft_key = idem()
+    assert trade.post(
+        f"{SHIPMENTS}/{sid}/milestones/plan-draft", json={}, headers=draft_key
+    ).json()["today_kst"] == _day(0)
+    tomorrow = today_kst() + timedelta(days=1)
+    monkeypatch.setattr(milestone_view, "today_kst", lambda: tomorrow)
+    again = _plan(trade, sid, "ETD", body, key=key).json()
+    assert again["change"] == first["change"]
+    assert again["board"]["today_kst"] == tomorrow.isoformat()
+    etd = {r["milestone_type"]: r for r in again["board"]["rows"]}["ETD"]
+    assert etd["days_left"] == 9  # 재생 시점 기준 D-N(저장 당시 10이 아님)
+    replayed_draft = trade.post(
+        f"{SHIPMENTS}/{sid}/milestones/plan-draft", json={}, headers=draft_key
+    )
+    assert replayed_draft.status_code == 200
+    assert replayed_draft.json()["today_kst"] == tomorrow.isoformat()
+    assert _changes(sid) == 1
+
+
+@pytest.mark.group_k
+def test_a_change_takes_at_most_twenty_notices(trade: TestClient) -> None:
+    """적대 검토 반영 ⑧(K) — 변경 1건당 통보 기록 상한 20: 20건까지 201, 21번째 422 NOTICE_LIMIT_REACHED·통신 기록 추가 0
+    (이력 응답·보드가 한 변경의 통보를 전부 싣는 내장 집합의 상한)"""
+    assert milestone_flow.NOTICE_LIMIT_PER_CHANGE == 20
+    sid = _shipment(trade)["id"]
+    change = _plan(trade, sid, "ETD", {"planned_on": "2026-11-05"}).json()["change"]
+    url = f"{SHIPMENTS}/{sid}/milestone-changes/{change['id']}/notices"
+    notice = {"occurred_on": _day(0), "summary": "포워더 통보"}
+    for _ in range(20):
+        assert trade.post(url, json=notice, headers=idem()).status_code == 201
+    over = trade.post(url, json=notice, headers=idem())
+    assert over.status_code == 422 and _code(over) == "SHIPMENTS.MILESTONE.NOTICE_LIMIT_REACHED"
+    assert (
+        scalar(
+            "SELECT count(*) FROM comm_logs WHERE subject_type = 'SHIPMENT' AND subject_id = :s",
+            s=sid,
+        )
+        == 20
+    )
+    page = trade.get(f"{SHIPMENTS}/{sid}/milestone-changes").json()
+    assert len(page["items"][0]["notices"]) == 20
 
 
 @pytest.mark.group_k

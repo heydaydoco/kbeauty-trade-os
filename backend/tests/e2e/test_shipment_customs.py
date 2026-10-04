@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import date, timedelta
 from typing import Any
 
@@ -24,8 +25,16 @@ from tests.factories.shipments import (
     so_status,
 )
 from tests.factories.trade import create_supplier, idem, logged_in, unique
+from tests.support.kst import pin_today_kst
 
 pytestmark = pytest.mark.group_a
+
+
+@pytest.fixture(autouse=True)
+def _pin_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KST 자정 경계 고정(적대 검토 반영 ⑩) — 시험마다 base 날짜를 한 번 잡아
+    앱 import 지점(마일스톤·통관·선적 흐름·보드)과 이 시험 모듈의 `today_kst`를 같은 날로 맞춘다."""
+    pin_today_kst(monkeypatch, sys.modules[__name__])
 
 
 @pytest.fixture

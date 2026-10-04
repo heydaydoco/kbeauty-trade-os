@@ -6,11 +6,14 @@
   `FOR UPDATE`(shipment_children) + **행 version** 대조. 통보 = 멱등 → (상대 거래처) partners `FOR KEY SHARE` → 선적 `FOR SHARE`(R-08).
   선적 취소도 같은 헤더를 `FOR UPDATE`로 잡으므로 "실적 기록 vs 취소"는 직렬화된다(실적이 먼저면 취소 409 ACTUAL_RECORDED, 취소가 먼저면
   실적 409 OWNER_NOT_ACTIVE).
-■ 오류 우선순위(ADR-0079 ⑧ 401→403→404→409→422): 선적 404 → 취소된 선적 409(OWNER_NOT_ACTIVE) → 종류 자체의 쓰기 불가 422(파생·비적용·
-  신고수리 실적) → 행 version 409 → 값 검증 422(형태·시간대·미래·출고 전 실적·사유).
+■ 오류 우선순위(ADR-0079 ⑧ 401→403→404→409→422): 선적 404 → 취소된 선적 409(OWNER_NOT_ACTIVE) → 행 version 409 → 종류 자체의 쓰기 불가
+  422(파생·비적용·신고수리 실적) → 값 검증 422(범위·형태·시간대·미래·출고 전 실적·사유). (적대 검토 반영 ⑦ — 종전엔 종류 422가 version 409보다 먼저)
 ■ **덮어쓰기 금지 2중**: 파생 3종 쓰기 = 422 `DERIVED_NOT_EDITABLE`(여기) + DB `ck_milestones_type_valid`(파생 값 공간 없음 — 번역표).
 ■ 재계산 = 읽기 결과의 변화(파생 비저장) — 이 TX는 마일스톤 행 1·이력 1·아웃박스 1만 쓴다. **상태 전이 0**(`record_transition` 미임포트 — B8 ⑦).
 ■ 응답 = `{board, change: {id, change_kind} | null}`(R-19) — 이력 행이 안 생기는 no-op이면 null. 같은 Idempotency-Key 재요청 = 같은 change.id.
+  **멱등 저장 본문은 결정적인 `change`만**이고 재생 때 보드를 새로 조립한다(재생 시점의 today_kst·판정 — 적대 검토 반영 ⑨).
+■ 통보는 변경 1건당 `NOTICE_LIMIT_PER_CHANGE`건까지(초과 422 NOTICE_LIMIT_REACHED — 소유 마일스톤 행 `FOR UPDATE` 아래에서 센다,
+  적대 검토 반영 ⑧). 잠금 순서: 멱등 → 거래처 → 선적(SHARE) → shipment_children(마일스톤 행).
 """
 
 from __future__ import annotations
@@ -76,6 +79,8 @@ NOTICE_PARTNER_TYPES: tuple[str, ...] = (
     "SUPPLIER",
     "OEM",
 )
+#: 변경 1건에 연결할 수 있는 통보 기록 상한(무상한 내장 집합 방지 — 이력 응답·보드 배지가 한 변경의 통보를 모두 싣는다. 적대 검토 반영 ⑧).
+NOTICE_LIMIT_PER_CHANGE = 20
 #: 통보 요지에서만 허용하는 줄 구분 문자(여러 줄 요지) — 그 밖의 보이지 않는 글자는 422.
 _SUMMARY_LINE_BREAKS = frozenset("\t\n\r")
 #: 시각형 값의 업무 범위 — [2000-01-01T00:00Z, 3000-01-01T00:00Z)(날짜형 BUSINESS_DATE_MIN~MAX와 같은 연도 범위, DB CHECK `value_range`).
@@ -279,10 +284,21 @@ def _write(
 def _finish(
     session: Session, claim: idempotency.Claim, row: Shipment, change: dict[str, Any] | None
 ) -> tuple[int, dict[str, Any]]:
-    body = {"board": board_body(session, row), "change": change}
+    """멱등 저장 본문 = 결정적인 `change`만(보드는 재생 때 새로 조립 — 적대 검토 반영 ⑨)."""
     assert claim.record is not None
-    idempotency.complete(session, claim.record, status_code=200, body=body)
-    return 200, body
+    idempotency.complete(session, claim.record, status_code=200, body={"change": change})
+    return 200, {"board": board_body(session, row), "change": change}
+
+
+def _replay_with_board(
+    session: Session, shipment_id: int, replay: idempotency.Replay
+) -> tuple[int, dict[str, Any]]:
+    """같은 Idempotency-Key 재요청 — 저장된 `change`(같은 id)에 **지금 시점의 보드**를 붙인다(낡은 today_kst·판정 재생 0)."""
+    row = shipments.require_shipment(session, shipment_id)
+    return replay.status_code, {
+        "board": board_body(session, row),
+        "change": replay.body.get("change"),
+    }
 
 
 # ── 계획 (T6 — 설정·롤오버) ────────────────────────────────────────────────────
@@ -307,12 +323,13 @@ def record_milestone_plan(
             request_body={"shipment_id": shipment_id, "milestone_type": milestone_type, **payload},
         )
         if claim.replay is not None:
-            return claim.replay.status_code, claim.replay.body
+            return _replay_with_board(session, shipment_id, claim.replay)
         row = lock_document(session, Shipment, shipment_id)  # 404 · shipments FOR UPDATE
         _require_owner_active(row)
-        _require_type_writable(row, milestone_type)
+        # 409(행 version)가 422(종류 쓰기 불가)보다 먼저 — ADR-0079 ⑧(적대 검토 반영 ⑦). 쓸 수 없는 종류는 행이 없어 version 생략이 정답
         milestone = shipments.find_milestone(session, row.id, milestone_type, for_update=True)
         _require_version(milestone, payload.get("version"))
+        _require_type_writable(row, milestone_type)
         new = _value(
             milestone_type, payload, on_key="planned_on", at_key="planned_at", required=True
         )
@@ -397,17 +414,18 @@ def record_milestone_actual(
             request_body={"shipment_id": shipment_id, "milestone_type": milestone_type, **payload},
         )
         if claim.replay is not None:
-            return claim.replay.status_code, claim.replay.body
+            return _replay_with_board(session, shipment_id, claim.replay)
         row = lock_document(session, Shipment, shipment_id)
         _require_owner_active(row)
+        # 409(행 version)가 422(종류·신고수리 실적)보다 먼저 — ADR-0079 ⑧(적대 검토 반영 ⑦)
+        milestone = shipments.find_milestone(session, row.id, milestone_type, for_update=True)
+        _require_version(milestone, payload.get("version"))
         _require_type_writable(row, milestone_type)
         if milestone_type == MilestoneType.CUSTOMS_CLEARED.value:
             raise AppError(
                 ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD,
                 detail={"milestone_type": "신고수리 실적은 통관 기록의 수리일로 입력합니다."},
             )
-        milestone = shipments.find_milestone(session, row.id, milestone_type, for_update=True)
-        _require_version(milestone, payload.get("version"))
         if "actual_on" not in payload and "actual_at" not in payload:
             field = "actual_at" if milestone_type in DATETIME_MILESTONES else "actual_on"
             raise invalid(field, "실적 값을 보내 주세요(지우려면 null과 사유).")
@@ -488,7 +506,10 @@ def draft_milestone_plan(
             request_body={"shipment_id": shipment_id},
         )
         if claim.replay is not None:
-            return claim.replay.status_code, claim.replay.body
+            # 재생 = 지금 시점의 보드(저장 본문은 결정적 표지뿐 — 적대 검토 반영 ⑨)
+            return claim.replay.status_code, board_body(
+                session, shipments.require_shipment(session, shipment_id)
+            )
         row = lock_document(session, Shipment, shipment_id)
         _require_owner_active(row)
         existing = set(
@@ -498,14 +519,16 @@ def draft_milestone_plan(
                 )
             ).scalars()
         )
-        for milestone_type in sorted(_draft_types(session, row) - existing):
+        created = sorted(_draft_types(session, row) - existing)
+        for milestone_type in created:
             shipments.insert_milestone(
                 session, shipment_id=row.id, milestone_type=milestone_type, actor_id=actor.id
             )
-        body = board_body(session, row)
         assert claim.record is not None
-        idempotency.complete(session, claim.record, status_code=200, body=body)
-        return 200, body
+        idempotency.complete(
+            session, claim.record, status_code=200, body={"created_types": created}
+        )
+        return 200, board_body(session, row)
 
 
 # ── 통보 기록 (T8 — comm_logs SHIPMENT 1행 + 연결 1행, 발송 0) ────────────────────────
@@ -580,6 +603,14 @@ def record_milestone_notice(
             )
         row = _lock_shipment_for_share(session, shipment_id)
         _require_owner_active(row)  # 잠금 뒤 재확인(peek와 잠금 사이 취소)
+        # 변경 1건당 통보 상한 — 소유 마일스톤 행 FOR UPDATE 아래에서 센다(동시 통보 경합에 안전 — 적대 검토 반영 ⑧)
+        if shipments.lock_notice_slot(session, change) >= NOTICE_LIMIT_PER_CHANGE:
+            raise AppError(
+                ErrorCode.SHIPMENTS_MILESTONE_NOTICE_LIMIT_REACHED,
+                detail={
+                    "change_id": f"이 변경의 통보 기록은 {NOTICE_LIMIT_PER_CHANGE}건까지입니다."
+                },
+            )
         log = collaboration.record_shipment_comm_log(
             session,
             shipment_id=row.id,
