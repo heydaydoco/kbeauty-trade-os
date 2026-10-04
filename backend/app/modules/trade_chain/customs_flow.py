@@ -204,9 +204,8 @@ def _changes(record: CustomsRecord, payload: dict[str, Any]) -> dict[str, Any]:
 def _needs_reason(record: CustomsRecord, changes: dict[str, Any]) -> bool:
     if "declaration_no" in changes or "declared_on" in changes:
         return True
-    return (
-        "accepted_on" in changes and record.accepted_on is not None
-    )  # 기존 수리일의 변경·삭제 = 정정
+    # 기존 수리일의 변경·삭제 = 정정(첫 입력은 기록)
+    return "accepted_on" in changes and record.accepted_on is not None
 
 
 def _audit_detail(

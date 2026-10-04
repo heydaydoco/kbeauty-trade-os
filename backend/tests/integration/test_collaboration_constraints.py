@@ -154,7 +154,8 @@ def test_the_subject_enumeration_is_locked_to_the_consumed_value() -> None:
     with pytest.raises(IntegrityError) as exc:
         _insert_comm_log(subject_type="FORWARDER")
     assert "subject_type_valid" in str(exc.value)
-    assert _insert_comm_log(subject_type="SHIPMENT") > 0  # DB는 SHIPMENT를 허용한다(M15 CHECK 재정의)
+    # DB는 SHIPMENT를 허용한다(M15 CHECK 재정의)
+    assert _insert_comm_log(subject_type="SHIPMENT") > 0
 
 
 def test_the_generic_api_subjects_stay_certification_only() -> None:

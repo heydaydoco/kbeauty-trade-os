@@ -91,7 +91,9 @@ def test_milestones_store_every_live_shape(shipment: int) -> None:
                 tz="Asia/Seoul",
             ),
         )
-        _insert(connection, "milestones", _milestone(shipment, milestone_type="PSI", planned_on=None))
+        _insert(
+            connection, "milestones", _milestone(shipment, milestone_type="PSI", planned_on=None)
+        )
         _insert(
             connection,
             "milestones",
@@ -103,7 +105,11 @@ _MILESTONE_CASES: list[tuple[str, dict[str, Any], str]] = [
     # 파생 3종은 값 공간에 없다 — DB 직접 INSERT도 거부(덮어쓰기 금지 2중의 DB 층, GC-21)
     ("derived_loading", {"milestone_type": "LOADING_DEADLINE"}, "ck_milestones_type_valid"),
     ("derived_payment", {"milestone_type": "PAYMENT_DUE"}, "ck_milestones_type_valid"),
-    ("derived_presentation", {"milestone_type": "PRESENTATION_DEADLINE"}, "ck_milestones_type_valid"),
+    (
+        "derived_presentation",
+        {"milestone_type": "PRESENTATION_DEADLINE"},
+        "ck_milestones_type_valid",
+    ),
     ("unknown_type", {"milestone_type": "ATD"}, "ck_milestones_type_valid"),
     # OEM 4종은 PO 소유만
     ("oem_on_shipment", {"milestone_type": "FILLING"}, "ck_milestones_owner_type_scope"),
@@ -242,7 +248,11 @@ def test_customs_checks_reject_violations(
 def test_customs_records_accept_multi_line_notes_and_pending_acceptance(shipment: int) -> None:
     """양성 — 미수리(수리일 NULL)·여러 줄 메모(탭·LF·CR)·수리일 = 신고일 경계는 저장된다(1:N 분할 신고 — X-03)"""
     with owner_engine.begin() as connection:
-        _insert(connection, "customs_records", _customs(shipment, accepted_on=None, declaration_no="A-1"))
+        _insert(
+            connection,
+            "customs_records",
+            _customs(shipment, accepted_on=None, declaration_no="A-1"),
+        )
         _insert(
             connection,
             "customs_records",

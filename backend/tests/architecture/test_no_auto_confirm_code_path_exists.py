@@ -731,6 +731,76 @@ REGISTRY: tuple[Entry, ...] = (
         forbid_module_import=False,
         notes="선적 취소(사람 전이) — 라우터 1곳+행위자 필수. 마지막 선적이면 같은 TX에서 SO 자동 복귀(수렴 함수 1곳)",
     ),
+    # S3-2 PR-4a — 마일스톤·통관 쓰기(ADR-0080·0083). **자동 일정·자동 초안·자동 통관 0**: 계획·실적·초안·통보·통관 기록은 사람 1클릭이고
+    # 호출처는 마일스톤 라우터 1곳뿐이다(SO 확정·선적 생성·스케줄러·CLI·임포트·이관·알림·아웃박스 어디서도 부르거나 임포트하지 않는다 — X-11).
+    *(
+        Entry(
+            name=name,
+            defined_in="app.modules.trade_chain.milestone_flow",
+            allowed_files=frozenset(
+                {"modules/trade_chain/milestone_flow.py", "modules/trade_chain/milestone_router.py"}
+            ),
+            forbidden_modules=frozenset(
+                {
+                    "platform",
+                    "imports",
+                    "handover",
+                    "notifications",
+                    "outbox",
+                    "worklist",
+                    "deadlines",
+                    "collaboration",
+                    "order_intake",
+                    "order_board",
+                    "seeds",
+                }
+            ),
+            notes="마일스톤 쓰기(계획·롤오버·실적·초안·통보) — 라우터 1곳+행위자 필수+멱등 키. 자동 경로에서 import·언급 0",
+        )
+        for name in (
+            "record_milestone_plan",
+            "record_milestone_actual",
+            "draft_milestone_plan",
+            "record_milestone_notice",
+        )
+    ),
+    *(
+        Entry(
+            name=name,
+            defined_in="app.modules.trade_chain.customs_flow",
+            allowed_files=frozenset(
+                {"modules/trade_chain/customs_flow.py", "modules/trade_chain/milestone_router.py"}
+            ),
+            forbidden_modules=frozenset(
+                {
+                    "platform",
+                    "imports",
+                    "handover",
+                    "notifications",
+                    "outbox",
+                    "worklist",
+                    "deadlines",
+                    "collaboration",
+                    "order_intake",
+                    "order_board",
+                    "seeds",
+                }
+            ),
+            notes="통관 기록 쓰기(추가·정정·삭제) — 라우터 1곳+행위자 필수. 사실 기록만(세율·HS 판정 0)",
+        )
+        for name in ("create_customs_record", "update_customs_record", "delete_customs_record")
+    ),
+    Entry(
+        name="record_shipment_comm_log",
+        defined_in="app.modules.collaboration.service",
+        allowed_files=frozenset(
+            {"modules/collaboration/service.py", "modules/trade_chain/milestone_flow.py"}
+        ),
+        forbidden_modules=frozenset({"platform", "imports", "handover", "notifications"}),
+        requires_actor=False,  # 서비스 착지 — actor_id(int)를 받는다
+        forbid_module_import=False,  # 정의 모듈(collaboration.service)은 범용 통신 기록 서비스라 여러 곳이 임포트한다 — 언급 검사로 충분
+        notes="SHIPMENT 주제 통신 기록(롤오버 통보)을 만드는 유일한 착지 — 선적 통보 통로 1곳만 부른다(R-05: 범용 경로 쓰기 차단)",
+    ),
     Entry(
         name="converge_sales_order_shipping",
         defined_in="app.modules.trade_chain.chain_ops",

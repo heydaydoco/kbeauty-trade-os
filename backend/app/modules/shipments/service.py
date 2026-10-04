@@ -453,18 +453,16 @@ def apply_customs_update(customs: CustomsRecord, changes: dict[str, Any], *, act
     if "note" in changes:
         customs.note = changes["note"]
     customs.updated_by_id = actor_id
-    customs.updated_at = (
-        utcnow()
-    )  # 같은 행위자·같은 값이어도 dirty → version_id_col +1(겹친 정정 409)
+    # 같은 행위자·같은 값이어도 dirty → version_id_col +1(겹친 정정 409)
+    customs.updated_at = utcnow()
 
 
 def remove_customs_record(customs: CustomsRecord, *, actor_id: int) -> None:
     """통관 기록 삭제(soft delete — 사유는 호출자가 audit_log에 남긴다). version +1."""
     customs.deleted_at = utcnow()
     customs.updated_by_id = actor_id
-    customs.updated_at = (
-        utcnow()
-    )  # 같은 행위자·같은 값이어도 dirty → version_id_col +1(겹친 정정 409)
+    # 같은 행위자·같은 값이어도 dirty → version_id_col +1(겹친 정정 409)
+    customs.updated_at = utcnow()
 
 
 @dataclass(frozen=True, slots=True)

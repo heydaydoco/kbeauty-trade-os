@@ -273,7 +273,8 @@ def _stored_row(
             body["scan_date"] = scan_date.isoformat()
             body["local_date"] = instant.astimezone(schedule.zone(m.tz)).date().isoformat()
             if actual.at is None:
-                overdue = now > instant  # 도과 = UTC 시각 비교(R-20 — 날짜 비교면 기한 전 최대 ~16시간 '도과' 오표시)
+                # 도과 = UTC 시각 비교(R-20 — 날짜 비교면 기한 전 최대 ~16시간 '도과' 오표시)
+                overdue = now > instant
                 days_left = (scan_date - today).days  # D-N 문턱 = 이른 날짜(B3 ④ — 더 일찍 경고)
                 if days_left < 0 and not overdue:
                     days_left = 0  # 기준일은 지났지만 기한 시각 전 — 'D-day'(도과 표시는 is_overdue만 근거, R-20)
@@ -282,9 +283,8 @@ def _stored_row(
         return body
     planned_on = m.planned_on if m else None
     if milestone_type == MilestoneType.CUSTOMS_CLEARED.value:
-        actual_on = (
-            clearance.cleared_on
-        )  # 통관 기록 MIN(accepted_on) — 마일스톤 실적 열은 CHECK로 비어 있다(X-02)
+        # 통관 기록 MIN(accepted_on) — 마일스톤 실적 열은 CHECK로 비어 있다(X-02)
+        actual_on = clearance.cleared_on
         body["customs_state"] = clearance.state.value
         body["customs_pending_count"] = clearance.pending_count
         body["input_source"] = "CUSTOMS_RECORD"  # 실적 입력처 = 통관 기록(계획은 마일스톤 행)
@@ -341,9 +341,8 @@ def _derived_row(
         return body
     body = _empty_row(milestone_type, kind="DERIVED", applicable=True)  # 대금만기 — 수출·수입 공통
     context = schedule.AnchorContext(order_at=_order_at(session, row), etd=etd, bl=bl, eta=eta)
-    due = schedule.payment_due(
-        row, context, None
-    )  # 결제조건 = 선적 헤더 사본(X-01), L/C 입력 None(운영 UNKNOWN)
+    # 결제조건 = 선적 헤더 사본(X-01), L/C 입력 None(운영 UNKNOWN — ADR-0081)
+    due = schedule.payment_due(row, context, None)
     body["derived"] = _due_body(due)
     if due.value is not None:
         body["days_left"] = (
