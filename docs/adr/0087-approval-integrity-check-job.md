@@ -13,3 +13,5 @@
 **기각한 대안** — PR-6에 동석(트리거보다 늦음), 불일치 = 잡 FAILED(정정 수단 없는 매일 실패 — 실행 오류와 구분 불가), dedup에 일자 포함(매일 재알림 — 피로), DB 트리거 실시간 탐지(ADR-0060 기각 유지), 배선 보류(조용한 누락).
 
 **되돌리기 비용** — 낮음(`enabled=false`, 키 형식 변경은 신규 알림부터). 오너=영준(보안 판정) 항목을 자율 확정한 것이라 **오너 확인 권장 2순위**.
+
+**부기(2026-10-04 — S3-2 PR-1b 이행)** — (위 원문 결정은 고치지 않는다.) ①~⑤ 이행: `approvals/integrity.py`에 `scan_all`(기존 `check_integrity` 로직을 `after_id` 페이지로 전건 순회 — 대사 로직 재사용, 판정 문제 8종 무변경)·`run_integrity_check`(잡 본체·CLI 겸용)를 더했다. **읽기 전용을 DB가 강제**: 대사는 첫 문장이 `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY`인 독립 트랜잭션에서 돌고(쓰기 시도는 PG가 거부 — J 테스트), 열린 트랜잭션 합류는 거부한다. 알림은 그 뒤 별도 트랜잭션 1개에서 `approval-integrity:{approval_id}:{problem}`(수신자별 `:{user_id}` 접미는 `notify` 공통) dedup·CRITICAL·ADMIN 라우팅·`entity_type=approvals`로 만든다. 잡 `approval-integrity-check` daily@05:40 등록(JOB 12→13), 불일치는 잡 OK·FAILED는 실행 예외뿐. CLI `python -m app.cli approval-integrity-check`(불일치가 있으면 종료 코드 1 — 합계 검산 CLI 관례). **첫 커밋 실측**: dev DB 승인 0건·불일치 0 / 앱 경로 흐름 16건(6상태) 투입 후 불일치 0(PROGRESS 'S3-2 PR-1b'). 남은 한계(의도): dedup이 수신자 단위라 **관리자가 새로 생기면 미해소 문제를 그 관리자에게 1회** 보낸다(받은편지함 기준).
