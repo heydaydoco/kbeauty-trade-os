@@ -407,7 +407,7 @@ export function ShipmentCreateDialog({ so, onClose, onReload }: Props) {
                   <tr>
                     <th scope="col" className="cell-nowrap px-3 py-2 text-center">번호</th>
                     <th scope="col" className="cell-nowrap px-3 py-2">SKU</th>
-                    <th scope="col" className="cell-nowrap px-3 py-2">품명</th>
+                    <th scope="col" className="cell-nowrap min-w-32 px-3 py-2">품명</th>
                     <th scope="col" className="cell-nowrap px-3 py-2 text-center">이번 수량</th>
                     <th scope="col" className="cell-nowrap px-3 py-2 text-center">선적 전 잔량</th>
                     <th scope="col" className="cell-nowrap px-3 py-2 text-center">선적 후 잔량</th>

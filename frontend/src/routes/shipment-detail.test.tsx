@@ -446,4 +446,12 @@ describe("선적 화면 — 소스 계약 (design-D D12·D13, PR-2b R-2b-2 승�
       for (const th of text.match(/<th[\s>][^>]*>/g) ?? []) expect(th, path).toContain("cell-nowrap");
     }
   });
+
+  it("390px에서 품명·영문 이름·주소 칸이 글자 단위로 꺾이지 않게 최소 폭을 둔다(실브라우저 발견 — 표는 래퍼 안에서 가로 스크롤)", () => {
+    const heads = Object.entries(sources)
+      .filter(([path]) => !path.includes(".test."))
+      .flatMap(([, src]) => code(src).match(/<th[\s>][^>]*>(품명|거래처\(영문\)|주소\(영문\))<\/th>/g) ?? []);
+    expect(heads.length).toBe(4);
+    for (const th of heads) expect(th).toMatch(/min-w-\d+/);
+  });
 });

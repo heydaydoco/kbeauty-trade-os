@@ -555,7 +555,7 @@ function LinesSection({
             <tr>
               <th scope="col" className="cell-nowrap px-3 py-2 text-center">번호</th>
               <th scope="col" className="cell-nowrap px-3 py-2">SKU</th>
-              <th scope="col" className="cell-nowrap px-3 py-2">품명</th>
+              <th scope="col" className="cell-nowrap min-w-32 px-3 py-2">품명</th>
               <th scope="col" className="cell-nowrap px-3 py-2 text-center">수량</th>
               <th scope="col" className="cell-nowrap px-3 py-2 text-center">원천 라인</th>
               <th scope="col" className="cell-nowrap px-3 py-2 text-center">선적 잔량</th>
@@ -966,8 +966,8 @@ function PartiesSection({
             <thead className="bg-gray-50 text-left text-gray-600">
               <tr>
                 <th scope="col" className="cell-nowrap px-3 py-2 text-center">역할</th>
-                <th scope="col" className="cell-nowrap px-3 py-2">거래처(영문)</th>
-                <th scope="col" className="cell-nowrap px-3 py-2">주소(영문)</th>
+                <th scope="col" className="cell-nowrap min-w-40 px-3 py-2">거래처(영문)</th>
+                <th scope="col" className="cell-nowrap min-w-48 px-3 py-2">주소(영문)</th>
                 <th scope="col" className="cell-nowrap px-3 py-2 text-center">출처</th>
                 {editable && <th scope="col" className="cell-nowrap px-3 py-2 text-center">편집</th>}
               </tr>
