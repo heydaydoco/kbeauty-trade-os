@@ -46,6 +46,8 @@ MILESTONE_FILES = (
     "modules/trade_chain/customs_flow.py",
     "modules/trade_chain/milestone_view.py",
     "modules/trade_chain/milestone_router.py",
+    # S3-2 PR-4c — 품목군 마일스톤 세트 쓰기(전이·발송 0 — OEM 쓰기는 milestone_flow 안)
+    "modules/trade_chain/milestone_set_flow.py",
 )
 #: 상태를 바꾸는 커널·사슬 함수 — 마일스톤·통관 모듈은 언급조차 하지 않는다.
 TRANSITION_NAMES = {
@@ -63,7 +65,8 @@ OUTBOUND_NAMES = {"notify", "send", "send_message", "sendmail", "post_message"}
 
 @pytest.mark.group_i
 def test_milestone_and_customs_writes_never_transition_documents() -> None:
-    """B8 ⑦ — 마일스톤·통관 4파일은 전이·탄생·사슬 잠금·수렴·채번을 언급하지 않는다(실적 입력이 선적·SO 상태를 바꾸지 않는다 — 자동 엣지 0)"""
+    """B8 ⑦ — 마일스톤·통관 5파일(PR-4c 세트 쓰기 포함)은 전이·탄생·사슬 잠금·수렴·채번을 언급하지 않는다(실적 입력이 선적·SO·PO 상태를 바꾸지
+    않는다 — 자동 엣지 0, OEM 실적도 PO 상태 무변경)"""
     sources = app_sources()
     for rel in MILESTONE_FILES:
         assert rel in sources, rel
@@ -75,7 +78,7 @@ def test_milestone_and_customs_writes_never_transition_documents() -> None:
 
 @pytest.mark.group_h
 def test_the_notice_path_sends_nothing() -> None:
-    """H(통보 = 기록, 발송 0) — 마일스톤·통관 4파일은 HTTP·메일·메신저 클라이언트·알림 코어를 임포트하지 않고 발송 함수를 부르지 않는다.
+    """H(통보 = 기록, 발송 0) — 마일스톤·통관 5파일은 HTTP·메일·메신저 클라이언트·알림 코어를 임포트하지 않고 발송 함수를 부르지 않는다.
     통보 착지(`record_shipment_comm_log`)는 아웃박스도 쓰지 않는다(행 1개 추가뿐)"""
     sources = app_sources()
     for rel in MILESTONE_FILES:
