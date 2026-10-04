@@ -13,8 +13,11 @@ import { downloadFile } from "../lib/download";
 import { usePagedList } from "../lib/paging";
 import { SALES_ORDERS_QUERY_KEY, type SalesOrderSummary } from "../lib/sales-order";
 
-/** 사람이 만들 수 있는 상태만 필터로 둔다(예약 상태 4값은 아직 전이가 없다). */
-export const SO_STATUS_FILTERS = ["RECEIVED", "CONFIRMED", "ON_HOLD", "CANCELLED"] as const;
+/**
+ * 도달 가능한 상태만 필터로 둔다(예약 상태 3값 — 부분할당·할당완료·완료 — 은 아직 전이가 없다).
+ * 선적중(IN_SHIPMENT)은 S3-2 PR-3a부터 첫 선적 생성 시 자동 수렴으로 도달한다(R-21 — 없으면 선적 후 수주가 필터로 안 잡힌다).
+ */
+export const SO_STATUS_FILTERS = ["RECEIVED", "CONFIRMED", "IN_SHIPMENT", "ON_HOLD", "CANCELLED"] as const;
 
 /** 목록·CSV가 같은 필터 문자열을 쓴다(CSV는 지금 보는 조건 그대로 내려받는다). */
 function filterQuery(filters: { status: string; q: string; dateFrom: string; dateTo: string }) {

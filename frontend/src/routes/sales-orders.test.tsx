@@ -97,6 +97,21 @@ describe("수주 목록", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("내보내기 실패");
   });
 
+  // R-21(S3-2 PR-3b) — 첫 선적 뒤 수주는 선적중(IN_SHIPMENT)으로 자동 수렴한다. 필터에 없으면 그 수주를 상태로 못 찾는다.
+  it("상태 필터에 '선적중'이 있고 IN_SHIPMENT로 서버에 묻는다 — 선적중 수주는 배지로 보인다", async () => {
+    const shipping = soSummary({ id: 14, doc_number: "SO-2026-0014", status: "IN_SHIPMENT", confirmed_at: "2026-09-30T02:00:00Z" });
+    const { calls } = stubFetch(TRADER, [["/v1/sales-orders", "GET", () => jsonResponse(page([...ROWS, shipping]))]]);
+    renderWithProviders(<AppRoutes />, { route: "/sales-orders" });
+    await screen.findByText("SO-2026-0001");
+    expect(within(rowOf("SO-2026-0014")).getByText("선적중")).toBeInTheDocument();
+
+    const select = screen.getByLabelText("상태");
+    const labels = within(select).getAllByRole("option").map((option) => option.textContent);
+    expect(labels).toEqual(["전체", "접수", "확정", "선적중", "보류", "취소"]);
+    fireEvent.change(select, { target: { value: "IN_SHIPMENT" } });
+    await waitFor(() => expect(calls.map((c) => c.url)).toContain("/api/v1/sales-orders?status=IN_SHIPMENT"));
+  });
+
   it("50건을 넘으면 쪽 이동이 2쪽을 요청한다", async () => {
     const { calls } = stubFetch(TRADER, [["/v1/sales-orders", "GET", () => jsonResponse({ items: ROWS, total: 120, page: 1, size: 50 })]]);
     renderWithProviders(<AppRoutes />, { route: "/sales-orders" });

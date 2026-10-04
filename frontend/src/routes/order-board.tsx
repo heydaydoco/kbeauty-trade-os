@@ -509,7 +509,7 @@ export function OrderBoardPage() {
         <div>
           <h1 className="text-2xl font-bold">오더 보드</h1>
           <p className="mt-1 break-keep text-sm text-gray-500">
-            접수 대기 인테이크부터 확정된 수주까지 한눈에 봅니다. 카드를 누르면 상세 화면으로 갑니다. 원가·여신·게이트 판정은 상세 화면에서 확인합니다.
+            접수 대기 인테이크부터 확정·선적중인 수주까지 한눈에 봅니다. 카드를 누르면 상세 화면으로 갑니다. 원가·여신·게이트 판정은 상세 화면에서 확인합니다.
           </p>
         </div>
         <button type="button" onClick={() => void exportCsv()} className="cell-nowrap rounded border border-gray-300 px-3 py-2 text-sm">

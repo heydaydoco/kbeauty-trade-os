@@ -36,6 +36,7 @@ export const INTAKE_CARD = boardCard({
 export const SO_RECEIVED_CARD = boardCard({ id: 11, ref_label: "SO-2026-0011", version: 3 });
 export const SO_HOLD_CARD = boardCard({ id: 12, ref_label: "SO-2026-0012", version: 5, buyer_name: "XYZ Corp" });
 export const SO_CONFIRMED_CARD = boardCard({ id: 13, ref_label: "SO-2026-0013", version: 8 });
+export const SO_IN_SHIPMENT_CARD = boardCard({ id: 14, ref_label: "SO-2026-0014", version: 9, buyer_name: "Ship Co" });
 
 export function column(stage: BoardColumn["stage"], label: string, items: BoardCard[], over: Partial<BoardColumn> = {}): BoardColumn {
   return { stage, label_ko: label, total: items.length, has_more: false, items, ...over };
@@ -48,6 +49,7 @@ export function board(over: Partial<Record<BoardColumn["stage"], Partial<BoardCo
       column("SO_RECEIVED", "수주 접수", [SO_RECEIVED_CARD], over.SO_RECEIVED),
       column("SO_ON_HOLD", "수주 보류", [SO_HOLD_CARD], over.SO_ON_HOLD),
       column("SO_CONFIRMED", "수주 확정", [SO_CONFIRMED_CARD], over.SO_CONFIRMED),
+      column("SO_IN_SHIPMENT", "선적중", [SO_IN_SHIPMENT_CARD], over.SO_IN_SHIPMENT),
     ],
     generated_at: "2026-10-03T01:00:00Z",
   };
