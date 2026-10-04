@@ -15,3 +15,5 @@
 **되돌리기 비용** — 중간. 전이표·총수는 코드+테스트 상수라 엣지 추가는 낮다(ADR 부기+총수 갱신). PI·PO에 초안을 나중에 넣으려면 CHECK 재정의 마이그레이션과 동결 시점·생성 API 재정의가 따라와 중간~높음. 이력 표를 다형 1개로 통합하거나 컬럼을 바꾸는 것은 IMMUTABLE 테이블이라 새 마이그레이션+이관이 필요하므로 데이터가 쌓이기 전인 지금이 가장 싸다.
 
 **영향 세션** — S3-1 PR-5~8(전이·이력·이벤트 구현)·PR-9/12(SO `approval_id` 배선, M10) / S3-2(SO 후반 엣지 추가·RESERVED 감소·총수 갱신·`CHILD_LINKS` 등록) / S3-3(입금 화면·`converge_payment_status` 확장) / S4-1(PO 후반 엣지) / S4-2(할당 상태 엣지·`AllocationPort` 실구현).
+
+**부기(2026-10-04 — S3-2 계획)** — (자율 확정 — 사후 번복 가능. 위 원문 결정은 고치지 않는다.) **S3-2 소비분**: ① DocKind `SHIPMENT`(8상태 — 활성 사람 엣지 3·자동 0·RESERVED 5[PICKING~CLOSED, S4-2])를 같은 기계·같은 통로(`record_birth`/`record_transition`)·같은 이력 계약(`shipment_status_log` IMMUTABLE)으로 편입한다. ② SO는 **RESERVED에서 IN_SHIPMENT를 빼고 자동 엣지 2개(CONFIRMED↔IN_SHIPMENT)**를 연다 — 위 "SO 후반 엣지 추가·RESERVED 감소"의 S3-2 몫. **COMPLETED는 RESERVED 유지**(S3-3 미수 provider PR과 함께 — ADR-0076). ③ 총수 핀 25/101/126 → **30/152/182**(사람 18·자동 12). ④ SO 범용 전이 Literal은 사람 엣지만 세므로 무변경. 근거: ADR-0074·0075·0076 / design-integrated.md §2.5·R-23.
