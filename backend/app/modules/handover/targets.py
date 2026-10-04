@@ -22,6 +22,7 @@ from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.purchase_orders.models import PurchaseOrder
 from app.modules.quotations.models import Quotation
 from app.modules.sales_orders.models import SalesOrder
+from app.modules.shipments.models import Shipment
 from app.modules.worklist.models import Alert, AlertRule, Task
 
 #: 담당자를 가리키는 컬럼 이름들. 감사 컬럼(created_by_id·updated_by_id)과
@@ -61,6 +62,8 @@ ASSIGNMENT_TARGETS: tuple[AssignmentTarget, ...] = (
     AssignmentTarget("proforma_invoices", ProformaInvoice, ProformaInvoice.assignee_id),
     AssignmentTarget("sales_orders", SalesOrder, SalesOrder.assignee_id),
     AssignmentTarget("purchase_orders", PurchaseOrder, PurchaseOrder.assignee_id),
+    # S3-2 PR-3a — 선적 담당자(FREE 열, 원천 담당자 사본). LOCK_ORDER (6) PO → (7) shipments 순서 그대로 PO 다음(ADR-0078).
+    AssignmentTarget("shipments", Shipment, Shipment.assignee_id),
 )
 
 
@@ -83,6 +86,10 @@ USER_FK_CLASSIFICATION: dict[tuple[str, str], str] = {
         "decided_by_id",
     ): "ACTOR_LOG",  # PR-13a — 확정·거부 결정자(이력 — 이관으로 바뀌지 않는다)
     ("purchase_order_status_log", "actor_user_id"): "ACTOR_LOG",
+    (
+        "shipment_status_log",
+        "actor_user_id",
+    ): "ACTOR_LOG",  # S3-2 PR-3a — 선적 상태이력 행위자(이력)
     ("import_staging", "confirmed_by_id"): "ACTOR_LOG",
     # S3-1 PR-9a — 승인 4표(ADR-0061). 승인 대기 건은 **역할 기반**이라 이관 대상이 아니다(requested_by·decided_by는 이력이고,
     # 대결은 개인 결재 권한의 임시 위탁이라 이관하지 않는다 — 이관 도구가 대상 계정을 비활성화하면 대결은 계산 술어로 즉시 무효).

@@ -1,7 +1,7 @@
 """A. SO 상태 전이 — SO 8상태 56쌍 전수·통로 규칙·예약 상태·재개 목표·확정 액션 엣지 (S3-1 PR-7a / ADR-0051·0052 / design-B B1·B2·B3).
 
-SO 8상태의 순서쌍 56개: 허용 8(사람 8·자동 0)은 성공, 미허용 48은 409 전건(ADR-0038의 전수 선례). 그중 RESERVED 4상태(PARTIALLY_ALLOCATED·
-ALLOCATED·IN_SHIPMENT·COMPLETED)는 in/out 엣지가 0이다(소비 세션 S3-2·S4-2가 더한다). 확정(RECEIVED→CONFIRMED)은 동결 액션 전용 엣지라
+SO 8상태의 순서쌍 56개: 허용 10(사람 8·자동 2 — S3-2 PR-3a CONFIRMED↔IN_SHIPMENT 선적 수렴, ADR-0075)은 성공, 미허용 46은 409 전건
+(ADR-0038의 전수 선례). RESERVED 3상태(PARTIALLY_ALLOCATED·ALLOCATED·COMPLETED)는 in/out 엣지가 0이다(소비 세션 S4-2·S3-3이 더한다). 확정(RECEIVED→CONFIRMED)은 동결 액션 전용 엣지라
 PR-12의 `confirm`이 오기 전까지 이 파일이 `via_freeze_action=True` 직접 호출로 시험한다(죽은 문이 아니라 상태 기계의 실제 진입점).
 """
 
@@ -87,7 +87,7 @@ def _kwargs_for(pair: tuple[str, str], actor: int) -> dict[str, Any]:
     return {
         "actor_user_id": actor,
         "reason": "테스트 사유" if to in ("CANCELLED", "ON_HOLD") else None,
-        "automatic": False,
+        "automatic": pair in AUTO,  # 선적 수렴 2엣지는 자동 통로로만(행위자 = 유발자)
         "via_freeze_action": pair in FREEZE,
     }
 
@@ -100,7 +100,7 @@ def _make(pair: tuple[str, str]) -> int:
 
 @pytest.mark.parametrize("pair", _ALL_PAIRS, ids=[f"{a}->{b}" for a, b in _ALL_PAIRS])
 def test_all_fifty_six_so_pairs(pair: tuple[str, str]) -> None:
-    """SO 56쌍 — 허용 8쌍은 성공(이력 1행·automatic=false·이벤트 1건), 미허용 48쌍은 409 TRANSITION.NOT_ALLOWED이고 무변"""
+    """SO 56쌍 — 허용 10쌍은 성공(이력 1행·automatic은 자동 엣지에서만 true·이벤트 1건), 미허용 46쌍은 409 TRANSITION.NOT_ALLOWED이고 무변"""
     frm, to = pair
     actor = create_user(f"so-actor-{frm}-{to}@example.com", roles=(RoleCode.TRADE,))
     so_id = _make(pair)
@@ -110,7 +110,7 @@ def test_all_fifty_six_so_pairs(pair: tuple[str, str]) -> None:
         assert _scalar("SELECT status FROM sales_orders WHERE id = :i", i=so_id) == to
         rows = _log_rows(so_id)
         assert len(rows) == before_log + 1 and _events(so_id) == before_events + 1
-        assert rows[-1][:3] == (frm, to, False)
+        assert rows[-1][:3] == (frm, to, pair in AUTO)
         if to in ("CANCELLED", "ON_HOLD"):
             assert rows[-1][3] == "테스트 사유"
         # 확정 시각은 동결 액션(RECEIVED→CONFIRMED)만 채운다 — 그 밖의 전이는 건드리지 않는다
@@ -118,7 +118,9 @@ def test_all_fifty_six_so_pairs(pair: tuple[str, str]) -> None:
             "SELECT confirmed_at IS NOT NULL FROM sales_orders WHERE id = :i", i=so_id
         )
         assert confirmed == (
-            pair in FREEZE or frm in ("CONFIRMED",) or (frm, to) == ("ON_HOLD", "CONFIRMED")
+            pair in FREEZE
+            or frm in ("CONFIRMED", "IN_SHIPMENT")
+            or (frm, to) == ("ON_HOLD", "CONFIRMED")
         )
     else:
         with pytest.raises(AppError) as caught:
@@ -130,12 +132,12 @@ def test_all_fifty_six_so_pairs(pair: tuple[str, str]) -> None:
 
 
 def test_the_pair_table_itself_is_not_vacuous() -> None:
-    """공회전 방지 — 56쌍 중 허용 8(사람 8·자동 0)·미허용 48이 실제로 갈리고, RESERVED 4상태 관련 쌍은 전부 미허용이다"""
+    """공회전 방지 — 56쌍 중 허용 10(사람 8·자동 2)·미허용 46이 실제로 갈리고, RESERVED 3상태 관련 쌍은 전부 미허용이다"""
     assert len(_ALL_PAIRS) == 56
-    assert len([p for p in _ALL_PAIRS if p in HUMAN | AUTO]) == 8
-    assert (len(HUMAN), len(AUTO)) == (8, 0)
+    assert len([p for p in _ALL_PAIRS if p in HUMAN | AUTO]) == 10
+    assert (len(HUMAN), len(AUTO)) == (8, 2)
     reserved = RESERVED[KIND]
-    assert reserved == {"PARTIALLY_ALLOCATED", "ALLOCATED", "IN_SHIPMENT", "COMPLETED"}
+    assert reserved == {"PARTIALLY_ALLOCATED", "ALLOCATED", "COMPLETED"}
     assert not [
         p for p in _ALL_PAIRS if (p[0] in reserved or p[1] in reserved) and p in HUMAN | AUTO
     ]
@@ -143,7 +145,7 @@ def test_the_pair_table_itself_is_not_vacuous() -> None:
 
 @pytest.mark.parametrize("pair", sorted(HUMAN))
 def test_wrong_channel_is_rejected_even_for_an_allowed_pair(pair: tuple[str, str]) -> None:
-    """허용 쌍도 통로가 틀리면 거부 — 사람 쌍에 automatic=True(SO는 자동 엣지가 0) · 동결 엣지는 동결 액션으로만, 그 밖은 동결 액션으로 못 넘는다"""
+    """허용 쌍도 통로가 틀리면 거부 — 사람 쌍에 automatic=True(사람 쌍은 자동 집합에 없다) · 동결 엣지는 동결 액션으로만, 그 밖은 동결 액션으로 못 넘는다"""
     frm, to = pair
     actor = create_user(f"so-chan-{frm}-{to}@example.com", roles=(RoleCode.TRADE,))
     so_id = _make(pair)
@@ -154,6 +156,22 @@ def test_wrong_channel_is_rejected_even_for_an_allowed_pair(pair: tuple[str, str
     with pytest.raises(AppError) as flipped:
         _transition(so_id, to, **{**good, "via_freeze_action": pair not in FREEZE})
     assert flipped.value.code == "TRADE_DOCS.TRANSITION.NOT_ALLOWED"
+    assert _scalar("SELECT status FROM sales_orders WHERE id = :i", i=so_id) == frm
+
+
+@pytest.mark.parametrize("pair", sorted(AUTO))
+def test_the_shipping_convergence_edges_reject_the_human_channel(pair: tuple[str, str]) -> None:
+    """선적 수렴 2엣지(CONFIRMED↔IN_SHIPMENT)는 자동 통로로만 — 사람 통로(automatic=False)·동결 액션 통로는 409이고 상태 무변(공개 API로 요청 불가)"""
+    frm, to = pair
+    actor = create_user(f"so-auto-{frm}-{to}@example.com", roles=(RoleCode.TRADE,))
+    so_id = _make(pair)
+    for kwargs in (
+        {"automatic": False, "via_freeze_action": False},
+        {"automatic": True, "via_freeze_action": True},
+    ):
+        with pytest.raises(AppError) as caught:
+            _transition(so_id, to, actor_user_id=actor, reason=None, **kwargs)
+        assert caught.value.code == "TRADE_DOCS.TRANSITION.NOT_ALLOWED"
     assert _scalar("SELECT status FROM sales_orders WHERE id = :i", i=so_id) == frm
 
 

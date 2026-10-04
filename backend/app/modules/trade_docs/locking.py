@@ -4,8 +4,14 @@
 리뷰가 아니라 헬퍼(`lock_document`·`chain.lock_chain`·`quantities.lock_lines_for_consumption`)로 구조화한다.
 
     (−1) 파일 해시 advisory xact lock(CSV 입구 전용, 트랜잭션 첫 문장 — `order_intake.csv_import`, PR-14a)
-    → (0) 멱등 claim 행 → (1) order_intakes → (2) partners(바이어) → (3) QT → (4) PI → (5) SO → (6) PO
-    → (7) approvals → (8) 라인(id 오름차순) → (9) doc_number_seq(항상 마지막)
+    → (0) 멱등 claim 행 → (1) order_intakes → (2) partners(바이어·당사자·관세사) → (3) QT → (4) PI → (5) SO → (6) PO
+    → (7) shipments → (8) shipment_children → (9) approvals → (10) 라인(id 오름차순) → (11) doc_number_seq(항상 마지막)
+
+S3-2 PR-3a 개정(ADR-0078 — §17.2 부기 ② "변경은 ADR"): 선적은 SO·PO의 후속이라 조상 → 자기 순서로 (7)에 들어간다. (8)
+`shipment_children` = 선적 1건의 비-라인 하위 행(당사자 — 마일스톤·통관 기록은 PR-4a가 같은 슬롯을 쓴다), 여러 행이면 id 오름차순.
+라인 범주는 **원천 라인 → 선적 라인**(id 순). 잠금 모드: SO 수렴을 동반할 수 있는 선적 쓰기(생성·라인·출고지시·취소)는 SO를
+`FOR UPDATE`로 **선점**한다(`lock_lines_for_consumption`의 헤더 `FOR SHARE`는 기보유 잠금에 흡수 — SHARE→UPDATE 승격 교착 차단).
+당사자 쓰기는 멱등 → partners `FOR KEY SHARE`(id 순) → shipments(R-08 — 거래처 검증이 선적 잠금 뒤로 가지 않게).
 
 (−1)은 행 잠금이 아니라 같은 파일(sha256)의 업로드끼리만 직렬화하는 advisory 잠금이라 `LOCK_ORDER` 튜플(행 잠금 대상)에는 넣지 않는다 —
 트랜잭션의 첫 문장이므로 어떤 행 잠금보다 앞선다. 한 트랜잭션 안에서 같은 표의 여러 행을 잠그는 곳(임포트 확정 `load_targets_for_update` 등)은 **id 오름차순**이다.
@@ -37,6 +43,8 @@ LOCK_ORDER: tuple[str, ...] = (
     "proforma_invoices",
     "sales_orders",
     "purchase_orders",
+    "shipments",
+    "shipment_children",
     "approvals",
     "lines",
     "doc_number_seq",

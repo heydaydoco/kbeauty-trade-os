@@ -155,6 +155,8 @@ class SalesOrderLineOut(BaseModel):
     quantity_delta: int | None
     #: 파생값 — 접수 단가가 원천 단가와 다른가. 직접 수주는 None.
     price_changed: bool | None
+    #: 파생값(S3-2 PR-3a) — 선적 잔량 = 라인 수량 − 살아 있는 선적 라인 합. 상세 응답에만 싣는다(라인 편집 응답은 접수 상태라 None — 선적 0).
+    shipment_open_quantity: int | None = None
 
 
 class SalesOrderSummary(BaseModel):

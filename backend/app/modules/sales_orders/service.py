@@ -402,6 +402,11 @@ def detail_body(session: Session, row: SalesOrder) -> dict[str, Any]:
     )
     statuses = sku_statuses(session, [line.sku_id for line in lines])
     sources = _source_map(session, lines)
+    # S3-2 PR-3a(design-D X3) — 선적 잔량 = 라인 수량 − 살아 있는 선적 라인 합(파생, 저장 아님). 화면은 산술하지 않는다.
+    shipment_open = {
+        line_id: quantity.open
+        for line_id, quantity in open_quantity(session, "SO_LINE", [ln.id for ln in lines]).items()
+    }
     body = _summary_body(
         row,
         _doc_numbers(session, _QUOTATIONS, {row.qt_id} if row.qt_id else set()).get(row.qt_id or 0),
@@ -430,7 +435,12 @@ def detail_body(session: Session, row: SalesOrder) -> dict[str, Any]:
             "last_line_no": row.last_line_no,
             "is_reference": row.qt_id is not None,
             "lines": [
-                _line_body(line, sku_status=statuses.get(line.sku_id), source=sources.get(line.id))
+                {
+                    **_line_body(
+                        line, sku_status=statuses.get(line.sku_id), source=sources.get(line.id)
+                    ),
+                    "shipment_open_quantity": shipment_open.get(line.id, line.quantity),
+                }
                 for line in lines
             ],
         }

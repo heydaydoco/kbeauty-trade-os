@@ -1,6 +1,6 @@
 """열 분류 레지스트리 `FIELD_POLICY` — 동결 계약의 유일 정본 (S3-1 ADR-0053 / design-B B2 / X-04).
 
-전표 헤더·라인 테이블의 **모든 컬럼**을 정확히 하나로 등재한다(미등재·유령 = CI 실패, fail-closed):
+전표 헤더·라인 테이블(QT·PI·SO·PO·선적 — S3-2 PR-3a)의 **모든 컬럼**을 정확히 하나로 등재한다(미등재·유령 = CI 실패, fail-closed):
 
   CONTENT  편집 가능 상태에서만 수정, **동결 후 불변**(거래처·통화·환율·결제조건·Incoterms·유효기간·라인 전 컬럼…)
   ORIGIN   생성 시 1회 결정, 이후 어느 상태에서도 불변(참조 FK·복제 원본)
@@ -253,6 +253,58 @@ FIELD_POLICY: dict[str, dict[str, ColumnClass]] = {
         "unit_cost": C,
         "line_cost": C,
         "price_basis": C,
+    },
+    # 선적(S3-2 PR-3a / design-integrated §2.1 (a)(b) / R-15) — **원천 사본은 전부 ORIGIN**(통화·환율·결제조건·Incoterms·거래 상대·구분·원천 FK):
+    # 생성 시 원천(확정 SO·발행 PO)에서 복사하고 이후 어느 상태에서도 불변이다(선적은 재입력 금지라 편집 구간 자체가 없다). `doc_date`도 ORIGIN —
+    # 원천 복사가 아니라 생성 시 `today_kst()` 1회 설정(R-15). 편집 구간(PLANNED)의 CONTENT는 국가 2열·합계(라인 수량 연동)뿐이다.
+    # 복제 경로가 없어 `copied_from_id`는 SYSTEM(CHECK `no_copy_lineage`로 항상 NULL). FREE는 메모·담당자(FREE_COLUMNS 4개 불변).
+    "shipments": {
+        **_AUDIT_SYSTEM,
+        "version": S,
+        "doc_number": S,
+        "status": S,
+        "frozen_at": S,
+        "last_line_no": S,
+        "copied_from_id": S,
+        "doc_date": ORG,
+        "currency": ORG,
+        "fx_rate": ORG,
+        "fx_rate_date": ORG,
+        "payment_type": ORG,
+        "advance_pct_bp": ORG,
+        "balance_anchor": ORG,
+        "balance_days": ORG,
+        "incoterm_code": ORG,
+        "incoterm_place": ORG,
+        "incoterm_year": ORG,
+        "shipment_kind": ORG,
+        "so_id": ORG,
+        "po_id": ORG,
+        "counterparty_partner_id": ORG,
+        "counterparty_name": ORG,
+        "origin_country_code": C,
+        "dest_country_code": C,
+        "total_amount": C,
+        "internal_note": F,
+        "assignee_id": F,
+    },
+    # 선적 라인 — 원천 라인 참조·SKU·통화·단가·무상 표식은 ORIGIN(원천 사본), 수량·금액만 CONTENT(PLANNED 중 원천 잔량 안에서), 번호는 SYSTEM.
+    "shipment_lines": {
+        **_AUDIT_SYSTEM,
+        "shipment_id": ORG,
+        "line_no": S,
+        "so_line_id": ORG,
+        "po_line_id": ORG,
+        "sku_id": ORG,
+        "sku_code": ORG,
+        "sku_name_ko": ORG,
+        "sku_name_en": ORG,
+        "sku_kind": ORG,
+        "currency": ORG,
+        "unit_price_amount": ORG,
+        "is_free": ORG,
+        "quantity": C,
+        "line_amount": C,
     },
 }
 

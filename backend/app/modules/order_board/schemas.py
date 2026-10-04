@@ -91,7 +91,7 @@ class BoardItemsQuery(BoardFilter):
 
 
 class BoardExportQuery(BoardFilter):
-    """`GET /order-board/export.csv` — 같은 필터, `stage`를 주면 그 열만(없으면 4열 전부)."""
+    """`GET /order-board/export.csv` — 같은 필터, `stage`를 주면 그 열만(없으면 5열 전부)."""
 
     stage: BoardStage | None = None
 
@@ -133,7 +133,7 @@ class BoardColumn(BaseModel):
 
 
 class OrderBoardOut(BaseModel):
-    """`GET /order-board` — **비-Page 단일 객체**(의도된 예외 — 고정 4열·열당 상한). 최상위 배열이 아니다."""
+    """`GET /order-board` — **비-Page 단일 객체**(의도된 예외 — 고정 5열·열당 상한). 최상위 배열이 아니다."""
 
     columns: list[BoardColumn]
     generated_at: datetime

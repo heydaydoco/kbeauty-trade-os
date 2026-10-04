@@ -1,4 +1,4 @@
-"""상태이력 표 — 전표별 4표, 불변 (S3-1 ADR-0051 / design-B B6 / DESIGN §17.5 확장).
+"""상태이력 표 — 전표별 5표(S3-2 PR-3a 선적 포함), 불변 (S3-1 ADR-0051 / design-B B6 / DESIGN §17.5 확장).
 
 문서별 테이블이다(다형 단일 테이블 기각 — FK RESTRICT 불가·상태값 CHECK가 합집합으로 약화). 이 파일은 각
 전표 PR이 자기 `<doc>_status_log`를 추가하는 자리다(certification_status_log 계보). 구조 중복은
@@ -186,10 +186,32 @@ class PurchaseOrderStatusLog(StatusLogColumns, PkMixin, Base):
     )
 
 
+class ShipmentStatusLog(StatusLogColumns, PkMixin, Base):
+    """선적 상태 변경 이력 — 불변(S3-2 PR-3a / ADR-0074 / §17.5 확장 — 신설 세션 등재). 선적은 자동 엣지가 없어 `automatic`은 항상 false다."""
+
+    __tablename__ = "shipment_status_log"
+
+    shipment_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("shipments.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    __table_args__ = (
+        *status_log_checks(DocKind.SHIPMENT),
+        Index(
+            "uq_shipment_status_log_shipment_id_birth",
+            "shipment_id",
+            unique=True,
+            postgresql_where=text("from_status IS NULL"),
+        ),
+        Index("ix_shipment_status_log_shipment_id_id", "shipment_id", desc("id")),
+    )
+
+
 #: 전표별 상태이력 모델 — 각 전표 PR이 자기 표를 여기 등록한다(record_birth/record_transition이 소비).
 STATUS_LOG_MODELS: dict[DocKind, type[Any]] = {
     DocKind.QUOTATION: QuotationStatusLog,
     DocKind.PROFORMA_INVOICE: ProformaInvoiceStatusLog,
     DocKind.SALES_ORDER: SalesOrderStatusLog,
     DocKind.PURCHASE_ORDER: PurchaseOrderStatusLog,
+    DocKind.SHIPMENT: ShipmentStatusLog,
 }

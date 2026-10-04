@@ -84,7 +84,12 @@ def test_pending_child_tables_are_exactly_the_ones_not_yet_created() -> None:
 
 def test_child_links_are_wellformed() -> None:
     """모든 링크의 부모는 DocKind이고, 테이블이 존재하면 FK 열·live 술어 열(deleted_at·status)이 실제로 있다"""
-    assert {link.parent for link in CHILD_LINKS} == {DocKind.QUOTATION, DocKind.PROFORMA_INVOICE}
+    assert {link.parent for link in CHILD_LINKS} == {
+        DocKind.QUOTATION,
+        DocKind.PROFORMA_INVOICE,
+        DocKind.SALES_ORDER,  # S3-2 PR-3a — SO←선적(so_id)
+        DocKind.PURCHASE_ORDER,  # S3-2 PR-3a — PO←선적(po_id, 수입선적 생성은 PR-5a)
+    }
     for link in CHILD_LINKS:
         table = Base.metadata.tables.get(link.child_table)
         if table is None:
@@ -103,6 +108,11 @@ def test_the_live_predicate_is_derived_from_the_dead_status_tuple() -> None:
     assert '"CANCELLED"' not in body and '"EXPIRED"' not in body
     assert DEAD_STATUSES == ("CANCELLED", "EXPIRED")
     assert chain.links_for(DocKind.QUOTATION) and chain.links_for(DocKind.PROFORMA_INVOICE)
-    assert (
-        chain.links_for(DocKind.SALES_ORDER) == [] and chain.links_for(DocKind.PURCHASE_ORDER) == []
-    )
+    # S3-2 PR-3a — SO·PO의 후속은 선적 하나씩(역순 취소), 선적 자신의 후속은 0(CI/PL = S3-3).
+    assert [
+        (link.child_table, link.fk_column) for link in chain.links_for(DocKind.SALES_ORDER)
+    ] == [("shipments", "so_id")]
+    assert [
+        (link.child_table, link.fk_column) for link in chain.links_for(DocKind.PURCHASE_ORDER)
+    ] == [("shipments", "po_id")]
+    assert chain.links_for(DocKind.SHIPMENT) == []

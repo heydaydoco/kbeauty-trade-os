@@ -13,3 +13,5 @@
 **기각한 대안** — SHARE 유지 + 수렴을 별도 TX(§17.1 위반), PO도 `FOR UPDATE`로 통일(불필요하게 강함 — X-10), `ANCESTORS`에 경로별 모드를 싣기(헬퍼 확장 대비 실익 없음 — 교착 무관), 당사자 쓰기에서 거래처 검증을 선적 잠금 뒤에.
 
 **되돌리기 비용** — **중간**(교착 재검증 필요 — 계측 테스트가 비용을 줄인다). 잠금 강도 낮추기는 헬퍼 1곳으로 낮음. DESIGN §8.3 부기 문면 변경이라 번복 시 부기 원복이 같이 움직인다.
+
+**부기(2026-10-04 — S3-2 PR-3a 이행: 순서표·선점·계측)** — ①·②(T1·T4·T5·T8)·④·⑤를 구현했다. `locking.LOCK_ORDER` = 멱등 → 인테이크 → 거래처 → QT → PI → SO → PO → **shipments → shipment_children** → approvals → lines → seq(독스트링 갱신). T1 수출 생성 = 거래처(id 순) → **SO `FOR UPDATE` 선점** → 원천 라인 `FOR UPDATE`(`lock_lines_for_consumption`의 헤더 SHARE는 흡수) → 채번. 라인 편집·출고지시·취소 = `lock_chain(SHIPMENT)`(SO → 선적). 당사자 추가 = 멱등 → 거래처 `FOR KEY SHARE` → 선적, 당사자 제외 = 선적 → `shipment_children`. J-07 계측 시험이 경로 8개(생성·라인 추가·수정·삭제·당사자 추가·제외·출고지시·취소)의 첫 잠금 순서를 `LOCK_ORDER` 색인 오름차순으로 단언하고, GC-F4(7+7 동시)·20명 경합이 교착 0을 실측한다(변이: SO 선점을 빼면 GC-F4 실패). T2(수입 PO SHARE)·T9(통관)·T13(OEM)은 해당 PR(5a·4a·4c)이 소비한다. 담당 이관 대상은 purchase_orders 뒤에 shipments.

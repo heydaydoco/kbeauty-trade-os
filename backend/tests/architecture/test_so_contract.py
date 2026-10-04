@@ -175,6 +175,9 @@ def test_so_routes_are_bounded_no_create_no_document_delete() -> None:
         ("POST", "/api/v1/sales-orders/{so_id}/gate-overrides/revoke"),
         ("POST", "/api/v1/quotations/{qt_id}/sales-orders"),
         ("POST", "/api/v1/proforma-invoices/{pi_id}/sales-orders"),
+        # S3-2 PR-3a — SO 참조 수출선적(미리보기·생성). SO 자신은 바뀌지 않고 같은 TX에서 IN_SHIPMENT로 수렴할 뿐이다(확정 경로 아님)
+        ("POST", "/api/v1/sales-orders/{so_id}/shipments/preview"),
+        ("POST", "/api/v1/sales-orders/{so_id}/shipments"),
     }
 
 

@@ -79,7 +79,7 @@ def test_every_so_status_is_on_the_board_or_explicitly_excluded_or_reserved() ->
         )
         == []
     )
-    assert set(STAGE_ORDER) == set(BoardStage) and len(STAGE_ORDER) == 4
+    assert set(STAGE_ORDER) == set(BoardStage) and len(STAGE_ORDER) == 5  # S3-2 PR-3a "선적중" 열
     assert set(BOARD_STAGE_STATUSES) == set(BoardStage) - {BoardStage.INTAKE_PENDING}
     assert set(STAGE_LABELS_KO) == set(BoardStage)
 

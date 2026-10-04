@@ -43,6 +43,9 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     "/api/v1/order-board",
     # S3-2 PR-2a — 휴일 캘린더(조회 = 전 역할, 원자 교체·CSV 미리보기 = 관리자 전용 — ADR-0079·0082).
     "/api/v1/holidays",
+    # S3-2 PR-3a — 선적(조회 = 전 역할, 라인·취소 = 무역, 헤더·출고지시·당사자 = 무역 + **물류**[첫 전표 쓰기 — ADR-0079]).
+    # SO 하위 참조 생성(`/sales-orders/{so_id}/shipments[/preview]`)은 위 SO 접두어가 통제한다(행만 추가).
+    "/api/v1/shipments",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -442,6 +445,81 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         A: ALLOW,
         T: DENY,
         L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    # S3-2 PR-3a — 선적(design-integrated §2.9 / ADR-0079). 생성·미리보기·라인·취소 = 무역(SO 잔량 소비·SO 수렴 = 상업 사실),
+    # 헤더(메모·담당·국가)·출고지시·당사자 = 무역 + 물류(물류 첫 전표 쓰기), 조회 = 전 역할(원가 필드 없음). 인증·조회 전용은 쓰기 0.
+    ("POST", "/api/v1/sales-orders/{so_id}/shipments/preview"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/sales-orders/{so_id}/shipments"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("GET", "/api/v1/shipments"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/shipments/{shipment_id}"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    ("GET", "/api/v1/shipments/{shipment_id}/status-log"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("PATCH", "/api/v1/shipments/{shipment_id}"): {A: ALLOW, T: ALLOW, L: ALLOW, C: DENY, V: DENY},
+    ("POST", "/api/v1/shipments/{shipment_id}/lines"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("PATCH", "/api/v1/shipments/{shipment_id}/lines/{line_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("DELETE", "/api/v1/shipments/{shipment_id}/lines/{line_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/shipments/{shipment_id}/release-order"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/shipments/{shipment_id}/transitions"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/shipments/{shipment_id}/parties"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: DENY,
+        V: DENY,
+    },
+    ("DELETE", "/api/v1/shipments/{shipment_id}/parties/{party_id}"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
         C: DENY,
         V: DENY,
     },

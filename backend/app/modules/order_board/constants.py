@@ -1,6 +1,7 @@
 """오더 보드 상수 — 열(stage)·상태 매핑·상한·벌크 열거의 단일 출처 (S3-1 PR-15a / design-D D6 / ADR-0066).
 
-■ 보드 범위는 **접수 이후~확정까지**의 인테이크·SO 뷰뿐이다(할당·선적 열은 소비 세션 S3-2·S4-2가 상수 1줄+테스트로 붙인다 — 죽은 열 금지).
+■ 보드 범위는 **접수 이후~선적중까지**의 인테이크·SO 뷰다(할당 열은 소비 세션 S4-2가 상수 1줄+테스트로 붙인다 — 죽은 열 금지).
+  S3-2 PR-3a(ADR-0066 부기·ADR-0075): SO IN_SHIPMENT가 RESERVED에서 빠졌으므로 "선적중" 5번째 열을 더했다(카드가 조용히 사라지지 않게).
 ■ `BOARD_STAGE_STATUSES`(SO 상태→열)는 완전성 테스트가 지킨다: **모든 SO 상태 = 매핑됨 ∪ {CANCELLED} ∪ RESERVED**. RESERVED가 줄거나 상태가 늘면
   테스트가 실패해 카드가 조용히 사라지지 않는다. 취소·거부는 보드에서 제외한다(각 목록 화면의 상태 필터로 본다).
 ■ 벌크 열거는 3종뿐이다 — 보류·거부·취소·override·승인 요청은 **건별 사유·판정 해시가 필요한 행위**라 벌크로 흘리지 않는다(재판정 트리거: 실사용 요구).
@@ -21,14 +22,16 @@ class BoardStage(StrEnum):
     SO_RECEIVED = "SO_RECEIVED"
     SO_ON_HOLD = "SO_ON_HOLD"
     SO_CONFIRMED = "SO_CONFIRMED"
+    SO_IN_SHIPMENT = "SO_IN_SHIPMENT"
 
 
-#: 고정 4열(화면 순서).
+#: 고정 5열(화면 순서).
 STAGE_ORDER: tuple[BoardStage, ...] = (
     BoardStage.INTAKE_PENDING,
     BoardStage.SO_RECEIVED,
     BoardStage.SO_ON_HOLD,
     BoardStage.SO_CONFIRMED,
+    BoardStage.SO_IN_SHIPMENT,
 )
 
 STAGE_LABELS_KO: dict[BoardStage, str] = {
@@ -36,6 +39,7 @@ STAGE_LABELS_KO: dict[BoardStage, str] = {
     BoardStage.SO_RECEIVED: "수주 접수",
     BoardStage.SO_ON_HOLD: "수주 보류",
     BoardStage.SO_CONFIRMED: "수주 확정",
+    BoardStage.SO_IN_SHIPMENT: "선적중",
 }
 
 #: 인테이크 열이 보는 인테이크 상태 — 상태 열거의 단일 출처(`IntakeStatus`)에서 가져온다(문자열 하드코딩 금지).
@@ -50,13 +54,16 @@ BOARD_STAGE_STATUSES: dict[BoardStage, tuple[str, ...]] = {
     BoardStage.SO_RECEIVED: (SalesOrderStatus.RECEIVED.value,),
     BoardStage.SO_ON_HOLD: (SalesOrderStatus.ON_HOLD.value,),
     BoardStage.SO_CONFIRMED: (SalesOrderStatus.CONFIRMED.value,),
+    BoardStage.SO_IN_SHIPMENT: (SalesOrderStatus.IN_SHIPMENT.value,),
 }
 
 #: 보드에서 제외하는 SO 상태(매핑 완전성 테스트의 한 축) — 취소는 각 목록 화면에서 본다.
 EXCLUDED_SO_STATUSES: frozenset[str] = frozenset({SalesOrderStatus.CANCELLED.value})
 
-#: 열 정렬 — 대기·접수·보류는 접수(생성) 오래된 순(주의 필요), 확정은 최근 확정 순.
-NEWEST_FIRST_STAGES: frozenset[BoardStage] = frozenset({BoardStage.SO_CONFIRMED})
+#: 열 정렬 — 대기·접수·보류는 접수(생성) 오래된 순(주의 필요), 확정·선적중은 최근 확정 순(같은 인덱스 `ix_sales_orders_board_confirmed`).
+NEWEST_FIRST_STAGES: frozenset[BoardStage] = frozenset(
+    {BoardStage.SO_CONFIRMED, BoardStage.SO_IN_SHIPMENT}
+)
 
 #: 열당 카드 상한(그 이상은 `has_more` + `GET /order-board/items` 드릴다운).
 COLUMN_LIMIT = 50

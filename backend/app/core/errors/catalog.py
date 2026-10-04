@@ -485,6 +485,34 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         422,
         "휴일 CSV 형식을 확인해 주세요(UTF-8, 머리글 holiday_on,name).",
     ),
+    ErrorCode.SHIPMENTS_SOURCE_LINE_MISMATCH: ErrorSpec(
+        422,
+        "선택한 라인이 이 수주의 라인이 아닙니다. 수주 상세에서 라인을 다시 선택해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_SHIPMENT_NOT_ACTIVE: ErrorSpec(
+        409,
+        "취소된 선적은 수정할 수 없습니다. 필요하면 수주에서 새 선적을 만들어 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_LINE_DUPLICATE_SOURCE: ErrorSpec(
+        409,
+        "같은 수주 라인이 이 선적에 이미 있습니다. 기존 라인의 수량을 수정해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_LINE_LAST_LINE: ErrorSpec(
+        409,
+        "선적에는 라인이 1개 이상 있어야 합니다. 선적 전체를 없애려면 선적을 취소해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_PARTY_ROLE_DUPLICATE: ErrorSpec(
+        409,
+        "이 역할의 당사자가 이미 있습니다. 기존 당사자를 삭제한 뒤 다시 지정해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_PARTY_ROLE_NOT_ALLOWED: ErrorSpec(
+        422,
+        "이 역할의 당사자는 직접 지정하거나 삭제할 수 없습니다(수하인 = 수주 바이어 자동, 송하인 = 자사). 통지처·포워더·관세사 역할로 지정해 주세요.",
+    ),
+    ErrorCode.SHIPMENTS_PARTY_ENGLISH_NAME_MISSING: ErrorSpec(
+        422,
+        "거래처의 영문명이 비어 있어 선적 서류에 쓸 수 없습니다. 거래처 화면에서 영문명을 입력한 뒤 다시 시도해 주세요.",
+    ),
 }
 
 

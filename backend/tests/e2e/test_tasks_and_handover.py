@@ -230,6 +230,7 @@ def test_handover_reports_every_target_table(client: TestClient) -> None:
         "sales_orders",  # PR-7a
         "purchase_orders",  # PR-8a
         "order_intakes",  # PR-13a
+        "shipments",  # S3-2 PR-3a
     }
     assert body["total"] == 0
 

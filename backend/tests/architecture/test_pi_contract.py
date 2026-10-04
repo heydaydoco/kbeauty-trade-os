@@ -25,9 +25,9 @@ from tests.support.astscan import app_sources, module_of
 pytestmark = pytest.mark.group_k
 
 
-def test_line_consumers_register_exactly_the_three_s31_relations() -> None:
-    """LINE_CONSUMERS 등록 대사 — QT_LINE←PI_LINE.qt_line_id·QT_LINE←SO_LINE.qt_line_id·PI_LINE←SO_LINE.pi_line_id 3건(X-19)이고
-    SO_LINE·PO_LINE 소비자(선적·입고)는 S3-1에 없다"""
+def test_line_consumers_register_exactly_the_five_relations() -> None:
+    """LINE_CONSUMERS 등록 대사 — S3-1 3건(X-19: QT_LINE←PI_LINE.qt_line_id·QT_LINE←SO_LINE.qt_line_id·PI_LINE←SO_LINE.pi_line_id, 전부 FULFILL)
+    + S3-2 PR-3a 2건(SO_LINE←SHIPMENT_LINE.so_line_id = FULFILL / PO_LINE←SHIPMENT_LINE.po_line_id = **IN_TRANSIT** — PO 잔량 불변, ADR-0077)"""
     registered = {
         (
             kind,
@@ -35,17 +35,29 @@ def test_line_consumers_register_exactly_the_three_s31_relations() -> None:
             spec.line_fk_col,
             spec.child_header_table,
             spec.child_header_fk,
+            spec.kind,
         )
         for kind, specs in LINE_CONSUMERS.items()
         for spec in specs
     }
     assert registered == {
-        ("QT_LINE", "proforma_invoice_lines", "qt_line_id", "proforma_invoices", "pi_id"),
-        ("QT_LINE", "sales_order_lines", "qt_line_id", "sales_orders", "so_id"),
-        ("PI_LINE", "sales_order_lines", "pi_line_id", "sales_orders", "so_id"),
+        (
+            "QT_LINE",
+            "proforma_invoice_lines",
+            "qt_line_id",
+            "proforma_invoices",
+            "pi_id",
+            "FULFILL",
+        ),
+        ("QT_LINE", "sales_order_lines", "qt_line_id", "sales_orders", "so_id", "FULFILL"),
+        ("PI_LINE", "sales_order_lines", "pi_line_id", "sales_orders", "so_id", "FULFILL"),
+        ("SO_LINE", "shipment_lines", "so_line_id", "shipments", "shipment_id", "FULFILL"),
+        ("PO_LINE", "shipment_lines", "po_line_id", "shipments", "shipment_id", "IN_TRANSIT"),
     }
-    assert LINE_CONSUMERS["SO_LINE"] == () and LINE_CONSUMERS["PO_LINE"] == ()
-    assert all(spec.kind == "FULFILL" for specs in LINE_CONSUMERS.values() for spec in specs)
+    assert {spec.kind for specs in LINE_CONSUMERS.values() for spec in specs} == {
+        "FULFILL",
+        "IN_TRANSIT",
+    }
 
 
 def test_pending_consumer_tables_are_exactly_the_registered_tables_missing_from_metadata() -> None:

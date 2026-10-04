@@ -13,3 +13,5 @@
 **기각한 대안** — COMPLETED를 열고 `CLOSED_STATUSES`를 `("CANCELLED",)`로 좁히기(부분 인덱스 술어 재생성 마이그레이션 + S3-3 왕복 비용 2배), 진입 조건만 건 엣지 개방(도달 불가 죽은 엣지), short-close 사람 엣지 선개방(잔량 종결 = 노출 감소라 같은 공백).
 
 **되돌리기 비용** — **낮음**(S3-3이 엣지 1개 가산·RESERVED 1개 감소·총수 갱신). **번복 가능성 가장 높음** — S3-3 provider PR에서 반드시 연다(그때 이 ADR을 "대체" 표기). 반대로 지금 열었다 공백이 실재하면 높음.
+
+**부기(2026-10-04 — S3-2 PR-3a 이행: 결속 시험)** — ①·③·④를 이행했다. `credit/exposure.py`·`CLOSED_STATUSES`·`open_order_amount`는 **diff 0**(P-01). 아키텍처 시험 `test_so_completed_stays_reserved_while_the_receivable_provider_is_the_default`가 "기본 미수 provider인 동안 COMPLETED ∈ RESERVED[SO]"를 고정하고(변이: COMPLETED를 RESERVED에서 빼면 실패), ④는 상태별 산입 표의 기존 IN_SHIPMENT 행에 더해 **실제 선적 생성 경로로 IN_SHIPMENT가 된 SO가 노출에 전액 남고 선적 취소로 CONFIRMED 복귀해도 같다**는 통합 시험을 더했다(부분선적 차감 0). short-close·COMPLETED 엣지는 여전히 미개방 — S3-3 provider PR에서 이 시험을 개정한다.

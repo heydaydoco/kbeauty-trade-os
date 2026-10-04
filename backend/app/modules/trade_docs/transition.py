@@ -53,7 +53,18 @@ PAYLOAD_KEYS = (
     "automatic",
     "assignee_id",
     "partner_id",
+    # S3-2 PR-3a — SO 선적 수렴(CONFIRMED↔IN_SHIPMENT)을 일으킨 선적 id(자동 전이에만 실린다 — 그 밖의 이벤트에는 키가 없다).
+    "cause_shipment_id",
+    # S3-2 PR-3a(design-integrated §2.7) — 선적 이벤트에만 싣는 구분·원천(KIND_PAYLOAD_COLUMNS). 금액·원가 0.
+    "shipment_kind",
+    "so_id",
+    "po_id",
 )
+
+#: 종류별로 커널 payload에 더 싣는 헤더 열(화이트리스트 `PAYLOAD_KEYS` 안에서만) — 선적의 구분·원천 FK(수출 = so_id, 수입 = po_id).
+KIND_PAYLOAD_COLUMNS: dict[DocKind, tuple[str, ...]] = {
+    DocKind.SHIPMENT: ("shipment_kind", "so_id", "po_id"),
+}
 
 
 def _kind(doc: Any) -> DocKind:
@@ -75,6 +86,7 @@ def _payload(
         "automatic": automatic,
         "assignee_id": doc.assignee_id,
         "partner_id": getattr(doc, PARTNER_COLUMN[kind]),
+        **{column: getattr(doc, column) for column in KIND_PAYLOAD_COLUMNS.get(kind, ())},
     }
 
 
@@ -127,8 +139,12 @@ def record_transition(
     automatic: bool,
     approval_id: int | None = None,
     via_freeze_action: bool = False,
+    cause_shipment_id: int | None = None,
 ) -> str:
-    """상태 전이 1건을 검사·기록한다. 돌려주는 값은 이전 상태(from)."""
+    """상태 전이 1건을 검사·기록한다. 돌려주는 값은 이전 상태(from).
+
+    `cause_shipment_id`는 SO 선적 수렴(자동 전이)의 원인 선적 — 이벤트 payload에만 싣는다(화이트리스트 키, 금액 없음).
+    """
     kind = _kind(doc)
     from_status: str = doc.status
     if to in RESERVED[kind] or from_status in RESERVED[kind]:
@@ -190,12 +206,17 @@ def record_transition(
     if actor_user_id is not None:
         doc.updated_by_id = actor_user_id
     session.add(log_model(**log_fields))
+    payload = _payload(doc, kind, from_status, to, automatic)
+    if cause_shipment_id is not None:
+        if not automatic:
+            raise TypeError("cause_shipment_id는 자동 수렴 전이에만 싣는다.")
+        payload["cause_shipment_id"] = cause_shipment_id
     outbox.publish(
         session,
         event_type=f"{EVENT_PREFIX[kind]}.status_changed",
         aggregate_type=DOC_TABLES[kind],
         aggregate_id=doc.id,
-        payload=_payload(doc, kind, from_status, to, automatic),
+        payload=payload,
     )
     session.flush()
     return from_status

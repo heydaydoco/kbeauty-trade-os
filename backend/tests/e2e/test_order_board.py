@@ -1,6 +1,6 @@
 """K. 오더 보드 조회·드릴다운·CSV·검색형 선택 (S3-1 PR-15a / design-D D6 / ADR-0066).
 
-보드는 **비-Page 단일 객체**(고정 4열·열당 50·`total`·`has_more`)이고 카드에는 원가·마진·매입가·여신·게이트 필드가 없다(어느 역할에도). 쿼리 수는 카드 수와 무관한 상수다.
+보드는 **비-Page 단일 객체**(고정 5열·열당 50·`total`·`has_more`)이고 카드에는 원가·마진·매입가·여신·게이트 필드가 없다(어느 역할에도). 쿼리 수는 카드 수와 무관한 상수다.
 """
 
 from __future__ import annotations
@@ -91,8 +91,8 @@ def _walk_keys(value: Any) -> list[str]:
     return []
 
 
-def test_the_board_is_one_object_with_four_fixed_columns(client: TestClient) -> None:
-    """보드는 최상위 객체(columns·generated_at)이고 열은 고정 4개(대기·접수·보류·확정 순)·한국어 이름·빈 보드도 4열이다"""
+def test_the_board_is_one_object_with_five_fixed_columns(client: TestClient) -> None:
+    """보드는 최상위 객체(columns·generated_at)이고 열은 고정 5개(대기·접수·보류·확정·선적중 순 — S3-2 PR-3a)·한국어 이름·빈 보드도 5열이다"""
     body = _board(client)
     assert set(body) == {"columns", "generated_at"}
     assert [c["stage"] for c in body["columns"]] == [s.value for s in STAGE_ORDER]
@@ -101,6 +101,7 @@ def test_the_board_is_one_object_with_four_fixed_columns(client: TestClient) -> 
         "수주 접수",
         "수주 보류",
         "수주 확정",
+        "선적중",
     ]
     for col in body["columns"]:
         assert col == {
@@ -181,7 +182,7 @@ def test_cards_carry_sales_side_fields_only_with_derived_counts_and_kst_age(
 def test_cancelled_rejected_confirmed_intakes_and_reserved_states_stay_off_the_board(
     client: TestClient,
 ) -> None:
-    """취소 SO·확정/거부 인테이크·예약 상태(완료 등)·soft delete는 보드에 없다 — 보드는 접수 이후~확정까지만"""
+    """취소 SO·확정/거부 인테이크·예약 상태(완료 등)·soft delete는 보드에 없다 — 보드는 접수 이후~선적중까지만(선적중 SO는 5번째 열)"""
     buyer, owner = world_ids()
     seed_so("CANCELLED", buyer=buyer, assignee=owner)
     seed_so("COMPLETED", buyer=buyer, assignee=owner)
@@ -197,9 +198,11 @@ def test_cancelled_rejected_confirmed_intakes_and_reserved_states_stay_off_the_b
         reject_reason="합성 거부 사유",
     )
     kept = seed_so("CONFIRMED", buyer=buyer, assignee=owner)
+    shipping = seed_so("IN_SHIPMENT", buyer=buyer, assignee=owner)
     body = _board(client)
-    assert [c["total"] for c in body["columns"]] == [0, 0, 0, 1]
+    assert [c["total"] for c in body["columns"]] == [0, 0, 0, 1, 1]
     assert column(body, "SO_CONFIRMED")["items"][0]["id"] == kept
+    assert column(body, "SO_IN_SHIPMENT")["items"][0]["id"] == shipping
 
 
 def test_confirmed_column_is_newest_confirmed_first_and_the_others_oldest_first(
@@ -224,7 +227,7 @@ def test_confirmed_column_is_newest_confirmed_first_and_the_others_oldest_first(
 
 
 def test_filters_narrow_every_column_and_q_escapes_like_wildcards(client: TestClient) -> None:
-    """필터 — 거래처·담당자·통화·시장·q(바이어명·PO번호·수주번호 부분 일치, 인테이크·수주 모두 `%`·`_`는 글자 그대로)가 4열 모두에 걸린다"""
+    """필터 — 거래처·담당자·통화·시장·q(바이어명·PO번호·수주번호 부분 일치, 인테이크·수주 모두 `%`·`_`는 글자 그대로)가 5열 모두에 걸린다"""
     buyer, owner = world_ids()
     other_buyer = create_buyer(name_en="Zeta Imports")
     other_owner = board_user(RoleCode.TRADE)
@@ -234,20 +237,24 @@ def test_filters_narrow_every_column_and_q_escapes_like_wildcards(client: TestCl
     i2 = raw_intake(buyer=other_buyer, assignee=other_owner, po_no="PO-ZZZ", currency="EUR")
     s1 = seed_so("RECEIVED", buyer=buyer, assignee=owner, buyer_po_no="PO-A_1")
     s2 = seed_so("ON_HOLD", buyer=other_buyer, assignee=other_owner, buyer_po_no="PO-AB1")
+    s3 = seed_so("IN_SHIPMENT", buyer=other_buyer, assignee=owner, buyer_po_no="PO-SH9")
 
     def ids(**params: Any) -> set[int]:
         body = _board(client, **params)
         return {item["id"] for col in body["columns"] for item in col["items"]}
 
     assert ids(buyer_partner_id=buyer) == {i1, i1x, i_pct, s1}
+    assert ids(buyer_partner_id=other_buyer) == {i2, s2, s3}  # 선적중 열(S3-2 PR-3a)도 같은 필터
     assert ids(assignee_id=other_owner) == {i2, s2}
-    assert ids(currency="EUR") == {i2} and ids(currency="USD") == {i1, i1x, i_pct, s1, s2}
+    assert ids(assignee_id=owner) == {i1, i1x, i_pct, s1, s3}
+    assert ids(currency="EUR") == {i2} and ids(currency="USD") == {i1, i1x, i_pct, s1, s2, s3}
     assert ids(q="1_0") == {i1}  # 인테이크 PO: `_`가 와일드카드였다면 PO-1X0도 걸렸다
     assert ids(q="%") == {i_pct}  # `%`가 와일드카드였다면 모든 카드가 걸렸다
     assert ids(q="A_1") == {s1}  # 수주 PO: `_`가 와일드카드였다면 PO-AB1도 걸렸다
+    assert ids(q="SH9") == {s3}
     # 거래처 마스터 영문명 부분 일치(대소문자 무시) — 인테이크·수주 같은 의미
-    assert ids(q="zeta") == {i2, s2}
-    assert ids(q="raw buyer") == {s1, s2}  # 수주: 헤더 바이어 표기 부분 일치
+    assert ids(q="zeta") == {i2, s2, s3}
+    assert ids(q="raw buyer") == {s1, s2, s3}  # 수주: 헤더 바이어 표기 부분 일치
     assert ids(dest_market_code="KR") == set()
 
 

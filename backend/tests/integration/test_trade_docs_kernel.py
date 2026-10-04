@@ -227,12 +227,15 @@ def test_open_quantity_kind_filter_defaults_to_fulfill_only(
 
 
 def test_open_quantity_default_is_unchanged_for_registered_consumers() -> None:
-    """S3-2 PR-2a 회귀 — 기본 필터는 FULFILL이고 현재 등록 소비자는 전부 FULFILL·kind는 폐쇄 집합 안이다(기존 4종 전표 잔량 동작 불변)"""
+    """S3-2 PR-2a 회귀 — 기본 필터는 FULFILL이고 kind는 폐쇄 집합 안이다(기존 4종 전표 잔량 동작 불변). PR-3a 이후 IN_TRANSIT 소비자는
+    수입선적(PO_LINE) 1건뿐이고 나머지(QT·PI·SO 라인 소비자)는 전부 FULFILL이다"""
     assert frozenset({"FULFILL"}) == quantities.DEFAULT_OPEN_KINDS
     assert frozenset({"FULFILL", "IN_TRANSIT"}) == quantities.CONSUMER_KINDS
     specs = [spec for group in quantities.LINE_CONSUMERS.values() for spec in group]
     assert specs and all(spec.kind in quantities.CONSUMER_KINDS for spec in specs)
-    assert all(spec.kind == "FULFILL" for spec in specs)
+    in_transit = [(spec.name, spec.kind) for spec in specs if spec.kind != "FULFILL"]
+    assert in_transit == [("SHIPMENT_LINE.po_line_id", "IN_TRANSIT")]
+    assert all(spec.kind == "FULFILL" for spec in quantities.LINE_CONSUMERS["SO_LINE"])
 
 
 @pytest.fixture

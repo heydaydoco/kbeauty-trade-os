@@ -38,6 +38,8 @@ IMMUTABLE_TABLES: frozenset[str] = frozenset(
         # 정정은 새 행이다(override 철회 = REVOKE 행 추가).
         "gate_evaluations",
         "gate_overrides",
+        # S3-2 PR-3a — 선적 상태 변경 이력(ADR-0074·§17.5 확장 "상태 변경 이력 성격 — 신설 세션 등재"). 정정은 새 전이 기록이다.
+        "shipment_status_log",
     }
 )
 
@@ -161,6 +163,12 @@ MUTABLE_TABLES: frozenset[str] = frozenset(
         # 것이 앱 계정의 정상 UPDATE다. 변경 이력의 정본은 audit_log(`holidays.calendar.replaced`)다.
         "holiday_calendar_years",
         "holidays",
+        # S3-2 PR-3a — 선적(ADR-0074). 상태 전이(출고지시·취소)·FREE 열(담당자·메모)·계획 중 국가·라인 편집이 앱 계정의 정상 UPDATE라
+        # 권한 회수가 불가능하다(불변은 서비스 동결 가드+상태이력 IMMUTABLE — ADR-0053). 라인은 제자리 UPDATE·제외(soft delete),
+        # 당사자는 추가·제외(soft delete — 자동 스냅샷 행은 서비스가 불변으로 지킨다).
+        "shipments",
+        "shipment_lines",
+        "shipment_parties",
     }
 )
 

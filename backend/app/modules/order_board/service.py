@@ -1,9 +1,9 @@
 """오더 보드 조회·CSV (S3-1 PR-15a / design-D D6 / ADR-0066).
 
-■ `get_order_board` — **비-Page 단일 객체**: 고정 4열(인테이크 대기·수주 접수·수주 보류·수주 확정), 열마다 `total`·`has_more`·카드 최대 50장. 함수명에 `list_` 접두를 쓰지 않는다
+■ `get_order_board` — **비-Page 단일 객체**: 고정 5열(인테이크 대기·수주 접수·수주 보류·수주 확정·선적중 — 5열째는 S3-2 PR-3a), 열마다 `total`·`has_more`·카드 최대 50장. 함수명에 `list_` 접두를 쓰지 않는다
   (Page 봉투 스캔은 `list_` 접두만 본다 — 의도된 예외이며 열 상한·건수는 별도 테스트가 고정한다). 열 '더 보기'는 `list_board_items`(Page)가 맡는다.
-■ 읽기 트랜잭션은 첫 문장에서 `REPEATABLE READ, READ ONLY`(`read_snapshot`) — 6쿼리가 한 스냅샷을 본다(카드 중복·`total < len(items)` 방지).
-■ **쿼리 수는 카드 수와 무관한 상수**다: 열 건수 2쿼리(인테이크 COUNT·SO 상태별 GROUP BY) + 열별 카드 4쿼리. 라인 수·인테이크 합계는 상관 서브쿼리, 담당자·거래처 이름은
+■ 읽기 트랜잭션은 첫 문장에서 `REPEATABLE READ, READ ONLY`(`read_snapshot`) — 7쿼리가 한 스냅샷을 본다(카드 중복·`total < len(items)` 방지).
+■ **쿼리 수는 카드 수와 무관한 상수**다: 열 건수 2쿼리(인테이크 COUNT·SO 상태별 GROUP BY) + 열별 카드 5쿼리. 라인 수·인테이크 합계는 상관 서브쿼리, 담당자·거래처 이름은
   조인 — 카드마다 추가 질의가 없다(§18.4 N+1 금지). 게이트·여신은 평가하지 않는다(카드에 그 필드가 없다).
 ■ 보드는 **조회만** 한다(상태 대입 0). 취소 SO·확정/거부 인테이크는 보드에 없다. 원가·마진·매입가 열은 어느 쿼리도 읽지 않는다.
 ■ CSV(`export_rows`)는 같은 필터·같은 정렬로 `core.csv_export.render_csv` 통로(BOM·수식 이스케이프)를 지나며 최대 50,000행이다(초과 422 — 조용한 잘라내기 금지).
@@ -399,7 +399,7 @@ def _stage_totals(session: Session, f: BoardFilter) -> dict[BoardStage, int]:
 
 
 def get_order_board(f: BoardFilter) -> dict[str, Any]:
-    """보드 전체 — 고정 4열 × (전체 건수·`has_more`·카드 ≤ `COLUMN_LIMIT`). 쿼리 수 상수(6)."""
+    """보드 전체 — 고정 5열 × (전체 건수·`has_more`·카드 ≤ `COLUMN_LIMIT`). 쿼리 수 상수(7)."""
     generated_at = utcnow()
     today = today_kst()
     with read_snapshot() as session:

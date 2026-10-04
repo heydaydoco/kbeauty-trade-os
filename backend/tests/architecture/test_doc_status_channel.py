@@ -29,6 +29,7 @@ DOC_MODULES = {
     "sales_orders",
     "purchase_orders",
     "trade_chain",
+    "shipments",  # S3-2 PR-3a — 선적 커널 편입(L1)
 }
 DOC_MODEL_NAMES = {
     "Quotation",
@@ -39,14 +40,17 @@ DOC_MODEL_NAMES = {
     "SalesOrderLine",
     "PurchaseOrder",
     "PurchaseOrderLine",
+    "Shipment",
+    "ShipmentLine",
 }
 STATUS_LOG_NAMES = {
     "QuotationStatusLog",
     "ProformaInvoiceStatusLog",
     "SalesOrderStatusLog",
     "PurchaseOrderStatusLog",
+    "ShipmentStatusLog",
 }
-PREFIX_LITERALS = {"QT", "PI", "SO", "PO"}
+PREFIX_LITERALS = {"QT", "PI", "SO", "PO", "SH"}
 
 TRANSITION = "modules/trade_docs/transition.py"
 CONSTANTS = "modules/trade_docs/constants.py"
@@ -56,6 +60,8 @@ QT_SERVICE = "modules/quotations/service.py"
 PI_SERVICE = "modules/proforma_invoices/service.py"
 SO_SERVICE = "modules/sales_orders/service.py"
 PO_SERVICE = "modules/purchase_orders/service.py"
+SH_SERVICE = "modules/shipments/service.py"
+SH_FLOW = "modules/trade_chain/shipment_flow.py"
 
 
 def _flatten(target: ast.expr) -> list[ast.expr]:
@@ -155,6 +161,10 @@ ALLOWED_SITES: frozenset[tuple[str, str, str]] = frozenset(
         # PO 생성 착지 — 헤더 열을 **명시 키워드**로 넣는다(`**dict` 전개 없음 — UNKNOWN 항목이 없다)
         (PO_SERVICE, "insert_issued", "total_cost"),
         (PO_SERVICE, "insert_issued", "doc_number"),
+        # 선적 생성 착지(S3-2 PR-3a) — 참조 생성 오케스트레이터(shipment_flow._plan)가 만든 헤더 dict(리터럴 키만 — 아래 자기검사가 확인)
+        (SH_SERVICE, "insert_planned", "total_amount"),
+        (SH_SERVICE, "insert_planned", "doc_number"),
+        (SH_SERVICE, "insert_planned", UNKNOWN),
         # 헤더 편집: setattr(row, name, value)의 name은 _header_columns가 만든 화이트리스트 cols의 키(아래 자기검사가 확인)
         (QT_SERVICE, "update_quotation", UNKNOWN),
         (QT_SERVICE, "update_meta", UNKNOWN),
@@ -302,6 +312,10 @@ _SQL_DOC_TABLES = (
     "purchase_orders",
     "purchase_order_lines",
     "purchase_order_status_log",
+    "shipments",
+    "shipment_lines",
+    "shipment_parties",
+    "shipment_status_log",
     "bank_accounts",
 )
 #: `UPDATE [ONLY] [public.]["]table` · `INSERT INTO …` · `DELETE FROM …` (대소문자·개행 무시). f-string은 값 자리를 `{}`로 접어 본다.
@@ -447,12 +461,13 @@ def test_the_dynamic_write_allowlist_entries_are_bounded_by_whitelists() -> None
 
 
 def test_totals_and_numbers_have_a_single_creator_per_document() -> None:
-    """생성자의 total_amount=·total_cost=·doc_number=는 전표별 생성 착지 한 곳씩(QT insert_draft·PI insert_issued·SO create_received_sales_order·PO insert_issued) · 헤더 합계는 recompute_total의 setattr로만 오른다"""
+    """생성자의 total_amount=·total_cost=·doc_number=는 전표별 생성 착지 한 곳씩(QT insert_draft·PI insert_issued·SO create_received_sales_order·PO insert_issued·선적 insert_planned) · 헤더 합계는 recompute_total의 setattr로만 오른다"""
     sites = all_protected_sites()
     creators = {
         (QT_SERVICE, "insert_draft"),
         (PI_SERVICE, "insert_issued"),
         (SO_SERVICE, "create_received_sales_order"),
+        (SH_SERVICE, "insert_planned"),  # S3-2 PR-3a — 선적 생성 착지
     }
     po_creator = (
         PO_SERVICE,
@@ -480,17 +495,24 @@ def test_totals_and_numbers_have_a_single_creator_per_document() -> None:
 
 
 def test_document_headers_are_never_soft_deleted_and_doc_number_is_never_reassigned() -> None:
-    """전표 삭제 경로 0 — `.deleted_at =`의 수신자는 라인(line)뿐이다 · doc_number는 생성자에서만(insert_draft) (B9)"""
+    """전표 삭제 경로 0 — `.deleted_at =`의 수신자는 라인(line)·선적 당사자(party — 헤더 구성 행, S3-2 PR-3a)뿐이다 · doc_number는 생성자에서만 (B9)"""
+    receivers: set[str] = set()
     for rel, tree in _doc_module_sources().items():
         for line, receiver in attribute_assignments(tree, "deleted_at"):
-            assert receiver == "line", f"{rel}:{line} 헤더 soft delete 의심(수신자 {receiver})"
+            assert receiver in {"line", "party"}, (
+                f"{rel}:{line} 헤더 soft delete 의심(수신자 {receiver})"
+            )
+            receivers.add(receiver)
+            if receiver == "party":
+                assert rel == SH_SERVICE, f"{rel}:{line} 당사자 soft delete는 선적 서비스 착지 1곳"
         assert attribute_assignments(tree, "doc_number") == [], rel
+    assert receivers == {"line", "party"}
     users = [
         rel
         for rel, tree in _doc_module_sources().items()
         if keyword_calls(tree, "doc_number", DOC_MODEL_NAMES)
     ]
-    assert sorted(users) == sorted([QT_SERVICE, PI_SERVICE, SO_SERVICE, PO_SERVICE])
+    assert sorted(users) == sorted([QT_SERVICE, PI_SERVICE, SO_SERVICE, PO_SERVICE, SH_SERVICE])
 
 
 def test_document_numbers_are_issued_only_through_the_kernel_wrapper() -> None:
@@ -546,6 +568,13 @@ def test_line_writes_go_through_the_editable_guard() -> None:
             assert calls.index("lock_document") < calls.index("assert_editable"), (
                 f"{service}:{name}: 잠금이 먼저"
             )
+    # S3-2 PR-3a — 선적 라인 쓰기는 L2 오케스트레이터가 사슬 잠금(원천 SO → 선적, `_lock_shipment_chain` = lock_chain)을 먼저 잡는다
+    tree = app_sources()[SH_FLOW]
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    for name in ("add_line", "update_line", "remove_line"):
+        calls = _calls_in_source_order(functions[name])
+        assert "assert_editable" in calls and "_lock_shipment_chain" in calls, name
+        assert calls.index("_lock_shipment_chain") < calls.index("assert_editable"), name
 
 
 def test_the_lock_order_of_a_line_write_is_checked_in_source_order() -> None:
@@ -583,6 +612,15 @@ def test_no_http_delete_on_the_document_itself() -> None:
         for path, operations in app.openapi()["paths"].items()
         if "delete" in operations and "/sales-orders" in path
     } == {"/api/v1/sales-orders/{so_id}/lines/{line_id}"}
+    # 선적(S3-2 PR-3a)은 라인 제외·당사자 제외 DELETE만 있다(폐기 = 취소 전이, 번호는 남는다)
+    assert {
+        path
+        for path, operations in app.openapi()["paths"].items()
+        if "delete" in operations and "/shipments" in path
+    } == {
+        "/api/v1/shipments/{shipment_id}/lines/{line_id}",
+        "/api/v1/shipments/{shipment_id}/parties/{party_id}",
+    }
 
 
 # ── 자기검사: 스캐너가 위반 코퍼스를 실제로 잡는다 ────────────────────────────────

@@ -75,10 +75,15 @@ def test_status_log_tables_are_immutable_and_carry_the_seven_checks() -> None:
 
 
 def test_event_payload_keys_are_the_whitelist_and_carry_no_money_or_secrets() -> None:
-    """payload 허용 키 = 8종 고정 — 금액·단가·원가·마진·여신·사유 계열 이름이 없다(마스킹·금액 판정 양쪽 통과)"""
+    """payload 허용 키 = 12종 고정(S3-2 PR-3a cause_shipment_id·선적 구분·원천 포함) — 금액·단가·원가·마진·여신·사유 계열 이름이 없다(마스킹·금액 판정 양쪽 통과)"""
     assert set(PAYLOAD_KEYS) == {
         "doc_type", "doc_id", "doc_number", "from_status", "to_status", "automatic", "assignee_id", "partner_id",
+        "cause_shipment_id",  # S3-2 PR-3a — SO 선적 수렴의 원인 선적(자동 전이에만)
+        "shipment_kind", "so_id", "po_id",  # S3-2 PR-3a — 선적 이벤트에만(design-integrated §2.7)
     }  # fmt: skip
+    from app.modules.trade_docs.transition import KIND_PAYLOAD_COLUMNS
+
+    assert all(set(columns) <= set(PAYLOAD_KEYS) for columns in KIND_PAYLOAD_COLUMNS.values())
     for key in PAYLOAD_KEYS:
         assert not is_money_column_name(key) and not is_sensitive_key(key), key
         assert not any(
