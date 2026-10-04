@@ -1,10 +1,11 @@
 // 선적 화면 공용 조각 — 국가 코드 입력·DG 배지·가용재고 '미산정' 배지·거래처 고치기 안내 (S3-2 PR-3b).
 // 선적 상세(`routes/shipment-detail.tsx`)와 생성 대화상자(`shipment-create-dialog.tsx`)가 같은 조각을 쓴다 — 표시가 갈리지 않게.
 
-import { useId, type ReactNode } from "react";
+import { useId } from "react";
 import { Link } from "react-router";
 import { ApiError } from "../lib/api";
-import { ENGLISH_NAME_MISSING_CODE, countryName, type ShipmentDg } from "../lib/shipment";
+import { hasRole, useSession } from "../lib/session";
+import { ENGLISH_NAME_MISSING_CODE, canonicalCountryOf, countryName, type ShipmentDg } from "../lib/shipment";
 
 const inputClass = "rounded border border-gray-300 px-3 py-2 text-sm";
 
@@ -12,6 +13,9 @@ const inputClass = "rounded border border-gray-300 px-3 py-2 text-sm";
 export function countryProblem(code: string): string | null {
   if (code === "") return "필수 입력입니다.";
   if (!/^[A-Z]{2}$/.test(code)) return "영문 대문자 2자리 국가 코드로 입력해 주세요(예: US).";
+  // CLDR 별칭(UK·DD·SU 등)은 이름이 붙어도 ISO 정식 코드가 아니다 — 정식 코드를 안내한다(서버는 형식만 본다).
+  const canonical = canonicalCountryOf(code);
+  if (canonical !== null) return `${code}는 ISO 정식 코드가 아닙니다 — ${canonical}로 입력해 주세요.`;
   if (countryName(code) === null) return "알 수 없는 국가 코드입니다(ISO 3166-1 두 자리 — 예: US·JP·CN).";
   return null;
 }
@@ -80,19 +84,29 @@ export function DgBadge({ dg }: { dg: ShipmentDg }) {
   );
 }
 
-/** 거래처 영문명·주소 문제(422)는 거래처 화면에서 고친다 — 막다른 길 대신 이동 링크. */
-export function PartnerFixHint({ error }: { error: unknown }): ReactNode {
-  if (!(error instanceof ApiError)) return null;
-  const partnerProblem =
-    error.code === ENGLISH_NAME_MISSING_CODE ||
-    (error.code === "COMMON.VALIDATION.INVALID_FIELD" && Object.keys(error.detail).some((key) => key.includes("partner_id") || key === "so_id"));
-  if (!partnerProblem) return null;
+/**
+ * 거래처 영문명 결측(422 `ENGLISH_NAME_MISSING`)의 고치는 길 — 거래처 수정 화면·API가 없다(부채 P-44). 실재하는 경로는
+ * **거래처 CSV 내보내기 → 영문명·영문주소 채우기 → 엑셀 임포트(대상: 거래처)**이고 임포트는 무역·관리자 전용이다(runbook 운영 개시 ⑤).
+ * 그 밖의 역할에는 링크 없이 요청 안내만. ★ 같은 `INVALID_FIELD`(422)가 주소의 보이지 않는 글자·거래처 유형 불일치·삭제 거래처에
+ * 함께 쓰여 코드로 가를 수 없으므로 INVALID_FIELD에는 아무것도 붙이지 않는다(서버 문구만 — 주소 전용 코드 분리는 부채 R-3b-7).
+ */
+export function PartnerFixHint({ error }: { error: unknown }) {
+  const { me } = useSession();
+  if (!(error instanceof ApiError) || error.code !== ENGLISH_NAME_MISSING_CODE) return null;
+  if (!hasRole(me, "TRADE")) {
+    return <span className="mt-1 block break-keep">무역 담당에게 거래처 영문명 등록을 요청하세요.</span>;
+  }
   return (
-    <span className="mt-1 block">
+    <span className="mt-1 block break-keep">
+      거래처 영문명은{" "}
       <Link to="/partners" className="underline">
-        거래처 화면에서 영문 이름·주소 고치기
+        거래처
+      </Link>{" "}
+      &lsquo;CSV 내보내기&rsquo;로 받아 영문명·영문주소를 채운 뒤{" "}
+      <Link to="/imports" className="underline">
+        엑셀 임포트
       </Link>
+      (대상: 거래처)로 올려 고칩니다.
     </span>
   );
 }
-

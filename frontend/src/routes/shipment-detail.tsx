@@ -34,6 +34,7 @@ import {
   createKeyKeeper,
   openQuantityByLine,
   partyRoleLabel,
+  refreshAfterQuantityConflict,
   shipmentDetailKey,
   shipmentKindLabel,
   type SelectablePartyRole,
@@ -54,6 +55,9 @@ interface UserLookup {
   id: number;
   display_name: string;
 }
+
+/** 원천 수주 id — 수출선적만(수입선적의 원천은 발주라 수주 재조회 대상이 없다). */
+const soIdOf = (shipment: ShipmentDetail): number | null => (shipment.source.kind === "SALES_ORDER" ? shipment.source.id : null);
 
 /** 선적 오류 문구 — 서버 한국어 message 그대로(낙관 잠금은 '선적' 안내문). */
 const shipmentError = (error: unknown, fallback = "요청을 처리하지 못했습니다."): string => errorMessage(error, fallback, NOUN);
@@ -101,9 +105,14 @@ function ShipmentDetailView() {
     void client.invalidateQueries({ queryKey: [...SALES_ORDERS_QUERY_KEY, "list"] });
   }
 
-  function afterWrite(next: ShipmentDetail) {
+  /**
+   * 쓰기 응답 반영. ★ 기준 version은 **헤더 쓰기**(메모·국가·라인·출고지시·취소 — 서버가 base 일치를 검사하고 +1)의 응답으로만 옮긴다.
+   * 당사자 추가·제외는 헤더 version을 검사·증가하지 않고 서버 최신 version을 그대로 돌려준다 — 그 값으로 기준을 옮기면 화면이 낡았을 때
+   * 메모·국가 폼이 409 없이 남의 수정을 덮는다(적대 검토 med ④). 그때는 기준을 두고 '다른 곳에서 수정' 배너가 뜨게 한다.
+   */
+  function afterWrite(next: ShipmentDetail, headerWrite = true) {
     client.setQueryData(detailKey, next);
-    setBaseVersion(next.version);
+    if (headerWrite) setBaseVersion(next.version);
     setNotice(null);
     invalidateRelated(next.source.kind === "SALES_ORDER" ? next.source.id : null);
   }
@@ -120,11 +129,17 @@ function ShipmentDetailView() {
   }
 
   const transition = useMutation({
-    mutationFn: (input: { kind: Action; key: string; body: Record<string, unknown> }) =>
-      apiFetch<ShipmentDetail>(
-        input.kind === "release" ? `/v1/shipments/${id}/release-order` : `/v1/shipments/${id}/transitions`,
-        { method: "POST", idempotencyKey: input.key, body: input.body },
-      ),
+    // 동기 잠금 해제는 요청 자체의 finally에서 — 관찰자(reset·닫기)가 바뀌어도 잠금이 남지 않는다(적대 검토 low ⑨).
+    mutationFn: async (input: { kind: Action; key: string; body: Record<string, unknown> }) => {
+      try {
+        return await apiFetch<ShipmentDetail>(
+          input.kind === "release" ? `/v1/shipments/${id}/release-order` : `/v1/shipments/${id}/transitions`,
+          { method: "POST", idempotencyKey: input.key, body: input.body },
+        );
+      } finally {
+        actionLock.current = false;
+      }
+    },
     onSuccess: (next) => {
       setAction(null);
       afterWrite(next);
@@ -142,7 +157,7 @@ function ShipmentDetailView() {
     if (actionLock.current) return; // 동기 잠금 — isPending은 한 틱 늦게 켜진다
     actionLock.current = true;
     const key = actionKeys.keyFor(JSON.stringify({ kind, body }));
-    transition.mutate({ kind, key, body }, { onSettled: () => (actionLock.current = false) });
+    transition.mutate({ kind, key, body });
   }
 
   if (detail.isPending) return <p className="p-5 text-gray-500">불러오는 중…</p>;
@@ -258,7 +273,12 @@ function ShipmentDetailView() {
           onError={setNotice}
         />
 
-        <PartiesSection key={`parties-${shipment.id}-${resetToken}`} shipment={shipment} onSaved={afterWrite} onError={setNotice} />
+        <PartiesSection
+          key={`parties-${shipment.id}-${resetToken}`}
+          shipment={shipment}
+          onSaved={(next) => afterWrite(next, false)}
+          onError={setNotice}
+        />
 
         {isExport ? (
           <DocumentFlowPanel kind="SHIPMENT" id={shipment.id} />
@@ -427,8 +447,13 @@ function MetaPanel({
   const destProblem = editCountries && dest !== shipment.dest_country_code ? countryProblem(dest) : null;
 
   const save = useMutation({
-    mutationFn: () =>
-      apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}`, { method: "PATCH", body: { version, ...body } }),
+    mutationFn: async () => {
+      try {
+        return await apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}`, { method: "PATCH", body: { version, ...body } });
+      } finally {
+        lock.current = false;
+      }
+    },
     onSuccess: onSaved,
     onError,
   });
@@ -440,7 +465,7 @@ function MetaPanel({
     event.preventDefault();
     if (lock.current || !changed || originProblem !== null || destProblem !== null) return;
     lock.current = true;
-    save.mutate(undefined, { onSettled: () => (lock.current = false) });
+    save.mutate();
   }
 
   return (
@@ -525,8 +550,15 @@ function LinesSection({
   const removeLock = useRef(false);
 
   const remove = useMutation({
-    mutationFn: (line: ShipmentLine) =>
-      apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/lines/${line.id}?version=${version}`, { method: "DELETE" }),
+    mutationFn: async (line: ShipmentLine) => {
+      try {
+        return await apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/lines/${line.id}?version=${version}`, {
+          method: "DELETE",
+        });
+      } finally {
+        removeLock.current = false;
+      }
+    },
     onSuccess: (next) => {
       setRemoveTarget(null);
       onSaved(next);
@@ -589,9 +621,9 @@ function LinesSection({
                   <td className="break-keep px-3 py-2">{line.sku.name_ko}</td>
                   <td className="num cell-nowrap px-3 py-2">{line.quantity}</td>
                   <td className="num cell-nowrap px-3 py-2">
-                    #{line.source_line.line_no} · 수주 {line.source_line.quantity}
+                    {isExport ? `#${line.source_line.line_no} · 수주 ${line.source_line.quantity}` : "—"}
                   </td>
-                  <td className="num cell-nowrap px-3 py-2">{line.source_line.remaining_after}</td>
+                  <td className="num cell-nowrap px-3 py-2">{isExport ? line.source_line.remaining_after : "—"}</td>
                   <td className="num cell-nowrap px-3 py-2">
                     {!isExport ? "—" : line.is_free ? "무상" : (line.unit_price_text ?? "—")}
                   </td>
@@ -664,7 +696,7 @@ function LinesSection({
           onConfirm={() => {
             if (removeLock.current) return;
             removeLock.current = true;
-            remove.mutate(removeTarget, { onSettled: () => (removeLock.current = false) });
+            remove.mutate(removeTarget);
           }}
         />
       )}
@@ -689,6 +721,8 @@ function LineEditRow({
   onCancel: () => void;
   onError: (error: unknown) => void;
 }) {
+  const client = useQueryClient();
+  const isExport = shipment.shipment_kind === "EXPORT";
   const [quantity, setQuantity] = useState(String(line.quantity));
   const [localError, setLocalError] = useState<unknown>(null);
   const lock = useRef(false);
@@ -698,16 +732,23 @@ function LineEditRow({
   const hintId = `line-${line.id}-qty-hint`;
 
   const update = useMutation({
-    mutationFn: () =>
-      apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/lines/${line.id}`, {
-        method: "PATCH",
-        body: { version, quantity: Number(quantity) },
-      }),
+    mutationFn: async () => {
+      try {
+        return await apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/lines/${line.id}`, {
+          method: "PATCH",
+          body: { version, quantity: Number(quantity) },
+        });
+      } finally {
+        lock.current = false;
+      }
+    },
     onSuccess: onDone,
     // 오류는 한 곳에만 — 낙관 잠금 충돌은 페이지 배너(최신 불러오기), 그 밖은 칸 아래.
     onError: (error) => {
       if (isVersionConflict(error)) onError(error);
       else setLocalError(error);
+      // 잔량 초과면 다른 선적이 먼저 가져갔다 — 수주·이 선적을 다시 받아 상한 안내(원천 잔량 + 현재)를 서버 값으로(low ⑥).
+      if (openQuantityByLine(error).size > 0) refreshAfterQuantityConflict(client, soIdOf(shipment), shipment.id);
     },
   });
 
@@ -721,7 +762,7 @@ function LineEditRow({
             event.preventDefault();
             if (lock.current || !changed || !quantityOk) return;
             lock.current = true;
-            update.mutate(undefined, { onSettled: () => (lock.current = false) });
+            update.mutate();
           }}
         >
           <span className="cell-nowrap font-medium">
@@ -742,7 +783,7 @@ function LineEditRow({
             />
           </label>
           <span id={hintId} className="cell-nowrap text-xs text-gray-500">
-            상한 = 원천 잔량 {line.source_line.remaining_after} + 현재 {line.quantity}
+            {isExport ? `상한 = 원천 잔량 ${line.source_line.remaining_after} + 현재 ${line.quantity}` : "상한은 서버가 판정합니다"}
           </span>
           <button
             type="submit"
@@ -768,7 +809,7 @@ function LineEditRow({
         {localError !== null && (
           <p role="alert" className="mt-2 break-keep text-sm text-signal-red">
             {shipmentError(localError)}
-            {open !== undefined && ` — 원천 남은 수량 ${open}`}
+            {open !== undefined && ` — 이 라인 최대 수량 ${open}`}
           </p>
         )}
       </td>
@@ -788,6 +829,7 @@ function LineAddForm({
   onDone: (next: ShipmentDetail) => void;
   onError: (error: unknown) => void;
 }) {
+  const client = useQueryClient();
   const soId = shipment.source.id;
   const so = useQuery({
     queryKey: salesOrderDetailKey(soId),
@@ -807,8 +849,17 @@ function LineAddForm({
   const open = chosen === undefined ? undefined : openQuantityByLine(localError).get(chosen.id);
 
   const add = useMutation({
-    mutationFn: (input: { key: string; body: Record<string, unknown> }) =>
-      apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/lines`, { method: "POST", idempotencyKey: input.key, body: input.body }),
+    mutationFn: async (input: { key: string; body: Record<string, unknown> }) => {
+      try {
+        return await apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/lines`, {
+          method: "POST",
+          idempotencyKey: input.key,
+          body: input.body,
+        });
+      } finally {
+        lock.current = false;
+      }
+    },
     onSuccess: (next) => {
       keys.reset();
       setLineId("");
@@ -819,6 +870,8 @@ function LineAddForm({
     onError: (error) => {
       if (isVersionConflict(error)) onError(error);
       else setLocalError(error);
+      // 잔량 초과면 원천 수주를 다시 받아 드롭다운의 '선적 잔량'·[잔량 전부]를 서버 값으로(low ⑥).
+      if (openQuantityByLine(error).size > 0) refreshAfterQuantityConflict(client, soId, shipment.id);
     },
   });
 
@@ -833,7 +886,7 @@ function LineAddForm({
         if (!ready || lock.current || chosen === undefined) return;
         lock.current = true;
         const body = { version, source_line_id: chosen.id, quantity: Number(quantity) };
-        add.mutate({ key: keys.keyFor(JSON.stringify(body)), body }, { onSettled: () => (lock.current = false) });
+        add.mutate({ key: keys.keyFor(JSON.stringify(body)), body });
       }}
     >
       <h3 className="font-medium">라인 추가</h3>
@@ -935,8 +988,15 @@ function PartiesSection({
   const removeLock = useRef(false);
 
   const remove = useMutation({
-    mutationFn: (party: ShipmentParty) =>
-      apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/parties/${party.id}?version=${party.version}`, { method: "DELETE" }),
+    mutationFn: async (party: ShipmentParty) => {
+      try {
+        return await apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/parties/${party.id}?version=${party.version}`, {
+          method: "DELETE",
+        });
+      } finally {
+        removeLock.current = false;
+      }
+    },
     onSuccess: (next) => {
       setRemoveTarget(null);
       onSaved(next);
@@ -1025,7 +1085,7 @@ function PartiesSection({
           onConfirm={() => {
             if (removeLock.current) return;
             removeLock.current = true;
-            remove.mutate(removeTarget, { onSettled: () => (removeLock.current = false) });
+            remove.mutate(removeTarget);
           }}
         />
       )}
@@ -1042,8 +1102,17 @@ function PartyAddForm({ shipment, onDone }: { shipment: ShipmentDetail; onDone: 
   const [keys] = useState(() => createKeyKeeper());
 
   const add = useMutation({
-    mutationFn: (input: { key: string; body: { role: SelectablePartyRole; partner_id: number } }) =>
-      apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/parties`, { method: "POST", idempotencyKey: input.key, body: input.body }),
+    mutationFn: async (input: { key: string; body: { role: SelectablePartyRole; partner_id: number } }) => {
+      try {
+        return await apiFetch<ShipmentDetail>(`/v1/shipments/${shipment.id}/parties`, {
+          method: "POST",
+          idempotencyKey: input.key,
+          body: input.body,
+        });
+      } finally {
+        lock.current = false;
+      }
+    },
     onSuccess: (next) => {
       keys.reset();
       setRole("");
@@ -1068,7 +1137,7 @@ function PartyAddForm({ shipment, onDone }: { shipment: ShipmentDetail; onDone: 
         if (!ready || lock.current) return;
         lock.current = true;
         const body = { role, partner_id: partner.id };
-        add.mutate({ key: keys.keyFor(JSON.stringify(body)), body }, { onSettled: () => (lock.current = false) });
+        add.mutate({ key: keys.keyFor(JSON.stringify(body)), body });
       }}
     >
       <h3 className="font-medium">당사자 추가</h3>

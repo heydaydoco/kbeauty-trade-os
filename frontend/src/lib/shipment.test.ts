@@ -3,9 +3,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
+  canonicalCountryOf,
   countryName,
   countryText,
   createKeyKeeper,
+  isResultUnknown,
   openQuantityByLine,
   partyRoleLabel,
   shipmentKindLabel,
@@ -41,6 +43,31 @@ describe("국가 코드(ISO 3166-1 alpha-2 — 국가 마스터 없음, Intl 이
     expect(countryName("ZZ")).toBeNull();
   });
 
+  // 적대 검토 med ① — Intl.DisplayNames는 CLDR 별칭에도 이름을 준다(UK → '영국'). 비ISO 코드가 정상처럼 보이며 저장되지 않게 막는다.
+  it.each([
+    ["UK", "GB"],
+    ["DD", "DE"],
+    ["SU", "RU"],
+    ["FX", "FR"],
+    ["BU", "MM"],
+    ["ZR", "CD"],
+    ["YU", "RS"],
+    ["CS", "RS"],
+    ["AN", "CW"],
+    ["TP", "TL"],
+    ["DY", "BJ"],
+    ["YD", "YE"],
+  ])("별칭 %s → 이름 null·정식 코드 %s", (alias, canonical) => {
+    expect(countryName(alias)).toBeNull();
+    expect(canonicalCountryOf(alias)).toBe(canonical);
+    expect(countryText(alias)).toBe(alias);
+  });
+
+  it("정식 코드는 별칭이 아니다", () => {
+    for (const code of ["GB", "DE", "RU", "US", "KR", "CN", "JP", "XK"]) expect(canonicalCountryOf(code)).toBeNull();
+    expect(countryName("GB")).toBe("영국");
+  });
+
   it("표시는 '이름 (코드)' — 서버에 저장된 모르는 코드는 코드 그대로", () => {
     expect(countryText("JP")).toBe("일본 (JP)");
     expect(countryText("XX")).toBe("XX");
@@ -56,6 +83,17 @@ describe("오류 detail 해석", () => {
     ]);
     expect(openQuantityByLine(apiError("OTHER", { open_quantity: { "41": 0 } })).size).toBe(0);
     expect(openQuantityByLine(new Error("x")).size).toBe(0);
+  });
+
+  it("결과를 모르는 실패 = 네트워크(0)·5xx(504 포함), 4xx는 결과가 확정된 실패", () => {
+    const at = (status: number) => new ApiError(status, { code: "X", message: "m", detail: {}, requestId: null });
+    expect(isResultUnknown(at(0))).toBe(true);
+    expect(isResultUnknown(at(500))).toBe(true);
+    expect(isResultUnknown(at(503))).toBe(true);
+    expect(isResultUnknown(at(504))).toBe(true);
+    expect(isResultUnknown(at(409))).toBe(false);
+    expect(isResultUnknown(at(422))).toBe(false);
+    expect(isResultUnknown(new Error("x"))).toBe(false);
   });
 
   it("409 SUCCESSOR_ALIVE의 먼저 취소할 선적 번호", () => {

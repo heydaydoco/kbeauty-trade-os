@@ -124,7 +124,14 @@ export function ConfirmDialog({
   const [reason, setReason] = useState("");
   const firstRef = useRef<HTMLTextAreaElement | HTMLButtonElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
-  useDialogBehavior(boxRef, onCancel, firstRef);
+  // 처리 중(pending)에는 Esc로 닫지 않는다 — 닫기 버튼과 같은 규칙(응답 전 닫으면 결과를 못 보고 재오픈 시 새 키가 된다).
+  useDialogBehavior(
+    boxRef,
+    () => {
+      if (!pending) onCancel();
+    },
+    firstRef,
+  );
 
   const needsReason = reasonLabel !== undefined;
   // 길이는 코드포인트 기준(서버 문자 수와 맞춤 — 이모지 등 서로게이트 쌍이 2로 세어지지 않게).

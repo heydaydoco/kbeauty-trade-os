@@ -155,7 +155,18 @@ describe("선적 상세 — 표시", () => {
       shipmentDetail({
         shipment_kind: "IMPORT",
         source: { kind: "PURCHASE_ORDER", id: 4, doc_number: "PO-2026-0004", status: "ISSUED" },
-        lines: [{ ...SHIPMENT_LINE, so_line_id: null, unit_price_amount: null, unit_price_text: null, line_amount: 0, line_amount_text: "0.00" }],
+        // 백엔드 shipment_view.detail_body 그대로 — 수입 라인은 SO 원천이 없어 source_line = {id: po_line_id, line_no 0, quantity 0, remaining_after 0}.
+        lines: [
+          {
+            ...SHIPMENT_LINE,
+            so_line_id: null,
+            unit_price_amount: null,
+            unit_price_text: null,
+            line_amount: 0,
+            line_amount_text: "0.00",
+            source_line: { id: 77, line_no: 0, quantity: 0, remaining_after: 0 },
+          },
+        ],
         allowed_actions: [],
       }),
     );
@@ -163,6 +174,12 @@ describe("선적 상세 — 표시", () => {
     expect(screen.getByRole("link", { name: "PO-2026-0004" })).toHaveAttribute("href", "/purchase-orders/4");
     expect(screen.getByText(/수입선적은 문서 흐름/)).toBeInTheDocument();
     expect(screen.queryByText("0.00")).not.toBeInTheDocument();
+    // 원천 라인·선적 잔량 칸은 '—' — '수주 0'·'0'으로 위장하지 않는다(적대 검토 low ⑫).
+    const row = within(screen.getByRole("region", { name: "라인" })).getByText("SKU-001").closest("tr") as HTMLElement;
+    const cells = within(row).getAllByRole("cell").map((cell) => cell.textContent);
+    expect(cells[4]).toBe("—");
+    expect(cells[5]).toBe("—");
+    expect(row.textContent).not.toContain("수주 0");
     expect(sent(calls, "/v1/document-flow/SHIPMENT/31", "GET")).toHaveLength(0);
   });
 
@@ -266,6 +283,34 @@ describe("선적 상세 — 출고지시·취소 대화상자", () => {
     expect(posts[1]!.headers["Idempotency-Key"]).toBe(posts[0]!.headers["Idempotency-Key"]);
   });
 
+  it("확인창 처리 중(pending) Esc를 눌러도 닫히지 않는다 — 응답이 오면 결과로 닫힌다(적대 검토 low ⑨)", async () => {
+    let release: (value: Response) => void = () => undefined;
+    const released = shipmentDetail({ status: "RELEASE_ORDERED", version: 4, frozen_at: "2026-10-04T03:00:00Z", allowed_actions: ["CANCEL", "EDIT_META", "EDIT_PARTIES"] });
+    open(shipmentDetail(), TRADER, [
+      [
+        `${SH}/release-order`,
+        "POST",
+        () =>
+          new Promise<Response>((resolve) => {
+            release = (value) => {
+              server.detail = released;
+              resolve(value);
+            };
+          }),
+      ],
+    ]);
+    await heading();
+    fireEvent.click(screen.getByRole("button", { name: "출고지시" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "출고지시 확정" }));
+    expect(await within(dialog).findByRole("button", { name: "처리 중…" })).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    release(jsonResponse(released));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText(/출고지시된 선적입니다/)).toBeInTheDocument();
+  });
+
   it("취소를 닫고 다시 열면 새 키(대화상자 1회 = 키 1개)", async () => {
     const { calls } = open(shipmentDetail(), TRADER, [
       [`${SH}/transitions`, "POST", () => jsonResponse(apiErrorResponse("X.Y.Z", "실패"), 422)],
@@ -286,7 +331,7 @@ describe("선적 상세 — 출고지시·취소 대화상자", () => {
 });
 
 describe("선적 상세 — 라인·메모·당사자 쓰기", () => {
-  it("라인 수량 수정: PATCH {version, quantity} · 409 EXCEEDS_OPEN이면 그 라인 칸 아래 '원천 남은 수량 N'", async () => {
+  it("라인 수량 수정: PATCH {version, quantity} · 409 EXCEEDS_OPEN이면 칸 아래 '이 라인 최대 수량 N'(원천 잔량 + 현재)·선적·수주 재조회", async () => {
     const { calls } = open(shipmentDetail(), TRADER, [
       [
         `${SH}/lines/501`,
@@ -302,10 +347,15 @@ describe("선적 상세 — 라인·메모·당사자 쓰기", () => {
     fireEvent.click(screen.getByRole("button", { name: "수정" }));
     const form = screen.getByRole("form", { name: "라인 1 수정" });
     fireEvent.change(within(form).getByRole("textbox"), { target: { value: "9" } });
+    const before = { shipment: sent(calls, SH, "GET").length, so: sent(calls, "/v1/sales-orders/9", "GET").length };
     fireEvent.click(within(form).getByRole("button", { name: "저장" }));
     const alert = await screen.findByText(/원천 남은 수량을 넘습니다/);
-    expect(alert).toHaveTextContent("— 원천 남은 수량 2");
+    expect(alert).toHaveTextContent("— 이 라인 최대 수량 2");
+    expect(alert).not.toHaveTextContent("원천 남은 수량 2");
     expect(sent(calls, `${SH}/lines/501`, "PATCH")[0]!.body).toEqual({ version: 3, quantity: 9 });
+    // 409 뒤 선적·원천 수주를 다시 받아 상한 안내(원천 잔량 + 현재)를 서버 값으로(low ⑥).
+    await waitFor(() => expect(sent(calls, SH, "GET").length).toBeGreaterThan(before.shipment));
+    await waitFor(() => expect(sent(calls, "/v1/sales-orders/9", "GET").length).toBeGreaterThan(before.so));
   });
 
   it("라인 제외: DELETE ?version= · 마지막 라인 409 LAST_LINE은 대화상자 안에 서버 문구(선적 취소 안내)", async () => {
@@ -345,7 +395,41 @@ describe("선적 상세 — 라인·메모·당사자 쓰기", () => {
     expect(post.headers["Idempotency-Key"]).toMatch(/^key-/);
   });
 
-  it("메모·담당·국가: 바뀐 필드만 PATCH, 모르는 국가 코드는 저장 불가", async () => {
+  it("라인 추가 409 EXCEEDS_OPEN 뒤 원천 수주를 다시 받아 드롭다운의 선적 잔량이 서버 값으로 바뀐다", async () => {
+    let conflicted = false;
+    const so = () =>
+      soDetail({
+        status: "IN_SHIPMENT",
+        lines: [
+          { ...SO_LINE, shipment_open_quantity: 2 },
+          { ...SO_LINE, id: 42, line_no: 2, sku_code: "SKU-002", sku_name_ko: "토너", shipment_open_quantity: conflicted ? 3 : 5 },
+        ],
+      });
+    open(shipmentDetail(), TRADER, [
+      ["/v1/sales-orders/9", "GET", () => jsonResponse(so())],
+      [
+        `${SH}/lines`,
+        "POST",
+        () => {
+          conflicted = true;
+          return jsonResponse(apiErrorResponse("TRADE_DOCS.QUANTITY.EXCEEDS_OPEN", "원천 남은 수량을 넘습니다.", { open_quantity: { "42": 3 } }), 409);
+        },
+      ],
+    ]);
+    await heading();
+    const form = await screen.findByRole("form", { name: "라인 추가" });
+    const select = await within(form).findByRole("combobox");
+    await within(select).findByRole("option", { name: "#2 SKU-002 토너 — 선적 잔량 5" });
+    fireEvent.change(select, { target: { value: "42" } });
+    fireEvent.change(within(form).getByRole("textbox"), { target: { value: "5" } });
+    fireEvent.click(within(form).getByRole("button", { name: "라인 추가" }));
+    expect(await within(form).findByRole("alert")).toHaveTextContent("— 원천 남은 수량 3");
+    expect(await within(select).findByRole("option", { name: "#2 SKU-002 토너 — 선적 잔량 3" })).toBeInTheDocument();
+    fireEvent.click(within(form).getByRole("button", { name: "잔량 전부" }));
+    expect(within(form).getByRole("textbox")).toHaveValue("3");
+  });
+
+  it("메모·담당·국가: 바뀐 필드만 PATCH, 모르는 국가 코드·별칭 코드는 저장 불가", async () => {
     const { calls } = open(shipmentDetail(), TRADER, [[SH, "PATCH", writes(shipmentDetail({ version: 4, dest_country_code: "JP" }))]]);
     await heading();
     const form = screen.getByRole("form", { name: "메모·담당·국가" });
@@ -355,6 +439,12 @@ describe("선적 상세 — 라인·메모·당사자 쓰기", () => {
     expect(within(form).getByLabelText("도착국 (필수)")).toHaveValue("XX");
     expect(within(form).getByText(/알 수 없는 국가 코드입니다/)).toBeInTheDocument();
     expect(save).toBeDisabled();
+    // CLDR 별칭(UK·DD·SU)은 이름이 붙어도 ISO 정식 코드가 아니다 — 정식 코드 안내·저장 불가(적대 검토 med ①).
+    for (const [alias, canonical] of [["UK", "GB"], ["DD", "DE"], ["SU", "RU"]] as const) {
+      fireEvent.change(within(form).getByLabelText("도착국 (필수)"), { target: { value: alias } });
+      expect(within(form).getByText(`${alias}는 ISO 정식 코드가 아닙니다 — ${canonical}로 입력해 주세요.`)).toBeInTheDocument();
+      expect(save).toBeDisabled();
+    }
     fireEvent.change(within(form).getByLabelText("도착국 (필수)"), { target: { value: "jp" } });
     expect(within(form).getByText("일본")).toBeInTheDocument();
     fireEvent.click(save);
@@ -381,7 +471,7 @@ describe("선적 상세 — 라인·메모·당사자 쓰기", () => {
     expect(await within(screen.getByRole("region", { name: "당사자" })).findByText("Fast Forwarding Co.")).toBeInTheDocument();
   });
 
-  it("당사자 추가 422 영문명 결측은 서버 문구 + 거래처 화면 링크(막다른 길 금지)", async () => {
+  it("당사자 추가 422 영문명 결측(무역): 서버 문구 + 실재하는 고치는 길(거래처 CSV 내보내기 → 엑셀 임포트) 링크", async () => {
     open(shipmentDetail(), TRADER, [
       ["/v1/partners?size=20", "GET", () => jsonResponse(page([{ id: 9, name_ko: "영문없는 상사", name_en: null, type_codes: ["BUYER"] }]))],
       [
@@ -396,8 +486,72 @@ describe("선적 상세 — 라인·메모·당사자 쓰기", () => {
     fireEvent.focus(within(form).getByRole("combobox", { name: "통지처 거래처" }));
     fireEvent.click(await screen.findByRole("option", { name: "영문없는 상사 — 영문명 없음" }));
     fireEvent.click(within(form).getByRole("button", { name: "당사자 추가" }));
-    expect(await within(form).findByRole("alert")).toHaveTextContent("거래처 영문명을 확인해 주세요.");
-    expect(within(form).getByRole("link", { name: /거래처 화면에서/ })).toHaveAttribute("href", "/partners");
+    const alert = await within(form).findByRole("alert");
+    expect(alert).toHaveTextContent("거래처 영문명을 확인해 주세요.");
+    // 거래처 수정 화면·API는 없다(P-44) — 실재 경로는 거래처 CSV 내보내기 → 엑셀 임포트(대상: 거래처).
+    expect(within(alert).getByRole("link", { name: "거래처" })).toHaveAttribute("href", "/partners");
+    expect(within(alert).getByRole("link", { name: "엑셀 임포트" })).toHaveAttribute("href", "/imports");
+    expect(alert).toHaveTextContent("CSV 내보내기");
+  });
+
+  async function partyAddFails(me: unknown, error: { code: string; message: string; detail: Record<string, unknown> }) {
+    open(shipmentDetail({ allowed_actions: ["RELEASE_ORDER", "EDIT_COUNTRIES", "EDIT_META", "EDIT_PARTIES"] }), me, [
+      ["/v1/partners?type=FORWARDER&size=20", "GET", () => jsonResponse(page([{ id: 9, name_ko: "어떤 상사", name_en: "Some Co", type_codes: ["BUYER"] }]))],
+      [`${SH}/parties`, "POST", () => jsonResponse(apiErrorResponse(error.code, error.message, error.detail), 422)],
+    ]);
+    await heading();
+    const form = screen.getByRole("form", { name: "당사자 추가" });
+    fireEvent.change(within(form).getByRole("combobox", { name: "역할" }), { target: { value: "FORWARDER" } });
+    fireEvent.focus(within(form).getByRole("combobox", { name: "포워더 거래처" }));
+    fireEvent.click(await screen.findByRole("option", { name: "어떤 상사 (Some Co)" }));
+    fireEvent.click(within(form).getByRole("button", { name: "당사자 추가" }));
+    return within(form).findByRole("alert");
+  }
+
+  it("당사자 추가 422 영문명 결측(물류): '무역 담당에게 요청' 문구만 — 링크 0(물류는 임포트 권한이 없다)", async () => {
+    const alert = await partyAddFails(LOGISTICS, {
+      code: "SHIPMENTS.PARTY.ENGLISH_NAME_MISSING",
+      message: "거래처 영문명을 확인해 주세요.",
+      detail: { partner_id: 9 },
+    });
+    expect(alert).toHaveTextContent("무역 담당에게 거래처 영문명 등록을 요청하세요.");
+    expect(within(alert).queryAllByRole("link")).toHaveLength(0);
+  });
+
+  it("거래처 유형 불일치 422(INVALID_FIELD)는 서버 문구만 — 고치기 링크·안내 0(주소 문제와 코드로 구분 불가)", async () => {
+    const alert = await partyAddFails(TRADER, {
+      code: "COMMON.VALIDATION.INVALID_FIELD",
+      message: "입력값을 확인해 주세요.",
+      detail: { partner_id: "포워더 유형의 거래처가 아닙니다. 거래처 유형을 확인해 주세요." },
+    });
+    expect(alert).toHaveTextContent("포워더 유형의 거래처가 아닙니다");
+    expect(within(alert).queryAllByRole("link")).toHaveLength(0);
+    expect(alert).not.toHaveTextContent("엑셀 임포트");
+  });
+
+  // 적대 검토 med ④ — 당사자 쓰기는 헤더 version을 검사·증가하지 않고 서버 최신 version을 돌려준다. 그 값으로 기준을 옮기면
+  // 낡은 화면의 메모 폼이 409 없이 남의 수정을 덮어썼다.
+  it("낡은 화면에서 당사자 추가 → 응답의 최신 version으로 기준을 옮기지 않는다: 배너가 뜨고 메모 저장은 옛 version으로 나가 409", async () => {
+    const { calls } = open(shipmentDetail(), TRADER, [
+      // 그 사이 다른 사람이 메모를 바꿔 서버는 v4 — 당사자 추가 응답이 그 값을 싣는다.
+      [`${SH}/parties`, "POST", writes(shipmentDetail({ version: 4, internal_note: "다른 사람 메모", parties: [AUTO_CONSIGNEE, FORWARDER_PARTY] }), 201)],
+      ["/v1/partners?type=FORWARDER&size=20", "GET", () => jsonResponse(page([{ id: 8, name_ko: "빠른포워딩", name_en: "Fast Forwarding Co.", type_codes: ["FORWARDER"] }]))],
+      [SH, "PATCH", () => jsonResponse(apiErrorResponse("COMMON.CONCURRENCY.VERSION_CONFLICT", "다른 사용자가 먼저 수정했습니다."), 409)],
+    ]);
+    await heading();
+    const partyForm = screen.getByRole("form", { name: "당사자 추가" });
+    fireEvent.change(within(partyForm).getByRole("combobox", { name: "역할" }), { target: { value: "FORWARDER" } });
+    fireEvent.focus(within(partyForm).getByRole("combobox", { name: "포워더 거래처" }));
+    fireEvent.click(await screen.findByRole("option", { name: "빠른포워딩 (Fast Forwarding Co.)" }));
+    fireEvent.click(within(partyForm).getByRole("button", { name: "당사자 추가" }));
+    expect(await screen.findByText(/다른 곳에서 이 선적이 수정되었습니다/)).toBeInTheDocument();
+
+    const meta = screen.getByRole("form", { name: "메모·담당·국가" });
+    fireEvent.change(within(meta).getByLabelText("내부 메모"), { target: { value: "내 메모" } });
+    fireEvent.click(within(meta).getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(sent(calls, SH, "PATCH")).toHaveLength(1));
+    expect(sent(calls, SH, "PATCH")[0]!.body).toMatchObject({ version: 3, internal_note: "내 메모" });
+    expect(await screen.findByText(/다른 곳에서 이 선적 정보가 먼저 수정되었습니다/)).toBeInTheDocument();
   });
 
   it("당사자 제외: DELETE ?version=당사자 version(헤더 version 아님)", async () => {
