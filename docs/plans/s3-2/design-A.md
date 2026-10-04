@@ -1,5 +1,8 @@
 # S3-2 계획서 부록 A — 선적 데이터 모델 (shipments·lines·parties·customs_records·상태머신·사슬 등록)
 
+
+> **통합 우선순위(2026-10-04)**: 이 부록과 `design-integrated.md`가 충돌하면 통합 문서가 이긴다. 통합 검토가 모순 해소에 필요한 최소 문면만 고쳤고, 고친 자리는 "[통합 X-nn]"·"[통합 N-nn]"으로 표시했다(목록: 통합 §1.6).
+> **적대 검토 정정(2026-10-04)**: 통합 문서 §9(R-01~R-30)가 이 부록과 통합 §0~§8보다 우선한다. 이 부록에서 고친 자리는 "[적대 R-nn]"으로 표시했다(목록: 통합 §9 R-27).
 - 성격: 설계 결정이다(구현 아님). 기준은 main `a4d91c0`이다. 근거 정본은 DESIGN.md §3·§7.1·§7.2·§7.5·§8.3·§15·§17·§18·§20·§22, WBS.md S3-2 행(`W:112-116`), PROGRESS.md 'S3-1 PR-16 / S3-1 종결'·'## 현재'다.
 - 표기: `D:줄`=DESIGN.md, `W:줄`=WBS.md, `P:줄`=PROGRESS.md, `code:경로:줄`=`backend/app/` 기준 현행 코드다.
 - 판정: 전 안건 **자율 확정**이다(오너 지시 2026-09-29 — 더 엄격한 fail-closed 권장안으로 확정, 사후 번복 가능, ADR-0011 부기). "미정" 결론은 두지 않는다.
@@ -78,7 +81,7 @@
 
 **결정 — 기존 믹스인 열의 분류(선적 한정)**
 - 통화, 환율 2열, 결제조건 4열, Incoterms 3열은 **ORIGIN**이다. 생성 시 원천에서 복사하고 이후 어느 상태에서도 불변이다. SO에서는 이 열들이 CONTENT(RECEIVED에서 편집 가능)였지만, 선적은 재입력 금지라 편집 구간 자체가 없다.
-- `doc_date`는 ORIGIN(발급 KST 날짜)이다.
+- `doc_date`는 ORIGIN(발급 KST 날짜)이다. **[적대 R-15]** 값 = 생성 시 `today_kst()` 1회 설정(원천 헤더에서 복사하지 않음), 이후 불변.
 - `internal_note`·`assignee_id`는 FREE다. **`FREE_COLUMNS`는 정확히 4개 그대로**이고 확장 ADR이 없다.
 - version, doc_number, status, frozen_at, last_line_no, 감사 컬럼은 SYSTEM이다.
 
@@ -214,7 +217,7 @@
 - 생성과 수량 증가는 다음 순서다: 멱등 claim → (당사자 검증 시) partners `FOR KEY SHARE`(id 순) → **원천 헤더 `FOR UPDATE`**(`lock_chain`) → `lock_lines_for_consumption`(헤더 `FOR SHARE`, 이미 같은 TX가 더 강한 잠금을 쥐어 즉시 통과 → 상태 검증 → 라인 `FOR UPDATE ORDER BY id`) → `open_quantity` 검사 → INSERT → `doc_number_seq`(마지막).
 - 원천 헤더를 처음부터 `FOR UPDATE`로 잡는 이유는 같은 TX에서 SO 상태 수렴(CONFIRMED↔IN_SHIPMENT, A7)이 일어나기 때문이다. `FOR SHARE`를 쥔 두 TX가 `UPDATE`로 승격하려 하면 40P01 교착이 난다(SHARE→UPDATE 승격 금지).
   - 시그니처는 바뀌지 않으므로 §8.3 부기 ②의 문면("상위 헤더 FOR SHARE")은 **최소 요건으로 충족**된다. DESIGN §8.3 부기에 "S3-2는 상태 수렴 동반이라 원천 헤더 FOR UPDATE를 선행"을 1줄 추가한다.
-- 수입은 PO 상태를 바꾸지 않지만, 같은 헬퍼 경로를 쓰도록 PO도 `FOR UPDATE`로 통일한다(단순성, PO 헤더 쓰기 경합이 낮음).
+- ~~수입은 PO 상태를 바꾸지 않지만, 같은 헬퍼 경로를 쓰도록 PO도 `FOR UPDATE`로 통일한다~~ **[통합 X-10]** 수입은 PO 상태를 바꾸지 않으므로 PO 헤더는 `FOR SHARE`(`D:229` ② 문면 그대로 — 승격 없음, PO 취소 `FOR UPDATE`와 직렬화).
 
 **근거**: `D:173`, `D:175` ②, `D:229` ②, P-04, P-07(`P:562`, `P:565`), WBS DoD "부분선적 1:N 잔량 정확"·검증 A "잔량 0·초과 거부"(`W:115-116`, `D:419`).
 
@@ -274,11 +277,11 @@ ChildLink(DocKind.SALES_ORDER, "shipments", "so_id")
 ChildLink(DocKind.PURCHASE_ORDER, "shipments", "po_id")
 ```
 
-- 효과: 살아 있는 선적이 있는 SO·PO는 취소 시 409 `TRADE_DOCS.CANCEL.SUCCESSOR_ALIVE`다(`record_transition`이 엣지 검사보다 먼저 판정, `code:modules/trade_docs/transition.py:139-146`, SO 취소 `code:modules/trade_chain/lifecycle.py:355-359`).
+- 효과: 살아 있는 선적이 있는 SO·PO는 취소 시 409 `TRADE_DOCS.CANCEL.SUCCESSOR_ALIVE`다(`record_transition`이 엣지 검사보다 먼저 판정, `code:modules/trade_docs/transition.py:139-146`, SO 취소 `code:modules/trade_chain/lifecycle.py:355-359`). **[적대 R-02]** 단 현 SO 취소는 `SO_CANCELLABLE` 상태 검사(`:351-354`)가 먼저라 IN_SHIPMENT SO는 `TRANSITION.NOT_ALLOWED`가 난다 — PR-3a에서 후속 생존 검사를 상태 검사 앞으로 옮겨 `SUCCESSOR_ALIVE`+`detail.successors`를 보장한다.
 - nullable FK여도 equality 술어라 반대편 구분의 행은 잡히지 않는다.
 - 선적 **종결(CLOSED)은 LIVE**로 남아 이행된 사슬의 선행 취소를 계속 막는다. 의도된 동작이다(`DEAD_STATUSES`는 CANCELLED·EXPIRED만).
 - 자식 테이블 필수 열 `{fk_column, deleted_at, status, doc_number}`를 shipments가 충족한다(`tests/architecture/test_doc_chain_contract.py:85-94`).
-- `ANCESTORS[SHIPMENT] = ((SALES_ORDER, "so_id"), (PURCHASE_ORDER, "po_id"))`. `lock_chain`은 None 조상을 건너뛴다(`code:modules/trade_chain/chain_ops.py:58-63`). LOCK_ORDER상 SO→PO 순서와도 일치한다.
+- `ANCESTORS[SHIPMENT] = ((SALES_ORDER, "so_id"), (PURCHASE_ORDER, "po_id"))`. `lock_chain`은 None 조상을 건너뛴다(`code:modules/trade_chain/chain_ops.py:58-63`). LOCK_ORDER상 SO→PO 순서와도 일치한다. **[적대 R-08]** `lock_chain`은 조상을 `FOR UPDATE`로 잡는다 — 선적 기점 경로(T4·T5)는 이를 그대로 쓰고(SO·PO 모두 UPDATE), PO `FOR SHARE`는 수입 생성(T2)에만 적용한다.
 
 **결정 — 허용목록(사유 10자 이상)**
 - `("shipment_lines","shipment_id")`: 라인은 자기 헤더의 구성 요소다.
@@ -331,8 +334,8 @@ ChildLink(DocKind.PURCHASE_ORDER, "shipments", "po_id")
 | RELEASE_ORDERED → CANCELLED | 사람 | 범용 `/transitions` | 필수 |
 
 - 선적은 **자동 엣지 0**이다. `public_transition_targets(SHIPMENT) == {CANCELLED}`.
-- ETD·B/L 등 실적 입력은 **상태와 독립된 마일스톤 데이터**다(마일스톤 부록). "선적(ETD 실적)" 상태로의 자동 전이는 S3-2에서 하지 않는다. 출고(RESERVED)를 건너뛰는 우회 엣지가 되기 때문이다.
-- 선적 취소의 부수 처리는 같은 TX에서 한다: 살아 있는 통관 기록 검사(A8) → 전이 → SO 수렴(A7-2) → 아웃박스 `shipments.shipment.status_changed`.
+- ETD·B/L 등 실적 입력은 **상태와 독립된 마일스톤 데이터**다(마일스톤 부록). **[적대 R-01]** 단 ETD·BL_ISSUED·ETA 실적은 **RELEASE_ORDERED에서만** 받고(PLANNED면 422 `SHIPMENTS.MILESTONE.ACTUAL_BEFORE_RELEASE`), 그 실적이 살아 있는 선적은 취소 409 `SHIPMENTS.SHIPMENT.ACTUAL_RECORDED`(실적을 사유와 함께 정정·삭제한 뒤 취소). "선적(ETD 실적)" 상태로의 자동 전이는 S3-2에서 하지 않는다. 출고(RESERVED)를 건너뛰는 우회 엣지가 되기 때문이다.
+- 선적 취소의 부수 처리는 같은 TX에서 한다: 살아 있는 통관 기록 검사(A8) → **[적대 R-01] 살아 있는 ETD·BL_ISSUED·ETA 실적 검사(PR-4a)** → 전이 → SO 수렴(A7-2) → 아웃박스 `shipments.shipment.status_changed`.
 
 **근거**: `D:181`. AMB-01 판단의 핵심은 §8.4 "검수 통과 후에만" 출고한다는 것과 출고가 원장 기록 시점(`D:231`)이라는 것이다. S4-2 "§7.2 선적 상태 연동"(`W:139-140`)이 이 엣지를 소유한다.
 
@@ -392,7 +395,7 @@ ChildLink(DocKind.PURCHASE_ORDER, "shipments", "po_id")
   - `test_doc_machines.py:36-51,73-87,123-146,149-166`
   - `test_sales_order_lifecycle.py:132-141`
   - `machine.py:7-10` 독스트링
-  - `trade_chain/router.py:95-96,109-110`: 임포트 시 assert가 있으므로 엣지와 Literal을 같은 커밋에서 바꾼다.
+  - ~~`trade_chain/router.py:95-96,109-110`: 임포트 시 assert가 있으므로 엣지와 Literal을 같은 커밋에서 바꾼다.~~ **[적대 R-23]** SO Literal은 무변경(자동 엣지는 `public_transition_targets` 밖) — assert 통과만 확인. 신설 `ShipmentTarget`만 assert 추가.
   - 오더 보드 완전성 `test_order_board_contract.py:74-87`: IN_SHIPMENT가 RESERVED에서 빠지므로 매핑이 필수다.
 - 보드 처리 권장: 보드 부록이 **`SO_IN_SHIPMENT`("선적중") 열을 1줄 가산**한다. 보드 상수 독스트링이 이 경로를 지정하고 있고(`code:modules/order_board/constants.py:3`), 카드가 조용히 사라지지 않는다(fail-visible). 열 UI는 화면 부록 경계다.
 
@@ -411,20 +414,20 @@ ChildLink(DocKind.PURCHASE_ORDER, "shipments", "po_id")
 | `declaration_no` | VARCHAR(40) | NOT NULL | 외부 신고번호(형식 CHECK 없음 — 비공백·대문자·제어문자 금지만) |
 | `declared_on` | DATE | NOT NULL | 신고일(현지 날짜) |
 | `accepted_on` | DATE | NULL | **수리일** — NULL = 미수리 |
-| `customs_broker_partner_id` | BIGINT FK `partners.id` RESTRICT | NULL | 유형 CUSTOMS_BROKER 검증(KEY SHARE) |
+| `customs_broker_partner_id` | BIGINT FK `partners.id` RESTRICT | NULL | 유형 CUSTOMS_BROKER 검증(KEY SHARE — **[적대 R-08] shipments 잠금보다 먼저**) |
 | `note` | VARCHAR(1000) | NULL | |
 
 - 이 밖에 version, 감사 컬럼, soft delete를 둔다.
 
 **결정 — 제약·인덱스**
 - `ck_customs_records_kind_valid`
-- `ck_customs_records_accept_after_declare`: `accepted_on IS NULL OR accepted_on >= declared_on`
+- `ck_customs_records_accept_after_declare`: `accepted_on IS NULL OR accepted_on >= declared_on`(**[적대 R-26]** 서비스 선검증 422 `SHIPMENTS.CUSTOMS.ACCEPT_BEFORE_DECLARE`) · **[적대 R-18]** 신고일·수리일 ≤ `today_kst()`(422 `SHIPMENTS.CUSTOMS.DATE_IN_FUTURE`) · **[적대 R-16]** 표 생성은 M15(PR-4a)
 - `ck_customs_records_declaration_no_shape`: 공백 금지와 `[[:cntrl:]]` 금지
 - `uq_customs_records_declaration_live`: `(declaration_kind, declaration_no) WHERE deleted_at IS NULL`. 위반은 409 `SHIPMENTS.CUSTOMS.DECLARATION_DUPLICATE`.
 - `ix_customs_records_shipment_live`: `(shipment_id) WHERE deleted_at IS NULL`
 
 **결정 — 규칙**
-- 선적:통관 = **1:N**이다(분할 신고 허용). 적재의무를 기록별로 낼지 MIN으로 집계할지는 마일스톤 부록의 몫이다. 이 부록은 `accepted_on`을 제공한다.
+- 선적:통관 = **1:N**이다(분할 신고 허용 — [통합 X-03] 유지). **[통합 X-02]** `accepted_on`이 수리일의 **유일 원천**이고 마일스톤 `CUSTOMS_CLEARED` 실적으로 복사하지 않는다. 유효 수리일 = 구분 일치·살아 있는 통관 기록의 `MIN(accepted_on)`(읽기 시 파생).
 - 구분 대응: EXPORT 선적에는 EXPORT 신고만, IMPORT 선적에는 IMPORT 신고만 허용한다. 위반은 422 `SHIPMENTS.CUSTOMS.KIND_MISMATCH`다.
 - 취소된 선적에는 기록할 수 없다(409 `SHIPMENTS.SHIPMENT.NOT_ACTIVE`).
 - **선적 취소 가드**: 살아 있는 통관 기록이 있으면 선적 취소는 409 `SHIPMENTS.SHIPMENT.CUSTOMS_RECORD_ALIVE`다. 통관 기록을 먼저 사유와 함께 soft delete해야 한다(역순 원칙의 사실 기록판). 통관 기록에는 status·doc_number가 없어 CHILD_LINKS로 표현할 수 없으므로, 선적 취소 서비스의 명시 검사와 J 테스트로 고정한다.
@@ -466,7 +469,7 @@ ChildLink(DocKind.PURCHASE_ORDER, "shipments", "po_id")
 
 ## A10. 잠금 순서(`LOCK_ORDER`) 개정 — ADR 필수
 
-**결정**: `… → sales_orders → purchase_orders → **shipments** → **customs_records** → approvals → lines → doc_number_seq`.
+**결정**: `… → sales_orders → purchase_orders → **shipments** → **customs_records** → approvals → lines → doc_number_seq`. **[통합 X-09]** 최종 표기는 `shipments → shipment_children`(milestones·customs_records·shipment_parties, PO 소유 OEM 마일스톤 포함) — 통합 §2.11.
 
 - 선적은 SO·PO의 후속이므로 조상→자기 순서다(`lock_chain` 관용).
 - 통관 기록은 선적 행을 잠근 뒤에 잠근다.
@@ -489,7 +492,7 @@ ChildLink(DocKind.PURCHASE_ORDER, "shipments", "po_id")
 **결정**
 - 권한(`authz_matrix` `GOVERNED_PREFIXES`에 `/api/v1/shipments` 등재 — 등재하지 않으면 매트릭스가 공회전한다):
   - 조회(목록·상세·라인·당사자·통관·상태이력)는 **전 역할 ALLOW**다.
-  - 쓰기(생성 from-SO/from-PO, 라인 편집, 출고지시, 취소, 당사자, 통관 기록)는 **ADMIN·TRADE·LOGISTICS ALLOW, CERT·VIEWER DENY**다.
+  - ~~쓰기 전부 ADMIN·TRADE·LOGISTICS ALLOW~~ **[통합 X-14]** 동작별: 생성·라인·취소 = A·T, 헤더(FREE·국가)·출고지시·당사자·통관·마일스톤 = A·T·L, CERT·VIEWER DENY(통합 §2.9).
   - LOGISTICS는 **최초의 전표 쓰기 허용**이다(현재 전 전표 쓰기 DENY, `tests/architecture/authz_matrix.py:198-263`). §2 역할 부기와 ADR을 함께 낸다.
 - 401→403→404→409→422 순서를 따른다. 부모-자식 불일치(다른 선적의 라인·당사자·통관 id)는 404다(`D:370`).
 - **수입선적 화면과 응답에 PO 원가가 없다**(A3에서 복사하지 않음). 그래서 LOGISTICS·VIEWER에게 원가 채널이 새로 열리지 않는다. 원천 PO 조회는 기존 원가 마스킹 규칙을 따른다.
@@ -528,9 +531,9 @@ ChildLink(DocKind.PURCHASE_ORDER, "shipments", "po_id")
 | 코드 | HTTP | 상황 |
 |---|---|---|
 | `SHIPMENTS.SOURCE.LINE_MISMATCH` | 422 | 라인의 원천 라인이 헤더 원천 전표 소속이 아님 |
-| `SHIPMENTS.SOURCE.KIND_NOT_OPEN` | 422 | 채널입고·샘플무상 생성 요청(경로 미개방) |
+| ~~`SHIPMENTS.SOURCE.KIND_NOT_OPEN`~~ | — | **[통합 X-21] 철회** — 생성 경로에 구분 입력이 없어 도달 불가(DB CHECK가 닫음) |
 | `SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE` | 409 | 수입선적 수량 > PO 라인 배정 가능량 |
-| `SHIPMENTS.SHIPMENT.NOT_EDITABLE` | 409 | PLANNED 아닌 선적의 라인·CONTENT 편집 |
+| ~~`SHIPMENTS.SHIPMENT.NOT_EDITABLE`~~ | — | **[통합 X-20] 철회** — 커널 `TRADE_DOCS.DOCUMENT.FROZEN` 재사용 |
 | `SHIPMENTS.SHIPMENT.NOT_ACTIVE` | 409 | 취소된 선적에 당사자·통관 기록 |
 | `SHIPMENTS.SHIPMENT.CUSTOMS_RECORD_ALIVE` | 409 | 살아 있는 통관 기록이 있는 선적 취소 |
 | `SHIPMENTS.PARTY.ROLE_DUPLICATE` | 409 | (선적, 역할) 부분 유니크 위반 번역 |
@@ -619,7 +622,7 @@ ChildLink(DocKind.PURCHASE_ORDER, "shipments", "po_id")
 1. **WBS "RESERVED 엣지 COMPLETED 추가"(`W:114`) 미이행.** 노출 공백(A7-3) 때문에 S3-3 provider PR로 이월한다. WBS v1.6 정정 후보이고 부채로 등재한다.
 2. **§7.5 구분 4종 중 채널입고·샘플무상의 생성 경로 미개방**(A2). 값만 싣고 DB CHECK로 닫는다. 부채로 등재한다.
 3. **§15 부기 "SO 자동 엣지 0" 개정**(A7-2). IN_SHIPMENT 수렴 2엣지를 위해 문서·테스트 계약을 바꾼다.
-4. **§8.3 부기 ② "선적 소비는 헤더 FOR SHARE"의 운용 보강**(A4). FOR UPDATE를 선행하며 시그니처는 불변이다.
+4. **§8.3 부기 ② "선적 소비는 헤더 FOR SHARE"의 운용 보강**(A4) — **[적대 R-13] 해석이 아니라 문면 변경으로 보고**. FOR UPDATE를 선행하며 시그니처는 불변이다.
 5. **선적 상태 중 PICKING 이후 5종은 S3-2에서 도달 불가**(A7-1). 따라서 "선적(ETD 실적)" 상태는 P4 이후다. ETD 실적은 마일스톤 데이터로만 입력한다.
 
 ## 부채 등재 후보(이 부록)

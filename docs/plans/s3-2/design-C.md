@@ -1,5 +1,8 @@
 # S3-2 계획 설계 — 부록 C: 동시성·권한·감사·잡
 
+
+> **통합 우선순위(2026-10-04)**: 이 부록과 `design-integrated.md`가 충돌하면 통합 문서가 이긴다. 통합 검토가 모순 해소에 필요한 최소 문면만 고쳤고, 고친 자리는 "[통합 X-nn]"·"[통합 N-nn]"으로 표시했다(목록: 통합 §1.6).
+> **적대 검토 정정(2026-10-04)**: 통합 문서 §9(R-01~R-30)가 이 부록과 통합 §0~§8보다 우선한다. 이 부록에서 고친 자리는 "[적대 R-nn]"으로 표시했다(목록: 통합 §9 R-27).
 - 기준: main `a4d91c0`(S3-1 종결). 사양 정본은 DESIGN.md이고, 일정은 WBS.md S3-2 행(W:112-116)을 따른다.
 - 표기: `D:줄` = DESIGN.md, `W:줄` = WBS.md, `P:줄` = PROGRESS.md, `code:경로:줄` = `backend/app/` 아래 경로, `test:경로:줄` = `backend/tests/` 아래 경로. 줄 번호는 `a4d91c0`에서 읽은 값이다.
 - 판정 방식: 오너 지시(2026-09-29, CLAUDE.md "웹 세션 판정 절차 생략")에 따라 판정 후보는 모두 **더 엄격한(fail-closed) 권장안으로 '자율 확정'**했다. PROGRESS 등재 시 "자율 확정"으로 표기한다.
@@ -41,22 +44,22 @@
 
 | # | 업무 동작 (엔드포인트 가칭) | 잠금(LOCK_ORDER 순, C2) | 쓰기 | 이력·감사 | outbox |
 |---|---|---|---|---|---|
-| T1 | 수출 선적 참조 생성 `POST /shipments`(SO 참조) | 멱등 claim → partners `KEY SHARE`(당사자 유형 검증, ADR-0067) → SO `FOR UPDATE`(lock_chain) → SO 라인 `FOR UPDATE` id순(`lock_lines_for_consumption`, FOR SHARE는 기보유 FOR UPDATE에 흡수 — C3) → `doc_number_seq` | shipments·lines·parties INSERT, 마일스톤 슬롯 INSERT(부록 B), **첫 살아 있는 선적이면 SO CONFIRMED→IN_SHIPMENT 자동 수렴** | `record_birth`(선적 상태이력 1행), SO 상태이력 1행(automatic=True) | `shipments.shipment.created` + 커널 SO 전이 이벤트 |
+| T1 | 수출 선적 참조 생성 ~~`POST /shipments`~~ **[통합 X-17·sD S4]** `POST /sales-orders/{id}/shipments`(SO 참조) | 멱등 claim → partners `KEY SHARE`(당사자 유형 검증, ADR-0067) → SO `FOR UPDATE`(lock_chain) → SO 라인 `FOR UPDATE` id순(`lock_lines_for_consumption`, FOR SHARE는 기보유 FOR UPDATE에 흡수 — C3) → `doc_number_seq` | shipments·lines·parties INSERT(**[통합 X-11]** 마일스톤 0행 — 초안은 별도 1클릭 TX), **첫 살아 있는 선적이면 SO CONFIRMED→IN_SHIPMENT 자동 수렴** | `record_birth`(선적 상태이력 1행), SO 상태이력 1행(automatic=True) | `shipments.shipment.created` + 커널 SO 전이 이벤트 |
 | T2 | 수입 선적 참조 생성(PO 참조) | 멱등 → partners `KEY SHARE` → PO 헤더 `FOR SHARE`(상태 검증) → PO 라인 `FOR UPDATE` id순 → `doc_number_seq` | 위와 같음. **PO 상태·PO 잔량 무변경**(S32-IM-03), 단가 복사 0(C8) | `record_birth` | `shipments.shipment.created` |
 | T3 | 선적 헤더 수정(FREE·당사자·국가 등 편집 가능 열) | 멱등 → (당사자 변경 시) partners `KEY SHARE` → shipments `FOR UPDATE` + version 대조 | UPDATE, version+1 | (FIELD_POLICY상 CONTENT 열 변경은 409 — 모델 부록) | 없음(내부 편집) |
-| T4 | 선적 라인 수정·삭제(계획 상태 한정) | 멱등 → SO(또는 PO) `FOR UPDATE`/`FOR SHARE` → shipments `FOR UPDATE` + 헤더 version 대조 → 원천 라인 `FOR UPDATE` id순 | 라인 UPDATE/soft delete, **헤더 version+1**(D:344 ④) | — | 없음 |
-| T5 | 선적 사람 전이(계획→출고지시, 계획/출고지시→취소) `POST /shipments/{id}/transitions` | 멱등 → SO(또는 PO) `FOR UPDATE`(취소 시 수렴이 필요할 수 있으므로 항상) → shipments `FOR UPDATE` + version | `record_transition`. **취소로 살아 있는 선적이 0이 되면 SO IN_SHIPMENT→CONFIRMED 자동 수렴** | 선적·SO 상태이력, 취소 사유 필수 | 커널 전이 이벤트 |
+| T4 | 선적 라인 수정·삭제(계획 상태 한정) | 멱등 → SO(또는 PO) ~~`FOR UPDATE`/`FOR SHARE`~~ **[적대 R-08] `lock_chain` `FOR UPDATE`(SO·PO 동일)** → shipments `FOR UPDATE` + 헤더 version 대조 → 원천 라인 `FOR UPDATE` id순 | 라인 UPDATE/soft delete, **헤더 version+1**(D:344 ④) | — | 없음 |
+| T5 | 선적 사람 전이(계획→출고지시, 계획/출고지시→취소) ~~`POST /shipments/{id}/transitions`~~ **[통합 X-15]** 출고지시 = `POST /shipments/{id}/release-order`, 취소 = `/transitions`(`to=CANCELLED`) | 멱등 → SO(또는 PO) `FOR UPDATE`(취소 시 수렴이 필요할 수 있으므로 항상 — **[적대 R-08]** `lock_chain` 그대로, PO도 UPDATE·수렴 없음) → shipments `FOR UPDATE` + version | `record_transition`. **취소로 살아 있는 선적이 0이 되면 SO IN_SHIPMENT→CONFIRMED 자동 수렴** | 선적·SO 상태이력, 취소 사유 필수 | 커널 전이 이벤트 |
 | T6 | 마일스톤 계획 설정·변경(롤오버) | 멱등 → shipments `FOR UPDATE`(version 대조 없음 — 헤더 비수정) → milestones 행 `FOR UPDATE` + 행 version 대조 | milestones UPDATE | `milestone_changes` INSERT(사유 필수 종류는 CHECK — 부록 B9) | `shipments.milestone.changed` |
 | T7 | 마일스톤 실적 입력·정정 | T6과 같음 | milestones UPDATE. **파생값은 저장하지 않으므로 "후속 재계산"은 같은 TX에서 쓰기 0**(부록 B 계산값 원칙) | `milestone_changes` INSERT | `shipments.milestone.changed` |
-| T8 | 통보 기록 연결(comm_log 생성 + 롤오버 행 연결) | 멱등 → shipments `FOR SHARE`(존재·소속 확인) | comm_logs INSERT(SHIPMENT 주제), `milestone_change_notices` INSERT | 둘 다 기록 자체가 이력 | 없음(발송 0) |
-| T9 | 통관 기록 입력·정정 `…/customs-records` | 멱등 → shipments `FOR UPDATE` → customs_records 행 `FOR UPDATE` + version | INSERT/UPDATE | 정정 시 `audit_log` 1행(C9) | `shipments.customs.recorded` |
+| T8 | 통보 기록 연결(comm_log 생성 + 롤오버 행 연결) | 멱등 → **[적대 R-08]** (상대 거래처 있으면) partners `FOR KEY SHARE` → shipments `FOR SHARE`(존재·소속 확인) | comm_logs INSERT(SHIPMENT 주제), `milestone_change_notices` INSERT | 둘 다 기록 자체가 이력 | 없음(발송 0) |
+| T9 | 통관 기록 입력·정정 `…/customs-records` | 멱등 → **[적대 R-08]** (관세사 있으면) partners `FOR KEY SHARE` → shipments `FOR UPDATE` → customs_records 행 `FOR UPDATE` + version | INSERT/UPDATE | 정정 시 `audit_log` 1행(C9) | `shipments.customs.recorded` |
 | T10 | 휴일 연도 등록·교체(ADMIN) | 멱등 → (해당 국가·연도 선언 행) `FOR UPDATE` | 연도 단위 교체(삭제 표시 + 신규 INSERT) | `audit_log` 1행(C9) | 없음 |
 | T11 | 담당 일괄 이관(기존 handover) | ASSIGNMENT_TARGETS 순서 = LOCK_ORDER(C2) | shipments.assignee_id UPDATE(version 불변 — 기존 규약) | 기존 handover audit | 기존 |
 | T12 | 기일 스캔 잡(건별) | 잠금 없음(읽기) | alerts INSERT(`notify` 코어) | — | 없음(코어 직접, D:144) |
 
 - 선적 생성(T1·T2)에서 **채번은 트랜잭션 마지막**이다(`code:modules/trade_docs/doc_number.py:4-5`). 중간 실패 시 번호도 함께 롤백된다(번호 구멍은 허용, 재사용 금지 — D:346).
 - T1의 SO 자동 수렴은 **별도 트랜잭션이나 잡이 아니라 같은 트랜잭션**이다. 선적만 생기고 SO가 CONFIRMED로 남는 중간 상태는 관측될 수 없다(QT CONVERTED 수렴 선례 `code:modules/trade_chain/chain_ops.py:68-116`).
-- 선적 취소(T5)와 선적 라인 삭제(T4)는 **같은 수렴 함수**를 부른다(수렴 판정 = "살아 있는 선적 라인을 가진 선적이 있는가", 단일 정의). 정의가 둘로 갈리면 거짓 상태가 남는다(비대칭 결손 선례 D:140 ②).
+- 선적 취소(T5)와 선적 라인 삭제(T4)는 **같은 수렴 함수**를 부른다(수렴 판정 = ~~"살아 있는 선적 라인을 가진 선적이 있는가"~~ **[통합 X-13]** "살아 있는 선적 ≥ 1", 단일 정의). 정의가 둘로 갈리면 거짓 상태가 남는다(비대칭 결손 선례 D:140 ②).
 
 **근거**: D:340(17.1 "헤더+라인+원장+이력+이벤트 전부 커밋 or 전부 롤백", "트랜잭션 안에서 외부 호출 금지"), D:362(디스패처는 커밋 후), D:144(기일 스캔은 코어 직접), D:229 ②(소비 잠금), D:346(채번).
 
@@ -166,10 +169,10 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 |---|---|---|---|
 | shipments | `doc_number` 전역 UNIQUE + 형식 CHECK | (전역 — 삭제 행도 점유, D:348) | 발생 불가(채번) — 발생 시 500이 아니라 409로 번역 |
 | shipment_lines | (shipment_id, so_line_id) / (shipment_id, po_line_id) | `deleted_at IS NULL` | 409 `SHIPMENTS.LINE.DUPLICATE_SOURCE` |
-| shipment_parties | (shipment_id, role) | `deleted_at IS NULL` | 409 `SHIPMENTS.PARTY.DUPLICATE_ROLE` |
+| shipment_parties | (shipment_id, role) | `deleted_at IS NULL` | 409 `SHIPMENTS.PARTY.ROLE_DUPLICATE`(**[통합 X-19]**) |
 | milestones | (shipment_id, milestone_type) | `deleted_at IS NULL` | 409 `SHIPMENTS.MILESTONE.DUPLICATE_TYPE` |
-| customs_records | (shipment_id, declaration_kind) 그리고 (declaration_kind, declaration_number) | `deleted_at IS NULL` | 409 `SHIPMENTS.CUSTOMS.DUPLICATE` |
-| holidays | (country_code, holiday_date) | `deleted_at IS NULL` | 409 `HOLIDAYS.CALENDAR.DUPLICATE_DATE` |
+| customs_records | **[통합 X-03·X-04]** (declaration_kind, declaration_no) 1개(1:N 분할 신고 허용) | `deleted_at IS NULL` | 409 `SHIPMENTS.CUSTOMS.DECLARATION_DUPLICATE` |
+| holidays | (country_code, holiday_on) | `deleted_at IS NULL` | **[통합 X-22]** 본문 중복 날짜 = 422 `HOLIDAYS.CALENDAR.DUPLICATE_DATE`, 동시 최초 연도 선언 = 409 `HOLIDAYS.CALENDAR.YEAR_DUPLICATE` |
 | milestone_change_notices | (change_id, comm_log_id) | (IMMUTABLE, 술어 없음) | 409 |
 | alerts | 기존 dedup 키(`notify` 코어 ON CONFLICT DO NOTHING) | 기존 | 조용히 0건(정상) |
 
@@ -196,11 +199,11 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 | 엔드포인트(가칭) | A | T | L | C | V | 비고 |
 |---|---|---|---|---|---|---|
 | `GET /shipments`·`/{id}`·`/{id}/status-log`·`/{id}/milestones`·`/{id}/milestone-changes`·`/{id}/customs-records`·`export.csv` | ✓ | ✓ | ✓ | ✓ | ✓ | 전표는 회사 공유 자산(D:370). 원가 필드 없음(C8) |
-| `POST /shipments`(수출·수입 참조 생성) | ✓ | ✓ | ✗ | ✗ | ✗ | SO·PO 잔량을 소비하고 SO 상태를 수렴시키는 상업 동작 = 무역 |
+| ~~`POST /shipments`~~ **[통합 §2.9]** `POST /sales-orders/{id}/shipments`·`/purchase-orders/{id}/shipments`(수출·수입 참조 생성) | ✓ | ✓ | ✗ | ✗ | ✗ | SO·PO 잔량을 소비하고 SO 상태를 수렴시키는 상업 동작 = 무역 |
 | `PATCH /shipments/{id}`(헤더 편집 가능 열·당사자) | ✓ | ✓ | ✓ | ✗ | ✗ | 포워더·관세사 지정은 물류 실무 |
 | `PATCH/DELETE /shipments/{id}/lines/{line_id}` | ✓ | ✓ | ✗ | ✗ | ✗ | 잔량 소비 변경 = 무역 |
-| `POST /shipments/{id}/transitions` to=출고지시 | ✓ | ✓ | ✓ | ✗ | ✗ | 출고 준비 지시는 물류도 |
-| `POST /shipments/{id}/transitions` to=취소 | ✓ | ✓ | ✗ | ✗ | ✗ | SO 수렴 동반 = 무역. **같은 경로에서 대상 상태별로 서비스가 역할 판정** |
+| `POST /shipments/{id}/release-order`(**[통합 X-15]** 전용 동결 경로) | ✓ | ✓ | ✓ | ✗ | ✗ | 출고 준비 지시는 물류도 |
+| `POST /shipments/{id}/transitions`(`to=CANCELLED` 1값) | ✓ | ✓ | ✗ | ✗ | ✗ | SO 수렴 동반 = 무역. **[통합 X-15]** 경로 단위 역할 — 서비스 재판정 불필요 |
 | `PUT /shipments/{id}/milestones/{type}/plan`·`/actual` | ✓ | ✓ | ✓ | ✗ | ✗ | 일정·실적은 물류 실무 |
 | `POST /shipments/{id}/milestone-changes/{cid}/notices`(통보 기록) | ✓ | ✓ | ✓ | ✗ | ✗ | |
 | `POST/PATCH /shipments/{id}/customs-records` | ✓ | ✓ | ✓ | ✗ | ✗ | 사실 기록만(C12) |
@@ -209,10 +212,10 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 | `GET /document-flow/{doc_kind}/{doc_id}`(SHIPMENT 확장) | 기존 행 유지 | | | | | 경로 템플릿 불변(`authz_matrix.py:347-353`) — 값 공간만 확장 |
 
 - **LOGISTICS 첫 쓰기 허용**: 지금까지 전표 쓰기는 전부 `CAN_WRITE=(RoleCode.TRADE,)`(quotations·PI·SO·PO·trade_chain·intake 라우터)였다. 선적 일정·실적·통관·당사자에서 **처음으로 L ALLOW**가 생긴다. 이는 D:37 "역할 5종(관리자/무역/물류/…)"의 물류 업무 배정이 처음 문면화되는 지점이므로 **DESIGN §2 부기 + ADR**이 필요하다.
-- **단일 경로 다중 역할**(전이 엔드포인트): 라우터 가드는 `require_roles(T, L)`로 열고, 서비스가 `to` 값별로 역할을 재판정해 취소는 T만 통과시킨다(403). 이 재판정은 **존재 검사보다 먼저**(401→403→404→409→422, D:370) 해야 하는데, `to`는 본문에 있으므로 본문 검증 직후·조회 전에 판정한다. authz 매트릭스 프로브는 `to`별 2행으로 나눠 적는다(L의 취소 시도 = 403 프로브).
+- ~~**단일 경로 다중 역할**(전이 엔드포인트)~~ **[통합 X-15 — 이 문단 철회: 출고지시는 전용 경로, `/transitions`는 `to=CANCELLED` 1값(T) — 경로 단위 역할]**: 라우터 가드는 `require_roles(T, L)`로 열고, 서비스가 `to` 값별로 역할을 재판정해 취소는 T만 통과시킨다(403). 이 재판정은 **존재 검사보다 먼저**(401→403→404→409→422, D:370) 해야 하는데, `to`는 본문에 있으므로 본문 검증 직후·조회 전에 판정한다. authz 매트릭스 프로브는 `to`별 2행으로 나눠 적는다(L의 취소 시도 = 403 프로브).
 - **소유권 3축**(D:370)
   1. 역할 스코프: 위 표(403).
-  2. 부모-자식 소속: 경로의 `line_id`·`milestone type`·`customs_record_id`·`change_id`가 경로의 `shipment_id` 소속이 아니면 **404, 부작용 0**. 참조 생성 본문의 `so_line_id`가 본문 `so_id` 소속이 아니면 404(존재하지만 소속 다름 = 404).
+  2. 부모-자식 소속: 경로의 `line_id`·`milestone type`·`customs_record_id`·`change_id`가 경로의 `shipment_id` 소속이 아니면 **404, 부작용 0**. ~~참조 생성 본문의 `so_line_id`가 본문 `so_id` 소속이 아니면 404~~ **[통합 X-12]** 본문 참조 불일치는 422 `SHIPMENTS.SOURCE.LINE_MISMATCH`(S3-1 참조 생성 선례 `code:modules/trade_chain/reference.py:185-215`). 404는 경로의 부모-자식에 한정.
   3. 당사자성: 선적은 회사 공유 자산이고 담당자는 라우팅 단위이지 접근 제어가 아니다(D:370) — 당사자 축 비적용. 통보 기록의 comm_log도 공유.
 - **GOVERNED_PREFIXES**에 `/api/v1/shipments`·`/api/v1/holidays`(+`/api/v1/holiday-calendar-years`를 쓰면 그것도) 추가. 등재하지 않으면 매트릭스 검사가 공회전한다(조용한 누락 — **계획 DoD 항목**).
 - 신규 쓰기 스키마는 전부 `extra="forbid"`(`test:architecture/test_write_schema_forbid.py:114-131`). 참조 생성 본문에는 SKU·단가·통화·환율·거래처 필드가 **구조적으로 없다**(D:175 ①).
@@ -247,7 +250,7 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 
 **결정**
 - 선적 계열 표(shipments·lines·parties·milestones·customs_records·이력·notices)에 **원가 계열 열(`*_cost`·`unit_cost`·`price_basis`)을 두지 않는다.**
-- **수입 선적은 PO 라인에서 SKU·수량만 복사**하고 단가·통화·원가를 복사하지 않는다(AMB-37). 응답 스키마도 PO 원가를 조인하지 않는다. PO 원가는 `may_see_po_cost`로 라우터 1곳에서 갈리는 구조(`code:modules/purchase_orders/router.py:8`)인데, 선적이 PO를 조인해 원가를 실으면 그 갈림을 우회하는 **10번째 채널**이 된다(ADR-0024 필드 부재 방식).
+- **수입 선적은 PO 라인에서 SKU·수량만 복사**하고 단가·원가를 복사하지 않는다(AMB-37). **[통합 X-05]** 통화·환율(원가 아님)은 헤더·라인 NOT NULL 규약대로 복사한다. 응답 스키마도 PO 원가를 조인하지 않는다. PO 원가는 `may_see_po_cost`로 라우터 1곳에서 갈리는 구조(`code:modules/purchase_orders/router.py:8`)인데, 선적이 PO를 조인해 원가를 실으면 그 갈림을 우회하는 **10번째 채널**이 된다(ADR-0024 필드 부재 방식).
 - 수출 선적 라인의 판매 단가(SO 스냅샷)는 원가·마진이 아니므로 마스킹 비대상(여신·판매합계 선례 D:116 ③). 단 **금액 열 보유 여부 자체는 모델 부록 소관**이다 — 이 부록은 "보유한다면 전 역할 노출, 원가와 혼합 산출(마진) 필드는 금지"만 정한다.
 - outbox payload에 금액·원가를 넣지 않는다(`code:modules/outbox/service.py:31-32`). 선적 이벤트 payload는 id·종류·상태·날짜만(C10).
 - 로그: 기존 로거 마스킹 프로세서 사용. `log_context`에 원가 키를 넣지 않는다.
@@ -319,7 +322,7 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 ## C11. 스케줄 잡 — 배정·시각·총수·호출 경계
 
 **결정**
-- **신규 잡 1행**: `trade-deadline-scan`, `daily@06:40` KST(부록 B13·B18이 대상·문턱을 정함). 선적 마일스톤 기일 + QT/PI 만료 임박(D-N)을 한 잡에서 처리한다. **총수 12 → 13.**
+- **신규 잡 1행**: `trade-deadline-scan`, `daily@06:40` KST(부록 B13·B18이 대상·문턱을 정함). 선적 마일스톤 기일 + QT/PI 만료 임박(D-N)을 한 잡에서 처리한다. **총수 ~~12 → 13~~ [적대 R-17] 13 → 14**(무결성 잡이 PR-1b에서 12→13).
 - **시각 충돌 검증**(현행 12행, `code:modules/platform/scheduler.py:202-294`): 04:20·04:25·05:00·05:30·06:00·06:10·06:30·07:00·07:10·08:00·09:00 + interval@1. **06:40은 비어 있다.** 레지스트리 밖 외부 백업 03:00·일요일 복원 리허설 04:00과도 겹치지 않는다.
 - **순서 의존(시각 차로만 보장 — 기존 관례 `scheduler.py:219-237`)**
   - 06:10 `document-expiry-sweep`보다 **뒤**: 그날 만료된 QT/PI는 이미 EXPIRED라 D-N 후보에서 빠진다(후보 정의 = 스윕과 동일, 부록 B18).
@@ -331,10 +334,10 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 - **CLI 수동 실행 서브커맨드** 1개(`app/cli.py:157-262` 선례).
 - **같은 PR에서 함께 고칠 곳**
   1. `test:architecture/test_scheduler_registry.py:143-163` 4금 집합에 `"trade-deadline-scan"` 추가 + 주석 논증("읽기+alerts INSERT뿐 — 전표 상태 불변·대외 발송 없음·발주·원장 무접촉").
-  2. 같은 파일 `:167-174` `test_the_registry_has_exactly_twelve_jobs…` → **thirteen**으로 개명·총수 13·`schedules["trade-deadline-scan"]=="daily@06:40"`·daily 중복 금지 유지.
+  2. 같은 파일 `:167-174` `test_the_registry_has_exactly_twelve_jobs…` → ~~**thirteen**~~ **[적대 R-17] PR-1b에서 thirteen, PR-6에서 fourteen**으로 개명·총수 ~~13~~ 14·`schedules["trade-deadline-scan"]=="daily@06:40"`·daily 중복 금지 유지.
   3. `test:architecture/test_no_auto_confirm_code_path_exists.py:776-795` `test_scheduler_and_cli_reach_only_the_totals_check_and_the_expiry_sweep`: `_trade_chain_imports == {"expiry_sweep"}` → `{"expiry_sweep", "deadline_scan"}`. **이 테스트를 피하려고 스캔을 trade_chain 밖 새 모듈에 두지 않는다**(보호 테스트 우회 = 공회전). 대신 신규 단언 추가: `deadline_scan`은 `record_transition`·`lock_chain`·`issue_*`·`confirm_*`·`outbox.publish`·`numbering`을 언급하지 않는다.
   4. `test:architecture/test_po_no_auto_path.py:352-361`: 잡 code·name_ko에 `purchase`·`발주`·`-po-` 금지 — `trade-deadline-scan`/"무역 기일 스캔"은 통과.
-  5. `docs/runbook/prod.md:126-141` 잡 표 13행, DESIGN §15 잡 매핑 부기(D:324 ① 서식), ADR.
+  5. `docs/runbook/prod.md:126-141` 잡 표 ~~13행~~ **14행([적대 R-17])**, DESIGN §15 잡 매핑 부기(D:324 ① 서식), ADR.
   6. `len(JOB_REGISTRY)` 비교 테스트(`test:integration/test_scheduler.py` 등)는 자동 추종(수정 불요 — 추론).
 
 **근거**: D:320, D:322(코드 고정 폐쇄 열거·시드 금지), D:324 ①②(행 추가 서식·4금 논증), D:144 ⑧, `code:modules/platform/scheduler.py`.
@@ -394,7 +397,7 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 
 **결정**
 - 재사용: `TRADE_DOCS.TRANSITION.NOT_ALLOWED`, `TRADE_DOCS.CANCEL.SUCCESSOR_ALIVE`(SO 취소 시 살아 있는 선적 — CHILD_LINKS 등록만으로 자동), `TRADE_DOCS.QUANTITY.EXCEEDS_OPEN`, `TRADE_DOCS.QUANTITY.DOCUMENT_NOT_CONSUMABLE`, `COMMON.CONCURRENCY.LOCK_BUSY`(55P03·40P01 → 409, `code:core/errors/handlers.py:122-133`; 57014는 500 유지 — P-47).
-- 신규(이 부록 범위): `SHIPMENTS.LINE.DUPLICATE_SOURCE`, `SHIPMENTS.PARTY.DUPLICATE_ROLE`, `SHIPMENTS.MILESTONE.DUPLICATE_TYPE`, `SHIPMENTS.CUSTOMS.DUPLICATE`, `SHIPMENTS.CUSTOMS.REASON_REQUIRED`(정정 사유), `SHIPMENTS.TRANSITION.ROLE_NOT_ALLOWED`는 만들지 않고 **기존 403(ForbiddenError)** 을 쓴다(역할 판정은 403 단일 의미), `SHIPMENTS.IMPORT.EXCEEDS_ASSIGNABLE`(수입선적 배정 가능량 초과 409), `HOLIDAYS.CALENDAR.DUPLICATE_DATE`. 마일스톤·휴일 내용 검증 코드는 부록 B B19 목록을 따른다.
+- 신규(이 부록 범위 — **[통합 X-19]** 이름은 부록 A 쪽으로 통일: `PARTY.ROLE_DUPLICATE`·`CUSTOMS.DECLARATION_DUPLICATE`·`QUANTITY.EXCEEDS_ASSIGNABLE`; 최종 목록 통합 §2.6): `SHIPMENTS.LINE.DUPLICATE_SOURCE`, ~~`SHIPMENTS.PARTY.DUPLICATE_ROLE`~~, `SHIPMENTS.MILESTONE.DUPLICATE_TYPE`, ~~`SHIPMENTS.CUSTOMS.DUPLICATE`~~, `SHIPMENTS.CUSTOMS.REASON_REQUIRED`(정정 사유), `SHIPMENTS.TRANSITION.ROLE_NOT_ALLOWED`는 만들지 않고 **기존 403(ForbiddenError)** 을 쓴다(역할 판정은 403 단일 의미), `SHIPMENTS.IMPORT.EXCEEDS_ASSIGNABLE`(수입선적 배정 가능량 초과 409), `HOLIDAYS.CALENDAR.DUPLICATE_DATE`. 마일스톤·휴일 내용 검증 코드는 부록 B B19 목록을 따른다.
 - 형식: 3세그먼트·카탈로그 1:1·문구에 조치 힌트(`test:unit/test_error_catalog.py:19-49`), detail과 log_context 분리(`test:e2e/test_error_contract.py:56-85`). 409 detail에 금액 없음(잔량 수량만).
 
 **근거**: D:374, D:344 ③.
@@ -445,7 +448,7 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 | ID | 시나리오 | 기대 |
 |---|---|---|
 | I-01 | `test_no_auto_confirm_code_path_exists` 신규 엔트리 4종(C12) | 허용 호출처 밖 언급·임포트 0, 엔트리 비공회전 |
-| I-02 | 스케줄 레지스트리 13·06:40·daily 중복 0·4금 집합 | C11 갱신 |
+| I-02 | 스케줄 레지스트리 ~~13~~ **14([적대 R-17])**·06:40·05:40·daily 중복 0·4금 집합 | C11 갱신 |
 | I-03 | 스캔 1건 실패 주입(한 선적 조회에서 예외) | 나머지 건 처리 완료, 잡 FAILED, 관리자 알림 1건 |
 | I-04 | SO 자동 엣지 정확히 2개·COMPLETED 진입 0·provider 훅 단언 | C12 |
 | I-05 | `confirm.py`·`order_board/bulk.py`·인테이크가 선적 모듈을 임포트하지 않음 | 자동 선적 0 |
@@ -463,7 +466,7 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 | K-07 | 수입선적 응답에 PO `unit_cost` 부재(원가 열람 가능 역할로도) | 필드 부재 |
 
 ### 기존 테스트 갱신 목록(이 부록 범위 — 실패가 정상인 안전망)
-- `test_scheduler_registry.py:143-174`(C11), `test_no_auto_confirm_code_path_exists.py:64-110,776-795`(C11·C12), `test_doc_machines.py:123-126`(C12 개명), `authz_matrix.py` GOVERNED_PREFIXES·EXPECTED(C6), `test_write_schema_forbid.py`(C6), `test_user_fk_classification.py`·`test_assignment_coverage.py`·`handover/targets.py`(C9·C2), `test_table_policy.py`(C9), `test_error_catalog.py`(C13). 상태 총수·CHILD_LINKS·LINE_CONSUMERS·FIELD_POLICY·보드 매핑 테스트는 모델·상태 부록 소관.
+- `test_scheduler_registry.py:143-174`(C11), `test_no_auto_confirm_code_path_exists.py:64-110,776-795`(C11·C12), `test_doc_machines.py:123-126`(C12 개명), `authz_matrix.py` GOVERNED_PREFIXES·EXPECTED(C6), `test_write_schema_forbid.py`(C6), `test_user_fk_classification.py`·`test_assignment_coverage.py`·`handover/targets.py`(C9·C2), `test_table_policy.py`(C9), `test_error_catalog.py`(C13). **[적대 R-05]** + `test:integration/test_collaboration_constraints.py:151-156`(둘로 분할: DB는 SHIPMENT 허용 / 범용 API는 거부) · `test:e2e/test_collaboration.py:505-517`(범용 `SubjectType`이 `{CERTIFICATION}`이라 스키마 422 단언 그대로 유지). 상태 총수·CHILD_LINKS·LINE_CONSUMERS·FIELD_POLICY·보드 매핑 테스트는 모델·상태 부록 소관.
 
 **근거**: D:426(H), D:427(I), D:428(J), D:429(K), D:417 ①(P3=A·B·E·G·H·I·K), GC-F1/F2 실제 동시 실행 규칙.
 
@@ -485,7 +488,7 @@ idempotency_keys → order_intakes → partners → quotations → proforma_invo
 | C8 | 선적 계열 원가 열 0, 수입선적 단가 비복사, payload 금액 0 | — | 낮음 |
 | C9 | 상태·마일스톤은 IMMUTABLE 이력, 통관 정정·휴일 교체는 audit_log | §17.5 확장 + ADR | 낮음~중간 |
 | C10 | 이벤트 5종, 규칙 시드 0, 대외 채널 0 | — | 낮음 |
-| C11 | `trade-deadline-scan` daily@06:40, 12→13, scan은 trade_chain 내부, 보호 테스트 갱신(우회 금지) | §15 부기 + runbook + ADR | 낮음 |
+| C11 | `trade-deadline-scan` daily@06:40, ~~12→13~~ **13→14([적대 R-17])**, scan은 trade_chain 내부, 보호 테스트 갱신(우회 금지) | §15 부기 + runbook + ADR | 낮음 |
 | C12 | SO 자동 엣지 CONFIRMED↔IN_SHIPMENT만(4금 논증), COMPLETED 미개방, 자동 선적·초안 0, 레지스트리 4엔트리 | §15 부기 ② 개정 + ADR + **WBS 주석** | 낮음 |
 | C13 | 기존 코드 재사용 + 신규 6종, 역할 재판정은 403 | — | 낮음 |
 | C14 | J 15·H 8·I 5·K 7 케이스, 실제 동시 실행 | — | 낮음 |

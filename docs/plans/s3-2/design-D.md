@@ -1,5 +1,8 @@
 # S3-2 계획서 부록 D — 화면·API 계약 (선적·마일스톤·통관·휴일·보드 연결·셸·PR-16 부채 ③⑦)
 
+
+> **통합 우선순위(2026-10-04)**: 이 부록과 `design-integrated.md`가 충돌하면 통합 문서가 이긴다. 통합 검토가 모순 해소에 필요한 최소 문면만 고쳤고, 고친 자리는 "[통합 X-nn]"·"[통합 N-nn]"으로 표시했다(목록: 통합 §1.6).
+> **적대 검토 정정(2026-10-04)**: 통합 문서 §9(R-01~R-30)가 이 부록과 통합 §0~§8보다 우선한다. 이 부록에서 고친 자리는 "[적대 R-nn]"으로 표시했다(목록: 통합 §9 R-27).
 - 기준: main `a4d91c0`(S3-1 종결). 사양 정본은 DESIGN.md이고, 일정은 WBS.md S3-2 행(`W:112-116`)을 따른다. 진행·부채는 PROGRESS.md 'S3-1 종결 부채 최종 목록'(`P:32`)과 '## 현재'다.
 - 표기: `D:줄` = DESIGN.md, `W:줄` = WBS.md, `P:줄` = PROGRESS.md, `code:경로:줄` = `backend/app/` 아래 경로, `fe:경로:줄` = `frontend/src/` 아래 경로, `sA:절`·`sB:절` = 같은 디렉터리의 `design-A.md`(선적 데이터 모델)·`design-B.md`(기일 엔진·마일스톤·휴일).
 - 판정 방식: 오너 지시(2026-09-29, CLAUDE.md "웹 세션 판정 절차 생략")에 따라 판정 후보는 모두 **더 엄격한(fail-closed) 권장안으로 '자율 확정'**했다. PROGRESS 등재 시 "자율 확정"으로 표기한다. 각 안건은 **결정 / 근거 / 대안 / 자율 확정 여부 / 되돌리기 비용** 순서다.
@@ -25,8 +28,8 @@
 2. 생성 원천은 수출=SO 1건, 수입=PO 1건이고 채널입고·샘플무상은 DB CHECK로 닫혀 있다(sA §A2).
 3. 수입선적 라인·헤더에 금액이 없다(`ck_shipments_import_has_no_amount`, sA §A2·A3).
 4. 마일스톤은 저장형 8종 + 파생형 3종, 파생값은 비저장 계산값이다(sB §B1·B8).
-5. **수리일의 입력처는 하나다.** sA §A8은 `customs_records.accepted_on`을 적재의무 원천으로, sB §B7은 마일스톤 `CUSTOMS_CLEARED` 실적을 단일 원천으로 적었다. sB §B7 (ii)안("통관 기록 열을 유일 입력처로 하고, 마일스톤 실적은 같은 트랜잭션에서 복사·갱신만")이 두 부록을 동시에 만족하므로 **화면은 (ii)를 가정한다**: `CUSTOMS_CLEARED`의 **실적** 입력 버튼은 마일스톤 행에 두지 않고 통관 기록으로 안내한다(계획 입력은 마일스톤 행에서 허용). 통합이 다르게 정하면 D6의 버튼 1개만 바뀐다.
-6. 선적 기일 알림의 `entity_type`은 **소유 전표**(`shipments`, OEM은 `purchase_orders`)이고 `entity_id`는 소유 전표 id다. dedup 키(`deadline:milestones:{id}:…`, sB §B13)는 그대로 두고 알림 대상만 소유 전표로 둔다. 이렇게 해야 알림 이동 표(`fe:lib/alert-routes.ts:6-15`)가 행 1줄로 끝나고 "마일스톤 id → 선적" 해석 라우트가 필요 없다(D11).
+5. **[통합 X-02 확정]** 수리일 입력처 = 통관 기록 `accepted_on` 하나이고, 마일스톤 실적으로 **복사하지 않고 읽기 시 파생**(구분 일치·살아 있는 통관 기록 `MIN`)한다 — 아래 화면 가정(실적 버튼 대신 통관 기록 안내, `input_source="CUSTOMS_RECORD"`)은 그대로 성립한다. 원문: **수리일의 입력처는 하나다.** sA §A8은 `customs_records.accepted_on`을 적재의무 원천으로, sB §B7은 마일스톤 `CUSTOMS_CLEARED` 실적을 단일 원천으로 적었다. sB §B7 (ii)안("통관 기록 열을 유일 입력처로 하고, 마일스톤 실적은 같은 트랜잭션에서 복사·갱신만")이 두 부록을 동시에 만족하므로 **화면은 (ii)를 가정한다**: `CUSTOMS_CLEARED`의 **실적** 입력 버튼은 마일스톤 행에 두지 않고 통관 기록으로 안내한다(계획 입력은 마일스톤 행에서 허용). 통합이 다르게 정하면 D6의 버튼 1개만 바뀐다.
+6. 선적 기일 알림의 `entity_type`은 **소유 전표**(`shipments`, OEM은 `purchase_orders`)이고 `entity_id`는 소유 전표 id다. dedup 키(~~`deadline:milestones:{id}:…`~~ **[통합 X-25]** `deadline:shipments:{shipment_id}:{TYPE}/…`, sB §B13)는 그대로 두고 알림 대상만 소유 전표로 둔다. 이렇게 해야 알림 이동 표(`fe:lib/alert-routes.ts:6-15`)가 행 1줄로 끝나고 "마일스톤 id → 선적" 해석 라우트가 필요 없다(D11).
 
 ---
 
@@ -62,22 +65,22 @@
 |---|---|---|---|---|---|---|
 | S1 | `GET /shipments` | 전 | — | `status?`(다중), `shipment_kind?`, `so_id?`, `po_id?`, `assignee_id?`, `q?`(선적번호·거래 상대명 부분 일치, ≤100자), `page`,`size` | `Page[ShipmentListItem]` | 422 파라미터 |
 | S2 | `GET /shipments/{id}` | 전 | — | — | `ShipmentDetail`(D3) | 404 |
-| S3 | `POST /sales-orders/{so_id}/shipments/preview` | A·T·L | — (비저장, 채번·이벤트·키 소비 0) | `ShipmentCreateFromSo` | `ShipmentPreview` | 409 `TRADE_DOCS.QUANTITY.EXCEEDS_OPEN`·`DOCUMENT_NOT_CONSUMABLE`, 422 `SHIPMENTS.SOURCE.LINE_MISMATCH` |
-| S4 | `POST /sales-orders/{so_id}/shipments` | A·T·L | 멱등 | `ShipmentCreateFromSo` = `{lines:[{so_line_id, quantity}](≥1), origin_country_code, dest_country_code, parties?:[{role, partner_id}], internal_note?}` | 201 `ShipmentDetail` | S3과 같음 + 409 `LOCK_BUSY` |
-| S5 | `POST /purchase-orders/{po_id}/shipments/preview` | A·T·L | — | `ShipmentCreateFromPo` = `{lines:[{po_line_id, quantity}], origin_country_code, dest_country_code, parties?, internal_note?}` | `ShipmentPreview`(금액 키 없음) | 409 `SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE`·`DOCUMENT_NOT_CONSUMABLE` |
-| S6 | `POST /purchase-orders/{po_id}/shipments` | A·T·L | 멱등 | 같음 | 201 `ShipmentDetail` | 같음 |
-| S7 | `PATCH /shipments/{id}` | A·T·L | ver | `{internal_note?, assignee_id?}`(FREE, 상태 무관) + `{origin_country_code?, dest_country_code?}`(PLANNED만) | `ShipmentDetail` | 409 `SHIPMENTS.SHIPMENT.NOT_EDITABLE`·version, 422 |
-| S8 | `POST /shipments/{id}/lines` | A·T·L | 멱등+헤더 ver | `{source_line_id, quantity}` | `ShipmentDetail` | 409 NOT_EDITABLE·EXCEEDS_OPEN/ASSIGNABLE |
-| S9 | `PATCH /shipments/{id}/lines/{line_id}` | A·T·L | 헤더 ver | `{quantity}` | `ShipmentDetail` | 같음, 404 소속 |
-| S10 | `DELETE /shipments/{id}/lines/{line_id}` | A·T·L | 헤더 ver(쿼리) | — | `ShipmentDetail` | 409 마지막 라인 삭제(라인 ≥1 — 0이면 취소 안내) |
+| S3 | `POST /sales-orders/{so_id}/shipments/preview` | A·T [통합 X-14] | — (비저장, 채번·이벤트·키 소비 0) | `ShipmentCreateFromSo` | `ShipmentPreview` | 409 `TRADE_DOCS.QUANTITY.EXCEEDS_OPEN`·`DOCUMENT_NOT_CONSUMABLE`, 422 `SHIPMENTS.SOURCE.LINE_MISMATCH` |
+| S4 | `POST /sales-orders/{so_id}/shipments` | A·T [통합 X-14] | 멱등 | `ShipmentCreateFromSo` = `{lines:[{so_line_id, quantity}](≥1), origin_country_code, dest_country_code, parties?:[{role, partner_id}], internal_note?}` | 201 `ShipmentDetail` | S3과 같음 + 409 `LOCK_BUSY` |
+| S5 | `POST /purchase-orders/{po_id}/shipments/preview` | A·T [통합 X-14] | — | `ShipmentCreateFromPo` = `{lines:[{po_line_id, quantity}], origin_country_code, dest_country_code, parties?, internal_note?}` | `ShipmentPreview`(금액 키 없음) | 409 `SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE`·`DOCUMENT_NOT_CONSUMABLE` |
+| S6 | `POST /purchase-orders/{po_id}/shipments` | A·T [통합 X-14] | 멱등 | 같음 | 201 `ShipmentDetail` | 같음 |
+| S7 | `PATCH /shipments/{id}`(**[통합 X-20·적대 R-27]** 아래 `NOT_EDITABLE` → `TRADE_DOCS.DOCUMENT.FROZEN`) | A·T·L | ver | `{internal_note?, assignee_id?}`(FREE, 상태 무관) + `{origin_country_code?, dest_country_code?}`(PLANNED만) | `ShipmentDetail` | 409 `SHIPMENTS.SHIPMENT.NOT_EDITABLE`·version, 422 |
+| S8 | `POST /shipments/{id}/lines` | A·T [통합 X-14] | 멱등+헤더 ver | `{source_line_id, quantity}` | `ShipmentDetail` | 409 ~~NOT_EDITABLE~~ **[통합 X-20] `TRADE_DOCS.DOCUMENT.FROZEN`**·EXCEEDS_OPEN/ASSIGNABLE |
+| S9 | `PATCH /shipments/{id}/lines/{line_id}` | A·T [통합 X-14] | 헤더 ver | `{quantity}` | `ShipmentDetail` | 같음, 404 소속 |
+| S10 | `DELETE /shipments/{id}/lines/{line_id}` | A·T [통합 X-14] | 헤더 ver(쿼리) | — | `ShipmentDetail` | 409 마지막 라인 삭제(라인 ≥1 — 0이면 취소 안내) |
 | S11 | `POST /shipments/{id}/release-order` | A·T·L | 멱등+ver | `{version}` | `ShipmentDetail` | 409 `TRADE_DOCS.TRANSITION.NOT_ALLOWED` |
-| S12 | `POST /shipments/{id}/transitions` | A·T·L | 멱등+ver | `{to_status: "CANCELLED", reason, version}` — `to_status`는 `Literal` 1값 | `ShipmentDetail` | 409 `SHIPMENTS.SHIPMENT.CUSTOMS_RECORD_ALIVE`, 422 `TRADE_DOCS.TRANSITION.REASON_REQUIRED` |
+| S12 | `POST /shipments/{id}/transitions` | A·T [통합 X-14] | 멱등+ver | `{to_status: "CANCELLED", reason, version}` — `to_status`는 `Literal` 1값 | `ShipmentDetail` | 409 `SHIPMENTS.SHIPMENT.CUSTOMS_RECORD_ALIVE`, 422 `TRADE_DOCS.TRANSITION.REASON_REQUIRED` |
 | S13 | `GET /shipments/{id}/status-log` | 전 | — | Page | `Page[StatusLogEntry]`(기존 형태) | 404 |
 | S14 | `POST /shipments/{id}/parties` | A·T·L | 멱등 | `{role, partner_id}` | `ShipmentDetail` | 409 `SHIPMENTS.PARTY.ROLE_DUPLICATE`·NOT_ACTIVE, 422 `ROLE_NOT_ALLOWED`·`ENGLISH_NAME_MISSING`·거래처 유형 |
 | S15 | `DELETE /shipments/{id}/parties/{party_id}` | A·T·L | ver(쿼리) | — | `ShipmentDetail` | 422 `ROLE_NOT_ALLOWED`(자동 스냅샷 행), 404 |
 | S16 | `GET /shipments/{id}/customs-records` | 전 | — | Page | `Page[CustomsRecord]` | 404 |
-| S17 | `POST /shipments/{id}/customs-records` | A·T·L | 멱등 | `{declaration_kind, declaration_no, declared_on, accepted_on?, customs_broker_partner_id?, note?}` | 201 `CustomsRecord` | 409 `SHIPMENTS.CUSTOMS.DECLARATION_DUPLICATE`·NOT_ACTIVE, 422 `KIND_MISMATCH` |
-| S18 | `PATCH /shipments/{id}/customs-records/{rid}` | A·T·L | ver | 위 필드 일부 + `reason?`(`accepted_on` 변경 시 필수) | `CustomsRecord` | 422 `SHIPMENTS.CUSTOMS.REASON_REQUIRED`, 409 version |
+| S17 | `POST /shipments/{id}/customs-records` | A·T·L | 멱등 | `{declaration_kind, declaration_no, declared_on, accepted_on?, customs_broker_partner_id?, note?}` | 201 `CustomsRecord` | 409 `SHIPMENTS.CUSTOMS.DECLARATION_DUPLICATE`·NOT_ACTIVE, 422 `KIND_MISMATCH`·**[적대 R-18] `DATE_IN_FUTURE`·[적대 R-26] `ACCEPT_BEFORE_DECLARE`** |
+| S18 | `PATCH /shipments/{id}/customs-records/{rid}` | A·T·L | ver | 위 필드 일부 + `reason?`(`accepted_on` 변경 시 필수) | `CustomsRecord` | 422 `SHIPMENTS.CUSTOMS.REASON_REQUIRED`·**`DATE_IN_FUTURE`·`ACCEPT_BEFORE_DECLARE`([적대 R-18·R-26])**, 409 version |
 | S19 | `DELETE /shipments/{id}/customs-records/{rid}` | A·T·L | ver+`reason`(본문) | `{version, reason}` | 204 | 422 사유 |
 
 - 선적 "출고지시" 엔드포인트명은 sA §A7-1의 `release-order`를 그대로 쓴다.
@@ -89,13 +92,13 @@
 | # | 메서드·경로 | 역할 | 멱등/ver | 요청 골격 | 응답 | 주요 에러 |
 |---|---|---|---|---|---|---|
 | M1 | `GET /shipments/{id}/milestones` | 전 | — | — | `MilestoneBoard`(D3 — 상세에 내장된 것과 같은 형태, 쓰기 후 재조회용) | 404 |
-| M2 | `POST /shipments/{id}/milestones/{type}/plan` | A·T·L | 멱등+ver(행이 있을 때) | 날짜형 `{planned_on, reason?, version?}` / 시각형 `{planned_at, tz, reason?, version?}` | `MilestoneBoard` | 422 `SHIPMENTS.MILESTONE.DERIVED_NOT_EDITABLE`·`TYPE_NOT_APPLICABLE`·`REASON_REQUIRED`(기존 계획 변경 = 롤오버), 422 tz 미지원, 409 version·NOT_ACTIVE |
-| M3 | `POST /shipments/{id}/milestones/{type}/actual` | A·T·L | 멱등+ver(행이 있을 때) | `{actual_on \| actual_at+tz \| null(정정 삭제), reason?, version?}` | `MilestoneBoard` | 위 + 422 `ACTUAL_IN_FUTURE` |
-| M4 | `POST /shipments/{id}/milestones/plan-draft` | A·T·L | 멱등 | `{}` | `MilestoneBoard` | 409 NOT_ACTIVE |
+| M2 | `POST /shipments/{id}/milestones/{type}/plan` | A·T·L | 멱등+ver(행이 있을 때) | 날짜형 `{planned_on, reason?, version?}` / 시각형 `{planned_at, tz, reason?, version?}` | ~~`MilestoneBoard`~~ **[적대 R-19]** `{board: MilestoneBoard, change: {id, change_kind}\|null}`(같은 키 재요청 = 같은 `change.id`) · NOT_ACTIVE → **[통합 N-05]** `OWNER_NOT_ACTIVE` | 422 `SHIPMENTS.MILESTONE.DERIVED_NOT_EDITABLE`·`TYPE_NOT_APPLICABLE`·`REASON_REQUIRED`(기존 계획 변경 = 롤오버), 422 tz 미지원, 409 version·NOT_ACTIVE |
+| M3 | `POST /shipments/{id}/milestones/{type}/actual` | A·T·L | 멱등+ver(행이 있을 때) | `{actual_on \| actual_at+tz \| null(정정 삭제), reason?, version?}` | ~~`MilestoneBoard`~~ **[적대 R-19]** `{board, change}` | 위 + 422 `ACTUAL_IN_FUTURE`(**[적대 R-18]** 시각형은 `actual_at ≤ now_utc`) · **[적대 R-01]** 422 `ACTUAL_BEFORE_RELEASE` |
+| M4 | `POST /shipments/{id}/milestones/plan-draft` | A·T·L | 멱등 | `{}` | `MilestoneBoard` | 409 ~~NOT_ACTIVE~~ **[통합 N-05]** `SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE` |
 | M5 | `GET /shipments/{id}/milestone-changes` | 전 | — | `milestone_type?`, `change_kind?`, Page | `Page[MilestoneChange]`(행마다 `notices:[{comm_log_id, occurred_on, summary}]` 내장 — 변경 1건의 통보는 소수) | 404 |
-| M6 | `POST /shipments/{id}/milestone-changes/{change_id}/notices` | A·T·L | 멱등 | `{occurred_on, channel, counterpart_partner_id?, summary}` | 201 `MilestoneChange` | 404 소속, 422 |
+| M6 | `POST /shipments/{id}/milestone-changes/{change_id}/notices` | A·T·L | 멱등 | `{occurred_on, counterpart_partner_id?, summary}`(**[통합 X-23]** comm_logs에 채널 열이 없어 `channel` 제거 — 수단은 요지에) | 201 `MilestoneChange` | 404 소속, 422 |
 | M7 | `GET /purchase-orders/{po_id}/milestones` | 전(원가 키 없음) | — | — | `MilestoneBoard`(OEM 4종) | 404, 422 `SHIPMENTS.MILESTONE.OWNER_NOT_OEM` |
-| M8 | `POST /purchase-orders/{po_id}/milestones/{type}/plan`·`/actual` | A·T·L | 멱등+ver | M2·M3과 같음 | `MilestoneBoard` | 같음 |
+| M8 | `POST /purchase-orders/{po_id}/milestones/{type}/plan`·`/actual` | A·T [통합 X-16] | 멱등+ver | M2·M3과 같음 | `MilestoneBoard` | 같음 |
 | M9 | `GET /purchase-orders/{po_id}/milestone-changes` | 전 | — | Page | `Page[MilestoneChange]` | 404 |
 
 - `{type}`은 경로 `Literal`(저장형 종류만). 파생형 3종(`LOADING_DEADLINE`·`PAYMENT_DUE`·`PRESENTATION_DEADLINE`)을 넣으면 **스키마 422가 아니라 도메인 코드 422 `DERIVED_NOT_EDITABLE`**로 낸다 — sB GC-21이 이 코드를 단언하므로 경로 타입은 `MilestoneType` 전체로 받고 서비스가 거부한다.
@@ -172,7 +175,9 @@ MilestoneBoard {
     planned: "YYYY-MM-DD"|{at_utc, tz}|null, actual: 같음|null,
     effective: {value, basis}|null,
     derived: {status:"OK"|"UNKNOWN"|"NOT_APPLICABLE", value|null, basis|null, reason_code|null}|null,
-    days_left: int|null, is_overdue: bool|null, fulfilment: "MET"|"MET_LATE"|"OPEN"|"OVERDUE"|"UNKNOWN"|null,
+    scan_date: "YYYY-MM-DD"|null, local_date: "YYYY-MM-DD"|null,   # [적대 R-25] 시각형: D-N 기준일(min(현지,KST)) / 현지 날짜(휴일 판정) 구분
+    customs_state: "NONE"|"PARTIAL"|"CLEARED"|null,               # [적대 R-06] CUSTOMS_CLEARED 행 — 미수리 기록 1건↑ = PARTIAL("일부 미수리 n건")
+    days_left: int|null, is_overdue: bool|null,   # [적대 R-20] 시각형 is_overdue = now_utc > effective_at fulfilment: "MET"|"MET_LATE"|"OPEN"|"OVERDUE"|"UNKNOWN"|null,
     holiday: {flag:"HOLIDAY"|"CLEAR"|"UNVERIFIED", country, name|null}|null,   # 적용 종류만
     rollover_count: int, unnotified_rollovers: int,
     order_warning: "ETA_BEFORE_ETD"|null,
@@ -264,7 +269,7 @@ MilestoneBoard {
   - **유효값 기준 배지**: 실적이면 "실적", 계획이면 "예정 기준(실적 입력 시 다시 계산)"(sB §B4 "basis")
   - **D-N·도과**: 서버 `days_left`·`is_overdue`로 "D-3"/"D-day"/"3일 지남"(가운데 정렬·nowrap). 실적이 있으면 D-N 대신 "완료"
   - 적재기한은 `fulfilment` 라벨: "기한 내 적재"(MET)/"기한 후 적재"(MET_LATE)/"진행 중"(OPEN)/"도과"(OVERDUE)/"판정 불가"(UNKNOWN)
-  - **휴일 배지**(적용 종류만 — ETA=도착국, ETD·Cargo Closing·서류마감=출발국, sB §B12 ③): HOLIDAY → 황색 "도착국 휴일: 국경절 (CN)"; **UNVERIFIED → 회색 "휴일 캘린더 미등록 — 확인 불가 (CN 2027)" + `/holidays?country=CN&year=2027` 링크**; CLEAR → 배지 없음. 파생 3종과 세금기한은 휴일 판정을 하지 않으므로 대금만기 카드에 보조문 "휴일 미반영(자동 이월 없음)"을 단다(sB §B12·GC-18).
+  - **휴일 배지**(적용 종류만 — ETA=도착국~~, ETD·Cargo Closing·서류마감=출발국~~ **[적대 R-09] ETA만**, sB §B12 ③): HOLIDAY → 황색 "도착국 휴일: 국경절 (CN)"; **UNVERIFIED → 회색 "휴일 캘린더 미등록 — 확인 불가 (CN 2027)" + `/holidays?country=CN&year=2027` 링크**; CLEAR → 배지 없음. 파생 3종과 세금기한은 휴일 판정을 하지 않으므로 대금만기 카드에 보조문 "휴일 미반영(자동 이월 없음)"을 단다(sB §B12·GC-18).
   - 순서 경고(`order_warning`): "ETA가 ETD보다 이릅니다 — 날짜변경선이 아니라면 확인해 주세요"(차단 아님, sB §B8 ⑤·GC-19)
   - 롤오버 횟수 "롤오버 2회"(ETD·ETA·Cargo Closing만, sB §B9) + 미통보가 있으면 "통보 기록 없음 1"
   - **파생 UNKNOWN 사유 한글 표**(프런트 단일 표 — 모르는 코드는 "산정 불가(기타)"): `INVOICE_NOT_ISSUED`="인보이스 미발행(S3-3)", `ANCHOR_PENDING`="기산일 미확정", `LC_TERMS_NOT_REGISTERED`="L/C 조건 미등록", `NOT_CLEARED`="신고수리 전", `RECEIPT_NOT_RECORDED`="입고 미기록", `TERMS_MISSING`="결제조건 없음". **UNKNOWN을 빈칸·"-"·0일로 그리지 않는다**(`D:192` ② "UNKNOWN은 통과가 아니며" 계보, GC-A13).
@@ -278,8 +283,8 @@ MilestoneBoard {
 
 **결정 — 롤오버(계획 변경) 대화상자**
 - 계획이 이미 있는 저장형 행의 [계획 변경] = 롤오버. 이전 값 표시, 새 값, **사유 필수**, 그리고 선택 체크 "통보도 지금 기록"(체크 시 통보 입력 칸 노출).
-  - 체크 시 요청은 **2회**(M2 → 응답의 change_id로 M6)이며 각자 키를 갖는다. 1TX로 합치지 않는 이유: 통보는 사후에 생기는 사실이 일반적이고(sB §B9 "이력 행이 불변이라 통보는 사후 연결"), M2의 원자성(마일스톤+이력+outbox)을 통보 실패가 깨면 안 된다. M6 실패 시 "롤오버는 기록됐고 통보 기록은 실패 — 롤오버 이력에서 다시 기록해 주세요"를 보인다.
-- 통보 기록 칸: 일시(현지 날짜), 수단(이메일·전화·메신저·기타 — comm_logs 채널 열거 그대로), 상대 거래처(SearchSelect — 포워더·관세사·바이어 유형), 요지. **"보내기" 단어를 쓰지 않는다** — 버튼 라벨 "통보 기록 저장", 보조문 "이 시스템은 메일을 보내지 않습니다. 실제로 알린 사실을 기록합니다."(`D:132` ④, `D:313`).
+  - 체크 시 요청은 **2회**(M2 → 응답의 ~~change_id~~ **[적대 R-19] `change.id`**로 M6)이며 각자 키를 갖는다. 1TX로 합치지 않는 이유: 통보는 사후에 생기는 사실이 일반적이고(sB §B9 "이력 행이 불변이라 통보는 사후 연결"), M2의 원자성(마일스톤+이력+outbox)을 통보 실패가 깨면 안 된다. M6 실패 시 "롤오버는 기록됐고 통보 기록은 실패 — 롤오버 이력에서 다시 기록해 주세요"를 보인다.
+- 통보 기록 칸: 일시(현지 날짜), ~~수단(comm_logs 채널 열거)~~ **[통합 X-23]** 수단은 요지에 적는다(채널 열 없음), 상대 거래처(SearchSelect — 포워더·관세사·바이어 유형), 요지. **"보내기" 단어를 쓰지 않는다** — 버튼 라벨 "통보 기록 저장", 보조문 "이 시스템은 메일을 보내지 않습니다. 실제로 알린 사실을 기록합니다."(`D:132` ④, `D:313`).
 
 **결정 — 출고지시·취소·초안**
 - [출고지시]: 확인 대화상자 "출고지시 후에는 라인·국가를 바꿀 수 없습니다. 바꾸려면 취소 후 새로 만듭니다." 사유 없음(sA §A7-1). "피킹·검수·출고는 재고 기능(Phase 4)에서 이어집니다" 보조문 — RESERVED 상태를 버튼으로 노출하지 않는다.
@@ -302,7 +307,7 @@ MilestoneBoard {
 **결정 — 생성 대화상자**(`ShipmentCreateDialog`, mode EXPORT|IMPORT)
 - **1단(입력)**: 원천 라인 표 — SKU, 원천 수량, **남은 잔량**(X3/X4), **이번 선적 수량**(입력). **기본값은 빈칸**이고 행마다 [잔량 전부] 버튼을 둔다. 빈칸·0인 행은 요청에서 제외, 1행 이상이어야 [미리보기] 활성.
   - 출발국·도착국: ISO 3166-1 alpha-2 선택(국가명 한글 + 코드, nowrap). **둘 다 기본값 없음·필수**. 도착국을 SO 시장 코드로 미리 채우지 않는다 — 시장은 EU 같은 비국가 코드를 허용하고(`code:modules/markets/models.py:47-48`), 시장 국가 ≠ 도착항 국가일 수 있다(sA §A2 대안 (d)가 화면 재량으로 남긴 지점을 엄격 쪽으로 닫음).
-  - 당사자(선택): 포워더·관세사·Notify 등 역할별 SearchSelect. 원천에서 자동 복사되는 역할(수출 SHIPPER·CONSIGNEE 등 — sA §A5)은 "자동" 표시로 잠금.
+  - 당사자(선택): 포워더·관세사·Notify 등 역할별 SearchSelect. 원천에서 자동 복사되는 역할(~~수출 SHIPPER·CONSIGNEE 등~~ **[적대 R-27]** 수출 CONSIGNEE·수입 SHIPPER — sA §A5, 수출 SHIPPER는 거부)은 "자동" 표시로 잠금.
   - 입력 칸에 **SKU·단가·통화·환율·거래처·Incoterms·결제조건 입력은 없다**(`D:175` ①). 화면에 보이는 그 값들은 전부 원천에서 읽은 읽기 전용이다.
 - **2단(미리보기 → 확정)**: S3/S5 응답을 그대로 보인다(복사될 통화·고정 환율·Incoterms·결제조건·라인 금액[수출만]). [생성 확정]은 같은 대화상자 세션의 키로 S4/S6. 409 잔량 초과면 1단으로 돌아가 칸별 잔량을 표시한다(D4).
 - 진입 버튼 노출: SO 상세는 `status ∈ {CONFIRMED, IN_SHIPMENT}`이고 선적 잔량 합 > 0일 때, PO 상세는 `status ∈ {ISSUED, SUPPLIER_CONFIRMED}`이고 배정 가능량 합 > 0일 때(`CONSUMABLE_STATUSES` — sA §A4). 서버가 정본이다.
@@ -492,7 +497,7 @@ MilestoneBoard {
 | H | 롤오버 사유 없음 422(화면 제출 불가 + 서버 422 이중) / 통보 기록이 comm_logs SHIPMENT 1행 + 연결 1행, `/comm-logs` 역할 무변경(TRADE `POST /comm-logs` 여전히 403) |
 | I | M6 통보 경로에 발송 코드 0(아웃바운드 클라이언트 임포트 0 아키텍처 테스트) |
 | J | 생성 확정 더블클릭(같은 키) → 선적 1건 / 실적 입력 같은 키 2회 → 이력 1행·응답 동일 / version 409 표시 / 휴일 PUT 같은 키 2회 → 교체 1회 |
-| K | authz 행 전부(선적·마일스톤·통관·휴일·OEM 마일스톤: A·T·L 쓰기, C·V 쓰기 403, 휴일 쓰기 A만) / `GOVERNED_PREFIXES` 등재 / Page 봉투 자동 스캔(S1·S13·S16·M5·M9·H1·H2) / 상세 쿼리 수 상한 / 부모-자식 404(다른 선적의 라인·통관·마일스톤 변경 id) / 휴일 CSV BOM·수식 이스케이프 |
+| K | authz 행 전부(선적·마일스톤·통관·휴일·OEM 마일스톤: ~~A·T·L 쓰기~~ **[통합 §2.9·X-14·X-16]** 동작별 역할(생성·라인·취소·OEM = A·T, 일정·실적·통관·당사자·출고지시 = A·T·L, 마일스톤 세트 = A — 적대 R-14), C·V 쓰기 403, 휴일 쓰기 A만) / `GOVERNED_PREFIXES` 등재 / Page 봉투 자동 스캔(S1·S13·S16·M5·M9·H1·H2) / 상세 쿼리 수 상한 / 부모-자식 404(다른 선적의 라인·통관·마일스톤 변경 id) / 휴일 CSV BOM·수식 이스케이프 |
 | vitest | 타임라인: UNKNOWN 사유 한글·"예정 기준" 배지·UNVERIFIED 배지·링크·CLEAR 무배지·파생 행 버튼 0·CUSTOMS_CLEARED 실적 안내 / 생성 대화상자: 기본 수량 빈칸·[잔량 전부]·국가 필수·409 칸별 표시 / 보드 5열 / 문서 흐름 SHIPMENT 노드 / alert-routes `shipments` / `SHIPMENT_STATUS` 라벨·"기타" / `toZonedPairDisplay` / 날짜 문자열 `new Date` 금지 소스 계약 / `detail-layout` 하한 7 / SearchSelect 빠른 입력 오선택 0 / 사용자·역할 화면(ADMIN 외 메뉴 미노출·마지막 관리자 오류 표시) |
 | 워크스루 | D16의 3층 증거 |
 
@@ -504,7 +509,7 @@ MilestoneBoard {
 
 ## 멈춰서 보고할 항목(이 부록 범위)
 
-1. **수리일 입력처**: sA §A8(`customs_records.accepted_on`이 원천)과 sB §B7(마일스톤 실적이 단일 원천) 표현이 갈린다. 화면은 sB §B7 (ii)안(통관 기록이 유일 입력처, 마일스톤 실적은 동TX 복사)을 가정했다(§0 가정 5). 통합이 확정해야 한다.
+1. ~~**수리일 입력처**~~ **[통합 X-02로 해소 — 통관 기록이 유일 원천, 마일스톤 비복사·읽기 시 파생]**: sA §A8(`customs_records.accepted_on`이 원천)과 sB §B7(마일스톤 실적이 단일 원천) 표현이 갈린다. 화면은 sB §B7 (ii)안(통관 기록이 유일 입력처, 마일스톤 실적은 동TX 복사)을 가정했다(§0 가정 5). 통합이 확정해야 한다.
 2. **마일스톤 쓰기 메서드 표기**: sB §B8 ⑥(POST)과 GC-21(PUT)이 갈린다 → POST로 확정(D2-2).
 3. **알림 entity_type**: sB §B13 dedup 키는 마일스톤 id 기준이다. 화면은 알림 대상 = 소유 전표를 가정했다(§0 가정 6, D11).
 

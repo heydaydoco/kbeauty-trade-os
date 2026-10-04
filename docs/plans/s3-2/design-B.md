@@ -1,5 +1,8 @@
 # S3-2 계획 설계 — 부록 B: 기일 엔진·마일스톤·휴일
 
+
+> **통합 우선순위(2026-10-04)**: 이 부록과 `design-integrated.md`가 충돌하면 통합 문서가 이긴다. 통합 검토가 모순 해소에 필요한 최소 문면만 고쳤고, 고친 자리는 "[통합 X-nn]"·"[통합 N-nn]"으로 표시했다(목록: 통합 §1.6).
+> **적대 검토 정정(2026-10-04)**: 통합 문서 §9(R-01~R-30)가 이 부록과 통합 §0~§8보다 우선한다. 이 부록에서 고친 자리는 "[적대 R-nn]"으로 표시했다(목록: 통합 §9 R-27).
 - 기준: main `a4d91c0`(S3-1 종결). 사양 정본은 DESIGN.md이고, 일정은 WBS.md S3-2 행(W:112-116)을 따른다.
 - 표기: `D:줄` = DESIGN.md, `W:줄` = WBS.md, `P:줄` = PROGRESS.md, `A:줄` = docs/plans/s3-1/design-A.md, `code:경로:줄` = `backend/app/` 아래 경로.
 - 판정 방식: 오너 지시(2026-09-29, CLAUDE.md "웹 세션 판정 절차 생략")에 따라 판정 후보는 모두 **더 엄격한(fail-closed) 권장안으로 '자율 확정'**했다. 결정마다 되돌리기 비용을 적었다. PROGRESS 등재 시에는 "자율 확정"으로 표기한다.
@@ -49,17 +52,17 @@
 
 | 코드 | 한글 | 성격 | 값 형태 | 적용 구분 | 휴일 경고 국가 |
 |---|---|---|---|---|---|
-| DOC_CUTOFF | 서류마감 | 저장 | 시각(B3) | 수출·수입 | 출발국 |
-| CARGO_CLOSING | Cargo Closing | 저장 | 시각(B3) | 수출·수입 | 출발국 |
+| DOC_CUTOFF | 서류마감 | 저장 | 시각(B3) | 수출·수입 | ~~출발국~~ — **[적대 R-09]** |
+| CARGO_CLOSING | Cargo Closing | 저장 | 시각(B3) | 수출·수입 | ~~출발국~~ — **[적대 R-09]** |
 | PSI | 수출 전 검사 | 저장 | 날짜 | 수출 | — |
 | CUSTOMS_CLEARED | 신고수리 | 저장 | 날짜 | 수출·수입 | — |
-| ETD | ETD | 저장 | 날짜 | 수출·수입 | 출발국 |
+| ETD | ETD | 저장 | 날짜 | 수출·수입 | ~~출발국~~ — **[적대 R-09]** |
 | **BL_ISSUED** | B/L(AWB) 발행일 | 저장 | 날짜 | 수출·수입 | — |
 | ETA | ETA | 저장 | 날짜 | 수출·수입 | **도착국(D:203 명시)** |
 | IMPORT_TAX_DUE | 수입 세금 납부기한 | 저장(사람 입력) | 날짜 | 수입 | — |
 | LOADING_DEADLINE | 적재기한 | **파생**(B7) | 날짜 | 수출 | — |
 | PAYMENT_DUE | 대금만기 | **파생**(B4·B5) | 날짜 | 수출·수입 | — |
-| PRESENTATION_DEADLINE | L/C 제시기한 | **파생**(B6) | 날짜 | 수출 + 결제유형 LC | — |
+| PRESENTATION_DEADLINE | L/C 제시기한 | **파생**(B6) | 날짜 | ~~수출 + 결제유형 LC~~ **[적대 R-11] 수출·수입 + 결제유형 LC** | — |
 
 - 채널입고와 샘플 계열의 생성 경로는 헤더 부록이 닫는다. 그 구분의 적용 집합은 경로가 열리는 세션이 이 표에 행을 더한다.
 
@@ -72,7 +75,7 @@
 - (a) B/L일을 선적 헤더 열로 둔다. 기각한다. 계획·실적·롤오버 이력 규율이 둘로 갈린다.
 - (b) 파생형도 행으로 저장한다. B10에서 기각한다.
 
-**자율 확정**: 확정. 열거 확장(9→10 저장형·파생형 구분)은 DESIGN §7.5 부기와 ADR이 세트로 필요하다(멈춰서 보고할 항목 ①).
+**자율 확정**: 확정. 열거 확장(~~9→10~~ **[적대 R-03] 9→11종** — 저장 8[+BL_ISSUED]·파생 3[+PRESENTATION_DEADLINE 편입] 구분)은 DESIGN §7.5 부기와 ADR이 세트로 필요하다(멈춰서 보고할 항목 ①).
 
 **되돌리기 비용**: 낮음. 열거 축소·확장은 CHECK 재정의 마이그레이션 1건과 대사 테스트다.
 
@@ -121,7 +124,7 @@
 4. **시각형 2종**(DOC_CUTOFF·CARGO_CLOSING)
    - 시각은 UTC로 저장하고 `tz`(IANA)를 함께 저장한다.
    - 화면에는 **KST와 현지 시각을 병기**한다.
-   - 기일 판정에 쓰는 날짜는 **`min(현지 날짜, KST 날짜)`**다. 둘 중 이른 쪽을 써서 더 일찍 경고한다.
+   - 기일 판정에 쓰는 날짜는 **`min(현지 날짜, KST 날짜)`**다. 둘 중 이른 쪽을 써서 더 일찍 경고한다. **[적대 R-20]** 이 날짜(`scan_date`)는 **D-N 문턱에만** 쓴다. **도과(`is_overdue`·OVERDUE 알림)는 시각형에서 `now_utc > effective_at`**으로 판정한다(날짜 비교면 기한 전 최대 ~16시간 '도과' 오표시). **[적대 R-25]** 응답 행에 `scan_date`·`local_date`를 명시 필드로 내리고 화면 문구가 어느 날짜 기준인지 구분한다.
    - `tz` 값은 서버가 `zoneinfo.ZoneInfo`로 검증한다. 모르는 값은 422다.
 5. 시간대 원천은 사람 입력이다. 항구 마스터는 신설하지 않는다. 화면 기본값은 출발국 대표 시간대이며, 사람이 바꿀 수 있다(KR이면 `Asia/Seoul`).
 
@@ -144,7 +147,7 @@
 
 **결정**
 
-- **입력**: 원천 전표(수출=SO, 수입=PO)의 **동결된 결제조건 4열**을 **읽기만** 한다. 선적에 결제조건을 복사하지 않는다(파생값 이중 저장 금지, A:251).
+- **입력**: 동결된 결제조건 4열을 **읽기만** 한다. **[통합 X-01]** 읽는 곳은 **선적 헤더 사본**이다(부록 A §A2가 원천에서 ORIGIN으로 복사 — S3-1 결정 #5. 이중 저장 금지는 파생값[만기일]에 대한 규칙이다).
 - **결과 타입**: `DueResult = (status ∈ {OK, UNKNOWN, NOT_APPLICABLE}, value: date|None, basis ∈ {ACTUAL, PLANNED}|None, reason_code)`
 - **분기**
   - **TT_ADVANCE 100%**(anchor·days NULL): `NOT_APPLICABLE`("잔금 없음"). 선수금은 PI 입금 게이트(S3-1)의 영역이라 마일스톤으로 다루지 않는다.
@@ -155,7 +158,7 @@
 
 | balance_anchor | 원천 | 없을 때 |
 |---|---|---|
-| ORDER_DATE | 수출: SO `confirmed_at`의 **KST 날짜**(A:248). 수입: PO 발행일(KST 날짜) | UNKNOWN `ANCHOR_PENDING` |
+| ORDER_DATE | 수출: SO `confirmed_at`의 **KST 날짜**(A:248). 수입: PO 발행일(KST 날짜) — **[적대 R-29] PO `frozen_at`(생성=발행 시각, `NOT NULL DEFAULT now()`)의 KST 날짜**(`doc_date`는 쓰지 않음) | UNKNOWN `ANCHOR_PENDING` |
 | INVOICE_DATE | CI 발행일 — **S3-3 이전에는 원천이 없음** | 항상 UNKNOWN `INVOICE_NOT_ISSUED`. **ETD로 대체 금지** |
 | ETD_DATE | 마일스톤 ETD | UNKNOWN `ANCHOR_PENDING` |
 | BL_DATE | 마일스톤 BL_ISSUED | UNKNOWN |
@@ -242,7 +245,9 @@
 - **이행 판정**(계산값, 저장하지 않음)
   - ETD 실적이 있으면 `MET`(ETD ≤ 기한) 또는 `MET_LATE`다.
   - ETD 실적이 없고 오늘(KST) > 기한이면 도과다.
-- **수리일의 단일 원천은 마일스톤 CUSTOMS_CLEARED 실적**이다. customs_records 부록이 수리일 열을 둔다면 다음 둘 중 하나를 골라야 한다.
+  - **[적대 R-10]** 이행일 = **ETD·BL_ISSUED 실적 중 존재하는 값의 MAX**(둘 다 있으면 늦은 쪽 — fail-closed). DESIGN은 적재 사실의 원천을 정하지 않았으므로(`D:203`) **가정**으로 ADR-0080에 적는다. 대안 "BL_ISSUED 단독"은 B/L 발행 지연 시 이행 판정이 결측되어 기각, "ETD 단독"은 본선적재일(B/L)과의 불일치를 놓쳐 기각. 번복 = 함수 1개(낮음).
+  - **[적대 R-06]** 같은 선적·구분에 미수리(`accepted_on IS NULL`) 살아 있는 통관 기록이 1건 이상이면 신고수리 행 `customs_state = PARTIAL`, 화면 "일부 미수리 n건" 배지. 유효 실적 값·적재기한 산식은 MIN 그대로.
+- **[통합 X-02 — 아래 원안 대체]** 수리일의 단일 원천은 **`customs_records.accepted_on`**이고 복사하지 않는다. `CUSTOMS_CLEARED` 행은 계획만 저장(`actual_on`은 CHECK로 NULL), 유효 실적 = 구분 일치·살아 있는 통관 기록 `MIN(accepted_on)`(읽기 시 파생). 원안: ~~수리일의 단일 원천은 마일스톤 CUSTOMS_CLEARED 실적~~이다. customs_records 부록이 수리일 열을 둔다면 다음 둘 중 하나를 골라야 한다.
   - (i) 그 열을 두지 않는다.
   - (ii) 그 열을 **유일 입력처**로 하고, 마일스톤 실적은 같은 트랜잭션에서 복사·갱신만 한다.
   - 사람이 두 곳에 입력하는 구조는 금지한다.
@@ -268,6 +273,7 @@
 2. **동결된 전표의 CONTENT·ORIGIN 열은 건드리지 않는다.** SO·PO 결제조건, 선적 헤더 환율·Incoterms가 여기에 해당한다(D:184 ⑦). 재계산의 입력 중 **변하는 것은 마일스톤 값뿐**이고, 결제조건은 동결된 읽기 전용 입력이다. 그래서 "확정 후 단가·환율 불변"(W:109, GC-A6)과 충돌하지 않는다.
 3. **파생 마일스톤을 사람이 덮어쓰는 것은 금지**한다. 파생형 코드는 `milestones.milestone_type` CHECK가 거부한다. 쓰기 API도 422 `SHIPMENTS.MILESTONE.DERIVED_NOT_EDITABLE`을 낸다. 값을 바꾸는 유일한 통로는 입력(실적·계획)을 고치는 것이다.
 4. **실적 규율**
+   - **[적대 R-18]** 시각형 실적(`actual_at`)은 **`actual_at ≤ now_utc`**(여유 0)만 받는다(아래 +1일 여유는 날짜형 전용). **[적대 R-01]** ETD·BL_ISSUED·ETA 실적은 선적이 RELEASE_ORDERED일 때만(422 `ACTUAL_BEFORE_RELEASE`).
    - 실적 날짜는 **오늘(KST)+1일 이하**만 받는다. 현지 날짜가 KST보다 하루 앞설 수 있는 지역(UTC+10 이상)을 허용하기 위한 여유다. 그보다 미래면 422 `ACTUAL_IN_FUTURE`다.
    - 이미 입력된 실적을 바꾸거나 지우는 것은 **정정**이다. 사유가 필수이고(422 `REASON_REQUIRED`), 이력 행이 남는다.
 5. **순서 검증은 경고만** 한다. 계획 ETA < 계획 ETD, 실적 ETA < 실적 ETD 같은 경우다. 항공편이 날짜변경선을 넘으면 현지 날짜상 ETA가 ETD보다 이를 수 있으므로 차단하지 않는다(B20 GC-19).
@@ -295,12 +301,12 @@
 
 - **`milestone_changes`**(IMMUTABLE + `revoke_mutations`, INSERT/SELECT만)
   - 마일스톤 값이 바뀔 때마다 1행을 남긴다.
-  - 열: `milestone_id`, `change_kind ∈ {PLAN_SET, PLAN_CHANGED, ACTUAL_RECORDED, ACTUAL_CORRECTED}`, `old_value`/`new_value`(날짜형과 시각형을 각 열로 분리 — 타입 보존), `old_tz`/`new_tz`, `reason`, `actor_id`, `created_at`, `idempotency_key`.
+  - 열: `milestone_id`, `change_kind ∈ {PLAN_SET, PLAN_CHANGED, ACTUAL_RECORDED, ACTUAL_CORRECTED}`, `old_value`/`new_value`(날짜형과 시각형을 각 열로 분리 — 타입 보존), `old_tz`/`new_tz`, `reason`, `actor_user_id`, `created_at`. **[통합 X-06]** `idempotency_key` 열은 두지 않는다(멱등 정본 = `idempotency_keys`).
   - CHECK: `PLAN_CHANGED`·`ACTUAL_CORRECTED`이면 `reason`이 NOT NULL이고 공백이 아니어야 한다(제어문자 검사는 `core/text.invisible_char_problem`).
   - **"롤오버" = `PLAN_CHANGED` 행**이다. 화면에서 ETD·ETA·CARGO_CLOSING의 PLAN_CHANGED를 "롤오버"로 표기하고 횟수를 계산값으로 보인다.
   - 계획을 지우는 경로는 없다(변경만 가능하다). 실적은 `ACTUAL_CORRECTED`로 지울 수 있다(사유 필수).
 - **통보 기록 = `milestone_change_notices`**(IMMUTABLE)
-  - 열: `change_id` FK, `comm_log_id` FK, `actor_id`, `created_at`. (change_id, comm_log_id)는 유니크다.
+  - 열: `change_id` FK, `comm_log_id` FK, `actor_user_id`(**[통합 X-06]**), `created_at`. (change_id, comm_log_id)는 유니크다.
   - 통보 내용은 comm_logs의 **SHIPMENT 주제 1종 확장**으로 기록한다(D:132 ③ "포워더·관세사는 comm_logs 주제 열거 확장으로 소비 세션이 붙는다").
   - 이력 행이 불변이라 통보는 사후 연결 테이블로 남긴다.
   - 통보가 연결되지 않은 롤오버에는 "통보 기록 없음" 배지를 단다(계산값, 차단 없음).
@@ -425,7 +431,7 @@ def holiday_flag(day: date, country: str, covered_years: frozenset[int], holiday
    - **`UNVERIFIED`**: 선언이 없음. 화면 배지 "휴일 캘린더 미등록 — 확인 불가". **경고 없음이 평일을 뜻하지 않는다.**
 3. **적용 대상**(B1 표)
    - ETA → 도착국(D:203 명시)
-   - ETD·CARGO_CLOSING·DOC_CUTOFF → 출발국
+   - ~~ETD·CARGO_CLOSING·DOC_CUTOFF → 출발국~~ **[적대 R-09]** S3-2는 **ETA(도착국)만** 판정한다(`D:203` 문면 "ETA 현지 연휴 경고"). 출발국 확장은 부채(트리거: 사용자 요구 또는 S4-4) — 수입선적 출발국 미선언 UNVERIFIED 배지 대량 발생도 피한다.
    - 판정 날짜는 유효값(실적 우선, 없으면 계획)이다. 시각형은 현지 날짜로 판정한다.
    - 대금만기·제시기한·적재기한·세금기한은 판정하지 않는다(B4·B6. 주기 "휴일 미반영").
 4. 국가 원천은 선적 헤더의 `origin_country_code`·`dest_country_code`다. NULL이면 `UNVERIFIED`다.
@@ -460,7 +466,7 @@ def holiday_flag(day: date, country: str, covered_years: frozenset[int], holiday
 | DOC_CUTOFF | 계획 있음 + **실적 없음** | 실적 |
 | CARGO_CLOSING | 계획 있음 + **실적 없음** | 실적 |
 | IMPORT_TAX_DUE | 계획 있음 + **실적 없음** | 실적 = 납부일 |
-| LOADING_DEADLINE | 파생값 OK | ETD 실적 |
+| LOADING_DEADLINE | 파생값 OK | ~~ETD 실적~~ **[적대 R-10] ETD 또는 BL_ISSUED 실적(이행일 = MAX)** |
 
   - **PAYMENT_DUE·PRESENTATION_DEADLINE은 S3-2 알림에서 제외**하고 표시만 한다. 충족 신호(입금·제시)가 S3-3 소관이라 지금 알리면 이미 입금된 건에 도과 알림이 나간다. 부채로 등재하고 트리거는 S3-3 receivables·lc_terms다.
 - **문턱**: `alert_rules.config.thresholds` 데이터(event_type `shipments.milestone.approaching`)로 둔다. 규칙이 없으면 코드 기본 **D-7/3/1**과 도과를 쓴다. 기존 `DEFAULT_THRESHOLDS=(180,90,30)`(code:modules/deadlines/service.py:61)은 선적에 부적합하다.
@@ -468,7 +474,7 @@ def holiday_flag(day: date, country: str, covered_years: frozenset[int], holiday
 - **의미론**: S2-3을 그대로 승계한다(D:144 ①~⑤).
   - 문턱은 "지났다"로 판정한다.
   - 도과 건에는 지난 문턱을 소급 발송하지 않는다.
-  - dedup 키는 `deadline:milestones:{id}:{문턱}@{기일}:{수신자}`다. **롤오버로 기일이 바뀌면 새 알림**이 된다.
+  - dedup 키는 ~~`deadline:milestones:{id}:{문턱}@{기일}:{수신자}`~~ **[통합 X-25]** `deadline:shipments:{shipment_id}:{MILESTONE_TYPE}/{문턱}@{기일}:{수신자}`다(파생 LOADING_DEADLINE은 행 id가 없고, 알림 대상은 소유 전표). 에스컬레이션 조회 prefix는 TYPE까지 포함한다. **롤오버로 기일이 바뀌면 새 알림**이 된다.
   - D-3 에스컬레이션을 쓴다.
   - 수신자는 선적 담당자 → 규칙 → ADMIN 폴백(Routing.DEADLINE)이다.
 - **배치**
@@ -477,7 +483,7 @@ def holiday_flag(day: date, country: str, covered_years: frozenset[int], holiday
 - **잡**: `trade-deadline-scan` 1행, `daily@06:40` KST. 06:30 deadline-scan 뒤, 07:00 앞이다.
   - 선적 마일스톤과 B18 QT/PI 만료 임박을 한 잡에서 처리한다.
   - 이름에 `purchase`·`발주`·`-po-`를 쓰지 않는다(`tests/architecture/test_po_no_auto_path.py:352-361`).
-  - 레지스트리 총수를 12→13으로 갱신하고, 4금 집합 테스트(`test_scheduler_registry.py:143-174`), runbook 잡 표, DESIGN §15 잡 매핑 부기, ADR을 함께 고친다.
+  - 레지스트리 총수를 ~~12→13~~ **[적대 R-17] 13→14**(무결성 잡이 PR-1b에서 먼저 12→13)으로 갱신하고, 4금 집합 테스트(`test_scheduler_registry.py:143-174`), runbook 잡 표, DESIGN §15 잡 매핑 부기, ADR을 함께 고친다.
   - **4금 논증**: 전표 상태를 바꾸지 않고, 알림 생성만 한다. 대외 발송·지출·장부·법적 판정이 0이다.
 - 도과·D-N은 계산값이다. 저장 컬럼은 없다(D:144 ⑦).
 
@@ -500,7 +506,7 @@ def holiday_flag(day: date, country: str, covered_years: frozenset[int], holiday
 
 **결정**
 - S3-2는 산식(현재고 − 유효 할당 − 격리분)을 **구현하지 않는다.**
-- 선적 라인 조회 시 기존 `AllocationPort`(S3-1, NOT_IMPLEMENTED)의 결과를 그대로 노출한다. 화면은 **"가용재고 미산정"**으로 표시한다.
+- 선적 라인 조회 시 ~~기존 `AllocationPort`의 결과를 그대로 노출~~ **[통합 X-26]** 포트에는 읽기 메서드가 없으므로(포트 무변경) `AllocationStatus.NOT_IMPLEMENTED` 값을 싣는 조립 함수 1개가 응답 `availability.status`를 만든다. 화면은 **"가용재고 미산정"**으로 표시한다.
 - **0이나 현재고를 가용으로 표시하지 않는다**(fail-visible).
 - 이 부록의 기일 함수들은 재고를 입력으로 받지 않는다. 테스트로 "schedule.py는 재고 모듈을 임포트하지 않는다"를 고정한다.
 - 포트 배선 위치는 선적 라인 부록과의 경계다.
@@ -617,8 +623,8 @@ def holiday_flag(day: date, country: str, covered_years: frozenset[int], holiday
 | 페이지네이션(D:376) | 마일스톤 변경 이력·휴일·연도 선언 목록 기본 50. 선적 상세 타임라인은 일괄 로딩(쿼리 수 고정 테스트) |
 | 시간(렌즈 6 D:452) | B3. 프런트 `lib/datetime.ts`에 현지 병기 함수 신설(UTC 원문 노출 금지 — PR-16 결함①, P:16) |
 | 한국어 UI(D:303) | 마일스톤 표의 날짜·D-N은 가운데 정렬, 종류명·국가명은 nowrap, 사유는 break-keep. 390px 가로 스크롤 0 |
-| 운영(렌즈 9) | runbook: ① 운영 개시 전 출발·주요 도착국 휴일 연도 선언 ② 잡 표 13행 ③ "UNVERIFIED 배지 = 캘린더 미등록" 안내 |
-| 문서(렌즈 10) | DESIGN §7.5 부기(10종·파생·휴일 의미론·롤오버·통보), §3 표 맵(holiday_calendar_years·milestone_changes·notices·item_profile_milestone_types), §17.5 IMMUTABLE 2표, §15 잡 행. ADR(번호 0074~, 통합에서 부여): 파생 마일스톤 계산값·휴일 국가 축·근거 규약·경고만·OEM 프로파일 판정 |
+| 운영(렌즈 9) | runbook: ① 운영 개시 전 출발·주요 도착국 휴일 연도 선언 ② 잡 표 ~~13행~~ **14행([적대 R-17])** ③ "UNVERIFIED 배지 = 캘린더 미등록" 안내 |
+| 문서(렌즈 10) | DESIGN §7.5 부기(~~10종~~ **9→11종 [적대 R-03]**·파생·휴일 의미론·롤오버·통보), §3 표 맵(holiday_calendar_years·milestone_changes·notices·item_profile_milestone_types), §17.5 IMMUTABLE 2표, §15 잡 행. ADR(번호 0074~, 통합에서 부여): 파생 마일스톤 계산값·휴일 국가 축·근거 규약·경고만·OEM 프로파일 판정 |
 
 ---
 
@@ -659,20 +665,26 @@ def holiday_flag(day: date, country: str, covered_years: frozenset[int], holiday
 | GC-29 | QT/PI D-N | ISSUED QT valid_until 2026-10-10, today 2026-10-03 / 살아 있는 SO 있음 / CONVERTED | D-7 알림 / 0 / 0 | 스윕과 같은 후보 |
 | GC-30 | QT/PI D-N | valid_until == today | D-0 대상(당일 24:00까지 유효), 다음 날 스윕 EXPIRED | 포함 경계 |
 | GC-31 | KST 경계 | 2026-10-03T14:59Z vs 15:00Z에 스캔 | today_kst 10-03 / 10-04 | GC-H5 승계 |
+| GC-32 | payment_due(수입) **[적대 R-29]** | TT_DEFERRED, ORDER_DATE, days 0, PO `frozen_at` = 2026-10-03T15:30Z, PO `doc_date` = 2026-10-01 | OK **2026-10-04**(`frozen_at` KST 날짜, `doc_date` 미사용) | 수입 ORDER_DATE 원천 |
+| GC-33 | loading_deadline 부분 수리 **[적대 R-06]** | 통관 2건: 수리 2027-01-31 / 미수리 | 값 2027-03-02(MIN 유지) + `customs_state=PARTIAL`(미수리 1) | 부분 수리 표시 |
+| GC-34 | loading 이행 **[적대 R-10]** | 기한 2027-03-02, ETD 실적 03-01·BL 실적 03-03 / ETD만 03-01 / BL만 03-02 | MET_LATE(MAX 03-03) / MET / MET | 이행일 = MAX |
+| GC-35 | 시각형 실적 **[적대 R-18]** | now = 2026-10-10T05:00Z, `actual_at` 05:00Z / 05:00:01Z | 성공 / 422 `ACTUAL_IN_FUTURE` | 여유 0 |
+| GC-36 | 시각형 도과 **[적대 R-20]** | CARGO_CLOSING 2026-10-11T00:00Z `America/Los_Angeles`, 스캔 2026-10-10T21:40Z(KST 10-11 06:40) / 2026-10-11T00:00:01Z | 도과 아님(D-N 문턱은 scan_date 10-10 기준) / 도과 | UTC 시각 비교 |
+| GC-37 | 통관 미래일 **[적대 R-18]** | today_kst 2026-10-03, 수리일 2026-10-04 | 422 `SHIPMENTS.CUSTOMS.DATE_IN_FUTURE`(여유 0) | 수리일 ≤ 오늘 |
 
 추가 아키텍처 테스트(GC 외)
 - `MilestoneType`↔DB CHECK 대사
 - 파생형이 CHECK에 없는지
 - schedule.py·holidays/calc.py가 순수한지(세션·`today_kst`·DB 임포트 0)
 - 기일 스캔 모듈이 `record_transition`을 임포트하지 않는지
-- 스케줄 레지스트리 13
+- 스케줄 레지스트리 ~~13~~ **14([적대 R-17])**
 - 4금 집합에 `trade-deadline-scan` 포함
 
 ---
 
 ## 부록 요약 — 멈춰서 보고할 항목(DESIGN·WBS 부기와 ADR로 해소 전제)
 
-1. **§7.5 마일스톤 9종 vs 산식의 B/L일**: BL_ISSUED를 추가하고 저장형·파생형으로 구분한다(B1).
+1. **§7.5 마일스톤 9종 vs 산식의 B/L일**: BL_ISSUED를 추가하고 저장형·파생형으로 구분한다(B1). **[적대 R-03]** L/C 제시기한(문면상 "자동 계산" 항목)을 파생 마일스톤 **종류로 편입**한 것도 같은 등급의 문면 확장이라 함께 보고한다(9→11종).
 2. **WBS S3-2 DoD "L/C 만기 분기"·검증 K "제시기한·tolerance" vs 입력 원천 S3-3 `lc_terms`·L/C 프로덕션 닫힘(P-10)**: 순수 함수와 단위 테스트로 충족하고, 운영은 UNKNOWN으로 둔다(B5·B6). WBS v1.6 주석 후보다.
 3. **design-A:249 "휴일 보정은 S3-2" vs DESIGN §7.5 "경고"**: 경고만 한다(B12).
 4. **WBS 인계 "OEM `profile_id`"**: 판정 결과 미신설, 트리거를 등재한다(B15).
