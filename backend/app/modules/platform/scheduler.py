@@ -47,6 +47,7 @@ from sqlalchemy.orm import Session
 from app.core.db.uow import unit_of_work
 from app.core.logging.redaction import scrub_text
 from app.core.time import KST, utcnow
+from app.modules.approvals import integrity as approval_integrity
 from app.modules.approvals import stagnation as approval_stagnation
 from app.modules.certifications import service as certifications
 from app.modules.collaboration import stagnation
@@ -178,6 +179,11 @@ def _run_trade_docs_totals_verify() -> dict[str, int]:
     return trade_docs_verify.run_totals_verify()
 
 
+def _run_approval_integrity_check() -> dict[str, int]:
+    # 불일치는 FAILED가 아니다(알림만 — ADR-0087 ③). _fail_if_any_failed를 쓰지 않는다: FAILED = 실행 중 예외뿐.
+    return approval_integrity.run_integrity_check()
+
+
 def _run_document_expiry_sweep() -> dict[str, int]:
     return _fail_if_any_failed(expiry_sweep.sweep_expired_documents(), what="견적·PI 만료 스윕")
 
@@ -258,6 +264,14 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         # 만료 스윕(06:10) 사이, 업무 시작 전에 불일치를 알린다.
         schedule="daily@05:30",
         run=_run_trade_docs_totals_verify,
+    ),
+    JobSpec(
+        code="approval-integrity-check",
+        name_ko="승인 무결성 대사(승인 행 ↔ 이력 이벤트 — 읽기 전용, 불일치는 관리자 알림)",
+        # S3-2 PR-1b — PR-9a 부채 ① 소비(ADR-0087). 읽기 전용 트랜잭션 대사 + 문제별 1회 ADMIN 알림(dedup `approval-integrity:{id}:{problem}`).
+        # 승인 상태 무수정·자동 정정 없음·대외 발송 없음(4금 밖). 합계 검산(05:30) 뒤·인증 스윕(06:00) 앞.
+        schedule="daily@05:40",
+        run=_run_approval_integrity_check,
     ),
     JobSpec(
         code="document-expiry-sweep",
