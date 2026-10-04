@@ -4,7 +4,7 @@
 APPROVED를 직접 만들기)를 막지 못하고, 트리거는 이 리포가 채택하지 않는다(ADR-0028·0040). 그래서 **탐지**를 둔다: 모든 승인 행은 이력 이벤트만으로 다시 만들어져야 한다.
   ① 첫 이벤트는 `NULL→REQUESTED` ② 이벤트 사슬이 끊김 없이 이어진다(각 from = 직전 to) ③ 마지막 이벤트의 to = 현재 status
   ④ 승인·반려 이벤트의 행위자·위임자·대결 id = 승인 행의 decided_* ⑤ 소비 이벤트의 행위자 = consumed_by_id(소비 컬럼은 소비 이벤트가 있을 때만).
-읽기 전용이다 — 상태를 고치지 않는다. 주기 실행(잡 배선)은 부채로 등재했다(PROGRESS: DB 레벨 승인 위조 방어).
+읽기 전용이다 — 상태를 고치지 않는다. 주기 실행은 잡 `approval-integrity-check`(daily@05:40 KST — S3-2 PR-1b / ADR-0087)가 `scan_all`로 전건 순회한다.
 """
 
 from __future__ import annotations
@@ -21,17 +21,46 @@ from app.modules.approvals.models import Approval, ApprovalEvent
 DECISION_TARGETS = {ApprovalStatus.APPROVED.value, ApprovalStatus.REJECTED.value}
 
 
+#: 전건 순회 1페이지 크기(승인 행 수) — 이벤트는 페이지 승인 id IN 조회 1회.
+PAGE_SIZE = 1000
+
+
 def check_integrity(
-    session: Session, *, limit: int = 1000, after_id: int = 0
+    session: Session, *, limit: int = PAGE_SIZE, after_id: int = 0
 ) -> list[dict[str, Any]]:
     """`after_id` 뒤 승인 `limit`건을 이력과 대사해 어긋난 행 `[{approval_id, problem}]`을 돌려준다(없으면 빈 목록)."""
+    return _check_page(session, limit=limit, after_id=after_id)[0]
+
+
+def scan_all(session: Session, *, page_size: int = PAGE_SIZE) -> tuple[int, list[dict[str, Any]]]:
+    """승인 **전건**을 `after_id` 페이지로 순회 대사한다 — (대사한 승인 수, 불일치 목록). 읽기만 한다(S3-2 PR-1b / ADR-0087 ①).
+
+    페이지 경계는 그 페이지의 마지막 승인 id다(삭제 컬럼이 없는 표라 id 오름차순 전건 = 전체 승인 행)."""
+    if page_size < 1:
+        raise ValueError("page_size는 1 이상이어야 합니다.")
+    scanned = 0
+    after_id = 0
+    problems: list[dict[str, Any]] = []
+    while True:
+        found, seen, last_id = _check_page(session, limit=page_size, after_id=after_id)
+        problems.extend(found)
+        scanned += seen
+        if last_id is None or seen < page_size:
+            return scanned, problems
+        after_id = last_id
+
+
+def _check_page(
+    session: Session, *, limit: int, after_id: int
+) -> tuple[list[dict[str, Any]], int, int | None]:
+    """한 페이지 대사 — (불일치, 이 페이지 승인 수, 마지막 승인 id 또는 None)."""
     approvals = list(
         session.execute(
             select(Approval).where(Approval.id > after_id).order_by(Approval.id).limit(limit)
         ).scalars()
     )
     if not approvals:
-        return []
+        return [], 0, None
     events: dict[int, list[ApprovalEvent]] = {a.id: [] for a in approvals}
     for event in session.execute(
         select(ApprovalEvent)
@@ -75,4 +104,4 @@ def check_integrity(
                 bad("CONSUMED_MISMATCH")
         elif approval.consumed_by_id is not None or approval.consumed_at is not None:
             bad("CONSUMED_WITHOUT_EVENT")
-    return problems
+    return problems, len(approvals), approvals[-1].id

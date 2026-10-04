@@ -1,5 +1,14 @@
 # PROGRESS
 
+## S3-2 PR-1b (승인 무결성 대사 잡 `approval-integrity-check`) — 구현 기록 (2026-10-04)
+- **상태: 구현 중(로컬 커밋 — push·PR 전)**. 기준 커밋 `3b3723e` (S3-2 PR-1). 정본: 계획서 §4 PR-1b 행 → design-integrated §9 R-17 → §2.8·N-02 → ADR-0087. 마이그레이션 0.
+
+### 첫 커밋 실측 — 기존 DB 승인 전건 대사 (계획 §8 ⑦·R-17 ②, 2026-10-04 — 실행 확인)
+- **방법**: 전용 PG 5443(`new-pg.sh 5443 --fresh` — 공유 DB 미사용) `kbos_dev`에 `APP_ENV=dev alembic upgrade head`(head `f2cb6020b2bb`) 후, 이 커밋의 `integrity.scan_all`(기존 `check_integrity`를 `after_id` 페이지로 전건 순회)을 `REPEATABLE READ, READ ONLY` 트랜잭션에서 실행.
+- **결과 ① 기존 DB 그대로**: 승인 **0건**·이벤트 0건 → 대사 0건·**불일치 0**(0.018초). 이 환경의 dev DB는 새로 만든 것이라 0건이 실측값이고, **프로덕션은 실데이터 반입 전**(S3-2 PR-1 §8 ⑩)이라 대사할 실데이터가 없다.
+- **결과 ② 앱 경로 흐름 투입 후**(0건 실측이 공허하지 않게 — 기존 팩토리=서비스 함수 `request_approval`·`decide_approval`·`consume_approval`·`void_for_target`로 dev DB에 생성): 승인 **16건**(APPROVED 4·CONSUMED 3·REJECTED 2·REQUESTED 3·VOIDED 2·WITHDRAWN 2)·이벤트 32건 → 페이지 크기 7(3페이지 — 7·7·2)로 대사 **16건·불일치 0**(0.011초).
+- 판정: **불일치 0** — 알림 형식(R-17 ③ `approval-integrity:{approval_id}:{problem}`)은 계획대로 확정한다(1건↑였다면 형식 확정 전 원인 기록 대상이었음).
+
 ## S3-2 계획 확정·PR-1 (선적·기일 엔진·휴일 — 계획 자율 확정 + 문서 등재) — 기록 (2026-10-04)
 - **상태: 계획 자율 확정**(오너 지시 2026-09-29 — "PowerShell 없이 클라우드에서 끝까지, 결정·개입 없이", ADR-0011 부기). 웹 세션 판정 절차는 생략했고 판정 후보는 전부 **더 엄격한(fail-closed) 권장안으로 '자율 확정'**했다(사후 번복 가능 — 번복 비용이 큰 항목은 계획서 §5). **남은 판정 후보 0건.** 기준 커밋 main `a4d91c0`(S3-1 종결), 기준선 pytest 5031 passed·34 skipped · vitest 1171 · 커버리지 게이트 94(CI 3샤드).
 - **PR-1 범위 = 문서 전용(코드·테스트·마이그레이션 변경 0)**. 커밋(12자리): `e39e2f64852c` 계획 세션 체크포인트(부록 A·B·C 초안) / `52b923089085` 계획서 `docs/plans/s3-2-plan.md`+부록 `docs/plans/s3-2/design-A~E.md`+`design-integrated.md`(모순 37건 해소·적대 검토 44행 반영) / `d76f05da812b` DESIGN [M4] 보강 12문단 / `08c190328a87` ADR-0074~0087 신설 14건 / `1fabd2118486` 기존 ADR 부기 14파일 / `58dc6688203b` WBS v1.6 / `e0ed5c2f0943` GC v1.5 / `fb0f6fb6508c` runbook 예정 2행 초안 줄 / (이 절) PROGRESS.
