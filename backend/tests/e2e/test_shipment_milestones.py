@@ -191,6 +191,8 @@ def test_gc_a20_rollover_history_reason_and_same_key_same_change(trade: TestClie
     version = _version(trade, sid, "ETD")
     missing = _plan(trade, sid, "ETD", {"planned_on": "2026-11-12", "version": version})
     assert missing.status_code == 422 and _code(missing) == "SHIPMENTS.MILESTONE.REASON_REQUIRED"
+    # 서비스 1차 검사(필드 안내 동반) — DB CHECK 번역(2차 방어선, detail 없음)에 기대지 않는다
+    assert "reason" in missing.json()["error"]["detail"]
     key = unique("roll")
     body = {"planned_on": "2026-11-12", "version": version, "reason": "선사 스케줄 변경"}
     rolled = _plan(trade, sid, "ETD", body, key=key)

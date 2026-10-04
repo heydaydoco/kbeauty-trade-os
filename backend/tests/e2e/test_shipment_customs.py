@@ -287,6 +287,7 @@ def test_gc_a14_live_customs_record_blocks_cancel_until_deleted_with_a_reason(
     shipment = _shipment(trade)
     sid = shipment["id"]
     record = _record(trade, sid, declaration_no="LIVE-1").json()
+    assert _rows(trade, sid)["CUSTOMS_CLEARED"]["customs_state"] == "PARTIAL"  # 미수리 1건
     blocked = cancel(trade, sid)
     assert (
         blocked.status_code == 409 and _code(blocked) == "SHIPMENTS.SHIPMENT.CUSTOMS_RECORD_ALIVE"
@@ -304,6 +305,8 @@ def test_gc_a14_live_customs_record_blocks_cancel_until_deleted_with_a_reason(
         and audit[0]["detail"]["declaration_no"] == "LIVE-1"
     )
     assert trade.get(f"{SHIPMENTS}/{sid}/customs-records").json()["total"] == 0
+    # 삭제된 기록은 수리 파생에서 빠진다(살아 있는 기록만 — X-02)
+    assert _rows(trade, sid)["CUSTOMS_CLEARED"]["customs_state"] == "NONE"
     done = cancel(trade, sid)
     assert done.status_code == 200, done.text
     assert so_status(shipment["so_id"]) == "CONFIRMED"
