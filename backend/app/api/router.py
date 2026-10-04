@@ -36,8 +36,8 @@ from app.modules.readiness import router as readiness_router
 from app.modules.requirements import router as requirements_router
 from app.modules.sales_orders import router as sales_orders_router
 from app.modules.seeds import router as seeds_router
+from app.modules.trade_chain import milestone_router, shipment_router
 from app.modules.trade_chain import router as trade_chain_router
-from app.modules.trade_chain import shipment_router
 from app.modules.worklist import router as worklist_router
 
 api_router = APIRouter(prefix="/api/v1")
@@ -68,6 +68,8 @@ api_router.include_router(trade_chain_router.flow_router)
 # S3-2 PR-3a — 선적(목록·상세·헤더·라인·출고지시·취소·당사자)·SO 참조 수출선적 생성
 api_router.include_router(shipment_router.router)
 api_router.include_router(shipment_router.so_router)
+# S3-2 PR-4a — 선적 마일스톤(보드·계획·실적·초안)·변경 이력·통보·통관 기록
+api_router.include_router(milestone_router.router)
 api_router.include_router(sales_orders_router.router)
 api_router.include_router(proforma_invoices_router.router)
 api_router.include_router(purchase_orders_router.router)

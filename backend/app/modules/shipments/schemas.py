@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from app.modules.trade_docs.constants import MAX_LINES
 from app.modules.trade_docs.schemas import IncotermOut, PaymentTermsOut, StatusLogOut
@@ -108,6 +108,94 @@ class PartyAddRequest(PartyIn):
     """당사자 추가(S14) — 역할·거래처. 영문 스냅샷은 서버가 거래처에서 복사한다."""
 
 
+# ── 마일스톤·통보·통관 요청 (S3-2 PR-4a / design-D D2-1 S16~S19·D2-2 M1~M6) ──────────────────────────────
+
+#: 사유 상한(이력 CHECK `reason_clean`과 같다).
+REASON_MAX = 500
+
+
+class MilestonePlanRequest(BaseModel):
+    """계획 설정·변경(M2) — 날짜형 `{planned_on}` / 시각형 `{planned_at(UTC 오프셋 필수), tz}`. 기존 계획을 바꾸면 롤오버(사유 필수).
+
+    `version`은 행이 있을 때 그 행의 version(없으면 생략) — 화면이 본 상태와 다르면 409(겹친 편집). 계획을 지우는 경로는 없다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    planned_on: date | None = None
+    planned_at: AwareDatetime | None = None
+    tz: StrictStr | None = Field(default=None, max_length=64)
+    reason: StrictStr | None = Field(default=None, max_length=REASON_MAX)
+    version: StrictInt | None = Field(default=None, ge=1)
+
+
+class MilestoneActualRequest(BaseModel):
+    """실적 기록·정정(M3) — 날짜형 `{actual_on}` / 시각형 `{actual_at, tz}`. 값 필드는 **명시해야 한다**(지우기 = 명시적 null + 사유).
+
+    기존 실적을 바꾸거나 지우면 정정(사유 필수). 신고수리 실적은 통관 기록에서만 온다(422).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    actual_on: date | None = None
+    actual_at: AwareDatetime | None = None
+    tz: StrictStr | None = Field(default=None, max_length=64)
+    reason: StrictStr | None = Field(default=None, max_length=REASON_MAX)
+    version: StrictInt | None = Field(default=None, ge=1)
+
+
+class MilestonePlanDraftRequest(BaseModel):
+    """계획 초안 1클릭(M4) — 본문 없음(`{}`). 적용 종류의 빈 계획 행을 만들고 이미 있는 종류는 건너뛴다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class MilestoneNoticeRequest(BaseModel):
+    """롤오버 통보 기록(M6) — 실제로 알린 사실의 기록(발송 0). 수단(메일·전화 등)은 요지에 적는다(채널 열 없음 — X-23)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    occurred_on: date
+    counterpart_partner_id: StrictInt | None = Field(default=None, ge=1)
+    summary: StrictStr = Field(min_length=1, max_length=2000)
+
+
+class CustomsRecordCreateRequest(BaseModel):
+    """통관 기록 추가(S17) — 신고 구분은 선적 구분과 같아야 한다. 수리일은 미수리면 생략. 세율·세액·HS 필드는 없다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    declaration_kind: Literal["EXPORT", "IMPORT"]
+    declaration_no: StrictStr = Field(min_length=1, max_length=40)
+    declared_on: date
+    accepted_on: date | None = None
+    customs_broker_partner_id: StrictInt | None = Field(default=None, ge=1)
+    note: StrictStr | None = Field(default=None, max_length=1000)
+
+
+class CustomsRecordUpdateRequest(BaseModel):
+    """통관 기록 정정(S18) — 보낸 필드만 바뀐다. 신고번호·신고일 변경이나 기존 수리일 변경·삭제는 사유 필수(수리일 첫 입력은 기록)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: StrictInt = Field(ge=1)
+    declaration_no: StrictStr | None = Field(default=None, min_length=1, max_length=40)
+    declared_on: date | None = None
+    accepted_on: date | None = None
+    customs_broker_partner_id: StrictInt | None = Field(default=None, ge=1)
+    note: StrictStr | None = Field(default=None, max_length=1000)
+    reason: StrictStr | None = Field(default=None, max_length=REASON_MAX)
+
+
+class CustomsRecordDeleteRequest(BaseModel):
+    """통관 기록 삭제(S19) — version·사유 필수(사유는 audit_log)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: StrictInt = Field(ge=1)
+    reason: StrictStr | None = Field(default=None, max_length=REASON_MAX)
+
+
 # ── 응답 ───────────────────────────────────────────────────────────────────
 
 
@@ -188,6 +276,153 @@ class ShipmentPartyOut(BaseModel):
     version: int
 
 
+# ── 마일스톤 보드·변경 이력·통관 응답 (S3-2 PR-4a / design-D D3 MilestoneBoard·§9 R-06·R-19·R-20·R-25) ──────────
+
+
+class InstantOut(BaseModel):
+    """시각형 값 — UTC 시각 + IANA 시간대(화면이 KST·현지 병기)."""
+
+    at_utc: datetime
+    tz: str
+
+
+class EffectiveOut(BaseModel):
+    """유효값(실적 우선, 없으면 계획) — 날짜형 'YYYY-MM-DD' / 시각형 UTC ISO 문자열."""
+
+    value: str
+    basis: Literal["ACTUAL", "PLANNED"]
+
+
+class DerivedOut(BaseModel):
+    """파생값(비저장 계산값) — UNKNOWN은 통과가 아니다(사유 코드 동반, 빈칸·0일 대체 금지)."""
+
+    status: Literal["OK", "UNKNOWN", "NOT_APPLICABLE"]
+    value: date | None
+    basis: Literal["ACTUAL", "PLANNED"] | None
+    reason_code: str | None
+
+
+class HolidayFlagOut(BaseModel):
+    """휴일 경고(ETA·도착국만 — R-09). UNVERIFIED = 그 국가·연도 캘린더 미등록(평일 아님). 날짜는 옮기지 않는다(경고만)."""
+
+    flag: Literal["HOLIDAY", "CLEAR", "UNVERIFIED"]
+    country: str
+    name: str | None
+
+
+class MilestoneRowOut(BaseModel):
+    milestone_type: str
+    kind: Literal["STORED", "DERIVED"]
+    value_shape: Literal["DATE", "DATETIME"]
+    #: 구분(수출·수입)·결제유형 적용 여부 — false인 행은 화면이 숨긴다(L/C 제시기한은 LC 결제만).
+    applicable: bool
+    planned: InstantOut | date | None
+    actual: InstantOut | date | None
+    effective: EffectiveOut | None
+    derived: DerivedOut | None
+    #: 시각형만 — D-N 기준일(min(현지, KST) — 이른 경고) / 현지 날짜. 날짜형은 null(R-25).
+    scan_date: date | None
+    local_date: date | None
+    #: 신고수리 행만 — NONE(기록 없음)·CLEARED(전건 수리)·PARTIAL(미수리 1건↑ — 산식은 MIN 유지, R-06).
+    customs_state: Literal["NONE", "PARTIAL", "CLEARED"] | None
+    customs_pending_count: int | None
+    #: 열린 기일만(실적 있으면 null) — 날짜형 = 유효일 − KST 오늘, 시각형 = scan_date − KST 오늘.
+    days_left: int | None
+    #: 날짜형 = KST 오늘 > 유효일, **시각형 = 현재 UTC > 유효 시각**(R-20). 대금만기·제시기한은 충족 신호가 S3-3이라 null.
+    is_overdue: bool | None
+    #: 저장형 행의 판정 불가 사유 — `TZ_UNRESOLVED`(저장된 시간대를 앱의 tzdata가 모름)면 scan_date·local_date·days_left·is_overdue가
+    #: 전부 null이다(KST 추정 계산 금지 — "판정 불가" 배지). 정상 행은 null.
+    unknown_reason: Literal["TZ_UNRESOLVED"] | None
+    #: 적재기한만 — MET·MET_LATE·OPEN·OVERDUE·UNKNOWN(이행일 = ETD·B/L 실적 MAX — R-10).
+    fulfilment: str | None
+    holiday: HolidayFlagOut | None
+    #: 롤오버(계획 변경) 횟수·통보 기록이 연결되지 않은 롤오버 수.
+    rollover_count: int
+    unnotified_rollovers: int
+    order_warning: Literal["ETA_BEFORE_ETD"] | None
+    milestone_id: int | None
+    version: int | None
+    #: 입력처 — 신고수리 실적은 통관 기록(마일스톤 실적 버튼 없음), 파생 행은 null.
+    input_source: Literal["MILESTONE", "CUSTOMS_RECORD"] | None
+
+
+class HolidaySummaryOut(BaseModel):
+    holiday: int
+    unverified: int
+
+
+class MilestoneBoardOut(BaseModel):
+    """선적 마일스톤 보드(M1·상세 내장) — 저장형 8 + 파생 3 = 11행, 업무 흐름 순서. 판정은 전부 서버 계산값(프런트 날짜 산술 0)."""
+
+    today_kst: date
+    holiday_summary: HolidaySummaryOut
+    rows: list[MilestoneRowOut]
+
+
+class ChangeRefOut(BaseModel):
+    id: int
+    change_kind: str
+
+
+class MilestoneWriteOut(BaseModel):
+    """M2·M3 응답(R-19) — 이력 행이 안 생기는 no-op이면 change = null. 같은 Idempotency-Key 재요청 = 같은 change.id."""
+
+    board: MilestoneBoardOut
+    change: ChangeRefOut | None
+
+
+class NoticeOut(BaseModel):
+    comm_log_id: int
+    occurred_on: date
+    summary: str
+    partner_id: int | None
+    partner_name: str | None
+    actor_user_id: int
+    created_at: datetime
+
+
+class MilestoneChangeOut(BaseModel):
+    id: int
+    milestone_id: int
+    milestone_type: str
+    change_kind: str
+    old: InstantOut | date | None
+    new: InstantOut | date | None
+    reason: str | None
+    actor_user_id: int
+    actor_name: str | None
+    created_at: datetime
+    notices: list[NoticeOut]
+
+
+class CustomsBrokerOut(BaseModel):
+    partner_id: int
+    name: str
+
+
+class CustomsRecordOut(BaseModel):
+    id: int
+    shipment_id: int
+    declaration_kind: str
+    declaration_no: str
+    declared_on: date
+    #: 수리일 — null = 미수리("미수리" 배지).
+    accepted_on: date | None
+    customs_broker: CustomsBrokerOut | None
+    note: str | None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class CustomsSummaryOut(BaseModel):
+    """상세 내장 요약 — 목록은 `GET /shipments/{id}/customs-records`(Page)."""
+
+    live_count: int
+    pending_count: int
+    latest_accepted_on: date | None
+
+
 class ShipmentDetail(BaseModel):
     id: int
     doc_number: str
@@ -215,7 +450,11 @@ class ShipmentDetail(BaseModel):
     dg_line_count: int
     lines: list[ShipmentLineOut]
     parties: list[ShipmentPartyOut]
-    #: 표시 편의(서버가 쓰기 시 다시 검사한다) — RELEASE_ORDER·CANCEL·EDIT_LINES·EDIT_COUNTRIES·EDIT_META·EDIT_PARTIES 중 요청자 역할·상태로 가능한 것.
+    #: 마일스톤 보드(PR-4a) — 쓰기 후 재조회는 `GET /shipments/{id}/milestones`(같은 형태).
+    milestones: MilestoneBoardOut
+    customs_summary: CustomsSummaryOut
+    #: 표시 편의(서버가 쓰기 시 다시 검사한다) — RELEASE_ORDER·CANCEL·EDIT_LINES·EDIT_COUNTRIES·EDIT_META·EDIT_PARTIES·
+    #: EDIT_MILESTONES·PLAN_DRAFT·EDIT_CUSTOMS 중 요청자 역할·상태로 가능한 것.
     allowed_actions: list[str]
     created_at: datetime
     updated_at: datetime
@@ -235,6 +474,9 @@ class ShipmentListItem(BaseModel):
     total_amount: int
     total_text: str
     line_count: int
+    #: ETD·ETA 유효값(실적 우선, 없으면 계획 — 'YYYY-MM-DD' 현지 날짜, `new Date()` 금지). 행이 없거나 값이 없으면 null(design-D D3).
+    etd: EffectiveOut | None
+    eta: EffectiveOut | None
     assignee: AssigneeOut
     created_at: datetime
     updated_at: datetime

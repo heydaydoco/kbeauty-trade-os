@@ -541,6 +541,21 @@ def release_shipment_order(
         return 200, body
 
 
+def _require_no_live_facts(session: Session, row: Shipment) -> None:
+    """취소 차단 — 살아 있는 통관 기록(R-16)·ETD·B/L 발행·ETA 실적(R-01). 호출자가 선적 `FOR UPDATE`를 쥐고 있어야 한다."""
+    blockers = shipments.cancel_blockers(session, row.id)
+    if blockers.customs_numbers:
+        raise AppError(
+            ErrorCode.SHIPMENTS_SHIPMENT_CUSTOMS_RECORD_ALIVE,
+            detail={"declaration_nos": blockers.customs_numbers},
+        )
+    if blockers.actual_types:
+        raise AppError(
+            ErrorCode.SHIPMENTS_SHIPMENT_ACTUAL_RECORDED,
+            detail={"milestone_types": blockers.actual_types},
+        )
+
+
 def transition_shipment(
     *,
     actor: AuthenticatedUser,
@@ -552,7 +567,10 @@ def transition_shipment(
 ) -> tuple[int, dict[str, Any]]:
     """선적 범용 사람 전이 — 취소(계획·출고지시 → 취소, 사유 필수)뿐. 마지막 살아 있는 선적이면 같은 TX에서 SO가 CONFIRMED로 복귀한다.
 
-    실적(ETD·B/L·ETA)·통관 기록 생존 가드는 PR-4a(마일스톤·통관 표 M15)가 이 함수에 더한다 — 3a 구간엔 그 행이 0이라 공백 없음(R-01·R-16).
+    **생존 사실 가드(PR-4a — R-01·R-16, 역순 원칙의 사실 기록판)**: 살아 있는 통관 기록이 있으면 409 `CUSTOMS_RECORD_ALIVE`, ETD·B/L 발행·ETA
+    실적이 살아 있으면 409 `ACTUAL_RECORDED`(`detail.milestone_types`). 판정은 선적 `FOR UPDATE` 아래에서 한다 — 통관·마일스톤 쓰기도 같은 헤더를
+    `FOR UPDATE`로 잡으므로 판정과 취소 사이에 새 사실이 끼어들 수 없다. 탈출로 = 통관 기록·실적을 사유와 함께 삭제(이력 남음) 후 취소.
+    오류 우선순위: 404 → version 409 → 생존 409 → 전이 409·사유 422(커널).
     """
     with unit_of_work() as uow:
         session = uow.session
@@ -571,6 +589,7 @@ def transition_shipment(
         if claim.replay is not None:
             return claim.replay.status_code, claim.replay.body
         row = _lock_shipment_chain(session, shipment_id, version)
+        _require_no_live_facts(session, row)
         record_transition(session, row, to, actor_user_id=actor.id, reason=reason, automatic=False)
         converge_parent(
             session, KIND, row, actor_user_id=actor.id

@@ -82,6 +82,10 @@ class AuditAction:
     #: 선적 당사자 추가·삭제(S3-2 PR-3a / design-integrated §2.7) — detail=선적 번호·역할·거래처 id(영문명·주소 원문 미기재 — 스냅샷 행이 정본).
     SHIPMENTS_PARTY_ADDED = "shipments.party.added"
     SHIPMENTS_PARTY_REMOVED = "shipments.party.removed"
+    #: 통관 기록 정정·삭제(S3-2 PR-4a / design-C C9) — detail=선적 번호·기록 id·구분·바뀐 열과 전후 **날짜·번호**·사유(금액·세액 없음 —
+    #: 사실 열만). 수리일은 적재의무(+30) 산식의 유일 원천이라 조용히 바뀌지 않게 남긴다(표 자체는 MUTABLE).
+    SHIPMENTS_CUSTOMS_CORRECTED = "shipments.customs.corrected"
+    SHIPMENTS_CUSTOMS_DELETED = "shipments.customs.deleted"
 
 
 class AuditLog(PkMixin, Base):

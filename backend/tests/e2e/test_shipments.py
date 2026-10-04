@@ -641,7 +641,14 @@ def test_logistics_operates_but_cannot_consume_or_cancel() -> None:
         )
         released = release(logistics, shipment["id"])
         assert released.status_code == 200 and released.json()["status"] == "RELEASE_ORDERED"
-        assert released.json()["allowed_actions"] == ["EDIT_META", "EDIT_PARTIES"]
+        # PR-4a — 출고지시 뒤에도 일정·실적·초안·통관 기록은 물류 몫(ADR-0079)
+        assert released.json()["allowed_actions"] == [
+            "EDIT_META",
+            "EDIT_PARTIES",
+            "EDIT_MILESTONES",
+            "PLAN_DRAFT",
+            "EDIT_CUSTOMS",
+        ]
         assert logistics.get(f"{SHIPMENTS}/{shipment['id']}").status_code == 200
     assert scalar("SELECT count(*) FROM shipments") == 1
 

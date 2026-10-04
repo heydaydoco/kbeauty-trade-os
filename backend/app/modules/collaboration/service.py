@@ -30,7 +30,11 @@ from app.core.errors.exceptions import AppError, NotFoundError, VersionConflictE
 from app.core.money import minor_units
 from app.core.time import today_kst, utcnow
 from app.modules.certifications.models import Certification
-from app.modules.collaboration.models import AgencyContract, CommLog
+from app.modules.collaboration.models import (
+    GENERIC_COMM_SUBJECT_TYPES,
+    AgencyContract,
+    CommLog,
+)
 from app.modules.documents.models import Document
 from app.modules.idempotency import service as idempotency
 from app.modules.identity.service import AuthenticatedUser
@@ -471,7 +475,13 @@ def _comm_log_views(session: Session, rows: list[CommLog]) -> list[CommLogView]:
 
 
 def require_comm_log(session: Session, log_id: int, *, for_update: bool = False) -> CommLog:
-    stmt = select(CommLog).where(CommLog.id == log_id, CommLog.deleted_at.is_(None))
+    """범용 `/comm-logs` id 접근(상세·PATCH·DELETE) — 범용 주제 밖(SHIPMENT 통보 기록)은 **없는 것과 같다(404, 부작용 0)**(R-05).
+    선적 통보는 롤오버 이력과 결속된 사실이라 다른 역할이 범용 경로로 고치거나 지우면 결속이 깨진다."""
+    stmt = select(CommLog).where(
+        CommLog.id == log_id,
+        CommLog.deleted_at.is_(None),
+        CommLog.subject_type.in_(GENERIC_COMM_SUBJECT_TYPES),
+    )
     if for_update:
         stmt = stmt.with_for_update()
     row = session.execute(stmt).scalar_one_or_none()
@@ -688,7 +698,11 @@ def list_comm_logs(
 ) -> tuple[list[CommLogView], int]:
     with unit_of_work() as uow:
         session = uow.session
-        conditions: list[ColumnElement[bool]] = [CommLog.deleted_at.is_(None)]
+        # 범용 목록의 기본 조건 = 범용 주제만(R-05 — SHIPMENT 통보 기록은 선적 화면의 변경 이력으로만 노출)
+        conditions: list[ColumnElement[bool]] = [
+            CommLog.deleted_at.is_(None),
+            CommLog.subject_type.in_(GENERIC_COMM_SUBJECT_TYPES),
+        ]
         if subject_type is not None:
             conditions.append(CommLog.subject_type == subject_type)
         if subject_id is not None:
@@ -709,3 +723,34 @@ def list_comm_logs(
             ).scalars()
         )
         return _comm_log_views(session, rows), total
+
+
+# ── 선적 통보 기록(SHIPMENT 주제) — 선적 전용 통로 1곳만 부른다(S3-2 PR-4a / ADR-0083 / R-05) ──────────
+
+
+def record_shipment_comm_log(
+    session: Session,
+    *,
+    shipment_id: int,
+    partner_id: int | None,
+    occurred_on: date,
+    summary: str,
+    actor_id: int,
+) -> CommLog:
+    """선적 마일스톤 롤오버 통보의 통신 기록 1행(SHIPMENT 주제) — **호출처는 `trade_chain/milestone_flow.py` 1곳**(아키텍처 시험).
+
+    주제·상대 거래처 실재와 입력 위생은 호출자(선적 통로)가 잠금 순서 안에서 끝낸 뒤 부른다 — 여기는 행을 만드는 착지뿐이다.
+    flush는 호출자가 제약 번역 통로(`shipments.flush_translated`)로 한다(CHECK 위반이 500으로 새지 않게).
+    발송 0(일어난 일의 기록 — §5.4 "생성까지 시스템, 발송은 사람"). 다음 액션·기한은 두지 않는다(정체 독촉 대상 아님).
+    """
+    row = CommLog(
+        subject_type="SHIPMENT",
+        subject_id=shipment_id,
+        partner_id=partner_id,
+        occurred_on=occurred_on,
+        summary=summary,
+        created_by_id=actor_id,
+        updated_by_id=actor_id,
+    )
+    session.add(row)
+    return row

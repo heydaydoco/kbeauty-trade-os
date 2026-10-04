@@ -33,6 +33,8 @@ FLOW = "/api/v1/document-flow"
 #: 생성 대화상자가 아는 본문 키 — 이 밖의 키는 화면이 보내지 않는다(원천 값 재입력 0, 서버 extra=forbid).
 DIALOG_BODY_KEYS = {"lines", "origin_country_code", "dest_country_code", "parties", "internal_note"}
 #: 무역 계정이 계획 중 선적에서 받는 동작 — 화면 버튼은 이 문자열로만 열린다(lib/shipment.ts `ShipmentAction`).
+#: PR-4a — 계획/출고지시 중 선적에는 마일스톤(EDIT_MILESTONES)·계획 초안(PLAN_DRAFT)·통관 기록(EDIT_CUSTOMS)이 더 붙는다(화면 버튼은 PR-4b).
+RECORD_ACTIONS = ["EDIT_MILESTONES", "PLAN_DRAFT", "EDIT_CUSTOMS"]
 TRADE_PLANNED_ACTIONS = [
     "RELEASE_ORDER",
     "CANCEL",
@@ -40,6 +42,7 @@ TRADE_PLANNED_ACTIONS = [
     "EDIT_COUNTRIES",
     "EDIT_META",
     "EDIT_PARTIES",
+    *RECORD_ACTIONS,
 ]
 
 
@@ -208,6 +211,7 @@ def test_allowed_actions_are_the_only_button_source_for_each_role() -> None:
             "EDIT_COUNTRIES",
             "EDIT_META",
             "EDIT_PARTIES",
+            *RECORD_ACTIONS,
         ]
         # 물류는 담당자 선택 목록(`/users/lookup`)을 못 부른다 — 화면이 담당자를 읽기로 보이는 근거.
         assert logistics.get("/api/v1/users/lookup?size=200").status_code == 403
@@ -224,4 +228,5 @@ def test_allowed_actions_are_the_only_button_source_for_each_role() -> None:
             "CANCEL",
             "EDIT_META",
             "EDIT_PARTIES",
+            *RECORD_ACTIONS,
         ]

@@ -149,11 +149,24 @@ def test_the_same_contract_number_for_two_agencies_is_allowed() -> None:
 
 
 def test_the_subject_enumeration_is_locked_to_the_consumed_value() -> None:
-    """주제 유형은 소비분(CERTIFICATION)만 — 알 수 없는 값은 DB가 거부한다 (ADR-0028)"""
-    assert COMM_SUBJECT_TYPES == ("CERTIFICATION",)
+    """주제 유형은 소비분만 — CERTIFICATION + SHIPMENT(S3-2 PR-4a 선적 통보 — ADR-0083). 알 수 없는 값은 DB가 거부한다 (ADR-0028)"""
+    assert COMM_SUBJECT_TYPES == ("CERTIFICATION", "SHIPMENT")
     with pytest.raises(IntegrityError) as exc:
-        _insert_comm_log(subject_type="SHIPMENT")
+        _insert_comm_log(subject_type="FORWARDER")
     assert "subject_type_valid" in str(exc.value)
+    # DB는 SHIPMENT를 허용한다(M15 CHECK 재정의)
+    assert _insert_comm_log(subject_type="SHIPMENT") > 0
+
+
+def test_the_generic_api_subjects_stay_certification_only() -> None:
+    """R-05 — 범용 `/comm-logs`가 다루는 주제는 CERTIFICATION뿐이다(스키마 Literal·목록 기본 조건·id 접근·문서 첨부가 같은 상수를 본다).
+    SHIPMENT 통보 기록은 선적 전용 통로만 만든다 — DB 허용(위 시험)과 범용 API 거부(e2e)를 둘로 나눠 고정한다"""
+    from app.modules.collaboration.models import GENERIC_COMM_SUBJECT_TYPES
+    from app.modules.collaboration.schemas import SubjectType
+
+    assert GENERIC_COMM_SUBJECT_TYPES == ("CERTIFICATION",)
+    assert set(SubjectType.__args__) == set(GENERIC_COMM_SUBJECT_TYPES)  # type: ignore[attr-defined]
+    assert set(GENERIC_COMM_SUBJECT_TYPES) < set(COMM_SUBJECT_TYPES)
 
 
 def test_a_blank_summary_is_rejected() -> None:

@@ -296,5 +296,46 @@ class ErrorCode(StrEnum):
     #: 당사자 거래처의 영문명이 비어 있다(서류 영문 원천 결측 — 거래처 화면에서 보완, fail-visible).
     SHIPMENTS_PARTY_ENGLISH_NAME_MISSING = "SHIPMENTS.PARTY.ENGLISH_NAME_MISSING"
 
+    # 선적 마일스톤·통관 (S3-2 PR-4a / ADR-0080·0083 / design-integrated §2.6·§9 R-01·R-18·R-26 — 이 PR이 쓰는 17종.
+    # 남은 2종[MILESTONE.OWNER_NOT_OEM·QUANTITY.EXCEEDS_ASSIGNABLE]은 소비 PR[4c·5a]이 더한다 — 죽은 코드 금지)
+    #: 살아 있는 통관 기록이 있는 선적은 취소할 수 없다(역순 원칙의 사실 기록판 — 통관 기록을 사유와 함께 먼저 삭제).
+    SHIPMENTS_SHIPMENT_CUSTOMS_RECORD_ALIVE = "SHIPMENTS.SHIPMENT.CUSTOMS_RECORD_ALIVE"
+    #: ETD·B/L 발행·ETA 실적이 살아 있는 선적은 취소할 수 없다(R-01 — 실적을 사유와 함께 정정·삭제한 뒤 취소).
+    SHIPMENTS_SHIPMENT_ACTUAL_RECORDED = "SHIPMENTS.SHIPMENT.ACTUAL_RECORDED"
+    #: (신고 구분, 신고번호) 살아 있는 통관 기록이 이미 있다(부분 유니크 번역).
+    SHIPMENTS_CUSTOMS_DECLARATION_DUPLICATE = "SHIPMENTS.CUSTOMS.DECLARATION_DUPLICATE"
+    #: 신고 구분이 선적 구분과 다르다(수출선적 = 수출신고, 수입선적 = 수입신고).
+    SHIPMENTS_CUSTOMS_KIND_MISMATCH = "SHIPMENTS.CUSTOMS.KIND_MISMATCH"
+    #: 통관 기록의 신고번호·신고일·수리일 정정이나 삭제에 사유가 없다.
+    SHIPMENTS_CUSTOMS_REASON_REQUIRED = "SHIPMENTS.CUSTOMS.REASON_REQUIRED"
+    #: 신고일·수리일이 오늘(KST)보다 뒤다(R-18 — 여유 0).
+    SHIPMENTS_CUSTOMS_DATE_IN_FUTURE = "SHIPMENTS.CUSTOMS.DATE_IN_FUTURE"
+    #: 수리일이 신고일보다 앞이다(서비스 선검증 + CHECK 번역 — R-26).
+    SHIPMENTS_CUSTOMS_ACCEPT_BEFORE_DECLARE = "SHIPMENTS.CUSTOMS.ACCEPT_BEFORE_DECLARE"
+    #: (선적, 종류) 살아 있는 마일스톤 행이 이미 있다(부분 유니크 번역 — 동시 최초 입력 경합).
+    SHIPMENTS_MILESTONE_DUPLICATE_TYPE = "SHIPMENTS.MILESTONE.DUPLICATE_TYPE"
+    #: 파생 마일스톤(적재기한·대금만기·제시기한)은 직접 쓸 수 없다(덮어쓰기 금지 — 입력 값을 고친다).
+    SHIPMENTS_MILESTONE_DERIVED_NOT_EDITABLE = "SHIPMENTS.MILESTONE.DERIVED_NOT_EDITABLE"
+    #: 실적이 미래다(날짜형 > KST 오늘+1일, 시각형 > 현재 UTC 시각 — R-18).
+    SHIPMENTS_MILESTONE_ACTUAL_IN_FUTURE = "SHIPMENTS.MILESTONE.ACTUAL_IN_FUTURE"
+    #: 롤오버(계획 변경)·실적 정정에 사유가 없다.
+    SHIPMENTS_MILESTONE_REASON_REQUIRED = "SHIPMENTS.MILESTONE.REASON_REQUIRED"
+    #: 선적 구분(수출·수입)에 적용되지 않는 종류다(예: 수입선적의 수출 전 검사, 선적의 OEM 생산 종류).
+    SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE = "SHIPMENTS.MILESTONE.TYPE_NOT_APPLICABLE"
+    #: 취소된 선적(소유자)의 마일스톤은 쓸 수 없다(N-05).
+    SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE = "SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE"
+    #: 신고수리 실적은 마일스톤에 직접 쓰지 않는다 — 통관 기록의 수리일이 유일 원천이다(X-02).
+    SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD = (
+        "SHIPMENTS.MILESTONE.ACTUAL_FROM_CUSTOMS_RECORD"
+    )
+    #: IANA 시간대 이름이 아니다(시각형 마일스톤 — N-04).
+    SHIPMENTS_MILESTONE_TIMEZONE_INVALID = "SHIPMENTS.MILESTONE.TIMEZONE_INVALID"
+    #: 날짜형 종류에 시각 값(또는 그 반대)을 보냈다(N-04).
+    SHIPMENTS_MILESTONE_VALUE_SHAPE_MISMATCH = "SHIPMENTS.MILESTONE.VALUE_SHAPE_MISMATCH"
+    #: ETD·B/L 발행·ETA 실적은 출고지시 뒤에만 기록한다(R-01 — 계획 단계 선적에 실적 422).
+    SHIPMENTS_MILESTONE_ACTUAL_BEFORE_RELEASE = "SHIPMENTS.MILESTONE.ACTUAL_BEFORE_RELEASE"
+    #: 변경 1건에 연결할 수 있는 통보 기록 수를 넘었다(상한 — ORDER_BOARD.FILTER.LIMIT_REACHED 선례, PR-4a 적대 검토 반영 ⑧).
+    SHIPMENTS_MILESTONE_NOTICE_LIMIT_REACHED = "SHIPMENTS.MILESTONE.NOTICE_LIMIT_REACHED"
+
     # 최후
     INTERNAL_UNEXPECTED = "COMMON.INTERNAL.UNEXPECTED"

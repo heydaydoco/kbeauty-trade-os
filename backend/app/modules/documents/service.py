@@ -46,7 +46,7 @@ from app.core.time import today_kst, utcnow
 from app.modules.catalog.models import Sku
 from app.modules.catalog.profiles import require_profile
 from app.modules.certifications.models import Certification, CertificationTask
-from app.modules.collaboration.models import CommLog
+from app.modules.collaboration.models import GENERIC_COMM_SUBJECT_TYPES, CommLog
 from app.modules.documents.models import (
     DOCUMENT_OWNER_TYPES,
     Document,
@@ -274,8 +274,13 @@ def _require_owner(
             )
         return _certification_display(cert.id, cert.template_name)
     if owner_type == "COMM_LOG":
+        # 범용 주제의 통신 기록에만 첨부한다 — 선적 통보 기록(SHIPMENT)은 범용 경로 밖이다(S3-2 PR-4a R-05: 첨부 거부 = 기존 소유자 422)
         log = session.execute(
-            select(CommLog).where(CommLog.id == owner_id, CommLog.deleted_at.is_(None))
+            select(CommLog).where(
+                CommLog.id == owner_id,
+                CommLog.deleted_at.is_(None),
+                CommLog.subject_type.in_(GENERIC_COMM_SUBJECT_TYPES),
+            )
         ).scalar_one_or_none()
         if log is None:
             raise AppError(

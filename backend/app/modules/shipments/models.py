@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import ClassVar
 
 from sqlalchemy import (
@@ -22,20 +22,23 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     desc,
+    func,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db.base import Base
-from app.core.db.constraints import unique_active, value_in
+from app.core.db.constraints import BLANK_CHAR_CLASS, unique_active, value_in
 from app.core.db.mixins import (
     ActorMixin,
     PkMixin,
@@ -44,10 +47,17 @@ from app.core.db.mixins import (
     VersionMixin,
 )
 from app.modules.trade_docs.constants import (
+    DATETIME_MILESTONES,
     MAX_QUANTITY,
     MAX_SAFE_INTEGER,
+    OEM_MILESTONES,
+    REASON_REQUIRED_CHANGES,
+    SHIPMENT_STORED_MILESTONES,
     SKU_KINDS,
+    STORED_MILESTONES,
+    DeclarationKind,
     DocKind,
+    MilestoneChangeKind,
     PartyRole,
     ShipmentKind,
 )
@@ -275,4 +285,273 @@ class ShipmentParty(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, Acto
         unique_active("shipment_parties", "shipment_id", "role"),
         Index("ix_shipment_parties_shipment_id", "shipment_id"),
         Index("ix_shipment_parties_partner_id", "partner_id"),
+    )
+
+
+# ── 통관 기록·마일스톤 계열 (S3-2 PR-4a — 마이그레이션 M15 / ADR-0074·0080·0083 / design-integrated §2.1 (e)~(i)·§9 R-16·R-18) ──
+
+
+def _in_list(values: frozenset[str] | tuple[str, ...]) -> str:
+    return ", ".join(f"'{v}'" for v in sorted(values))
+
+
+#: 시각형 종류 SQL 목록(형태 CHECK가 쓴다).
+_DATETIME_TYPES = _in_list(DATETIME_MILESTONES)
+#: 여러 줄 자유 텍스트(메모)의 제어문자 규약 — 탭·LF·CR만 허용, 그 밖의 C0·DEL·C1 거부. 서비스가 1차(Cf·Zl·Zp·한글 채움까지
+#: `invisible_char_problem`으로 막는다)이고 DB는 C0·C1만 보는 최후 방어선이다(번역표 등재 — 500 금지).
+_MULTILINE_CLEAN = "translate({col}, chr(9) || chr(10) || chr(13), '') !~ '[[:cntrl:]]'"
+#: '보이는 글자 1개 이상'(`core.db.constraints.BLANK_CHAR_CLASS` — btrim은 U+0020만 자르던 구멍, 적대 검토 반영 ⑥).
+_HAS_VISIBLE = "{col} ~ '[^" + BLANK_CHAR_CLASS + "]'"
+#: 업무 날짜 범위 CHECK(2000-01-01~2999-12-31 — `BUSINESS_DATE_MIN·MAX`, 적대 검토 반영 ⑤).
+_DATE_IN_RANGE = "({col} IS NULL OR {col} BETWEEN DATE '2000-01-01' AND DATE '2999-12-31')"
+_INSTANT_IN_RANGE = (
+    "({col} IS NULL OR ({col} >= TIMESTAMPTZ '2000-01-01 00:00:00+00'"
+    " AND {col} < TIMESTAMPTZ '3000-01-01 00:00:00+00'))"
+)
+
+
+class CustomsRecord(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):
+    """통관 기록 — 관세사 신고 결과의 사실 기록(선적:통관 = 1:N 분할 신고 허용, X-03).
+
+    ■ **수리일(`accepted_on`) = 신고수리 실적·적재의무(+30) 산식의 유일 원천**(X-02) — 마일스톤으로 복사하지 않고 읽기 시
+      구분 일치·살아 있는 기록의 MIN으로 파생한다. 미수리 기록이 1건↑이면 신고수리 행 PARTIAL(R-06).
+    ■ 세율·과세가격·세액·HS 열은 **없다**(§15 법적 판정 금지 — 사실 열만). 신고 구분 = 선적 구분(서비스 422 KIND_MISMATCH).
+    ■ 신고일·수리일 ≤ KST 오늘(서비스 422 DATE_IN_FUTURE — R-18), 수리일 ≥ 신고일(CHECK + 서비스 선검증 — R-26).
+    ■ 살아 있는 통관 기록이 있으면 선적 취소 409 `CUSTOMS_RECORD_ALIVE`(R-16). 정정·삭제는 audit_log(사유 — design-C C9).
+    """
+
+    __tablename__ = "customs_records"
+
+    shipment_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("shipments.id", ondelete="RESTRICT"), nullable=False
+    )
+    declaration_kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    #: 외부 신고번호(형식 CHECK 없음 — 비공백·공백 없음·제어문자 없음·대문자만. 서비스가 strip·대문자 정규화).
+    declaration_no: Mapped[str] = mapped_column(String(40), nullable=False)
+    #: 신고일(현지 날짜 — 서류에 찍힌 날짜).
+    declared_on: Mapped[date] = mapped_column(Date, nullable=False)
+    #: 수리일 — NULL = 미수리.
+    accepted_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: 관세사(거래처 유형 CUSTOMS_BROKER — 서비스가 FOR KEY SHARE로 검증, 선적 잠금보다 먼저 — R-08).
+    customs_broker_partner_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("partners.id", ondelete="RESTRICT"), nullable=True
+    )
+    note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    __table_args__ = (
+        value_in("declaration_kind", [k.value for k in DeclarationKind], name="kind_valid"),
+        CheckConstraint(
+            "accepted_on IS NULL OR accepted_on >= declared_on", name="accept_after_declare"
+        ),
+        # ASCII 영숫자로 시작, 대문자 영숫자·`-`·`/`만(서비스가 대문자화 전 원문을 같은 규칙으로 422 — 적대 검토 반영 ④)
+        CheckConstraint(r"declaration_no ~ '^[A-Z0-9][A-Z0-9/-]*$'", name="declaration_no_shape"),
+        CheckConstraint(
+            "note IS NULL OR ("
+            + _HAS_VISIBLE.format(col="note")
+            + " AND "
+            + _MULTILINE_CLEAN.format(col="note")
+            + ")",
+            name="note_clean",
+        ),
+        CheckConstraint(
+            _DATE_IN_RANGE.format(col="declared_on")
+            + " AND "
+            + _DATE_IN_RANGE.format(col="accepted_on"),
+            name="date_range",
+        ),
+        # (구분, 신고번호) 살아 있는 기록 유일 — 위반 409 DECLARATION_DUPLICATE(soft delete 후 재유입 = 신규).
+        unique_active("customs_records", "declaration_kind", "declaration_no"),
+        Index(
+            "ix_customs_records_shipment_id_live",
+            "shipment_id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_customs_records_customs_broker_partner_id", "customs_broker_partner_id"),
+    )
+
+
+class Milestone(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):
+    """마일스톤 — 소유자(선적 또는 OEM PO) × 저장형 종류 1행, **계획/실적 이중값**(ADR-0080 / design-B B2·B3).
+
+    ■ 날짜형 = 현지 달력일 DATE(`*_on`), 시각형(서류마감·Cargo Closing) = UTC 시각 + IANA `tz`(`*_at`). 형태는 CHECK가 강제.
+    ■ 파생 3종(적재기한·대금만기·제시기한)은 **저장하지 않는다** — 종류 CHECK가 거부(덮어쓰기 금지 2중의 DB 층).
+    ■ 신고수리(`CUSTOMS_CLEARED`) 행은 **계획만** — 실적 열은 CHECK로 NULL(실적 = 통관 기록 MIN 파생, X-02).
+    ■ 값 변경마다 `milestone_changes` 1행(IMMUTABLE) — 행 version이 낙관 잠금(헤더 version은 올리지 않는다 — design-C C4).
+    ■ 계획을 지우는 경로는 없다(변경만). 실적은 정정(ACTUAL_CORRECTED)으로 지울 수 있다(사유 필수).
+    ■ 이 모듈(L1)은 PO 모델을 임포트하지 않는다(테이블 이름 FK — 계층 DAG).
+    """
+
+    __tablename__ = "milestones"
+
+    shipment_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("shipments.id", ondelete="RESTRICT"), nullable=True
+    )
+    #: OEM 생산 마일스톤 소유 PO(쓰기 경로 PR-4c — OEM 4종 ⇔ po_id, CHECK).
+    po_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("purchase_orders.id", ondelete="RESTRICT"), nullable=True
+    )
+    milestone_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    planned_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    actual_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    planned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: IANA 시간대(시각형 값이 있을 때만 — 서버가 zoneinfo로 검증, 모르는 값 422 TIMEZONE_INVALID).
+    tz: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("(shipment_id IS NULL) <> (po_id IS NULL)", name="one_owner"),
+        # 저장형만(선적 8 + OEM 4) — 파생 3종은 값 공간에 없다(DB 직접 INSERT도 거부).
+        value_in("milestone_type", sorted(STORED_MILESTONES), name="type_valid"),
+        CheckConstraint(
+            f"(milestone_type IN ({_in_list(OEM_MILESTONES)})) = (po_id IS NOT NULL)",
+            name="owner_type_scope",
+        ),
+        CheckConstraint(
+            f"milestone_type IN ({_DATETIME_TYPES})"
+            " OR (planned_at IS NULL AND actual_at IS NULL AND tz IS NULL)",
+            name="date_shape",
+        ),
+        CheckConstraint(
+            f"milestone_type NOT IN ({_DATETIME_TYPES})"
+            " OR (planned_on IS NULL AND actual_on IS NULL)",
+            name="datetime_shape",
+        ),
+        # 시각 값이 있으면 tz가 있고, 시각 값이 없으면 tz도 없다(주인 없는 시간대 금지).
+        CheckConstraint(
+            "(tz IS NULL) = (planned_at IS NULL AND actual_at IS NULL)", name="tz_iff_instant"
+        ),
+        CheckConstraint("tz IS NULL OR tz ~ '^[A-Za-z0-9_+/-]{1,64}$'", name="tz_format"),
+        # 업무 날짜 범위(2000~2999) — 달력 끝 값의 파생 산술 OverflowError 방지(적대 검토 반영 ⑤)
+        CheckConstraint(
+            " AND ".join(
+                [_DATE_IN_RANGE.format(col=c) for c in ("planned_on", "actual_on")]
+                + [_INSTANT_IN_RANGE.format(col=c) for c in ("planned_at", "actual_at")]
+            ),
+            name="value_range",
+        ),
+        # 신고수리 실적은 통관 기록에서만 파생된다(X-02 — 같은 사실 2곳 저장 금지).
+        CheckConstraint(
+            "milestone_type <> 'CUSTOMS_CLEARED' OR (actual_on IS NULL AND actual_at IS NULL)",
+            name="customs_actual_from_records",
+        ),
+        # (소유자, 종류) 살아 있는 행 유일 — 위반 409 DUPLICATE_TYPE(재유입 = 신규).
+        unique_active("milestones", "shipment_id", "milestone_type"),
+        unique_active("milestones", "po_id", "milestone_type"),
+    )
+
+
+class MilestoneChange(PkMixin, Base):
+    """마일스톤 변경 이력 — **IMMUTABLE**(`revoke_mutations` — INSERT/SELECT만, ADR-0083 / §17.5 확장).
+
+    롤오버 = PLAN_CHANGED. PLAN_CHANGED·ACTUAL_CORRECTED는 사유 필수(CHECK). 멱등 정본은 `idempotency_keys`(이 표에 키 열 없음 — X-06).
+    """
+
+    __tablename__ = "milestone_changes"
+
+    milestone_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("milestones.id", ondelete="RESTRICT"), nullable=False
+    )
+    change_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    old_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    new_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    old_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    new_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    old_tz: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    new_tz: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 사람 행위자(마일스톤 변경에 자동 경로는 없다 — NOT NULL).
+    actor_user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        value_in("change_kind", [k.value for k in MilestoneChangeKind], name="change_kind_valid"),
+        CheckConstraint(
+            f"change_kind NOT IN ({_in_list(REASON_REQUIRED_CHANGES)}) OR reason IS NOT NULL",
+            name="reason_required",
+        ),
+        CheckConstraint(
+            "reason IS NULL OR (char_length(reason) BETWEEN 1 AND 500 AND "
+            + _HAS_VISIBLE.format(col="reason")
+            + " AND reason !~ '[[:cntrl:]]')",
+            name="reason_clean",
+        ),
+        # 값 쌍 규약 — 한 값은 날짜형 또는 시각형 하나, 시각형 값에는 tz가 붙는다.
+        CheckConstraint(
+            "(old_on IS NULL OR old_at IS NULL) AND (new_on IS NULL OR new_at IS NULL)"
+            " AND (old_at IS NULL) = (old_tz IS NULL) AND (new_at IS NULL) = (new_tz IS NULL)",
+            name="value_pairs",
+        ),
+        # 종류 의미 — 설정·기록은 이전 값 없음, 변경·정정은 이전 값 있음, 새 값 없음(삭제)은 실적 정정에만.
+        CheckConstraint(
+            "((change_kind IN ('PLAN_SET', 'ACTUAL_RECORDED')) = (old_on IS NULL AND old_at IS NULL))"
+            " AND (change_kind = 'ACTUAL_CORRECTED' OR new_on IS NOT NULL OR new_at IS NOT NULL)",
+            name="kind_values",
+        ),
+        # 무변경 이력 금지(no-op은 이력 행을 만들지 않는다 — 응답 change = null).
+        CheckConstraint(
+            "(old_on, old_at, old_tz) IS DISTINCT FROM (new_on, new_at, new_tz)", name="changed"
+        ),
+        Index("ix_milestone_changes_milestone_id_id", "milestone_id", desc("id")),
+        Index("ix_milestone_changes_actor_user_id", "actor_user_id"),
+    )
+
+
+class MilestoneChangeNotice(PkMixin, Base):
+    """롤오버 통보 기록 연결 — **IMMUTABLE**(ADR-0083). 통보 = comm_logs SHIPMENT 주제 1행(선적 전용 통로 M6만 생성).
+
+    이력 행이 불변이라 통보는 사후 연결 표로 둔다(미연결 롤오버 = '통보 기록 없음' 배지). **발송 코드 0** — 일어난 일의 기록이다.
+    """
+
+    __tablename__ = "milestone_change_notices"
+
+    change_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("milestone_changes.id", ondelete="RESTRICT"), nullable=False
+    )
+    comm_log_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("comm_logs.id", ondelete="RESTRICT"), nullable=False
+    )
+    actor_user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "change_id", "comm_log_id", name="uq_milestone_change_notices_change_id_comm_log_id"
+        ),
+        Index("ix_milestone_change_notices_comm_log_id", "comm_log_id"),
+        Index("ix_milestone_change_notices_actor_user_id", "actor_user_id"),
+    )
+
+
+class ItemProfileMilestoneType(PkMixin, TimestampMixin, SoftDeleteMixin, ActorMixin, Base):
+    """품목군 마일스톤 세트(§4.8 / design-B B16 / N-01) — 계획 초안(M4)의 적용 종류 = 구분별 적용 집합 ∩ 라인 SKU 품목군 세트 합집합.
+
+    선적 저장형 8종만(CHECK). 쓰기 경로(`/item-profiles/{id}/milestone-types`, ADMIN 전용)는 PR-4c — 표는 M15에 먼저 선다.
+    품목군(`item_profiles`)은 requirements·catalog 소관이라 테이블 이름 FK만 쓴다(임포트 0 — X-29).
+    """
+
+    __tablename__ = "item_profile_milestone_types"
+
+    profile_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("item_profiles.id", ondelete="RESTRICT"), nullable=False
+    )
+    milestone_type: Mapped[str] = mapped_column(String(24), nullable=False)
+
+    __table_args__ = (
+        value_in("milestone_type", sorted(SHIPMENT_STORED_MILESTONES), name="type_valid"),
+        # unique_active()가 만들 이름(64자)이 PG 상한(63)을 넘어 짧게 직접 짓는다(item_profile_document_types 선례).
+        Index(
+            "uq_item_profile_milestone_types_profile_type_active",
+            "profile_id",
+            "milestone_type",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )

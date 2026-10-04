@@ -86,6 +86,45 @@ CONSTRAINT_ERRORS: dict[str, ErrorCode] = {
 _ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
 
 
+@dataclass(frozen=True, slots=True)
+class HolidayLookup:
+    """한 국가의 판정 입력 — 선언된 연도 집합(빈 목록 ≠ 미선언)과 요청한 날짜 중 휴일인 날짜 → 이름. `calc.holiday_flag`에 그대로 넘긴다."""
+
+    covered_years: frozenset[int]
+    holidays: dict[date, str]
+
+
+def lookup_days(session: Session, country: str, days: set[date]) -> HolidayLookup:
+    """국가·날짜들의 휴일 판정 입력을 **질의 2회**로 일괄 로드한다(선적 마일스톤 조립 — N+1 금지, 호출자 트랜잭션에서 읽기만).
+
+    도메인을 모른다(국가 코드·날짜만 받는다 — S3_PLATFORM). 날짜가 없거나 국가 형식이 아니면 질의 없이 빈 결과(= UNVERIFIED 판정).
+    """
+    if not days or not is_country_code(country):
+        return HolidayLookup(frozenset(), {})
+    years = sorted({day.year for day in days})
+    covered = frozenset(
+        int(year)
+        for year in session.execute(
+            select(HolidayCalendarYear.year).where(
+                HolidayCalendarYear.country_code == country,
+                HolidayCalendarYear.year.in_(years),
+                HolidayCalendarYear.deleted_at.is_(None),
+            )
+        ).scalars()
+    )
+    found = {
+        row[0]: str(row[1])
+        for row in session.execute(
+            select(Holiday.holiday_on, Holiday.name).where(
+                Holiday.country_code == country,
+                Holiday.holiday_on.in_(sorted(days)),
+                Holiday.deleted_at.is_(None),
+            )
+        ).all()
+    }
+    return HolidayLookup(covered, found)
+
+
 def _constraint_of(exc: IntegrityError) -> str | None:
     return getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
 

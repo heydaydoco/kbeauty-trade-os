@@ -42,7 +42,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db.base import Base
-from app.core.db.constraints import unique_active, value_in
+from app.core.db.constraints import (
+    BLANK_CHAR_CLASS,
+    SPACE_CHAR_CLASS,
+    unique_active,
+    value_in,
+)
 from app.core.db.mixins import (
     ActorMixin,
     PkMixin,
@@ -52,7 +57,11 @@ from app.core.db.mixins import (
 )
 
 #: 통신 기록의 주제 유형 — 소비분 한정 확장(위 독스트링). 폭 20은 후속 주제 여유다.
-COMM_SUBJECT_TYPES = ("CERTIFICATION",)
+#: S3-2 PR-4a(M15·ADR-0083): SHIPMENT = 선적 마일스톤 롤오버 통보 기록 — **선적 전용 통로(M6)만** 만든다.
+COMM_SUBJECT_TYPES = ("CERTIFICATION", "SHIPMENT")
+#: 범용 `/comm-logs`가 다루는 주제(쓰기·목록·id 접근·문서 첨부) — SHIPMENT는 범위 밖이다(R-05: POST 스키마 422·목록 기본 제외·
+#: id 접근 404·COMM_LOG 첨부 거부). 선적 통보는 선적 권한·화면(`/shipments/{id}/milestone-changes…`)으로만 오간다.
+GENERIC_COMM_SUBJECT_TYPES = ("CERTIFICATION",)
 
 
 class AgencyContract(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin, Base):
@@ -112,7 +121,22 @@ class CommLog(PkMixin, TimestampMixin, SoftDeleteMixin, VersionMixin, ActorMixin
 
     __table_args__ = (
         value_in("subject_type", COMM_SUBJECT_TYPES),
-        CheckConstraint("length(btrim(summary)) > 0", name="summary_not_blank"),
+        # 보이는 글자 1개 이상(M15 재정의 — btrim은 U+0020만 자른다). 범용 주제는 유니코드 공백만 빈 글자로 보고(기존 행 = 파이썬
+        # strip 통과분이라 호환), 선적 통보는 보이지 않는 서식·채움 글자까지 빈 글자로 본다(S3-2 PR-4a 적대 검토 반영 ⑥).
+        CheckConstraint(
+            "summary ~ '[^"
+            + SPACE_CHAR_CLASS
+            + "]' AND (subject_type <> 'SHIPMENT' OR summary ~ '[^"
+            + BLANK_CHAR_CLASS
+            + "]')",
+            name="summary_not_blank",
+        ),
+        # 선적 통보의 오간 날 = 업무 날짜 범위(2000~2999 — 적대 검토 반영 ⑤). 범용 주제 행은 대상 밖(기존 데이터 무접촉).
+        CheckConstraint(
+            "subject_type <> 'SHIPMENT'"
+            " OR occurred_on BETWEEN DATE '2000-01-01' AND DATE '2999-12-31'",
+            name="shipment_occurred_on_range",
+        ),
         CheckConstraint(
             "next_action IS NULL OR length(btrim(next_action)) > 0", name="next_action_not_blank"
         ),

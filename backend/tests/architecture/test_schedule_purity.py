@@ -28,6 +28,7 @@ ALLOWED_IMPORTS = {
     "typing",
     "zoneinfo",
     "app.core.time",  # KST 상수만(아래 금지 이름으로 시계 함수 차단)
+    "app.core.tzdb",  # 앱 버전 고정 tzdata 읽기(패키지 데이터 파일뿐 — DB·시계 0, PR-4a 적대 검토 반영)
     "app.modules.trade_docs.constants",  # 결제유형·앵커 열거(L0 — 순수 상수)
 }
 #: 시계·DB 의존을 뜻하는 이름 — 언급 자체를 금지한다(별칭 임포트 우회까지 잡는다).
