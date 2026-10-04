@@ -20,13 +20,14 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Integer, String, column, exists, func, select, table
+from sqlalchemy import DateTime, Integer, String, case, column, exists, func, select, table
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError
 from app.core.time import today_kst, utcnow
+from app.modules.catalog.models import ItemProfile
 from app.modules.collaboration.models import CommLog
 from app.modules.holidays import calc as holiday_calc
 from app.modules.holidays import service as holidays
@@ -36,6 +37,7 @@ from app.modules.sales_orders.models import SalesOrder
 from app.modules.shipments import service as shipments
 from app.modules.shipments.models import (
     CustomsRecord,
+    ItemProfileMilestoneType,
     Milestone,
     MilestoneChange,
     MilestoneChangeNotice,
@@ -719,3 +721,56 @@ def list_customs_records(
             .limit(limit)
         ).all()
         return [customs_record_body(record, name) for record, name in rows], int(total)
+
+
+# ── 품목군 마일스톤 세트(PR-4c — GET /item-profiles/{id}/milestone-types) ────────────────────
+
+
+def require_profile(session: Session, profile_id: int) -> None:
+    """경로의 품목군(살아 있는 행) — 없으면 404(경로 자원이라 부모 404, 부작용 0 — `D:370`. 본문 FK 검사인 catalog 422와 다르다)."""
+    found = session.execute(
+        select(ItemProfile.id).where(ItemProfile.id == profile_id, ItemProfile.deleted_at.is_(None))
+    ).scalar_one_or_none()
+    if found is None:
+        raise NotFoundError(log_context={"item_profile_id": profile_id})
+
+
+def profile_milestone_type_body(row: ItemProfileMilestoneType) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "item_profile_id": row.profile_id,
+        "milestone_type": row.milestone_type,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+#: 세트 목록 정렬 = 선적 보드 업무 흐름 순서(파생 3종은 세트에 없다 — 남는 8종이 흐름 순).
+_SET_ORDER = case(
+    {milestone_type: index for index, milestone_type in enumerate(SHIPMENT_BOARD_ORDER)},
+    value=ItemProfileMilestoneType.milestone_type,
+    else_=len(SHIPMENT_BOARD_ORDER),
+)
+
+
+def list_profile_milestone_types(
+    *, profile_id: int, offset: int, limit: int
+) -> tuple[list[dict[str, Any]], int]:
+    """품목군 마일스톤 세트(살아 있는 행 — Page, 업무 흐름 순). 세트가 비면 계획 초안은 구분별 전부를 쓴다(누락보다 과다 — B16)."""
+    with unit_of_work() as uow:
+        session = uow.session
+        require_profile(session, profile_id)
+        conditions = (
+            ItemProfileMilestoneType.profile_id == profile_id,
+            ItemProfileMilestoneType.deleted_at.is_(None),
+        )
+        total = session.execute(
+            select(func.count()).select_from(ItemProfileMilestoneType).where(*conditions)
+        ).scalar_one()
+        found = session.execute(
+            select(ItemProfileMilestoneType)
+            .where(*conditions)
+            .order_by(_SET_ORDER, ItemProfileMilestoneType.id)
+            .offset(offset)
+            .limit(limit)
+        ).scalars()
+        return [profile_milestone_type_body(row) for row in found], int(total)

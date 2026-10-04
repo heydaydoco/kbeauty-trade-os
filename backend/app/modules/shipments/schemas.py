@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from app.modules.trade_docs.constants import MAX_LINES
+from app.modules.trade_docs.constants import MAX_LINES, MilestoneType
 from app.modules.trade_docs.schemas import IncotermOut, PaymentTermsOut, StatusLogOut
 
 __all__ = ["StatusLogOut"]  # 라우터가 이 모듈에서 가져온다(공용 조각의 재노출)
@@ -148,6 +148,14 @@ class MilestonePlanDraftRequest(BaseModel):
     """계획 초안 1클릭(M4) — 본문 없음(`{}`). 적용 종류의 빈 계획 행을 만들고 이미 있는 종류는 건너뛴다."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class ProfileMilestoneTypeAddRequest(BaseModel):
+    """품목군 마일스톤 세트에 종류 추가(S3-2 PR-4c — 관리자). 선적 저장형 8종만(파생·OEM 종류 = 도메인 422 TYPE_NOT_APPLICABLE, 모르는 값 = 스키마 422)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    milestone_type: MilestoneType
 
 
 class MilestoneNoticeRequest(BaseModel):
@@ -378,6 +386,15 @@ class OemMilestoneBoardOut(MilestoneBoardOut):
     po_id: int
     #: 표시 편의(서버가 쓰기 시 다시 검사한다) — EDIT_MILESTONES(무역·관리자, 발주가 발행·공급사 확인 중일 때).
     allowed_actions: list[str]
+
+
+class ProfileMilestoneTypeOut(BaseModel):
+    """품목군 마일스톤 세트 행 1개 — 제거는 `DELETE /item-profiles/{profile_id}/milestone-types/{id}`."""
+
+    id: int
+    item_profile_id: int
+    milestone_type: str
+    created_at: datetime
 
 
 class OemMilestoneWriteOut(BaseModel):

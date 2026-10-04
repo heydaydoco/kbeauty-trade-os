@@ -755,7 +755,9 @@ def require_profile_milestone_type(
     return row
 
 
-def remove_profile_milestone_type(profile_type: ItemProfileMilestoneType, *, actor_id: int) -> None:
+def soft_delete_profile_milestone_type(
+    profile_type: ItemProfileMilestoneType, *, actor_id: int
+) -> None:
     """세트에서 종류 제거 = soft delete(재추가는 부활이 아니라 신규 — §17.4). 수신자 이름 `profile_type`은 soft delete 통로 스캔 등재명."""
     profile_type.deleted_at = utcnow()
     profile_type.updated_by_id = actor_id
