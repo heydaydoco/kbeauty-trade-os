@@ -11,7 +11,9 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
+from app.core.db.session import owner_engine
 from app.modules.identity.models import RoleCode
 from app.modules.trade_chain import document_flow
 from app.modules.trade_docs.constants import DocKind
@@ -158,6 +160,21 @@ def test_import_or_unknown_shipments_are_outside_the_flow(trade: TestClient) -> 
     for role in (RoleCode.LOGISTICS, RoleCode.CERT, RoleCode.VIEWER):
         with logged_in(role) as client:
             assert client.get(f"{FLOW}/SHIPMENT/{exported['id']}").status_code == 200, role
+
+
+def test_a_soft_deleted_shipment_is_neither_an_entry_nor_a_node(trade: TestClient) -> None:
+    """A — 삭제(soft delete) 행은 흐름에 없다: 삭제 선적으로 들어오면 404, SO의 흐름에도 노드가 없다(취소 선적은 이력이라 남는 것과 구분 —
+    선적 헤더 삭제 API는 없고 원시 UPDATE로만 만든다)"""
+    so = confirmed_so((10,))
+    kept = created(trade, so["id"], [(so["line_ids"][0], 1)])
+    gone = created(trade, so["id"], [(so["line_ids"][0], 1)])
+    with owner_engine.begin() as connection:
+        connection.execute(
+            text("UPDATE shipments SET deleted_at = now() WHERE id = :i"), {"i": gone["id"]}
+        )
+    assert trade.get(f"{FLOW}/SHIPMENT/{gone['id']}").status_code == 404
+    for kind, doc_id in (("SALES_ORDER", so["id"]), ("SHIPMENT", kept["id"])):
+        assert [n["id"] for n in _flow(trade, kind, doc_id)["nodes"]] == [so["id"], kept["id"]]
 
 
 # ── K. 쿼리 수 상한 ─────────────────────────────────────────────────────────────
