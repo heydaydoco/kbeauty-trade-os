@@ -177,6 +177,8 @@ export function ShipmentCreateDialog({ so, onClose, onReload }: Props) {
     if (emptied.length === 0) return;
     setQty((prev) => ({ ...prev, ...Object.fromEntries(emptied.map((line) => [line.id, ""])) }));
     setDropped((prev) => new Set([...prev, ...emptied.map((line) => line.id)]));
+    // 409 복귀 포커스가 그 칸에 있었다면 칸이 비활성이 되며 포커스가 문서로 빠진다(실브라우저 재확인 발견) — 다음 문제 칸·1단 제목으로 다시 옮긴다.
+    requestFocus("problem");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSignature, qty]);
 

@@ -380,6 +380,9 @@ describe("선적 만들기 2단 대화상자", () => {
     fireEvent.change(within(dialog).getByLabelText("도착국 (필수)"), { target: { value: "US" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "다음: 미리보기" }));
     expect(await within(dialog).findByText("남은 수량이 없어 이번 선적에서 뺐습니다(서버 재확인 결과).")).toBeInTheDocument();
+    // 포커스가 비활성이 된 칸과 함께 문서로 빠지지 않고 1단 제목에 있다(실브라우저 재확인 발견).
+    const step1 = within(dialog).getByRole("heading", { name: /선적 만들기 — SO-2026-0001/ });
+    await waitFor(() => expect(document.activeElement).toBe(step1));
     const next = within(dialog).getByRole("button", { name: "다음: 미리보기" });
     expect(next).toBeEnabled();
     fireEvent.click(next);
