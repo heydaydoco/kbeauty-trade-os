@@ -492,9 +492,8 @@ def _plan_import(
 ) -> _Plan:
     """PO → 수입선적 계획(T2). 오류 우선순위 404 → 409 → 422: 무잠금 peek로 PO 존재·소비 가능 상태를 먼저 본 뒤 역할·거래처·라인 순."""
     requested_parties = list(payload.get("parties") or [])
-    peek = _read_po(
-        session, po_id
-    )  # 공급사·구분·통화·조건은 발행 = 동결(ORIGIN)이라 무잠금 peek로 읽어도 안전하다
+    # 공급사·구분·통화·조건은 발행 = 동결(ORIGIN)이라 무잠금 peek로 읽어도 안전하다
+    peek = _read_po(session, po_id)
     if peek.status not in CONSUMABLE_STATUSES[PO_KIND]:
         raise _not_consumable(PO_KIND, peek.status)
     kind = ShipmentKind.IMPORT.value

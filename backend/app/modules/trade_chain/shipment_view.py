@@ -429,9 +429,8 @@ def list_shipments(
                 "created_at": row.created_at.isoformat(),
                 "updated_at": row.updated_at.isoformat(),
             }
-            if not is_import(
-                row
-            ):  # 수출만 — 통화·판매가 합계(수입 행은 키 자체가 없다 — 상세·CSV 빈칸과 같은 판정)
+            # 수출만 — 통화·판매가 합계(수입 행은 키 자체가 없다 — 상세·CSV 빈칸과 같은 판정)
+            if not is_import(row):
                 item.update(
                     {
                         "currency": row.currency,
