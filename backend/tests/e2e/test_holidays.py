@@ -485,6 +485,26 @@ def test_csv_preview_rejects_bad_files_whole(admin: TestClient, raw: bytes) -> N
     assert response.json()["error"]["code"] == "HOLIDAYS.CSV.INVALID_FORMAT"
 
 
+@pytest.mark.group_k
+def test_reads_are_one_snapshot_and_refuse_to_join_an_open_transaction() -> None:
+    """조회(H1·H2·H4)는 독립 읽기 트랜잭션의 첫 문장에서 `REPEATABLE READ, READ ONLY` — 선언 version과 휴일 행이 한 스냅샷.
+    바깥 트랜잭션에 합류하면(첫 문장 보장 불가) 프로그래밍 오류로 멈춘다"""
+    from app.core.db.uow import unit_of_work
+
+    assert (
+        service.SNAPSHOT_STATEMENT == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+    )
+    calls = (
+        lambda: service.list_calendars(country=None, year=None, offset=0, limit=50),
+        lambda: service.list_holidays(country="CN", year=2026, offset=0, limit=50),
+        lambda: service.export_rows(country="CN", year=2026),
+    )
+    for call in calls:
+        with unit_of_work(), pytest.raises(RuntimeError):
+            call()
+    assert service.list_holidays(country="CN", year=2026, offset=0, limit=50) == (None, [], 0)
+
+
 # ── A·GC-A19 — 저장 데이터 → 판정 (함수 층 배선 확인) ─────────────────────────
 
 

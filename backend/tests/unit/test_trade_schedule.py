@@ -343,9 +343,8 @@ def test_loading_fulfilment_open_overdue_and_unknown() -> None:
 # ── 시각형 기준일 (B20 행 15) ──────────────────────────────────────────────────
 
 
-@pytest.mark.golden
 def test_cutoff_scan_date_takes_the_earlier_of_local_and_kst() -> None:
-    """B20-15 — 2026-10-11T00:00Z·America/Los_Angeles → 2026-10-10(현지 10-10 < KST 10-11) · 서울은 같은 날 · 모르는 시간대·naive = ValueError"""
+    """B20-15(GC 비배정 경계 행 — PR-4a·6 소비) — 2026-10-11T00:00Z·America/Los_Angeles → 2026-10-10(현지 10-10 < KST 10-11) · 서울은 같은 날 · 모르는 시간대·naive = ValueError"""
     instant = datetime(2026, 10, 11, 0, 0, tzinfo=UTC)
     assert s.cutoff_scan_date(instant, "America/Los_Angeles") == date(2026, 10, 10)
     assert s.cutoff_scan_date(instant, "Asia/Seoul") == date(2026, 10, 11)

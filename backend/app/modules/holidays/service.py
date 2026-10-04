@@ -14,16 +14,18 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.csv_export import unescape_formula_cell
-from app.core.db.uow import unit_of_work
+from app.core.db.uow import in_unit_of_work, unit_of_work
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, NotFoundError, VersionConflictError
 from app.core.text import invisible_char_problem
@@ -171,6 +173,21 @@ def _holidays(year: int, items: list[dict[str, Any]]) -> list[tuple[date, str]]:
 
 # ── 조회 ────────────────────────────────────────────────────────────────────
 
+#: 조회 트랜잭션의 첫 문장 — 선언(version·건수)과 휴일 행·건수가 **한 스냅샷**이다(사이에 커밋된 교체가 섞여
+#: `calendar.version`과 다른 판의 휴일이 함께 보이지 않게 — 오더 보드 `read_snapshot` 선례).
+SNAPSHOT_STATEMENT = "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+
+
+@contextmanager
+def _read_snapshot() -> Iterator[Session]:
+    if (
+        in_unit_of_work()
+    ):  # SET TRANSACTION은 첫 문장이어야 한다 — 바깥 트랜잭션 합류는 프로그래밍 오류
+        raise RuntimeError("휴일 조회는 독립 트랜잭션이어야 합니다.")
+    with unit_of_work() as uow:
+        uow.session.execute(text(SNAPSHOT_STATEMENT))
+        yield uow.session
+
 
 @dataclass(frozen=True, slots=True)
 class CalendarYearView:
@@ -238,8 +255,7 @@ def list_calendars(
         require_country(country)
     if year is not None:
         require_year(year)
-    with unit_of_work() as uow:
-        session = uow.session
+    with _read_snapshot() as session:
         query = _calendar_query()
         count_query = select(func.count(HolidayCalendarYear.id)).where(
             HolidayCalendarYear.deleted_at.is_(None)
@@ -285,8 +301,7 @@ def list_holidays(
     """H2 — 한 국가·연도의 휴일(날짜순). 선언이 없으면 (None, [], 0) — **미선언 ≠ 빈 선언**(UNVERIFIED의 화면 근거)."""
     require_country(country)
     require_year(year)
-    with unit_of_work() as uow:
-        session = uow.session
+    with _read_snapshot() as session:
         calendar = _find_calendar(session, country, year)
         if calendar is None:
             return None, [], 0
@@ -306,8 +321,7 @@ def export_rows(*, country: str, year: int) -> list[tuple[str, str]]:
     """H4 — 한 국가·연도 휴일 CSV 행(날짜 문자열·이름). 선언이 없으면 404(빈 파일로 '휴일 없음'처럼 보이지 않게)."""
     require_country(country)
     require_year(year)
-    with unit_of_work() as uow:
-        session = uow.session
+    with _read_snapshot() as session:
         calendar = _find_calendar(session, country, year)
         if calendar is None:
             raise NotFoundError(log_context={"country": country, "year": year})
