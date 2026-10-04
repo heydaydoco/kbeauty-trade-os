@@ -55,7 +55,16 @@ PAYLOAD_KEYS = (
     "partner_id",
     # S3-2 PR-3a — SO 선적 수렴(CONFIRMED↔IN_SHIPMENT)을 일으킨 선적 id(자동 전이에만 실린다 — 그 밖의 이벤트에는 키가 없다).
     "cause_shipment_id",
+    # S3-2 PR-3a(design-integrated §2.7) — 선적 이벤트에만 싣는 구분·원천(KIND_PAYLOAD_COLUMNS). 금액·원가 0.
+    "shipment_kind",
+    "so_id",
+    "po_id",
 )
+
+#: 종류별로 커널 payload에 더 싣는 헤더 열(화이트리스트 `PAYLOAD_KEYS` 안에서만) — 선적의 구분·원천 FK(수출 = so_id, 수입 = po_id).
+KIND_PAYLOAD_COLUMNS: dict[DocKind, tuple[str, ...]] = {
+    DocKind.SHIPMENT: ("shipment_kind", "so_id", "po_id"),
+}
 
 
 def _kind(doc: Any) -> DocKind:
@@ -77,6 +86,7 @@ def _payload(
         "automatic": automatic,
         "assignee_id": doc.assignee_id,
         "partner_id": getattr(doc, PARTNER_COLUMN[kind]),
+        **{column: getattr(doc, column) for column in KIND_PAYLOAD_COLUMNS.get(kind, ())},
     }
 
 

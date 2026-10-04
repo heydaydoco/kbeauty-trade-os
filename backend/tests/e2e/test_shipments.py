@@ -446,6 +446,22 @@ def test_events_and_so_history_carry_the_convergence(trade: TestClient) -> None:
         created_events[0]["partner_id"] == so["buyer"]
         and "cause_shipment_id" not in created_events[0]
     )
+    # design-integrated §2.7 — created payload = shipment_id(doc_id)·doc_number·shipment_kind·so_id/po_id·partner_id·assignee_id
+    for event in (
+        *created_events,
+        *_events("shipments", shipment["id"], "shipments.shipment.status_changed"),
+    ):
+        assert (event["doc_id"], event["shipment_kind"], event["so_id"], event["po_id"]) == (
+            shipment["id"],
+            "EXPORT",
+            so["id"],
+            None,
+        )
+        assert event["doc_number"] == shipment["doc_number"] and "assignee_id" in event
+    so_created = _events("sales_orders", so["id"], "sales_orders.sales_order.status_changed")
+    assert all(
+        "shipment_kind" not in e and "so_id" not in e for e in so_created
+    )  # 다른 전표 이벤트는 그대로
     so_events = _events("sales_orders", so["id"], "sales_orders.sales_order.status_changed")
     assert [
         (e["from_status"], e["to_status"], e["automatic"], e["cause_shipment_id"])
