@@ -1070,7 +1070,7 @@ function LinesSection({
               <tr>
                 <th className="cell-nowrap px-3 py-2 text-center">번호</th>
                 <th className="cell-nowrap px-3 py-2">SKU</th>
-                <th className="cell-nowrap px-3 py-2">품명</th>
+                <th className="cell-nowrap min-w-32 px-3 py-2">품명</th>
                 <th className="cell-nowrap px-3 py-2 text-center">수량</th>
                 {showShipmentOpen && <th className="cell-nowrap px-3 py-2 text-center">선적 잔량</th>}
                 <th className="cell-nowrap px-3 py-2 text-center">요청납기</th>

@@ -125,6 +125,15 @@ describe("SO 상세 — 선적 섹션·선적 잔량", () => {
   });
 });
 
+describe("SO 상세 — 소스 계약", () => {
+  it("라인 표에 '선적 잔량' 열을 더했으니 품명 칸에 최소 폭을 둔다(390px 실브라우저 발견 — 글자 단위 꺾임)", () => {
+    const src = Object.values(
+      import.meta.glob("./sales-order-detail.tsx", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
+    )[0] as string;
+    expect(src).toMatch(/<th className="cell-nowrap min-w-\d+ px-3 py-2">품명<\/th>/);
+  });
+});
+
 describe("선적 만들기 2단 대화상자", () => {
   function openDialog(extra: GateHandler[] = [], so = confirmed()) {
     const stub = open(so, TRADER, extra);
