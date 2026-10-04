@@ -16,6 +16,9 @@ class DocKind(StrEnum):
     PROFORMA_INVOICE = "PROFORMA_INVOICE"
     SALES_ORDER = "SALES_ORDER"
     PURCHASE_ORDER = "PURCHASE_ORDER"
+    #: S3-2 PR-3a — 선적(수출·수입 한 kind + `shipment_kind` 4값, ADR-0074). approvals·gates 대상 CHECK는 넓히지 않는다
+    #: (두 집합은 DocKind의 부분집합이면 된다 — 선적 승인·게이트는 만들지 않는다).
+    SHIPMENT = "SHIPMENT"
 
 
 #: 채번 접두어(표시·채번 전용). doc_number 형식 CHECK와 3자 일치한다(테스트가 대사).
@@ -24,6 +27,7 @@ DOC_PREFIXES: dict[DocKind, str] = {
     DocKind.PROFORMA_INVOICE: "PI",
     DocKind.SALES_ORDER: "SO",
     DocKind.PURCHASE_ORDER: "PO",
+    DocKind.SHIPMENT: "SH",  # 수출·수입 공유(ADR-0074 — `SI`는 S3-3 Shipping Instruction 약어와 충돌)
 }
 
 #: 헤더·라인·상태이력 테이블 이름(테이블 이름 기반 Core 쿼리가 소비 — 모델 무임포트).
@@ -32,18 +36,21 @@ DOC_TABLES: dict[DocKind, str] = {
     DocKind.PROFORMA_INVOICE: "proforma_invoices",
     DocKind.SALES_ORDER: "sales_orders",
     DocKind.PURCHASE_ORDER: "purchase_orders",
+    DocKind.SHIPMENT: "shipments",
 }
 LINE_TABLES: dict[DocKind, str] = {
     DocKind.QUOTATION: "quotation_lines",
     DocKind.PROFORMA_INVOICE: "proforma_invoice_lines",
     DocKind.SALES_ORDER: "sales_order_lines",
     DocKind.PURCHASE_ORDER: "purchase_order_lines",
+    DocKind.SHIPMENT: "shipment_lines",
 }
 STATUS_LOG_TABLES: dict[DocKind, str] = {
     DocKind.QUOTATION: "quotation_status_log",
     DocKind.PROFORMA_INVOICE: "proforma_invoice_status_log",
     DocKind.SALES_ORDER: "sales_order_status_log",
     DocKind.PURCHASE_ORDER: "purchase_order_status_log",
+    DocKind.SHIPMENT: "shipment_status_log",
 }
 #: 상태이력 표의 문서 FK 컬럼 이름.
 STATUS_LOG_FK: dict[DocKind, str] = {
@@ -51,6 +58,7 @@ STATUS_LOG_FK: dict[DocKind, str] = {
     DocKind.PROFORMA_INVOICE: "proforma_invoice_id",
     DocKind.SALES_ORDER: "sales_order_id",
     DocKind.PURCHASE_ORDER: "purchase_order_id",
+    DocKind.SHIPMENT: "shipment_id",
 }
 #: 라인 → 헤더 FK 컬럼 이름(짧게 — 유니크 인덱스 이름 63자 한도, design-A A1).
 LINE_HEADER_FK: dict[DocKind, str] = {
@@ -58,19 +66,23 @@ LINE_HEADER_FK: dict[DocKind, str] = {
     DocKind.PROFORMA_INVOICE: "pi_id",
     DocKind.SALES_ORDER: "so_id",
     DocKind.PURCHASE_ORDER: "po_id",
+    DocKind.SHIPMENT: "shipment_id",
 }
 #: 헤더 합계 열·라인 금액 열(PO만 원가 이름 — `_cost` 접미가 마스킹·금액 판정에 자동 편입, design-A A12).
+#: 선적은 **판매가 축**(수출 = SO 단가 사본 × 수량, 수입 = 0 — PO 원가 비복사, ADR-0024 10번째 채널 미개설).
 HEADER_TOTAL_COLUMN: dict[DocKind, str] = {
     DocKind.QUOTATION: "total_amount",
     DocKind.PROFORMA_INVOICE: "total_amount",
     DocKind.SALES_ORDER: "total_amount",
     DocKind.PURCHASE_ORDER: "total_cost",
+    DocKind.SHIPMENT: "total_amount",
 }
 LINE_AMOUNT_COLUMN: dict[DocKind, str] = {
     DocKind.QUOTATION: "line_amount",
     DocKind.PROFORMA_INVOICE: "line_amount",
     DocKind.SALES_ORDER: "line_amount",
     DocKind.PURCHASE_ORDER: "line_cost",
+    DocKind.SHIPMENT: "line_amount",
 }
 #: 아웃박스 이벤트 이름 접두(`{접두}.created|status_changed`) — aggregate_type은 복수형 테이블명.
 EVENT_PREFIX: dict[DocKind, str] = {
@@ -78,6 +90,7 @@ EVENT_PREFIX: dict[DocKind, str] = {
     DocKind.PROFORMA_INVOICE: "proforma_invoices.proforma_invoice",
     DocKind.SALES_ORDER: "sales_orders.sales_order",
     DocKind.PURCHASE_ORDER: "purchase_orders.purchase_order",
+    DocKind.SHIPMENT: "shipments.shipment",
 }
 #: 거래 상대 열(이벤트 payload는 이를 `partner_id`로 매핑한다 — X-25).
 PARTNER_COLUMN: dict[DocKind, str] = {
@@ -85,14 +98,17 @@ PARTNER_COLUMN: dict[DocKind, str] = {
     DocKind.PROFORMA_INVOICE: "buyer_partner_id",
     DocKind.SALES_ORDER: "buyer_partner_id",
     DocKind.PURCHASE_ORDER: "supplier_partner_id",
+    DocKind.SHIPMENT: "counterparty_partner_id",  # 수출 = SO 바이어, 수입 = PO 공급사(원천 사본)
 }
 
 #: 동결 표식 열 — 이 열이 NOT NULL이면 동결된 전표다(X-03). SO만 confirmed_at(확정 시각=동결 시각).
+#: 선적은 출고지시(PLANNED→RELEASE_ORDERED, 동결 액션 `release-order`) 시각이다.
 FREEZE_COLUMN: dict[DocKind, str] = {
     DocKind.QUOTATION: "frozen_at",
     DocKind.PROFORMA_INVOICE: "frozen_at",
     DocKind.SALES_ORDER: "confirmed_at",
     DocKind.PURCHASE_ORDER: "frozen_at",
+    DocKind.SHIPMENT: "frozen_at",
 }
 
 #: 금액·수량 상한 — 프런트 number 보호(JS 안전 정수)·오버플로 방지(design-A A2).
@@ -149,6 +165,28 @@ class PoKind(StrEnum):
 
     PURCHASE = "PURCHASE"
     OEM_PRODUCTION = "OEM_PRODUCTION"
+
+
+class ShipmentKind(StrEnum):
+    """선적 구분 4값(§7.5 문면 — ADR-0074). **채널입고·샘플무상은 값만 싣고 생성 경로가 닫혀 있다** — DB
+    `ck_shipments_kind_source`가 두 값의 행을 거부한다(S4-3·S5-2·무상 SO 판정 세션이 CHECK를 재정의하며 연다, 부채 Q-03).
+    수출(EXPORT) = SO 참조 생성(PR-3a), 수입(IMPORT) = PO 참조 생성(PR-5a)."""
+
+    EXPORT = "EXPORT"
+    IMPORT = "IMPORT"
+    CHANNEL_INBOUND = "CHANNEL_INBOUND"
+    SAMPLE_FREE = "SAMPLE_FREE"
+
+
+class PartyRole(StrEnum):
+    """선적 당사자 역할 5값(design-A A5). 수출 CONSIGNEE·수입 SHIPPER는 원천 거래처의 **자동 스냅샷 행(불변)**이고,
+    수출 SHIPPER·수입 CONSIGNEE는 자사라 행을 만들지 않는다(422 `SHIPMENTS.PARTY.ROLE_NOT_ALLOWED`)."""
+
+    SHIPPER = "SHIPPER"
+    CONSIGNEE = "CONSIGNEE"
+    NOTIFY = "NOTIFY"
+    FORWARDER = "FORWARDER"
+    CUSTOMS_BROKER = "CUSTOMS_BROKER"
 
 
 class PriceBasis(StrEnum):

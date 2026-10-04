@@ -73,6 +73,11 @@ _NEVER_SEEDED = (
     # S3-2 PR-2a — 휴일 캘린더: 근거 링크·확인일을 사람이 확인한 선언만(시드 0 — ADR-0082, 함정 ⑩·외부 자동 수집 0)
     "holiday_calendar_years",
     "holidays",
+    # S3-2 PR-3a — 선적 4표: 업무 행위의 기록(사람 1클릭 참조 생성만 — 시드 불가·users FK 보유)
+    "shipments",
+    "shipment_lines",
+    "shipment_parties",
+    "shipment_status_log",
 )
 
 

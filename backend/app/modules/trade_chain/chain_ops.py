@@ -21,6 +21,7 @@ from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.purchase_orders.models import PurchaseOrder
 from app.modules.quotations.models import Quotation
 from app.modules.sales_orders.models import SalesOrder
+from app.modules.shipments.models import Shipment
 from app.modules.trade_docs.chain import has_live_children, has_live_confirmed_children
 from app.modules.trade_docs.constants import DocKind
 from app.modules.trade_docs.expiry import is_lapsed
@@ -33,6 +34,7 @@ DOC_MODELS: dict[DocKind, Any] = {
     DocKind.PROFORMA_INVOICE: ProformaInvoice,
     DocKind.SALES_ORDER: SalesOrder,
     DocKind.PURCHASE_ORDER: PurchaseOrder,
+    DocKind.SHIPMENT: Shipment,
 }
 
 #: 조상 사슬 — (조상 종류, 자식 행의 FK 열) 위→아래 순서.
@@ -41,6 +43,9 @@ ANCESTORS: dict[DocKind, tuple[tuple[DocKind, str], ...]] = {
     DocKind.PROFORMA_INVOICE: ((DocKind.QUOTATION, "qt_id"),),
     DocKind.SALES_ORDER: ((DocKind.QUOTATION, "qt_id"), (DocKind.PROFORMA_INVOICE, "pi_id")),
     DocKind.PURCHASE_ORDER: (),
+    # 선적 — SO(수출)·PO(수입) 중 하나만 채워진다(None 조상은 건너뛴다). 선적 기점 경로(라인·출고지시·취소)는 lock_chain 그대로
+    # SO·PO 모두 FOR UPDATE(R-08). SO의 조상(QT·PI)까지는 잠그지 않는다 — 선적은 SO만 수렴시킨다.
+    DocKind.SHIPMENT: ((DocKind.SALES_ORDER, "so_id"), (DocKind.PURCHASE_ORDER, "po_id")),
 }
 
 

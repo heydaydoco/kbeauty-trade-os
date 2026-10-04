@@ -5,7 +5,7 @@
 
 ■ LIVE = `deleted_at IS NULL AND status NOT IN (CANCELLED, EXPIRED)` — COMPLETED·CLOSED·FULLY_RECEIVED·ON_HOLD도
   살아 있다(이행된 체인의 선행 취소 사고 차단). 술어는 `machine.DEAD_STATUSES`에서 만들어 이중 정의하지 않는다.
-■ 사슬 후속만 등록한다: QT←PI(qt_id)·QT←SO(qt_id, PI 경유 SO도 qt_id가 채워진다)·PI←SO(pi_id).
+■ 사슬 후속만 등록한다: QT←PI(qt_id)·QT←SO(qt_id, PI 경유 SO도 qt_id가 채워진다)·PI←SO(pi_id)·SO←선적(so_id)·PO←선적(po_id — S3-2 PR-3a).
   `copied_from_id`(복제 계보)·상태이력 FK·라인→헤더 FK는 후속이 아니다(`NON_CHILD_FK_ALLOWLIST`).
 ■ 아직 만들어지지 않은 후속 테이블은 **건너뛴다**(PR-7a 이전의 SO가 그랬다 — 지금은 없다) — 그 테이블이 없으면 후속도 있을 수 없다.
   누락 방지: 후속 테이블이 metadata에 생기면 그 등록이 이미 이 표에 있어 바로 판정에 편입되고, 표에 없는
@@ -41,6 +41,10 @@ CHILD_LINKS: tuple[ChildLink, ...] = (
     ChildLink(DocKind.QUOTATION, "proforma_invoices", "qt_id"),
     ChildLink(DocKind.QUOTATION, "sales_orders", "qt_id", confirmed_column="confirmed_at"),
     ChildLink(DocKind.PROFORMA_INVOICE, "sales_orders", "pi_id"),
+    # S3-2 PR-3a(ADR-0074·design-A A6) — 살아 있는 선적이 있는 SO·PO는 취소 409 SUCCESSOR_ALIVE(역순 취소). 선적 종결(CLOSED)도 LIVE다.
+    # nullable FK라도 equality 술어라 반대 구분(수입선적의 so_id NULL)은 잡히지 않는다. 수입선적 생성 경로는 PR-5a지만 FK가 생기는 이 PR에서 등록한다.
+    ChildLink(DocKind.SALES_ORDER, "shipments", "so_id"),
+    ChildLink(DocKind.PURCHASE_ORDER, "shipments", "po_id"),
 )
 
 #: 전표·라인 테이블을 가리키지만 사슬 후속이 아닌 FK(사유 필수) — (자식 테이블, FK 열).
@@ -88,6 +92,20 @@ NON_CHILD_FK_ALLOWLIST: dict[tuple[str, str], str] = {
         "purchase_orders",
         "copied_from_id",
     ): "복제 계보 표시 — 사슬 후속이 아니다(살아 있음 판정 제외, X-08)",
+    # S3-2 PR-3a — 선적 계열(design-A A6). 선적 자신의 후속은 S3-2에 0건이다(CI/PL = S3-3이 ChildLink(SHIPMENT, …)를 더한다).
+    (
+        "shipment_lines",
+        "shipment_id",
+    ): "라인은 자기 헤더의 구성 요소다(원천 SO·PO 라인 소비는 LINE_CONSUMERS)",
+    ("shipment_status_log", "shipment_id"): "상태이력은 전표의 사건 기록이다",
+    (
+        "shipment_parties",
+        "shipment_id",
+    ): "당사자 영문 스냅샷은 선적 헤더의 구성 요소다(후속 전표 아님 — 상태·문서번호 없음)",
+    (
+        "shipments",
+        "copied_from_id",
+    ): "믹스인이 주는 복제 계보 열 — 선적은 복제 경로가 없다(CHECK no_copy_lineage로 항상 NULL)",
 }
 
 

@@ -1,7 +1,7 @@
 """K. 전표 상태 기계 — 총수·도달성·RESERVED·3자 대사 (S3-1 ADR-0051 / design-B B1).
 
-허용 25방향(사람 15 + 자동 10) / 미허용 101 / 총 126쌍 — 전이를 더하거나 빼면 EXPECTED와 machine.py 독스트링을
-함께 고친다(ADR-0038 관용). 공회전 방지: 4종이 전부 검사에 들어오고 각 검사가 자기 자신을 시험한다.
+허용 28방향(사람 18 + 자동 10) / 미허용 154 / 총 182쌍(S3-2 PR-3a 선적 편입 — 8상태·사람 3엣지·RESERVED 5) — 전이를 더하거나 빼면
+EXPECTED와 machine.py 독스트링을 함께 고친다(ADR-0038 관용). 공회전 방지: 5종이 전부 검사에 들어오고 각 검사가 자기 자신을 시험한다.
 """
 
 from __future__ import annotations
@@ -38,17 +38,19 @@ EXPECTED: dict[DocKind, tuple[int, int, int, int]] = {
     DocKind.PROFORMA_INVOICE: (8, 12, 1, 7),
     DocKind.SALES_ORDER: (8, 48, 8, 0),
     DocKind.PURCHASE_ORDER: (3, 27, 3, 0),
+    DocKind.SHIPMENT: (3, 53, 3, 0),
 }
 
 
-def test_all_four_documents_are_covered() -> None:
-    """검사 대상이 4종 전부이고 총합이 25/101/126이다(빈 검사로 초록을 사지 않는다)"""
+def test_all_five_documents_are_covered() -> None:
+    """검사 대상이 5종 전부(선적 포함)이고 총합이 28/154/182다(빈 검사로 초록을 사지 않는다)"""
     assert set(EXPECTED) == set(DocKind) == set(STATUSES)
-    assert sum(v[0] for v in EXPECTED.values()) == 25
-    assert sum(v[1] for v in EXPECTED.values()) == 101
-    assert sum(v[2] for v in EXPECTED.values()) == 15
+    assert len(DocKind) == 5
+    assert sum(v[0] for v in EXPECTED.values()) == 28
+    assert sum(v[1] for v in EXPECTED.values()) == 154
+    assert sum(v[2] for v in EXPECTED.values()) == 18
     assert sum(v[3] for v in EXPECTED.values()) == 10
-    assert sum(v[0] + v[1] for v in EXPECTED.values()) == 126
+    assert sum(v[0] + v[1] for v in EXPECTED.values()) == 182
 
 
 @pytest.mark.parametrize("kind", list(DocKind))
@@ -156,19 +158,37 @@ def test_reason_required_states_and_dead_statuses(kind: DocKind) -> None:
     assert set(STATUS_ENUMS[kind]) and {m.value for m in STATUS_ENUMS[kind]} == set(STATUSES[kind])
 
 
-def test_editable_states_are_only_qt_draft_and_so_received() -> None:
-    """편집 가능 상태는 QT:DRAFT·SO:RECEIVED 두 곳뿐이다(PI·PO는 편집 구간이 없다)"""
+def test_editable_states_are_only_qt_draft_so_received_and_shipment_planned() -> None:
+    """편집 가능 상태는 QT:DRAFT·SO:RECEIVED·선적:PLANNED 세 곳뿐이다(PI·PO는 편집 구간이 없다, 선적은 출고지시가 동결)"""
     assert {
         DocKind.QUOTATION: {"DRAFT"},
         DocKind.PROFORMA_INVOICE: set(),
         DocKind.SALES_ORDER: {"RECEIVED"},
         DocKind.PURCHASE_ORDER: set(),
+        DocKind.SHIPMENT: {"PLANNED"},
     } == EDITABLE_STATES
 
 
 def test_prefixes_are_unique_and_two_letters() -> None:
-    """채번 접두어는 4종이 서로 다르다"""
-    assert sorted(DOC_PREFIXES.values()) == ["PI", "PO", "QT", "SO"]
+    """채번 접두어는 5종이 서로 다르다(선적 SH — 수출·수입 공유)"""
+    assert sorted(DOC_PREFIXES.values()) == ["PI", "PO", "QT", "SH", "SO"]
+
+
+def test_shipment_edges_match_the_design() -> None:
+    """선적 활성 엣지 3 — 출고지시(동결 액션 전용)·계획/출고지시→취소(사유 필수), 자동 0, RESERVED 5(피킹·검수·출고·선적·종결 — S4-2)"""
+    assert HUMAN_TRANSITIONS[DocKind.SHIPMENT] == {
+        ("PLANNED", "RELEASE_ORDERED"),
+        ("PLANNED", "CANCELLED"),
+        ("RELEASE_ORDERED", "CANCELLED"),
+    }
+    assert AUTO_TRANSITIONS[DocKind.SHIPMENT] == frozenset()
+    assert FREEZE_ACTION_EDGES[DocKind.SHIPMENT] == {("PLANNED", "RELEASE_ORDERED")}
+    assert RESERVED[DocKind.SHIPMENT] == {"PICKING", "INSPECTED", "RELEASED", "SHIPPED", "CLOSED"}
+    assert REASON_REQUIRED_TO[DocKind.SHIPMENT] == {"CANCELLED"}
+    assert TERMINAL_STATUSES[DocKind.SHIPMENT] == {"CANCELLED"}
+    assert INITIAL_STATUS[DocKind.SHIPMENT] == "PLANNED"
+    # 범용 전이의 `to`는 취소 1값 — 출고지시는 전용 경로(release-order)로만 넘는다.
+    assert public_transition_targets(DocKind.SHIPMENT) == {"CANCELLED"}
 
 
 @pytest.mark.parametrize("kind", list(DocKind))

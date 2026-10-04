@@ -236,13 +236,18 @@ def test_the_supplier_type_check_takes_the_key_share_lock_only_when_creating() -
     assert "partner_type_codes" not in ast.unparse(tree)  # 유형을 직접 읽어 검증하는 우회 없음
 
 
-def test_po_is_outside_the_sales_chain_and_consumers_are_reserved_for_later_sessions() -> None:
-    """PO는 판매 사슬 밖이다 — CHILD_LINKS에 PO 부모·자식이 없고 LINE_CONSUMERS['PO_LINE']은 S3-1에서 등록 0건(S3-2 수입선적·S4-1 입고가 등록). PO 테이블의 전표 FK는 전부 NON_CHILD 허용목록에 사유와 함께 있다"""
-    assert links_for(KIND) == []
+def test_po_is_outside_the_sales_chain_and_only_the_import_shipment_follows_it() -> None:
+    """PO는 판매 사슬 밖이다 — PO 자신은 어느 링크의 자식도 아니고, PO의 후속은 수입선적 하나뿐이다(S3-2 PR-3a CHILD_LINKS, 생성은 PR-5a).
+    PO_LINE 소비자는 수입선적 **IN_TRANSIT** 1건(PO 잔량 불변 — 입고 FULFILL은 S4-1). PO 테이블의 전표 FK는 전부 NON_CHILD 허용목록에 사유와 함께 있다"""
+    assert [(link.child_table, link.fk_column) for link in links_for(KIND)] == [
+        ("shipments", "po_id")
+    ]
     assert all(
         link.child_table not in {"purchase_orders", "purchase_order_lines"} for link in CHILD_LINKS
     )
-    assert LINE_CONSUMERS["PO_LINE"] == ()
+    assert [(spec.name, spec.kind) for spec in LINE_CONSUMERS["PO_LINE"]] == [
+        ("SHIPMENT_LINE.po_line_id", "IN_TRANSIT")
+    ]
     for key in (
         ("purchase_order_lines", "po_id"),
         ("purchase_order_status_log", "purchase_order_id"),

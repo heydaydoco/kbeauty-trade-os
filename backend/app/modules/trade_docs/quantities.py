@@ -103,8 +103,30 @@ LINE_CONSUMERS: dict[str, tuple[ConsumerSpec, ...]] = {
             child_header_fk="so_id",
         ),
     ),
-    "SO_LINE": (),
-    "PO_LINE": (),
+    # S3-2 PR-3a(ADR-0074·0077 / design-A A4) — 수출선적이 SO 라인을 이행 소비한다(부분선적 1:N, 초과 409 EXCEEDS_OPEN).
+    "SO_LINE": (
+        ConsumerSpec(
+            name="SHIPMENT_LINE.so_line_id",
+            child_line_table="shipment_lines",
+            line_fk_col="so_line_id",
+            qty_col="quantity",
+            child_header_table="shipments",
+            child_header_fk="shipment_id",
+        ),
+    ),
+    # 수입선적은 **IN_TRANSIT** — PO 잔량(`open_quantity` 기본 = FULFILL)은 줄지 않고 배정 가능량(kinds={IN_TRANSIT})만 줄인다.
+    # S4-1 입고 FULFILL과 겹쳐 세지 않는다(ADR-0077 승계 계약). 생성 경로는 PR-5a지만 FK가 생기는 이 PR에서 등록한다.
+    "PO_LINE": (
+        ConsumerSpec(
+            name="SHIPMENT_LINE.po_line_id",
+            child_line_table="shipment_lines",
+            line_fk_col="po_line_id",
+            qty_col="quantity",
+            child_header_table="shipments",
+            child_header_fk="shipment_id",
+            kind="IN_TRANSIT",
+        ),
+    ),
 }
 
 #: 등록은 됐으나 자식 라인 테이블이 아직 없는 소비자의 테이블 — 각 전표 PR이 테이블을 만들며 **지워야** 한다
