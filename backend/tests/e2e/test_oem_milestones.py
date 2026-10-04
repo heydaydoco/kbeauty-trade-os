@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from app.core.time import today_kst
 from app.modules.identity.models import RoleCode
 from app.modules.trade_chain import milestone_view
-from tests.factories.shipments import SHIPMENTS, confirmed_so, created, rows, scalar
+from tests.factories.shipments import SHIPMENTS, cancel, confirmed_so, created, rows, scalar
 from tests.factories.trade import (
     create_po_via_api,
     create_supplier,
@@ -308,6 +308,36 @@ def test_a_cancelled_oem_po_takes_no_writes_but_still_reads(trade: TestClient) -
     confirmed = raw_po("SUPPLIER_CONFIRMED", po_kind="OEM_PRODUCTION")
     assert _plan(trade, confirmed, "FILLING", {"planned_on": _day(4)}).status_code == 200
     assert _board(trade, confirmed)["allowed_actions"] == ["EDIT_MILESTONES"]
+
+
+def test_owner_not_active_names_the_right_remedy_per_owner(trade: TestClient) -> None:
+    """PR-4c 적대 검토 반영 ③ — 같은 409 OWNER_NOT_ACTIVE라도 조치 문구는 소유자별로 정확하다: 취소된 **선적**의 마일스톤 쓰기 = "수주에서 새 선적"
+    (발주 안내 0, detail.owner_type = SHIPMENT), 취소된 **발주**의 생산 일정 쓰기 = "새 발주"(선적 안내 0, detail.owner_type = PURCHASE_ORDER).
+    카탈로그 기본 문구는 소유자 중립이다(경로가 덮는다)"""
+    from app.core.errors.catalog import spec_for
+    from app.core.errors.codes import ErrorCode
+
+    so = confirmed_so((5,))
+    shipment = created(trade, so["id"], [(so["line_ids"][0], 1)])
+    assert cancel(trade, shipment["id"]).status_code == 200
+    on_shipment = trade.post(
+        f"{SHIPMENTS}/{shipment['id']}/milestones/ETD/plan",
+        json={"planned_on": _day(3)},
+        headers=idem(),
+    )
+    error = on_shipment.json()["error"]
+    assert (on_shipment.status_code, error["code"]) == (409, "SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE")
+    assert "수주에서 새 선적" in error["message"] and "발주" not in error["message"]
+    assert error["detail"] == {"owner_type": "SHIPMENT"}
+    po_id = _oem_po(trade)["id"]
+    _cancel_po(trade, po_id)
+    on_po = _plan(trade, po_id, "FILLING", {"planned_on": _day(3)})
+    error = on_po.json()["error"]
+    assert (on_po.status_code, error["code"]) == (409, "SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE")
+    assert "새 발주" in error["message"] and "선적" not in error["message"]
+    assert error["detail"] == {"owner_type": "PURCHASE_ORDER"}
+    neutral = spec_for(ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE).message_ko
+    assert "새 선적" not in neutral and "새 발주" not in neutral
 
 
 # ── 권한·오류 우선순위 (검증 K) ──────────────────────────────────────────────────────

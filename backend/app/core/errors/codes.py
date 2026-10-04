@@ -313,7 +313,7 @@ class ErrorCode(StrEnum):
     SHIPMENTS_CUSTOMS_DATE_IN_FUTURE = "SHIPMENTS.CUSTOMS.DATE_IN_FUTURE"
     #: 수리일이 신고일보다 앞이다(서비스 선검증 + CHECK 번역 — R-26).
     SHIPMENTS_CUSTOMS_ACCEPT_BEFORE_DECLARE = "SHIPMENTS.CUSTOMS.ACCEPT_BEFORE_DECLARE"
-    #: (선적, 종류) 살아 있는 마일스톤 행이 이미 있다(부분 유니크 번역 — 동시 최초 입력 경합).
+    #: (소유자, 종류) 살아 있는 마일스톤 행·(품목군, 종류) 세트 행이 이미 있다(부분 유니크 번역 — 동시 최초 입력 경합, 세트 중복 — R-26).
     SHIPMENTS_MILESTONE_DUPLICATE_TYPE = "SHIPMENTS.MILESTONE.DUPLICATE_TYPE"
     #: 파생 마일스톤(적재기한·대금만기·제시기한)은 직접 쓸 수 없다(덮어쓰기 금지 — 입력 값을 고친다).
     SHIPMENTS_MILESTONE_DERIVED_NOT_EDITABLE = "SHIPMENTS.MILESTONE.DERIVED_NOT_EDITABLE"
@@ -324,7 +324,8 @@ class ErrorCode(StrEnum):
     #: 선적 구분(수출·수입)에 적용되지 않는 종류다(예: 수입선적의 수출 전 검사, 선적의 OEM 생산 종류).
     #: PR-4c 재사용(R-26): OEM 발주에 선적 종류, 품목군 세트에 파생·OEM 종류.
     SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE = "SHIPMENTS.MILESTONE.TYPE_NOT_APPLICABLE"
-    #: 취소된 선적·PO(소유자)의 마일스톤은 쓸 수 없다(N-05 — 선적·OEM 발주 공통 1코드).
+    #: 취소된 선적·PO(소유자)의 마일스톤은 쓸 수 없다(N-05 — 선적·OEM 발주 공통 1코드). 카탈로그 문구는 소유자 중립이고, 경로가
+    #: 소유자별 조치(선적 = 수주에서 새 선적 / 발주 = 새 발주)를 문구로 덮고 detail.owner_type을 싣는다(PR-4c 적대 검토 반영 ③).
     SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE = "SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE"
     #: 신고수리 실적은 마일스톤에 직접 쓰지 않는다 — 통관 기록의 수리일이 유일 원천이다(X-02).
     SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD = (

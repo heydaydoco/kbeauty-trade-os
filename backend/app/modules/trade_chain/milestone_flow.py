@@ -110,11 +110,22 @@ _INSTANT_END = datetime(3000, 1, 1, tzinfo=UTC)
 # ── 공통 검증 ─────────────────────────────────────────────────────────────────
 
 
+#: 소유자별 OWNER_NOT_ACTIVE 조치 문구(카탈로그는 소유자 중립 — 경로가 정확한 조치로 덮는다, PR-4c 적대 검토 반영 ③).
+SHIPMENT_INACTIVE_MESSAGE = (
+    "취소된 선적의 마일스톤은 수정할 수 없습니다. 필요하면 수주에서 새 선적을 만들어 주세요."
+)
+PO_INACTIVE_MESSAGE = (
+    "취소된 발주의 생산 일정은 수정할 수 없습니다. 필요하면 새 발주를 만들어 주세요."
+)
+
+
 def _require_owner_active(row: Shipment) -> None:
     if row.status not in RECORD_EDITABLE_STATES:
         raise AppError(
             ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE,
+            detail={"owner_type": MilestoneOwner.of_shipment(row.id).owner_type},
             log_context={"shipment_id": row.id, "status": row.status},
+            message_override=SHIPMENT_INACTIVE_MESSAGE,
         )
 
 
@@ -725,7 +736,9 @@ def _require_po_active(po: PoOwner) -> None:
     if po.status not in OEM_RECORD_EDITABLE_STATES:
         raise AppError(
             ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE,
+            detail={"owner_type": po.owner.owner_type},
             log_context={"purchase_order_id": po.id, "status": po.status},
+            message_override=PO_INACTIVE_MESSAGE,
         )
 
 

@@ -543,7 +543,7 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.SHIPMENTS_MILESTONE_DUPLICATE_TYPE: ErrorSpec(
         409,
-        "이 종류의 마일스톤이 이미 있습니다. 화면을 다시 불러온 뒤 기존 마일스톤을 수정해 주세요.",
+        "같은 종류가 이미 있습니다(선적·발주 일정 또는 품목군 마일스톤 세트). 화면을 다시 불러와 확인해 주세요.",
     ),
     ErrorCode.SHIPMENTS_MILESTONE_DERIVED_NOT_EDITABLE: ErrorSpec(
         422,
@@ -563,7 +563,7 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE: ErrorSpec(
         409,
-        "취소된 선적·발주의 마일스톤은 수정할 수 없습니다. 필요하면 새 선적·발주를 만들어 주세요.",
+        "취소된 전표의 일정은 수정할 수 없습니다. 화면을 다시 불러와 전표 상태를 확인해 주세요.",
     ),
     ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD: ErrorSpec(
         422,

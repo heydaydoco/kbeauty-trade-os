@@ -505,20 +505,42 @@ def test_two_first_oem_plans_on_the_same_type_leave_one_row(
         assert _changes(po_id) == 1
 
 
-def test_two_admins_adding_the_same_set_type_leave_one_row() -> None:
-    """J — 같은 품목군·같은 종류 동시 추가 2건(다른 키): 무잠금 peek를 둘 다 통과해도 부분 유니크 번역이 둘째를 409 DUPLICATE_TYPE으로(500 0)"""
+def test_two_admins_adding_the_same_set_type_leave_one_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """J — 같은 품목군·같은 종류 동시 추가 2건(다른 키): 두 스레드가 모두 peek에서 '없음'을 본 뒤(Barrier) INSERT하게 해 경합 경로를 결정적으로
+    밟는다 — 부분 유니크 번역이 둘째를 409 DUPLICATE_TYPE으로(500 0), 그 409에도 peek 경로와 **같은 문구·detail**(적대 검토 반영 ⑥). 행 1"""
     admin = make_user(RoleCode.ADMIN)
+    original = shipments_service.find_profile_milestone_type
     for _ in range(ROUNDS):
         profile = create_item_profile(unique("PRF"))
+        barrier = threading.Barrier(2, timeout=10)
+
+        def both_see_none(
+            session: Any, profile_id: int, milestone_type: str, barrier: threading.Barrier = barrier
+        ) -> Any:
+            found = original(session, profile_id, milestone_type)
+            assert found is None
+            barrier.wait()
+            return found
+
+        monkeypatch.setattr(shipments_service, "find_profile_milestone_type", both_see_none)
         outcomes = run_concurrently(
             lambda _i, profile=profile: milestone_set_flow.add_profile_milestone_type(
                 actor=admin, idempotency_key=unique("cs"), profile_id=profile, milestone_type="ETA"
             ),
             workers=2,
         )
+        monkeypatch.setattr(shipments_service, "find_profile_milestone_type", original)
         _no_db_errors(outcomes)
         assert sum(o.ok for o in outcomes) == 1
-        assert _code(next(o for o in outcomes if not o.ok)) == "SHIPMENTS.MILESTONE.DUPLICATE_TYPE"
+        failed = next(o for o in outcomes if not o.ok)
+        assert _code(failed) == "SHIPMENTS.MILESTONE.DUPLICATE_TYPE"
+        assert isinstance(failed.error, AppError)
+        assert failed.error.detail == {
+            "milestone_type": "이 품목군의 마일스톤 세트에 이미 있는 종류입니다."
+        }
+        assert failed.error.message.startswith("같은 종류가 이미 있습니다")
         assert (
             scalar(
                 "SELECT count(*) FROM item_profile_milestone_types"

@@ -7,7 +7,7 @@
 ■ 서류 세트 선례(`/item-profiles/{id}/document-types`) 동형 — 추가 = Idempotency-Key + 부분 유니크, 제거 = soft delete(재추가 = 신규 행).
   선례보다 엄격하게: 경로의 품목군이 없으면 **404**(선례 422 — 경로 자원), 중복은 **409 `SHIPMENTS.MILESTONE.DUPLICATE_TYPE`**(R-26 — 선례 422),
   파생·OEM 종류는 **422 `SHIPMENTS.MILESTONE.TYPE_NOT_APPLICABLE`**(R-26), 모르는 종류 = 스키마 422.
-■ 오류 우선순위(ADR-0079 ⑧): 403(라우터) → 품목군 404 → 중복 409(무잠금 peek + 경합은 부분 유니크 번역 — 500 0) → 비적용 422.
+■ 오류 우선순위(ADR-0079 ⑧): 403(라우터) → 품목군 404 → 중복 409(무잠금 peek + 경합은 부분 유니크 번역 — 500 0, 두 경로 같은 detail) → 비적용 422.
   비적용 종류는 CHECK 때문에 세트에 있을 수 없어 409·422가 한 요청에 겹치지 않는다.
 ■ 잠금: item_profiles·세트 행은 LOCK_ORDER 밖이다(전표 사슬과 한 TX에 섞이지 않는다 — 품목군 삭제 경로도 없다). 제거는 세트 행 `FOR UPDATE`.
 ■ 자동 경로 0 — 호출처는 세트 라우터 1곳(no_auto_confirm 레지스트리). 아웃박스·audit 없음(서류·요건 세트 선례 — 행위자 열·soft delete가 이력).
@@ -29,6 +29,15 @@ from app.modules.trade_docs.constants import SHIPMENT_STORED_MILESTONES
 ADD_ENDPOINT = "POST /api/v1/item-profiles/{id}/milestone-types"
 
 
+def _duplicate(profile_id: int, milestone_type: str) -> AppError:
+    """세트 중복 409 — 무잠금 peek 경로와 경합(부분 유니크 번역) 경로가 같은 detail을 싣는다."""
+    return AppError(
+        ErrorCode.SHIPMENTS_MILESTONE_DUPLICATE_TYPE,
+        detail={"milestone_type": "이 품목군의 마일스톤 세트에 이미 있는 종류입니다."},
+        log_context={"profile_id": profile_id, "milestone_type": milestone_type},
+    )
+
+
 def add_profile_milestone_type(
     *, actor: AuthenticatedUser, idempotency_key: str, profile_id: int, milestone_type: str
 ) -> tuple[int, dict[str, Any]]:
@@ -46,11 +55,7 @@ def add_profile_milestone_type(
             return claim.replay.status_code, claim.replay.body
         require_profile(session, profile_id)
         if shipments.find_profile_milestone_type(session, profile_id, milestone_type) is not None:
-            raise AppError(
-                ErrorCode.SHIPMENTS_MILESTONE_DUPLICATE_TYPE,
-                detail={"milestone_type": "이 품목군의 마일스톤 세트에 이미 있는 종류입니다."},
-                log_context={"profile_id": profile_id, "milestone_type": milestone_type},
-            )
+            raise _duplicate(profile_id, milestone_type)
         if milestone_type not in SHIPMENT_STORED_MILESTONES:
             raise AppError(
                 ErrorCode.SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE,
@@ -60,9 +65,15 @@ def add_profile_milestone_type(
                 },
                 log_context={"profile_id": profile_id, "milestone_type": milestone_type},
             )
-        row = shipments.insert_profile_milestone_type(
-            session, profile_id=profile_id, milestone_type=milestone_type, actor_id=actor.id
-        )
+        try:
+            row = shipments.insert_profile_milestone_type(
+                session, profile_id=profile_id, milestone_type=milestone_type, actor_id=actor.id
+            )
+        except AppError as exc:
+            # 경합(peek 뒤 다른 요청이 먼저 넣음) — 부분 유니크 번역 409에 peek 경로와 같은 detail을 붙인다(적대 검토 반영 ⑥)
+            if exc.code is ErrorCode.SHIPMENTS_MILESTONE_DUPLICATE_TYPE:
+                raise _duplicate(profile_id, milestone_type) from None
+            raise
         body = profile_milestone_type_body(row)
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=201, body=body)

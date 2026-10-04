@@ -23,6 +23,9 @@ from tests.support.factories import create_item_profile
 pytestmark = pytest.mark.group_k
 
 PROFILES = "/api/v1/item-profiles"
+#: 세트 중복 409의 문구·detail — peek 경로와 경합(부분 유니크 번역) 경로가 같다(PR-4c 적대 검토 반영 ⑥).
+DUPLICATE_MESSAGE = "같은 종류가 이미 있습니다(선적·발주 일정 또는 품목군 마일스톤 세트). 화면을 다시 불러와 확인해 주세요."
+DUPLICATE_DETAIL = {"milestone_type": "이 품목군의 마일스톤 세트에 이미 있는 종류입니다."}
 
 
 @pytest.fixture
@@ -98,7 +101,11 @@ def test_duplicates_are_409_and_derived_or_oem_types_are_422(admin: TestClient) 
     assert first.json()["id"] == again.json()["id"]
     duplicate = _add(admin, profile, "PSI")
     assert (duplicate.status_code, _code(duplicate)) == (409, "SHIPMENTS.MILESTONE.DUPLICATE_TYPE")
-    assert "milestone_type" in duplicate.json()["error"]["detail"]
+    error = duplicate.json()["error"]
+    assert (
+        error["message"] == DUPLICATE_MESSAGE
+    )  # 대상 중립 문구(선적·발주 일정 / 품목군 세트 — 다시 불러와 확인)
+    assert error["detail"] == DUPLICATE_DETAIL
     for milestone_type in (
         "LOADING_DEADLINE",
         "PAYMENT_DUE",
