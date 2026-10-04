@@ -50,8 +50,6 @@ def confirmed_so(
 
     `free_line=True`면 마지막 라인을 무상(단가 0·사유)으로 만든다(선적 라인 무상 규약 승계 시험용).
     """
-    from tests.factories.gates import set_terms
-
     buyer_id = buyer or create_buyer()
     skus = [create_priced_sku(amount=price, currency=currency) for _ in quantities]
     so = create_direct_so(
@@ -93,34 +91,46 @@ def confirmed_so(
             ),
             {"s": so["id"]},
         )
-    set_terms(so["id"], terms)
-    rate = 1 if currency == "KRW" else 1350
+    confirm_in_place(so["id"], terms=terms)
+    so["buyer"] = buyer_id
+    so["line_ids"] = [int(line_id) for line_id, _ in lines]
+    so["sku_ids"] = skus
+    return so
+
+
+def confirm_in_place(so_id: int, *, terms: str = "TT_DEFERRED") -> None:
+    """접수(RECEIVED) SO를 **원시 SQL로 확정**한다 — 결제조건·Incoterms·환율(KRW=1, 외화=1350·환율일=증빙일)·확정 증거 열·이력 1행.
+
+    `confirmed_so`(직접 수주)와 QT·PI 참조 수주(문서 흐름 시험 — S3-2 PR-3c)가 같이 쓴다. 확정 경로 자체(게이트·승인)는 PR-12a 시험의 몫이다.
+    """
+    from tests.factories.gates import set_terms
+
+    set_terms(so_id, terms)
     with owner_engine.begin() as connection:
+        currency, assignee_id = connection.execute(
+            text("SELECT currency, assignee_id FROM sales_orders WHERE id = :i"), {"i": so_id}
+        ).one()
         connection.execute(
             text(
                 "UPDATE sales_orders SET incoterm_code = 'FOB', incoterm_place = 'Busan',"
                 " incoterm_year = 2020, fx_rate = :r, fx_rate_date = doc_date WHERE id = :i"
             ),
-            {"i": so["id"], "r": rate},
+            {"i": so_id, "r": 1 if currency == "KRW" else 1350},
         )
         connection.execute(
             text(
                 "UPDATE sales_orders SET status = 'CONFIRMED', confirmed_at = now(),"
                 f" {CONFIRMED_EVIDENCE_SQL} WHERE id = :i"
             ),
-            {"i": so["id"]},
+            {"i": so_id},
         )
         connection.execute(
             text(
                 "INSERT INTO sales_order_status_log (sales_order_id, from_status, to_status,"
                 " actor_user_id, automatic) VALUES (:s, 'RECEIVED', 'CONFIRMED', :a, false)"
             ),
-            {"s": so["id"], "a": so["assignee_id"]},
+            {"s": so_id, "a": assignee_id},
         )
-    so["buyer"] = buyer_id
-    so["line_ids"] = [int(line_id) for line_id, _ in lines]
-    so["sku_ids"] = skus
-    return so
 
 
 def so_status(so_id: int) -> str:

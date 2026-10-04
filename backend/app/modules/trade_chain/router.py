@@ -559,10 +559,16 @@ def transition_purchase_order(
 
 flow_router = APIRouter(prefix="/document-flow", tags=["trade-chain"])
 
-FlowKind = Literal["QUOTATION", "PROFORMA_INVOICE", "SALES_ORDER"]
+#: 경로 `doc_kind` — `document_flow.FLOW_KINDS`와 같은 집합이어야 한다(아래 assert가 임포트 시 대사 — 한쪽만 바꾸면 앱 기동 실패).
+#: SHIPMENT = 수출선적(S3-2 PR-3c, SO 자식). 수입선적 id는 서비스가 404(판매 사슬 밖 — PO가 흐름에 없다).
+FlowKind = Literal["QUOTATION", "PROFORMA_INVOICE", "SALES_ORDER", "SHIPMENT"]
+
+assert set(FlowKind.__args__) == {k.value for k in document_flow.FLOW_KINDS}  # type: ignore[attr-defined]
 
 
 class FlowNode(BaseModel):
+    """흐름 노드 — QT·PI·SO·수출선적 공통 모양(`kind`로 구분). 금액은 판매 문서 표시 값(`total_text` 서버 서식)."""
+
     kind: str
     id: int
     doc_number: str
@@ -577,7 +583,8 @@ class FlowNode(BaseModel):
 
 
 class DocumentFlowOut(BaseModel):
-    """`nodes`는 위→아래(QT, PI…, PI의 SO…, QT 직접 SO…) 순서다. 직접(인테이크) 수주는 노드 1개다."""
+    """`nodes`는 위→아래(QT, PI…, PI의 SO…, QT 직접 SO…) 순서이고 각 SO 노드 **바로 뒤**에 그 SO의 수출선적 노드가 온다.
+    직접(인테이크) 수주는 SO 노드 1개(+그 수출선적)다."""
 
     root_kind: str
     root_id: int
@@ -585,7 +592,8 @@ class DocumentFlowOut(BaseModel):
 
 
 @flow_router.get(
-    "/{doc_kind}/{doc_id}", summary="문서 흐름 (QT→PI→SO 사슬 전체 — 취소·만료 전표 포함)"
+    "/{doc_kind}/{doc_id}",
+    summary="문서 흐름 (QT→PI→SO→수출선적 사슬 전체 — 취소·만료 전표 포함, 수입선적은 404)",
 )
 def get_document_flow(
     doc_kind: FlowKind, doc_id: Annotated[int, Path(ge=1)], current: CurrentUser
