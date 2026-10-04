@@ -48,7 +48,7 @@ import {
 import { occupantNotice, soErrorMessage } from "../lib/sales-order-errors";
 import { QUANTITY_EXCEEDS_OPEN_CODE } from "../lib/proforma";
 import { hasRole, useSession } from "../lib/session";
-import { SHIPMENTS_QUERY_KEY, shipmentKindLabel, successorNumbers, type ShipmentListItem } from "../lib/shipment";
+import { shipmentKindLabel, soShipmentsKey, successorNumbers, type ShipmentListItem } from "../lib/shipment";
 import type { Market } from "./markets";
 import { SalesOrderStatusBadge, SourceLinks } from "./sales-orders";
 import { CountryRoute, ShipmentStatusBadge } from "./shipments";
@@ -432,7 +432,7 @@ const SHIPPABLE_SO_STATUSES = new Set(["CONFIRMED", "IN_SHIPMENT"]);
 
 function ShipmentsSection({ so, canCreate, onReload }: { so: SalesOrderDetail; canCreate: boolean; onReload: () => void }) {
   const [creating, setCreating] = useState(false);
-  const list = usePagedList<ShipmentListItem>([...SHIPMENTS_QUERY_KEY, "list", "so", so.id], `/v1/shipments?so_id=${so.id}`, true, {
+  const list = usePagedList<ShipmentListItem>(soShipmentsKey(so.id), `/v1/shipments?so_id=${so.id}`, true, {
     staleTime: 0,
   });
   const openTotal = so.lines.reduce((sum, line) => sum + Math.max(line.shipment_open_quantity ?? 0, 0), 0);
