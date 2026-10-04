@@ -160,14 +160,18 @@ def test_registered_jobs_stay_clear_of_the_four_bans() -> None:
             # 원장·전표·감사·발주 무접촉·판정 없음·대외 발송 없음
             "idempotency-purge",
             "session-purge",
+            # S3-2 PR-1b — 승인 무결성 대사(READ ONLY 트랜잭션 대사 + ADMIN 인앱 알림뿐 — 승인 상태 무수정·자동 정정 없음·대외 발송 없음, ADR-0087 ⑤)
+            "approval-integrity-check",
         }
     )
 
 
-def test_the_registry_has_exactly_twelve_jobs_with_the_s3_1_schedules() -> None:
-    """S3-1 종결 총수 대사 — 7+5=12행(X-45·ADR-0058 ①). 청소 잡 2종은 백업(03:00)·복원 리허설(04:00) 뒤·저장소 점검(05:00) 앞."""
+def test_the_registry_has_exactly_thirteen_jobs_with_the_s3_2_pr1b_schedules() -> None:
+    """총수 대사 — S3-1 종결 12행(X-45·ADR-0058 ①) + S3-2 PR-1b `approval-integrity-check` 1행 = **13행**(R-17 중간값 — PR-6이 14로 올린다).
+    청소 잡 2종은 백업(03:00)·복원 리허설(04:00) 뒤·저장소 점검(05:00) 앞. 무결성 대사는 합계 검산(05:30) 뒤·인증 스윕(06:00) 앞."""
     schedules = {spec.code: spec.schedule for spec in scheduler.JOB_REGISTRY}
-    assert len(scheduler.JOB_REGISTRY) == 12
+    assert len(scheduler.JOB_REGISTRY) == 13
+    assert schedules["approval-integrity-check"] == "daily@05:40"
     assert schedules["idempotency-purge"] == "daily@04:20"
     assert schedules["session-purge"] == "daily@04:25"
     daily = [s for s in schedules.values() if s.startswith("daily@")]

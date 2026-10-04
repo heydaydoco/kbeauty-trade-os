@@ -24,6 +24,7 @@ from sqlalchemy import select
 from app.core.db.uow import unit_of_work
 from app.core.errors.exceptions import AppError
 from app.core.time import today_kst
+from app.modules.approvals import integrity as approval_integrity
 from app.modules.approvals import stagnation as approval_stagnation
 from app.modules.audit import service as audit
 from app.modules.audit.models import AuditAction
@@ -258,6 +259,12 @@ def main(argv: list[str] | None = None) -> int:
         help="전표 헤더 합계=라인 합계 검산을 1회 실행한다(불일치 시 관리자 알림 — 자동 보정 없음)",
     )
 
+    # 승인 무결성 대사 수동 실행 (S3-2 PR-1b / ADR-0087 — 잡 `approval-integrity-check`와 같은 함수, 읽기 전용).
+    commands.add_parser(
+        "approval-integrity-check",
+        help="승인 행과 이력 이벤트 전건 대사를 1회 실행한다(읽기 전용 — 불일치는 문제별 1회 관리자 알림, 자동 정정 없음)",
+    )
+
     # 실행기 진입점 — compose의 worker 서비스가 이 명령으로 뜬다.
     commands.add_parser("run-scheduler", help="배치 실행기를 기동한다(무한 루프)")
 
@@ -352,6 +359,18 @@ def main(argv: list[str] | None = None) -> int:
                 ""
                 if counts["mismatches"] == 0
                 else " (자동 보정하지 않았습니다 — 원인을 확인하세요)"
+            )
+        )
+        return 1 if counts["mismatches"] else 0
+    if args.command == "approval-integrity-check":
+        counts = approval_integrity.run_integrity_check()
+        print(
+            f"승인 무결성 대사 완료: 승인 {counts['approvals']}건 중 불일치 {counts['mismatches']}건 — "
+            f"신규 알림 {counts['notified']}건"
+            + (
+                ""
+                if counts["mismatches"] == 0
+                else " (자동 정정하지 않았습니다 — 관리자 알림의 승인 번호로 원인을 확인하세요)"
             )
         )
         return 1 if counts["mismatches"] else 0

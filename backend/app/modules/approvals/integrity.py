@@ -12,14 +12,31 @@ from __future__ import annotations
 from itertools import pairwise
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.core.db.uow import in_unit_of_work, unit_of_work
 from app.modules.approvals.machine import ApprovalStatus
 from app.modules.approvals.models import Approval, ApprovalEvent
+from app.modules.notifications import service as notifications
 
 DECISION_TARGETS = {ApprovalStatus.APPROVED.value, ApprovalStatus.REJECTED.value}
 
+
+#: 대사 트랜잭션의 첫 문장 — 전건 순회가 **한 스냅샷**을 보고, 이 트랜잭션에서는 어떤 쓰기도 DB가 거부한다(읽기 전용의 DB 증명).
+READ_ONLY_SNAPSHOT = "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+
+#: 알림 본문용 문제 설명(코드 → 한국어). 모르는 코드는 코드 그대로 쓴다.
+PROBLEM_TEXT_KO: dict[str, str] = {
+    "NO_EVENTS": "이력 이벤트가 하나도 없습니다",
+    "BAD_BIRTH": "첫 이벤트가 '요청'이 아닙니다",
+    "BROKEN_CHAIN": "이력 사슬이 끊겨 있습니다",
+    "STATUS_MISMATCH": "현재 상태가 마지막 이력과 다릅니다",
+    "DECISION_MISMATCH": "결정자(대결 포함)가 결정 이력과 다릅니다",
+    "DECISION_WITHOUT_EVENT": "결정 이력 없이 결정자·결정 시각이 있습니다",
+    "CONSUMED_MISMATCH": "소비자가 소비 이력과 다릅니다",
+    "CONSUMED_WITHOUT_EVENT": "소비 이력 없이 소비자·소비 시각이 있습니다",
+}
 
 #: 전건 순회 1페이지 크기(승인 행 수) — 이벤트는 페이지 승인 id IN 조회 1회.
 PAGE_SIZE = 1000
@@ -105,3 +122,46 @@ def _check_page(
         elif approval.consumed_by_id is not None or approval.consumed_at is not None:
             bad("CONSUMED_WITHOUT_EVENT")
     return problems, len(approvals), approvals[-1].id
+
+
+def dedup_subject(approval_id: int, problem: str) -> str:
+    """알림 dedup 주제 키 — **일자 제외**(같은 승인·같은 문제는 1회, 문제가 바뀌면 새 알림 — ADR-0087 ② / R-17 ③)."""
+    return f"approval-integrity:{approval_id}:{problem}"
+
+
+def run_integrity_check(*, page_size: int = PAGE_SIZE) -> dict[str, int]:
+    """잡 `approval-integrity-check` 본체(CLI 수동 실행 겸용) — 승인 전건 대사 후 불일치마다 ADMIN 인앱 알림.
+
+    ① 대사는 **독립 읽기 전용 트랜잭션**(`REPEATABLE READ, READ ONLY` 첫 문장)에서 돈다 — 승인 행 수정 0을 DB가 보증한다(ADR-0087 ⑤).
+    ② 알림은 그 뒤 **별도 트랜잭션** 하나에서 `approval-integrity:{approval_id}:{problem}` dedup으로 만든다 — 재실행은 새 알림 0.
+    ③ **불일치는 잡 실패가 아니다**(SUCCESS + 알림 — ADR-0087 ③). 잡 FAILED는 실행 중 예외뿐이다(예외를 삼키지 않는다).
+    """
+    if in_unit_of_work():
+        # SET TRANSACTION은 첫 문장이어야 한다 — 바깥 트랜잭션에 합류하면 읽기 전용 보증이 사라진다(프로그래밍 오류로 멈춘다).
+        raise RuntimeError(
+            "승인 무결성 대사는 독립 트랜잭션이어야 합니다 — 열린 트랜잭션 안에서 부를 수 없습니다."
+        )
+    with unit_of_work() as uow:
+        uow.session.execute(text(READ_ONLY_SNAPSHOT))
+        scanned, problems = scan_all(uow.session, page_size=page_size)
+
+    notified = 0
+    if problems:
+        with unit_of_work() as uow:
+            for item in problems:
+                approval_id, problem = int(item["approval_id"]), str(item["problem"])
+                created = notifications.notify(
+                    uow.session,
+                    subject_key=dedup_subject(approval_id, problem),
+                    title=f"승인 무결성 불일치 — 승인 #{approval_id}",
+                    body=(
+                        f"승인 #{approval_id}: {PROBLEM_TEXT_KO.get(problem, problem)}({problem}). "
+                        "이력으로 재구성되지 않는 승인 행입니다 — 자동으로 고치지 않았으니 원인(직접 변경 여부)을 확인해 주세요."
+                    ),
+                    severity="CRITICAL",
+                    routing=notifications.Routing.ADMIN,
+                    entity_type="approvals",
+                    entity_id=approval_id,
+                )
+                notified += len(created)
+    return {"approvals": scanned, "mismatches": len(problems), "notified": notified}

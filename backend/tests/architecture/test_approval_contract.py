@@ -388,9 +388,14 @@ def _approval_submodules(tree: ast.Module) -> set[str]:
 
 
 def test_scheduler_and_cli_reach_only_the_stagnation_scan() -> None:
-    """스케줄러·CLI가 임포트하는 승인 서브모듈은 `stagnation` 하나뿐 — 요청·결정·소비·무효 함수에 닿지 못한다(자동 승인 경로 부재)"""
+    """스케줄러·CLI가 임포트하는 승인 서브모듈은 `stagnation`과 (S3-2 PR-1b) 읽기 전용 대사 `integrity`뿐 — 요청·결정·소비·무효 함수에 닿지 못한다(자동 승인 경로 부재)"""
     for rel in ("modules/platform/scheduler.py", "cli.py"):
-        assert _approval_submodules(app_sources()[rel]) == {"stagnation"}, rel
+        assert _approval_submodules(app_sources()[rel]) == {"stagnation", "integrity"}, rel
+    # 대사 모듈 자신도 상태 기계(값)·모델(읽기)만 — 서비스·결정·소비·무효 모듈에 닿지 않는다(ADR-0087 ⑤).
+    assert _approval_submodules(app_sources()["modules/approvals/integrity.py"]) == {
+        "machine",
+        "models",
+    }
 
 
 def test_background_modules_never_import_the_approval_service() -> None:
