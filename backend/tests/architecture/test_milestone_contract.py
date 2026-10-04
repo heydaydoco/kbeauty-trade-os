@@ -21,6 +21,7 @@ from app.modules.trade_docs.constants import (
     DERIVED_MILESTONES,
     OEM_MILESTONES,
     RELEASE_BOUND_ACTUALS,
+    ROLLOVER_TYPES,
     SHIPMENT_BOARD_ORDER,
     SHIPMENT_MILESTONES_BY_KIND,
     SHIPMENT_STORED_MILESTONES,
@@ -163,6 +164,7 @@ def test_milestone_types_match_the_db_check_and_derived_types_are_outside_it() -
     assert set(SHIPMENT_BOARD_ORDER) == SHIPMENT_STORED_MILESTONES | DERIVED_MILESTONES
     assert {"ETD", "BL_ISSUED", "ETA"} == RELEASE_BOUND_ACTUALS
     assert {"DOC_CUTOFF", "CARGO_CLOSING"} == DATETIME_MILESTONES
+    assert {"ETD", "ETA", "CARGO_CLOSING"} == ROLLOVER_TYPES  # 롤오버 배지 대상(design-B B9 — PR-6 공유)
     for kind, types in SHIPMENT_MILESTONES_BY_KIND.items():
         assert types < SHIPMENT_STORED_MILESTONES, kind
         assert types >= RELEASE_BOUND_ACTUALS, kind

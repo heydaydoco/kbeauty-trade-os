@@ -39,6 +39,7 @@ from app.modules.trade_docs import schedule
 from app.modules.trade_docs.constants import (
     DATETIME_MILESTONES,
     DERIVED_MILESTONES,
+    ROLLOVER_TYPES,
     SHIPMENT_BOARD_ORDER,
     SHIPMENT_MILESTONES_BY_KIND,
     BalanceAnchor,
@@ -142,7 +143,10 @@ def assemble(session: Session, row: Shipment) -> Assembled:
             select(Milestone).where(Milestone.shipment_id == row.id, Milestone.deleted_at.is_(None))
         ).scalars()
     }
-    stats = _rollover_stats(session, sorted(m.id for m in stored.values()))
+    # 롤오버 배지는 ETD·ETA·CARGO_CLOSING만(design-B B9·D6) — 다른 종류의 계획 변경은 이력만 남고 배지 0
+    stats = _rollover_stats(
+        session, sorted(m.id for m in stored.values() if m.milestone_type in ROLLOVER_TYPES)
+    )
     # 통관 기록 — 선적 구분과 같은 신고 구분만(KIND_MISMATCH 가드가 다른 구분을 막지만 파생은 문면대로 '구분 일치'로 거른다)
     accepted = shipments.live_customs_accepted(session, row.id, row.shipment_kind)
     clearance = schedule.customs_clearance(accepted)

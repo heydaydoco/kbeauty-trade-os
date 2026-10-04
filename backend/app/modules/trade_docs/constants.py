@@ -297,6 +297,11 @@ class MilestoneChangeKind(StrEnum):
 REASON_REQUIRED_CHANGES: frozenset[str] = frozenset(
     {MilestoneChangeKind.PLAN_CHANGED.value, MilestoneChangeKind.ACTUAL_CORRECTED.value}
 )
+#: "롤오버"로 세는 종류(design-B B9·design-D D6) — 이 종류의 PLAN_CHANGED만 롤오버 횟수·'통보 기록 없음' 배지 대상이다.
+#: 다른 종류의 계획 변경도 이력(PLAN_CHANGED·사유 필수)은 남지만 배지는 0. 기일 스캔(PR-6)이 같은 집합을 공유한다.
+ROLLOVER_TYPES: frozenset[str] = frozenset(
+    {MilestoneType.ETD.value, MilestoneType.ETA.value, MilestoneType.CARGO_CLOSING.value}
+)
 
 
 class PriceBasis(StrEnum):

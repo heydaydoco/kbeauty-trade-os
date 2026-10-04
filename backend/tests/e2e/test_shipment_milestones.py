@@ -233,6 +233,41 @@ def test_gc_a20_rollover_history_reason_and_same_key_same_change(trade: TestClie
     assert _changes(sid) == 3 and _rows(trade, sid)["ETD"]["rollover_count"] == 2
 
 
+def test_rollover_badges_count_only_etd_eta_and_cargo_closing(trade: TestClient) -> None:
+    """적대 검토 반영 ③(design-B B9·D6) — '롤오버'는 ETD·ETA·CARGO_CLOSING의 계획 변경만: PSI 계획 변경은 이력(PLAN_CHANGED·사유)은
+    남지만 배지(rollover_count·unnotified_rollovers) 0, CARGO_CLOSING 계획 변경은 1"""
+    sid = _shipment(trade)["id"]
+    _plan(trade, sid, "PSI", {"planned_on": "2026-10-20"})
+    moved = _plan(
+        trade,
+        sid,
+        "PSI",
+        {
+            "planned_on": "2026-10-22",
+            "version": _version(trade, sid, "PSI"),
+            "reason": "검사관 일정",
+        },
+    )
+    assert moved.json()["change"]["change_kind"] == "PLAN_CHANGED"
+    psi = _rows(trade, sid)["PSI"]
+    assert (psi["rollover_count"], psi["unnotified_rollovers"]) == (0, 0)
+    at = {"tz": "Asia/Seoul"}
+    _plan(trade, sid, "CARGO_CLOSING", {"planned_at": "2026-11-03T09:00:00+09:00", **at})
+    _plan(
+        trade,
+        sid,
+        "CARGO_CLOSING",
+        {
+            "planned_at": "2026-11-04T09:00:00+09:00",
+            "version": _version(trade, sid, "CARGO_CLOSING"),
+            "reason": "선사 마감 연기",
+            **at,
+        },
+    )
+    closing = _rows(trade, sid)["CARGO_CLOSING"]
+    assert (closing["rollover_count"], closing["unnotified_rollovers"]) == (1, 1)
+
+
 def test_change_history_filters_and_404_for_unknown_shipment(trade: TestClient) -> None:
     """K — 변경 이력 Page 필터(종류·변경 종류)·없는 선적 404"""
     sid = _shipment(trade)["id"]
