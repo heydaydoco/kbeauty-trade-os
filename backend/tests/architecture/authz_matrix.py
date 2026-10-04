@@ -44,6 +44,7 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     # S3-2 PR-2a — 휴일 캘린더(조회 = 전 역할, 원자 교체·CSV 미리보기 = 관리자 전용 — ADR-0079·0082).
     "/api/v1/holidays",
     # S3-2 PR-3a — 선적(조회 = 전 역할, 라인·취소 = 무역, 헤더·출고지시·당사자 = 무역 + **물류**[첫 전표 쓰기 — ADR-0079]).
+    # PR-3c의 CSV(`/shipments/export.csv` — 전 역할)도 이 접두어가 통제한다(행만 추가).
     # SO 하위 참조 생성(`/sales-orders/{so_id}/shipments[/preview]`)은 위 SO 접두어가 통제한다(행만 추가).
     "/api/v1/shipments",
 )
@@ -465,6 +466,8 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         V: DENY,
     },
     ("GET", "/api/v1/shipments"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
+    # S3-2 PR-3c — 선적 목록 CSV(S20): 전 역할 같은 헤더(원가·단가 열 0 — 역할별 분기 없음, design-C C8).
+    ("GET", "/api/v1/shipments/export.csv"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
     ("GET", "/api/v1/shipments/{shipment_id}"): {A: ALLOW, T: ALLOW, L: ALLOW, C: ALLOW, V: ALLOW},
     ("GET", "/api/v1/shipments/{shipment_id}/status-log"): {
         A: ALLOW,
