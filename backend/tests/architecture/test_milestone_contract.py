@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import re
+from pathlib import Path
 
 import pytest
 
@@ -46,6 +47,8 @@ MILESTONE_FILES = (
     "modules/trade_chain/customs_flow.py",
     "modules/trade_chain/milestone_view.py",
     "modules/trade_chain/milestone_router.py",
+    # S3-2 PR-4c — 품목군 마일스톤 세트 쓰기(전이·발송 0 — OEM 쓰기는 milestone_flow 안)
+    "modules/trade_chain/milestone_set_flow.py",
 )
 #: 상태를 바꾸는 커널·사슬 함수 — 마일스톤·통관 모듈은 언급조차 하지 않는다.
 TRANSITION_NAMES = {
@@ -63,7 +66,8 @@ OUTBOUND_NAMES = {"notify", "send", "send_message", "sendmail", "post_message"}
 
 @pytest.mark.group_i
 def test_milestone_and_customs_writes_never_transition_documents() -> None:
-    """B8 ⑦ — 마일스톤·통관 4파일은 전이·탄생·사슬 잠금·수렴·채번을 언급하지 않는다(실적 입력이 선적·SO 상태를 바꾸지 않는다 — 자동 엣지 0)"""
+    """B8 ⑦ — 마일스톤·통관 5파일(PR-4c 세트 쓰기 포함)은 전이·탄생·사슬 잠금·수렴·채번을 언급하지 않는다(실적 입력이 선적·SO·PO 상태를 바꾸지
+    않는다 — 자동 엣지 0, OEM 실적도 PO 상태 무변경)"""
     sources = app_sources()
     for rel in MILESTONE_FILES:
         assert rel in sources, rel
@@ -75,7 +79,7 @@ def test_milestone_and_customs_writes_never_transition_documents() -> None:
 
 @pytest.mark.group_h
 def test_the_notice_path_sends_nothing() -> None:
-    """H(통보 = 기록, 발송 0) — 마일스톤·통관 4파일은 HTTP·메일·메신저 클라이언트·알림 코어를 임포트하지 않고 발송 함수를 부르지 않는다.
+    """H(통보 = 기록, 발송 0) — 마일스톤·통관 5파일은 HTTP·메일·메신저 클라이언트·알림 코어를 임포트하지 않고 발송 함수를 부르지 않는다.
     통보 착지(`record_shipment_comm_log`)는 아웃박스도 쓰지 않는다(행 1개 추가뿐)"""
     sources = app_sources()
     for rel in MILESTONE_FILES:
@@ -196,3 +200,66 @@ def test_the_today_pin_covers_every_milestone_import_point() -> None:
     assert readers, "공회전 — today_kst를 부르는 모듈을 하나도 못 찾음"
     assert readers <= pinned, readers - pinned
     assert len({module.today_kst() for module in MILESTONE_TODAY_IMPORT_POINTS}) == 1
+
+
+#: '마일스톤 계열' 시험 모듈 — 이름에 milestone·customs가 든 시험 파일(선적 마일스톤·통관·OEM 생산 일정·품목군 세트).
+_MILESTONE_TEST_NAME = re.compile(r"^test_.*(milestone|customs).*\.py$")
+
+
+def _pin_problems(rel: str, tree: ast.Module) -> list[str]:
+    """시험 모듈 1개의 KST 고정 규율 위반 — ① `today_kst`를 참조하면 `pin_today_kst`도 참조해야 하고 ② `today_kst`를 **자기 이름으로
+    가져오면**(`from … import today_kst`) 고정 호출에 그 모듈 자신(추가 인자)을 넘겨야 한다(안 넘기면 시험의 '오늘'만 자정을 넘는다)."""
+    names = referenced_names(tree)
+    if "today_kst" not in names:
+        return []
+    pin_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "pin_today_kst"
+    ]
+    if not pin_calls:  # 임포트만 남고 호출이 없으면 고정이 아니다
+        return [f"{rel}: today_kst를 쓰는데 pin_today_kst 고정 호출이 없다"]
+    binds_name = any(
+        isinstance(node, ast.ImportFrom) and any(alias.name == "today_kst" for alias in node.names)
+        for node in ast.walk(tree)
+    )
+    if binds_name and not any(len(call.args) >= 2 for call in pin_calls):
+        return [f"{rel}: today_kst를 직접 가져오는데 고정 호출에 시험 모듈 자신을 넘기지 않는다"]
+    return []
+
+
+def test_every_milestone_test_module_that_reads_today_also_pins_it() -> None:
+    """PR-4c 적대 검토 반영 ① 재발 방지 — 마일스톤 계열 시험 모듈(이름에 milestone·customs) 중 `today_kst`를 참조하는 것은 전부
+    `pin_today_kst`도 참조하고, `today_kst`를 직접 가져오는 모듈은 고정 호출에 자기 모듈을 넘긴다(KST 자정 경계 오판 0)"""
+    root = Path(__file__).resolve().parents[1]
+    modules = {
+        str(path.relative_to(root.parent)): ast.parse(path.read_text(encoding="utf-8"))
+        for path in sorted(root.rglob("test_*.py"))
+        if _MILESTONE_TEST_NAME.match(path.name)
+    }
+    readers = [rel for rel, tree in modules.items() if "today_kst" in referenced_names(tree)]
+    assert len(readers) >= 5, readers  # 공회전 방지 — 선적 마일스톤·통관·동시성·OEM e2e·OEM 동시성
+    problems = [problem for rel, tree in modules.items() for problem in _pin_problems(rel, tree)]
+    assert problems == [], problems
+
+
+def test_the_pin_scan_catches_a_missing_pin() -> None:
+    """자기검사 — 고정 없는 모듈·자기 모듈을 안 넘긴 고정을 실제로 잡고, 올바른 모듈에는 조용하다"""
+    missing = parse_source("from app.core.time import today_kst\nx = today_kst()\n")
+    assert _pin_problems("a.py", missing)
+    imported_only = parse_source(
+        "from app.core.time import today_kst\nfrom tests.support.kst import pin_today_kst\nx = today_kst()\n"
+    )
+    assert _pin_problems("a2.py", imported_only)
+    unbound = parse_source(
+        "from app.core.time import today_kst\nfrom tests.support.kst import pin_today_kst\n"
+        "def f(m):\n    pin_today_kst(m)\n"
+    )
+    assert _pin_problems("b.py", unbound)
+    good = parse_source(
+        "import sys\nfrom app.core.time import today_kst\nfrom tests.support.kst import pin_today_kst\n"
+        "def f(m):\n    pin_today_kst(m, sys.modules[__name__])\n"
+    )
+    assert _pin_problems("c.py", good) == []

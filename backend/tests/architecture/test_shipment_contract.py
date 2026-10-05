@@ -33,6 +33,8 @@ SHIPMENT_FILES = {
     "modules/trade_chain/customs_flow.py",
     "modules/trade_chain/milestone_view.py",
     "modules/trade_chain/milestone_router.py",
+    # S3-2 PR-4c — 품목군 마일스톤 세트 쓰기
+    "modules/trade_chain/milestone_set_flow.py",
 }
 LEDGER_WORDS = ("stock_movements", "stock_movement", "StockMovement", "inventory_ledger")
 
@@ -42,7 +44,7 @@ def _ledger_mentions(source: str) -> list[str]:
 
 
 def test_shipment_code_never_touches_the_stock_ledger() -> None:
-    """검증 K — 선적 모듈·오케스트레이션 10파일(PR-4a 마일스톤·통관 4 포함)에 재고 원장(stock_movements) 언급·임포트 0(출고·선적 = RESERVED, 원장 기록은 S4-2)"""
+    """검증 K — 선적 모듈·오케스트레이션 11파일(PR-4a 마일스톤·통관 4·PR-4c 세트 1 포함)에 재고 원장(stock_movements) 언급·임포트 0(출고·선적 = RESERVED, 원장 기록은 S4-2)"""
     sources = app_sources()
     assert set(sources) >= SHIPMENT_FILES
     for rel in SHIPMENT_FILES:
@@ -133,7 +135,7 @@ SOURCE_FIELDS = {
 
 
 def test_write_schemas_carry_no_source_values_and_forbid_extras() -> None:
-    """요청 스키마 16종(PR-4a 마일스톤·통관 7 포함) — extra=forbid이고 원천 값·상태·번호·합계 필드가 없다(생성 본문은 원천 라인 id·수량·국가·당사자·메모뿐)"""
+    """요청 스키마 17종(PR-4a 마일스톤·통관 7·PR-4c 세트 1 포함) — extra=forbid이고 원천 값·상태·번호·합계 필드가 없다(생성 본문은 원천 라인 id·수량·국가·당사자·메모뿐)"""
     requests = [
         schemas.ShipmentCreateFromSo,
         schemas.ShipmentLineFromSo,
@@ -152,6 +154,8 @@ def test_write_schemas_carry_no_source_values_and_forbid_extras() -> None:
         schemas.CustomsRecordCreateRequest,
         schemas.CustomsRecordUpdateRequest,
         schemas.CustomsRecordDeleteRequest,
+        # S3-2 PR-4c — 품목군 마일스톤 세트 추가(종류 1필드)
+        schemas.ProfileMilestoneTypeAddRequest,
     ]
     for model in requests:
         assert model.model_config.get("extra") == "forbid", model.__name__
@@ -194,6 +198,10 @@ def test_shipment_responses_carry_no_cost_fields() -> None:
         schemas.MilestoneWriteOut,
         schemas.MilestoneChangeOut,
         schemas.CustomsRecordOut,
+        # S3-2 PR-4c — OEM 생산 일정 보드·쓰기 응답(PO 소유지만 원가 키 0)·세트 행
+        schemas.OemMilestoneBoardOut,
+        schemas.OemMilestoneWriteOut,
+        schemas.ProfileMilestoneTypeOut,
     ):
         fields = names(model, set())
         assert not {f for f in fields if "cost" in f or "margin" in f or "purchase" in f}, model

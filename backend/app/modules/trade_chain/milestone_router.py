@@ -2,7 +2,10 @@
 
 권한은 **경로 단위**다(라우터 가드만으로 403이 존재 검사 전에 성립 — 401→403→404→409→422, `D:370`):
   조회(보드·변경 이력·통관 목록) = 전 역할 / 계획·실적·초안·통보·통관 쓰기 = 무역 + **물류**(일정·실적·통관은 물류 실무 — ADR-0079).
-  관리자는 `require_roles`에서 상시 통과한다. OEM 생산 마일스톤(`/purchase-orders/{id}/milestones…`)·마일스톤 세트 쓰기는 PR-4c.
+  관리자는 `require_roles`에서 상시 통과한다.
+  **PR-4c**: OEM 생산 일정(`/purchase-orders/{po_id}/milestones…` M7~M9) — 조회 = 전 역할(원가 키 없음), 계획·실적 = **무역**(PO는 무역 소관 —
+  물류의 PO 쓰기 0, X-16·ADR-0079 ④). 품목군 마일스톤 세트(`/item-profiles/{profile_id}/milestone-types`) — 조회 = 전 역할, 추가·제거 =
+  **관리자 전용**(R-14·ADR-0079 ⑥ — `require_roles(ADMIN)` + `AdminUser`, `GOVERNED_PREFIXES` 등재).
 쓰기는 전부 사람 1클릭이다. 계획·실적·초안·통보·통관 추가는 `Idempotency-Key` 필수, 통관 정정·삭제는 `version` 필수(409).
 경로의 `{milestone_type}`은 종류 전체(파생 포함)를 받는다 — 파생 3종은 스키마 422가 아니라 도메인 422 `DERIVED_NOT_EDITABLE`(덮어쓰기 금지 —
 design-D D2-2). 이 라우터가 마일스톤·통관 쓰기 함수의 **유일한 호출처**다(자동 일정·자동 통관 0 — test_no_auto_confirm_code_path_exists).
@@ -14,7 +17,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Response, status
 
-from app.api.deps import CurrentUser, IdempotencyKey, require_roles
+from app.api.deps import AdminUser, CurrentUser, IdempotencyKey, require_roles
 from app.core.pagination import Page, PageParams
 from app.modules.identity.models import RoleCode
 from app.modules.shipments.schemas import (
@@ -29,19 +32,32 @@ from app.modules.shipments.schemas import (
     MilestonePlanDraftRequest,
     MilestonePlanRequest,
     MilestoneWriteOut,
+    OemMilestoneBoardOut,
+    OemMilestoneWriteOut,
+    ProfileMilestoneTypeAddRequest,
+    ProfileMilestoneTypeOut,
 )
-from app.modules.trade_chain import customs_flow, milestone_flow, milestone_view
+from app.modules.trade_chain import customs_flow, milestone_flow, milestone_set_flow, milestone_view
 from app.modules.trade_docs.constants import MilestoneChangeKind, MilestoneType
 
 #: 일정·실적·통보·통관 — 무역 + 물류(관리자 상시 통과).
 CAN_RECORD = (RoleCode.TRADE, RoleCode.LOGISTICS)
+#: OEM 생산 일정(PO 소유) — 무역(관리자 상시 통과). 물류의 PO 쓰기 0(X-16).
+CAN_RECORD_OEM = (RoleCode.TRADE,)
+#: 품목군 마일스톤 세트 — 관리자 전용(CERT 미배정 — R-14).
+CAN_EDIT_SETS = (RoleCode.ADMIN,)
 
 ChangeKindFilter = Literal["PLAN_SET", "PLAN_CHANGED", "ACTUAL_RECORDED", "ACTUAL_CORRECTED"]
 assert set(ChangeKindFilter.__args__) == {k.value for k in MilestoneChangeKind}  # type: ignore[attr-defined]
 
 router = APIRouter(prefix="/shipments", tags=["shipments"])
+#: PR-4c — OEM 생산 일정(PO 하위 경로 — `/api/v1/purchase-orders` 통제 접두어가 행 누락을 잡는다).
+oem_router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
+#: PR-4c — 품목군 마일스톤 세트(`/api/v1/item-profiles/{profile_id}/milestone-types` 통제 접두어 — R-14).
+profile_router = APIRouter(prefix="/item-profiles", tags=["item-profiles"])
 
 ShipmentId = Annotated[int, Path(ge=1)]
+PoId = Annotated[int, Path(ge=1)]
 
 
 # ── 마일스톤 보드·계획·실적·초안 ──────────────────────────────────────────────────
@@ -241,5 +257,143 @@ def delete_shipment_customs_record(
 ) -> Response:
     customs_flow.delete_customs_record(
         actor=current, shipment_id=shipment_id, record_id=record_id, payload=payload.model_dump()
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ── OEM 생산 일정 (M7~M9 — PO 소유 4종, PR-4c) ──────────────────────────────────────
+
+
+@oem_router.get(
+    "/{po_id}/milestones",
+    summary="OEM 생산 일정 보드 (원료수급·충진·포장·출하검사 — 일반 구매 발주는 422. 전 역할, 원가 없음)",
+)
+def get_oem_milestones(po_id: PoId, current: CurrentUser) -> OemMilestoneBoardOut:
+    return OemMilestoneBoardOut.model_validate(milestone_view.get_oem_board(po_id, current.roles))
+
+
+@oem_router.post(
+    "/{po_id}/milestones/{milestone_type}/plan",
+    summary="OEM 생산 일정 계획 설정·변경 (변경 = 롤오버 — 사유 필수. OEM 4종만. 무역)",
+    dependencies=[require_roles(*CAN_RECORD_OEM)],
+)
+def plan_oem_milestone(
+    po_id: PoId,
+    milestone_type: MilestoneType,
+    payload: MilestonePlanRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> OemMilestoneWriteOut:
+    status_code, body = milestone_flow.record_oem_milestone_plan(
+        actor=current,
+        idempotency_key=key,
+        po_id=po_id,
+        milestone_type=milestone_type.value,
+        payload=payload.model_dump(exclude_unset=True),
+    )
+    response.status_code = status_code
+    return OemMilestoneWriteOut.model_validate(body)
+
+
+@oem_router.post(
+    "/{po_id}/milestones/{milestone_type}/actual",
+    summary="OEM 생산 일정 실적 기록·정정 (정정 = 사유 필수, 미래 날짜 불가. OEM 4종만. 무역)",
+    dependencies=[require_roles(*CAN_RECORD_OEM)],
+)
+def record_oem_milestone_actual(
+    po_id: PoId,
+    milestone_type: MilestoneType,
+    payload: MilestoneActualRequest,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> OemMilestoneWriteOut:
+    status_code, body = milestone_flow.record_oem_milestone_actual(
+        actor=current,
+        idempotency_key=key,
+        po_id=po_id,
+        milestone_type=milestone_type.value,
+        payload=payload.model_dump(exclude_unset=True),
+    )
+    response.status_code = status_code
+    return OemMilestoneWriteOut.model_validate(body)
+
+
+@oem_router.get(
+    "/{po_id}/milestone-changes",
+    summary="OEM 생산 일정 변경 이력 (롤오버·실적 정정 — 불변. 페이지 — 전 역할)",
+)
+def list_oem_milestone_changes(
+    po_id: PoId,
+    current: CurrentUser,
+    params: Annotated[PageParams, Depends()],
+    milestone_type: Annotated[MilestoneType | None, Query()] = None,
+    change_kind: Annotated[ChangeKindFilter | None, Query()] = None,
+) -> Page[MilestoneChangeOut]:
+    items, total = milestone_view.list_po_changes(
+        po_id=po_id,
+        milestone_type=milestone_type.value if milestone_type is not None else None,
+        change_kind=change_kind,
+        offset=params.offset,
+        limit=params.limit,
+    )
+    return Page.of([MilestoneChangeOut.model_validate(item) for item in items], total, params)
+
+
+# ── 품목군 마일스톤 세트 (PR-4c — 관리자 쓰기, 전 역할 조회) ─────────────────────────────
+
+
+@profile_router.get(
+    "/{profile_id}/milestone-types",
+    summary="품목군 마일스톤 세트 목록 (선적 계획 초안의 적용 종류 — 업무 흐름 순. 페이지 — 전 역할)",
+)
+def list_profile_milestone_types(
+    profile_id: Annotated[int, Path(ge=1)],
+    current: CurrentUser,
+    params: Annotated[PageParams, Depends()],
+) -> Page[ProfileMilestoneTypeOut]:
+    items, total = milestone_view.list_profile_milestone_types(
+        profile_id=profile_id, offset=params.offset, limit=params.limit
+    )
+    return Page.of([ProfileMilestoneTypeOut.model_validate(item) for item in items], total, params)
+
+
+@profile_router.post(
+    "/{profile_id}/milestone-types",
+    summary="품목군 마일스톤 세트에 종류 추가 (선적 일정 8종만 — 중복 409·자동 계산/OEM 종류 422. 관리자)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_EDIT_SETS)],
+)
+def add_profile_milestone_type(
+    profile_id: Annotated[int, Path(ge=1)],
+    payload: ProfileMilestoneTypeAddRequest,
+    current: AdminUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> ProfileMilestoneTypeOut:
+    status_code, body = milestone_set_flow.add_profile_milestone_type(
+        actor=current,
+        idempotency_key=key,
+        profile_id=profile_id,
+        milestone_type=payload.milestone_type.value,
+    )
+    response.status_code = status_code
+    return ProfileMilestoneTypeOut.model_validate(body)
+
+
+@profile_router.delete(
+    "/{profile_id}/milestone-types/{link_id}",
+    summary="품목군 마일스톤 세트에서 종류 제거 (soft delete — 재추가는 신규. 관리자)",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[require_roles(*CAN_EDIT_SETS)],
+)
+def remove_profile_milestone_type(
+    profile_id: Annotated[int, Path(ge=1)],
+    link_id: Annotated[int, Path(ge=1)],
+    current: AdminUser,
+) -> Response:
+    milestone_set_flow.remove_profile_milestone_type(
+        actor=current, profile_id=profile_id, link_id=link_id
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

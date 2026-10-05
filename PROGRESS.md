@@ -1,5 +1,98 @@
 # PROGRESS
 
+## S3-2 PR-4c (OEM 생산 마일스톤 T13·M7~M9 + 품목군 마일스톤 세트 쓰기 경로 — 백엔드, 마이그레이션 0) — 구현 기록 (2026-10-04)
+- **기준·재배치**: 처음엔 PR-4a 구현 브랜치 head `1dd21322c13d`(경계 — main `e8310bc2dd4a` + 4a 커밋 6개)에서 격리 워크트리로 시작했고, 4a가 적대 검토를 반영해 **PR #61 head `ae0d225a6767`**(4a ①~⑭)이 되자 그 위로 **재배치**했다 — `git branch pr4c-orig`(원 커밋 5개 백업) → `git reset --hard ae0d225a6767` → `git cherry-pick 1dd21322c13d..pr4c-orig`(하나씩, 충돌은 아래 '재배치' 소절). **4a 커밋은 수정하지 않았다**. push·PR 없음. 정본: 계획서 §4 PR-4c 행·검증 열(A·J·K) → design-integrated §9(R-14·R-22·R-26·R-30) → §0~§8(N-01·N-05·N-07·X-09·X-16·X-29·§2.6·§2.9·§2.11) → 부록 B(B9·B15·B16)·D(M7~M9·D7) → ADR-0078·0079·0085 → DESIGN §17·§18·§22 → PROGRESS 'S3-2 PR-4a' 절 4c 인계 계약(적대 검토 반영분 승계 포함).
+- **커밋(12자리 — PR #62 브랜치 기준, `ae0d225a6767` 이후)**: `72af05d75a2d` ① OEM 생산 일정 API(T13·M7~M9)·계획/실적 본체 소유자 공통 일반화·OWNER_NOT_OEM(4a 개정 규율 합본) / `3864912cedcd` ② 품목군 마일스톤 세트 쓰기 경로(관리자 전용·GOVERNED 등재) / `94658515cccb` ③ OEM 경로의 4a 개정 규율 시험 / `6ac75ce2275c` ④ 동시성·계약 시험 / `bf507d80c574` ⑤ 변이 보강·ADR 이행 부기 6건·PROGRESS / `ecd5e131243d` ⑥ 재배치 기록·재검증. **적대 검토 반영(아래 소절)**: `59ac43d291bb` ⑦ 시험(KST 고정·J-10 결정화·pg_locks 대기 증거·질의 수 == 2·세트 행위자) / `4be8311058f3` ⑧ 문구(소유자별 OWNER_NOT_ACTIVE·DUPLICATE_TYPE 중립·세트 경합 detail) / `f0200698bf05` ⑨ OEM 이벤트 분리 / `c53a3adf90b0` ⑩ 계약 스캔 구멍 / `bee013a7e1a8` ⑪ DESIGN §17.2·locking.py·ADR-0078 문면 / `cf79d7264d44` ⑫ KST 고정 자기검사 보강 / (이 커밋) ⑬ PROGRESS. (이전 판의 `b91c19c6d88d`~`91b238dc8730`은 로컬 재배치 직후 해시 — PR 브랜치 해시로 정정.) 재배치 전 원 커밋(백업 브랜치 `pr4c-orig`): `4550291f7753`·`1d00fa0adfeb`·`5105637fa158`·`62f9522bee3b`·`14e3357119f0`.
+
+### 무엇을 (계획서 §4 PR-4c 행 = 최종 기준, 마이그레이션 0 — 표는 M15)
+- **① OEM 생산 일정(T13·M7~M9)** — `GET /purchase-orders/{po_id}/milestones`(보드 — 원료수급 → 충진 → 포장 → 출하검사 4행, 전 역할)·`POST …/milestones/{type}/plan`·`/actual`(무역·관리자 — 물류 PO 쓰기 0, X-16)·`GET …/milestone-changes`(Page, 전 역할). **4a 재사용(복제 0)**: `milestone_flow`의 계획·실적 본체를 `_plan_change`·`_actual_change`로 추출해 선적·OEM이 같은 함수를 쓴다(값 형태·tz·사유·롤오버·no-op·이력·아웃박스 규율 공유). L1 `MilestoneOwner`(선적 또는 PO 정확히 하나 — `ck_milestones_one_owner`)로 `find_milestone`·`insert_milestone`·`live_milestones`를 소유자 일반화. 보드 행은 4a `_stored_row` 재사용(화면 타임라인 컴포넌트 재사용), 이력은 `_page_changes` 공용. **T13** = 멱등 → `purchase_orders FOR SHARE`(Core `table()`로 상태·구분만 — 원가 열 비조회·PO 무수정) → `milestones FOR UPDATE` + 행 version. 아웃박스 ~~`shipments.milestone.changed`~~ → **`purchase_orders.milestone.changed`**(aggregate `purchase_orders`, payload `owner_type=PURCHASE_ORDER` — 적대 검토 반영 ⑤로 분리). 에러 신설 1종 `SHIPMENTS.MILESTONE.OWNER_NOT_OEM`(422 — 카탈로그 1:1, 4a가 4c 몫으로 남긴 코드).
+- **② 품목군 마일스톤 세트 쓰기** — `GET /item-profiles/{profile_id}/milestone-types`(전 역할, Page 기본 50·업무 흐름 순)·`POST`(**관리자 전용**, 멱등 키, 201)·`DELETE …/{link_id}`(관리자 전용, soft delete 204 — 재추가 = 신규 행). `trade_chain/milestone_set_flow.py`(L2)·`milestone_view`(조회·품목군 404)·shipments L1 착지. `GOVERNED_PREFIXES += /api/v1/item-profiles/{profile_id}/milestone-types`(R-14·SA-10). 세트가 생기면 4a 계획 초안(`_draft_types`)이 바로 교집합을 쓴다(e2e·실기동 관통 확인) — **부채 #15 마일스톤 몫 종결**.
+- **③ 4a 적대 검토 개정 규율 정렬** — 계획·실적 본체 `_plan_change`·`_actual_change`가 4a 개정 규율을 그대로 품는다: 행 `FOR UPDATE` → **행 version 409 → `require_writable`(소유자별 종류 422)** → 범위 2000~2999·형태·tz(앱 고정 tzdata·정규 이름 저장)·미래·사유(유니코드 공백 거부 — DB CHECK) 422 → 대입·이력·아웃박스. 선적 경로(종류 422 + 신고수리 실적 422)와 OEM 경로(OWNER_NOT_OEM → 파생 → OEM 4종 밖)가 같은 훅을 쓴다. 멱등 저장 본문 = `change`만(4a `_finish`), 재생 = 저장된 change + 지금 보드(선적 `_replay_with_board`·OEM `_oem_replay`). OEM 보드는 4a `ROLLOVER_TYPES`(ETD·ETA·CARGO_CLOSING — B9) 그대로 → OEM 4종 롤오버 횟수·미통보 = 0(OEM 특례 0). 통보 상한(⑧)은 선적 통보 통로 전용이라 OEM 무관.
+- **④ 시험** — e2e 2파일 16건(OEM 10·세트 6)·J 동시성 6건·K 계약 스캔 5건 + 기존 스캔 편입(authz +7행·PO 경로 핀 8→12·no_auto_confirm +4·soft delete 수신자 `profile_type`·마일스톤 계약 5파일·선적 계약 11파일·요청 17종·응답 +3).
+
+### 재배치 (PR #61 head `ae0d225a6767` 위 — 충돌 지점과 해소)
+- **① `milestone_flow.py`(6 덩어리)** — 4a 개정본(version 409 선행·범위·tz 정규화·`_finish` = change만 저장·`_replay_with_board`·통보 상한)을 **기준으로
+  다시 합쳤다**: 4a 개정 본문을 그대로 두고 그 위에 소유자 일반화(`MilestoneOwner`·`_plan_change`·`_actual_change`·`_publish`/`_write` 소유자 인자)와
+  OEM 함수를 얹었다. `_finish(session, claim, board 조립기, change)` — 저장은 change만, 응답 보드는 쓰기 뒤 조립. 원래 ③이던 OEM 재생 재조립(`_oem_replay`)·
+  `require_writable` 훅은 4a `_finish`가 보드를 저장하지 않으므로 ①부터 필요해 ①로 당겼다.
+- **① `milestone_view.py` 임포트** — 4a `ROLLOVER_TYPES` + 4c `OEM_BOARD_ORDER` 둘 다. OEM 보드의 '미통보 0 고정' 특례를 지우고 4a 규칙(`ROLLOVER_TYPES`만 통계)을 그대로 적용.
+- **① `codes.py`·`catalog.py`** — 4a `NOTICE_LIMIT_REACHED` 뒤에 4c `OWNER_NOT_OEM`(양쪽 보존).
+- **③ `milestone_flow.py`** — ①의 합본(ours) 유지 → ③ 커밋은 시험 단언만 남음(메시지에 기록).
+- **⑤ ADR-0083 부기**(4a 적대 검토 부기와 나란히 — 4c 부기 문면을 ROLLOVER_TYPES 규칙으로 정정, 0085 부기도 같은 문구)·**PROGRESS '## 현재'**(다음 할 일 = PR-4b, 4c는 완료 줄).
+- 자동 병합(충돌 0): `shipments/service.py`(4a `lock_notice_slot`·범위 번역 + 4c `MilestoneOwner`·세트 착지)·`schemas.py`(4a `unknown_reason`·목록 etd/eta + 4c OEM·세트 스키마)·
+  `authz_matrix.py`·`test_milestone_contract.py`·`constants.py`·라우터.
+- **바뀐 동작(재배치 전 → 후)**: ① OEM 행 `rollover_count` 실제 값 → **0**(`unnotified_rollovers`는 전후 0) — 시험 기대 `(1, 0)` → `(0, 0)`, 실기동 관통 단계도 같은 기대로
+  ② OEM 보드 질의 수 3 → **2**(롤오버 통계 대상 0이면 질의 생략) ③ OEM·선적 멱등 저장 본문 = `{change}`만(재생 응답 모양은 그대로 `{board, change}`)
+  ④ OEM 계획·실적에 4a 범위(2000~2999 — 밖이면 422 INVALID_FIELD)·사유 유니코드 공백 거부 자동 적용(공용 `_value`·`_reason`·DB CHECK) — OEM은 날짜형뿐이라 tz 규율은 형태 422로 끝난다
+  ⑤ OEM 행에도 4a `unknown_reason` 필드(날짜형이라 늘 null).
+
+### 편차·자율 확정 (계획·설계 침묵분 — 전부 더 엄격하거나 계약 승계)
+1. **M8 응답 = `{board, change}`**(design-D 표의 `MilestoneBoard` 대신 R-19 승계 — 같은 키 같은 `change.id`, no-op = null).
+2. **OEM 보드 = 선적 보드 행 모양 + `po_id`·`allowed_actions`**(EDIT_MILESTONES — A·T, PO가 발행·공급사 확인 중). 표시 편의(서버가 쓰기 시 재검사) — 프런트에 상태 규칙 복제 0(shipment_view 선례).
+3. **OEM 쓰기 가능 PO 상태 = ISSUED·SUPPLIER_CONFIRMED만**(`OEM_RECORD_EDITABLE_STATES`) — 취소 = 409 `OWNER_NOT_ACTIVE`(N-05 공통 코드), 입고·종결(RESERVED)은 지금 닿을 수 없어 거부 쪽(S4-1 재판정 — 인계).
+4. **일반 구매 PO의 M9(이력)도 422 `OWNER_NOT_OEM`**(설계 M9 오류 열은 404뿐 — 빈 목록으로 숨기지 않는다, M7과 같은 판정).
+5. **OEM 오류 순서** = PO 404 → 취소 409 → 행 version 409 → 일반 구매 PO 422 → 파생 422 `DERIVED_NOT_EDITABLE`·선적 종류 422 `TYPE_NOT_APPLICABLE` → 값 422(4a 개정 규율 정렬 — ③).
+6. **OEM 행 롤오버 횟수·'통보 미연결' = 0, 휴일 요약 0** — 재배치 후 4a `ROLLOVER_TYPES`(B9 — ETD·ETA·CARGO_CLOSING만 롤오버 배지) 규칙을 그대로 적용한 결과다(OEM 특례 0 — 재배치 전엔 미통보만 0 고정·횟수는 실제 값이던 자율 확정을 4a 규칙으로 대체). 통보 통로(M6)는 선적 전용이고 OEM은 표시만(B15). 계획 변경 이력은 M9에 그대로.
+7. **세트 경로 품목군 없음 = 404**(서류·요건 세트 선례 422보다 엄격 — 경로 자원·부모-자식 `D:370`), 중복 = **409 `DUPLICATE_TYPE`**(선례 422 → R-26), 무잠금 peek(detail 동반) + 부분 유니크 번역 2차, 비적용(파생·OEM) = 서비스 422(detail 입력처 안내) + CHECK 번역 2차.
+8. **세트 쓰기 이중 가드** = `require_roles(ADMIN)` + `AdminUser`(휴일 쓰기 선례) — 한쪽만 풀어도 403 유지(변이 M04 = 동등 변이로 확인).
+9. **세트 변경 audit·아웃박스 없음**(서류·요건 세트 선례 — 행위자 열·soft delete 행이 이력). 세트 제거는 멱등 키 없음(선례 동형 — 두 번째 = 404).
+10. **세트 목록 정렬** = 선적 보드 업무 흐름 순(CASE).
+11. **카탈로그 문구 일반화 2건**: `TYPE_NOT_APPLICABLE`("이 대상(선적 구분·OEM 생산 발주·품목군 세트)에는 쓰지 않는…")·`OWNER_NOT_ACTIVE`(카탈로그는 중립 "취소된 전표의 일정은…" + 응답은 소유자별 조치 문구 — 적대 검토 반영 ③) — 4a 문구가 선적 한정이라 발주·세트 재사용 시 오안내(코드·HTTP 무변경).
+12. **PO 상세 응답 무변경** — 설계 D7: OEM '생산 일정' 섹션은 M7을 부른다(PO 상세 내장 없음, D2-4 X4의 `assignable_quantity`·`expected_receipt`는 PR-5a 몫). PO 스키마 원가 마스킹 쌍 차이 핀 그대로.
+13. **OEM 실적 생존 PO 취소는 막지 않는다**(설계 침묵 — PO 생애주기 변경은 범위 밖, 부채 R-4c-1). 실적 미래 여유는 공용 함수 그대로(날짜형 KST+1일).
+
+### 검증 (실행 확인 — 재배치 후 트리 `91b238dc8730` 기준, 재배치 전 수치는 끝줄)
+- **정적**: `ruff check .` All checks passed · `ruff format --check .` 600 files already formatted · `mypy app` Success(**302 source files**).
+- **마이그레이션 0(전용 PG 5454를 `--fresh`로 다시 만든 뒤 `kbos_dev`, `APP_ENV=dev` — M15가 4a 적대 검토로 바뀌었으므로)**: `alembic upgrade head`(M13 → M14 → M15 개정본) → `alembic check` = **No new upgrade operations detected** · `alembic heads` = `281da4794717 (head)` 1개 · `git diff ae0d225a6767 -- backend/migrations backend/requirements.txt` = 변경 0. tzdata = 공유 venv `2026.5`(IANA 2026e — 4a 고정 버전).
+- **전체 pytest 1회(전용 PG 5454 `kbos_test`, 재배치 후 HEAD `91b238dc8730`)**: **5621 passed · 34 skipped(=5655), 2524.14s(42분 4초), EXIT 0**, 경고 1(starlette 내부 DeprecationWarning — 기존). skipped 34 = 백업 스크립트 pg_dump/슈퍼유저 33·`KBOS_HEAVY` 실측용 1(재배치 전과 같은 환경 사유). 변이 핵심 재확인(PG 5455)·실기동 관통(kbos_dev)과 겹쳐 돌았다(DB 분리).
+- **4a 시험 전체 green(같은 실행에서 파일별 집계)**: 4a 시험 10파일 **175 passed·실패 0** — e2e 선적 마일스톤 37·통관 12·CSV 13·문서 흐름 7·화면 관통 3 / 통합 마일스톤 제약 68·동시성 6 / 아키텍처 마일스톤 계약 6·선적 계약 8 / 단위 tzdb 15. 4c 신규 4파일 27 passed(OEM e2e 10·세트 e2e 6·J 6·K 계약 5).
+- **수집 수**: `ae0d225a6767` 5610 → HEAD 5655(**+45** — 재배치 전 증분과 같다: 신규 4파일 27 + 기존 파일 가산 18). `pytest -m golden` = 78(무변경).
+- **동시성(재배치 후 — 실제 스레드·다른 연결 잠금)**: J 6건 green — T13 첫 접촉 = 멱등 → purchase_orders **FOR SHARE** → shipment_children FOR UPDATE / 진행 중 PO 취소 동안 OEM 쓰기 실대기 → 커밋 뒤 409 / 실적 vs 취소 5라운드 500·교착 0 / 같은 키 6스레드 change.id 1 / 최초 경합 409 / 세트 경합 409.
+- **변이 핵심 재확인(재배치 후 사본 + 보조 PG 5455 `--fresh` — 무변이 기준선 111 green 후)**: **6/6 kill** — M01 GOVERNED_PREFIXES에서 milestone-types 제거 / M02 `require_oem` 무력화(OEM 판정) / M06 세트 중복 peek 제거 / M07 세트 유니크 번역 제거(세트 중복 경합 500) / M09 T13 PO 잠금 제거 / M12 소유자·종류 422 훅을 version 409 앞으로(오류 순서 — 재배치 후 본체 정의로 다시 씀). 사본 삭제.
+- **실기동 관통 재실행(재배치 후 — uvicorn 127.0.0.1:8754·`--fresh` PG 5454 `kbos_dev`)**: 37단계 BAD 0·요청 40·500 0(상태 분포 재배치 전과 동일). 바뀐 단계 1개 — ⑤ 충진 롤오버 뒤 OEM 행 `rollover_count`·`unnotified_rollovers` = **(0, 0)**(재배치 전 (1, 0)). 서버는 PID로 종료.
+- **재배치 전(경계 `1dd21322c13d` 위) 기록**: 전체 pytest 5541 passed·34 skipped(46분 23초) · 변이 21/22 kill(생존 1 = M04 동등 변이 — 세트 쓰기 이중 가드 중 역할 목록만 넓혀도 `AdminUser`가 403) · 실기동 37단계 BAD 0.
+- **미실행(실행 검증 못 했음)**: GitHub CI(push 금지), 커버리지 측정, 프런트·실브라우저(화면 0 — PR-4b), 운영 DB 마이그레이션(마이그레이션 0), #61 병합 뒤 최신 main 위 재배치(오케스트레이터 몫).
+
+### 적대 검토 반영 (high 0·med 0·low 13[확정 1 + 12] — 전건 반영·더 엄격한 쪽, 2026-10-04, `ecd5e131243d` 위 새 커밋 ⑦~⑬)
+1. **(확정) KST 자정 경계** — `test_oem_milestones.py`·`test_oem_milestone_concurrency.py`에 autouse `pin_today_kst(monkeypatch, sys.modules[__name__])`(4a ⑩ 승계). 재발 방지: `test_milestone_contract.py`가 마일스톤·통관 계열 시험 모듈 중 `today_kst`를 쓰는 것은 **고정 호출**(임포트만으론 불통 — ⑫ 보강)이 있고, 직접 임포트하면 자기 모듈을 넘기는지 스캔 + 자기검사. [⑦·⑫]
+2. **4b 인계 OEM 오류 목록에 409 `DUPLICATE_TYPE`** — 동시 최초 계획의 늦은 쪽, VERSION_CONFLICT와 같은 재조회 처리(위 4b 인계 보강 반영). [⑬]
+3. **소유자별 `OWNER_NOT_ACTIVE` 조치 문구** — 선적 "…수주에서 새 선적을 만들어 주세요"·발주 "…새 발주를 만들어 주세요"(`message_override`), `detail.owner_type`, 카탈로그는 중립 문구. e2e가 선적 경로 409 문구(발주 단어 0)·발주 경로 문구·detail을 단언. [⑧]
+4. **설계 문면** — DESIGN §17.2 S3-2 부기 'PO `FOR SHARE`(수입선적 생성 T2 + OEM 생산 일정 T13 — PO 무수정)' + 선적 하위 슬롯에 PO 소유 OEM 마일스톤 행, `locking.py` 독스트링((8) 정의·잠금 모드 문단 T2·T13), **ADR-0078 부기**(제목 'PO FOR SHARE는 수입선적 생성만' 정정 — DESIGN·ADR 세트). [⑪]
+5. **OEM 이벤트 분리** — `purchase_orders.milestone.changed`(선적은 `shipments.milestone.changed` 그대로, `CHANGED_EVENTS` 소유자별 표). 알림 규칙은 `event_type` 일치만 보므로 선적 마일스톤 규칙이 OEM 변경에 발화하던 경로 차단 — e2e(group_h)가 OEM 변경 → 알림 0·선적 변경 → 1을 실측. design-integrated §2.7·N-07 정정 행 + **ADR-0083 부기**. 코드에 별도 이벤트 등록표는 없다(이벤트 표 = design-integrated §2.7 — 거기 정정). 소비자 점검: 두 이름 모두 앱·프런트 구독 잡·핸들러 0(grep — JOB_REGISTRY 무접촉) — PR-6이 OEM 알림을 붙일 때 새 이름을 쓴다. [⑨]
+6. **`DUPLICATE_TYPE` 카탈로그 대상 중립**("…다시 불러와 확인해 주세요"), 세트 경합(번역 409) 경로도 peek과 같은 `detail.milestone_type` — 시험이 message·detail 정확 일치. [⑧]
+7. **동시성 시험 달력 의존 제거** — 롤오버 대상 = today+1, `PLAN_CHANGED` 단언. [⑦]
+8. **J-10 결정화** — `find_milestone`을 감싸 Barrier로 두 쪽 모두 None을 본 뒤 INSERT → 지는 쪽 `== DUPLICATE_TYPE`(엄격). [⑦]
+9. **진행 중 PO 취소 대기** — 최초 계획(INSERT)에 더해 **행이 먼저 있고 롤오버(UPDATE — FK 검사 없음)** 변형 추가. 대기 증거 = `pg_locks`(`NOT granted`, 쓰기 쪽 `pg_backend_pid`) — sleep·is_alive 판정 제거, 단언 메시지 정정. [⑦]
+10. **빈 `assert seen` 제거 → 결정적 2시험** — (a) 실적이 PO `FOR SHARE`를 쥔 동안 취소가 기다린다(둘 다 착지) (b) 진행 중 취소 동안 실적이 기다렸다 409. [⑦]
+11. **OEM 보드 질의 수 `== 2`** — 독스트링 정정, 이력 축 → 행 수 축(0·1·4). [⑦]
+12. **계약 스캔 구멍** — `_po_write_sites`(함수형·PO 테이블 객체 `.update/.insert/.delete`·`table("purchase_orders")`로 만든 이름·문자열 SQL)·`_po_owner_sites`(`of_po`·`MilestoneOwner(po_id=…)`/위치 인자·`Milestone.po_id` — 허용 위치 2곳 고정, 앱 전체 스캔) 헬퍼, 자기검사가 같은 헬퍼 호출. [⑩]
+13. **세트 행위자** — 추가 `created_by_id` == 요청 관리자 id, 제거 뒤 `updated_by_id` == 제거한 관리자 id. [⑦]
+- **검증(실행 확인 — HEAD `cf79d7264d44`, 전용 PG 5454를 컨테이너 재시작 뒤 `--fresh`로 재생성)**: `ruff check .` 통과 · `ruff format --check .` 600 files · `mypy app` Success(302) · `alembic check` 드리프트 0·`heads` `281da4794717` 1개·마이그레이션·requirements diff 0 · **전체 pytest 5628 passed · 34 skipped(=5662), 3190.22s(53분 10초 — 변이와 겹쳐 돔), EXIT 0, 실패 0** · 그중 관련(OEM e2e·세트 e2e·OEM 동시성·OEM 계약) 32 passed(OEM e2e 12·세트 e2e 7·J 8·K 5) · `tests/architecture` 전체 685 passed·실패 0 · 4a 마일스톤 시험 파일 전체 10파일 177 passed·실패 0(e2e 선적 마일스톤 37·통관 12·CSV 13·문서 흐름 7·화면 관통 3 / 통합 제약 68·동시성 6 / 아키텍처 마일스톤 계약 8·선적 계약 8 / 단위 tzdb 15).
+- **변이(사본 + 보조 PG 5455 `--fresh`, 기준선 40 green 후)**: **8/8 kill** — R1 이벤트 분리 되돌리기(OEM 흐름·B15 알림·J 더블클릭 3건 실패) / R2 OEM e2e KST 고정 호출 제거(임포트 유지 — 고정 스캔) / R3 J-10 오번역 DUPLICATE_TYPE → VERSION_CONFLICT(J-10) / R4 `_PO_OWNERS.update()` 우회(K 쓰기 스캔) / R5 문자열 SQL 'UPDATE purchase_orders' 우회(K 쓰기 스캔) / R6 `MilestoneOwner(po_id=…)` 직접 생성(K 소유자 사용처) / R7 선적 취소 문구를 발주 문구로(e2e ③) / R8 세트 경합 409 detail 누락(J 세트 경합). 사본 삭제.
+- **중단 기록**: 컨테이너 재시작으로 ⑩ 작업 중 중단 → 미커밋 변경(⑩ 계약 스캔) 확인·재실행 후 커밋, 중단 전 시험·변이 결과는 무효 처리하고 위 수치로 전부 다시 돌렸다.
+- **미실행(실행 검증 못 했음)**: GitHub CI(push 금지), 실기동 관통 재실행(이번 반영은 문구·이벤트 이름·시험이라 e2e로 갈음), 프런트(PR-4b).
+
+### §22 11렌즈 (PR-4c)
+①**기능 통과** — 계획서 PR-4c 행: OEM 생산 마일스톤(T13·M7~M9)·세트 쓰기 경로(A 전용·GOVERNED 등재)·검증 A(OEM 4종 ⇔ PO 소유 — 서비스·DB·소스 스캔 3층)·J(T13 잠금 순서·PO 취소 직렬화)·K(authz·GOVERNED·중복 409·비적용 422)를 시험+실기동으로 green, 세트 → 계획 초안 반영(부채 #15 종결) ②**데이터 통과** — 마이그레이션 0(`alembic check` 드리프트 0)·PO 소유 행은 `po_id`로만(`one_owner`·`owner_type_scope`)·세트 soft delete·재유입 = 신규·이력 IMMUTABLE 공용 ③**트랜잭션 통과** — OEM 쓰기 1건 = 1TX(행 + 이력 + 아웃박스), 세트 쓰기 1TX, 외부 호출 0 ④**동시성·멱등 통과** — T13 FOR SHARE(진행 중 PO 취소를 실제로 기다림)·같은 키 6스레드 change.id 1·최초 경합 409·세트 경합 409·Idempotency-Key·행 version 409·번역표(500 0) ⑤**보안·권한 통과** — 서버측 `require_roles`(OEM 쓰기 A·T, 세트 쓰기 A 이중 가드)·authz +7행·GOVERNED 등재·쓰기 스키마 `extra="forbid"`·원가 키 0(PO 원가 열 비조회)·401→403→404→409→422 ⑥**시간 통과** — OEM 날짜형 = 현지 DATE·KST 오늘 기준 D-N·실적 미래 KST+1(공용), 시각 값 거부(VALUE_SHAPE) ⑦**성능 통과** — OEM 보드 질의 **정확히 2**(행 수 0·1·4 무관 시험 — 적대 검토 반영 ⑪)·목록 Page 50·부분 유니크 인덱스 사용 ⑧**테스트 통과** — 신규 4파일 27건 + 기존 가산 18, 변이 재배치 전 21/22 kill(생존 1 = M04 동등 변이) + 재배치 후 핵심 6/6 kill ⑨**운영 부분** — OEM 알림 없음(B15 표시만 — 기존 부채 9)·세트 운영 안내(runbook)는 PR-8 몫 ⑩**문서 통과** — ADR 이행 부기 6건(0021·0037·0078·0079·0083·0085)·이 절(4b 인계 보강) ⑪**워크스루 부분** — 화면 0(PR-4b). 백엔드 실기동 관통(uvicorn 실 HTTP 40요청 — 위 기록)으로 대체.
+
+### 부채 (신규 — 조용히 넘기지 않는다)
+- **R-4c-1 OEM 실적 생존 PO 취소 무차단**: 선적은 실적 생존 시 취소 409(R-01)지만 OEM 생산 실적은 PO 취소를 막지 않는다(설계 침묵 — PO 생애주기 S3-1 범위). 트리거: 사용자 요구 또는 S4-1 입고 착수 시 재판정.
+- **R-4c-2 `OEM_RECORD_EDITABLE_STATES` 재판정(S4-1)**: 입고·종결(RESERVED)이 열리면 그 상태의 생산 일정 쓰기 허용 여부를 함께 판정(지금은 거부 쪽).
+- **R-4c-3 화면 0**: PO 상세 '생산 일정' 섹션·품목군 '마일스톤 세트' 섹션은 PR-4b(아래 인계 보강).
+- **R-4c-4 `.shard_durations.json` 미갱신**: 신규 시험 4파일은 평균값 배정(Q-15 합류).
+- **R-4c-5 ~~4a 개정본(#61) 위로 옮길 때 합칠 지점~~ — 해소(2026-10-04 재배치)**: `ae0d225a6767` 위로 재배치 완료(위 '재배치' 소절). 남은 것 없음 — #61 병합 후 이 브랜치를 최신 main 위로 다시 옮길 때는 4a 커밋이 이미 main에 있어 충돌이 없어야 한다(실행 검증 못 했음 — 오케스트레이터 몫).
+- **R-4c-6 세트 변경 감사 기록 없음**(선례 동형 — 행위자 열·soft delete 행). 트리거: 감사 요구.
+- 기존 Q-13·Q-14·Q-16·Q-17·R-4a-* 무변경. P-01(credit/exposure.py) 무접촉. JOB_REGISTRY 무접촉(PR-6 몫).
+
+### PR-4a 관찰 (보고만 — 4a 커밋 무수정)
+- **결함 0건**(4a 원본 기준 회귀 시험 600건·전체 pytest green, 재배치 후 4a 개정본 기준 전체 pytest green — 4a 시험 전체 포함). 재사용 중 본 것: ① 카탈로그 문구 2건(`TYPE_NOT_APPLICABLE`·`OWNER_NOT_ACTIVE`)이 선적 한정 문장이라 발주·세트 재사용 시 오안내 → 4c 커밋에서 문구만 일반화(편차 11). ② 계획·실적 본체가 선적 전용 함수 안에 있어 소유자 일반화(`MilestoneOwner`·`_plan_change`·`_actual_change`)가 필요했다 — 4a 개정본(#61)과 합칠 때 충돌 예상 지점(R-4c-5). ③ 4a 계획 초안 시험은 세트를 SQL로 넣는다 — 4c는 그 시험을 바꾸지 않고 API 경로 시험을 따로 더했다. ④ (4a 이전부터) `catalog/models.py` `ItemProfile`·`catalog/profiles.py` 독스트링의 "헤더뿐 — 세트 연결은 후속 세션"은 S1~S3 세 세트가 다 붙은 지금 낡은 문면(동작 영향 0 — 문서 부채로만 기록).
+
+### PR-4b(마일스톤·통관 화면) 인계 계약 보강 — OEM 생산 일정 섹션·품목군 마일스톤 세트 섹션
+- **OEM '생산 일정' 섹션(PO 상세, `po_kind=OEM_PRODUCTION`일 때만)** — `GET /api/v1/purchase-orders/{po_id}/milestones` → `OemMilestoneBoardOut = MilestoneBoardOut + {po_id, allowed_actions}`(행 4: RAW_MATERIAL_READY 원료수급 · FILLING 충진 · PACKING 포장 · OUTGOING_INSPECTION 출하검사 — 순서 고정, 행 모양은 선적 `MilestoneRowOut` 그대로 → `MilestoneTimeline` 재사용). 전부 날짜형(`planned`·`actual` = "YYYY-MM-DD"), `holiday_summary`는 늘 0·`holiday`/`derived`/`customs_state`/`unknown_reason` null → **휴일·통관·판정 불가 배지 0**, `rollover_count`·`unnotified_rollovers`는 늘 0(OEM 4종은 `ROLLOVER_TYPES` 밖 — 롤오버 배지·"통보 기록 없음" 배지·통보 버튼 0, 계획 변경 이력은 이력 목록에서). 일반 구매 PO는 422 `OWNER_NOT_OEM`이라 섹션 자체를 그리지 않는다(`po_kind`로 판단).
+- **버튼** = 보드 `allowed_actions`에 `EDIT_MILESTONES`가 있을 때만(무역·관리자 + PO 발행·공급사 확인 중). 계획 `POST …/milestones/{type}/plan` `{planned_on, version?, reason?}`(기존 계획 변경 = 롤오버 → 사유 필수)·실적 `POST …/{type}/actual` `{actual_on | null(지우기), version?, reason?}`(값 키 필수, 정정 = 사유 필수, 미래 422, 날짜 2000-01-01~2999-12-31 밖 422) → 200 `{board: OemMilestoneBoardOut, change: {id, change_kind}|null}`(같은 키 재요청 = 같은 `change` + 지금 보드). 이력 `GET …/milestone-changes?milestone_type=&change_kind=&page=&size=` → `Page[MilestoneChangeOut]`(`notices`는 늘 빈 배열).
+- **오류(칸별)**: 409 `SHIPMENTS.MILESTONE.OWNER_NOT_ACTIVE`(취소된 발주 — 응답 `message` = "…새 발주를 만들어 주세요", `detail.owner_type = "PURCHASE_ORDER"`; 선적 쪽은 "…수주에서 새 선적을…"·`SHIPMENT` — 서버 문구 그대로 표시) · 409 `COMMON.CONCURRENCY.VERSION_CONFLICT` · **409 `SHIPMENTS.MILESTONE.DUPLICATE_TYPE`**(같은 종류 **최초 계획**이 동시에 둘 들어오면 늦은 쪽 — VERSION_CONFLICT와 **같은 처리: 보드를 다시 불러와 확인**, 적대 검토 반영 ②) · 422 `OWNER_NOT_OEM`·`TYPE_NOT_APPLICABLE`·`DERIVED_NOT_EDITABLE`·`REASON_REQUIRED`·`ACTUAL_IN_FUTURE`·`VALUE_SHAPE_MISMATCH` · 403(물류·인증·조회 — 버튼이 없으니 정상 경로에선 안 보임) · 404.
+- **품목군 '마일스톤 세트' 섹션(품목군 화면)** — 조회 `GET /api/v1/item-profiles/{profile_id}/milestone-types` → `Page[ProfileMilestoneTypeOut{id, item_profile_id, milestone_type, created_at}]`(업무 흐름 순). **추가·제거 버튼은 ADMIN에게만**(서버 이중 가드 — 다른 역할 403): 추가 `POST {milestone_type}`(선택지 = 선적 저장형 8종 — DOC_CUTOFF·CARGO_CLOSING·PSI·CUSTOMS_CLEARED·ETD·BL_ISSUED·ETA·IMPORT_TAX_DUE, 이미 있는 종류는 선택지에서 빼기) → 201, 제거 `DELETE …/{id}` → 204. 오류: 409 `DUPLICATE_TYPE`("이미 세트에 있음" — peek·경합 어느 경로든 `detail.milestone_type` 동일, 카탈로그 `message`는 대상 중립 "…다시 불러와 확인") · 422 `TYPE_NOT_APPLICABLE` · 404. 안내 문구: "세트가 비어 있으면 선적 계획 초안은 구분별 전체 종류를 만듭니다 / 세트 변경은 다음 초안부터 반영"(이미 만든 선적 행은 그대로).
+
 ## S3-2 PR-4a (마일스톤·롤오버·통보·통관, M15) — 구현 기록 (2026-10-04)
 - **기준**: main `e8310bc2dd4a`(PR-3a 병합)에서 격리 워크트리로 시작(`git reset --hard e8310bc2dd4a`). **PR-3c·PR-3b는 이 기준에 없다** — 병합 순서 정본은 3c → 3b → 4a라 오케스트레이터가 둘 병합 뒤 최신 main 위로 옮긴다(충돌 예상: 이 PROGRESS 맨 위 절·'## 현재', `api/router.py` 라우터 등록 줄, `shipment_view.py` 상세 필드·`allowed_actions`, `tests/architecture/authz_matrix.py` 선적 행, `test_shipment_contract.py` 파일 목록, `test_no_auto_confirm_code_path_exists.py` 레지스트리). push·PR 없음. 정본: 계획서 §4 PR-4a 행·검증 열 → design-integrated §9(R-01·R-05·R-06·R-09·R-10·R-16·R-18·R-19·R-20·R-25·R-26) → §0~§8 → 부록 B·C·D → ADR-0074·0078~0083·0085 → DESIGN §17·§18·§22.
 - **커밋(12자리 — PR #61 브랜치 기준, 재배치 후)**: `6c850b192f96` ① M15·L1 착지·제약 번역표 / `58122666a4f2` ② 마일스톤·통관 API·보드 배선·생존 취소 가드 / `cf0a77c90ac5` ③ 동시성·계약 시험 / `c89b7a9fb73b` ④ 시험 보강(서비스 1차 검사·삭제 기록 파생 제외) / `98abbf9ab845` ⑤ 변이 생존 2건 닫기·404 우선 시험·재유입 = 신규 시험 / `aa817dffe203` ⑥ ADR 이행 부기 8건·PROGRESS / `6217df45e349` ⑦ 재배치 정합(오케스트레이터 — PR-3b 화면 e2e의 allowed_actions 기대) / **적대 검토 반영** `50445bc0653f` ⑧ · `7c322318c552` ⑨ · `85e11bd4cad9` ⑩ · `b63a0d6e1ec6` ⑪ · `75f3ce1dd3df` ⑫ · `599ec296c874` ⑬ · (이 커밋) ⑭ — 아래 '적대 검토 반영' 소절. (재배치 전 로컬 해시 `fbf0d8d0c514`·`bf6579864ba2`·`b6adc8dcfed3`·`08442f077650`·`4cdf898ab309`·`1dd21322c13d`는 같은 내용)
@@ -1172,7 +1265,8 @@
 - **S2-2 (인증 인스턴스·상태머신) — 종결(2026-08-12).** PR #17 `44d415268392`(3테이블·상태머신 27전이·날짜 스윕·CLI — ADR-0037~0040, GC v1.3 C9·C10) + PR #18 `640916e5a2ec`(documents CERTIFICATION 확장·태스크 서류 링크·§4.8 자동 적용 — ADR-0041·0042). 상세는 아래 "현재" 절의 직전 세션 상세 항목이 정본. **종결 시점 정본 기준선: pytest 1094·vitest 79·커버리지 게이트 94·CI 6잡.**
 
 ## 현재
-- **다음 할 일: S3-2 PR-4c(OEM 생산 마일스톤 T13·M7~M9 + 품목군 마일스톤 세트 쓰기 경로 `/item-profiles/{id}/milestone-types` — 계획서 §4 PR-4c 행, 마이그레이션 0)** — 인계 = 맨 위 'S3-2 PR-4a' 절 끝 PR-4b/4c 인계 계약. 이어서 4b → 5a → 5b → 6 → 8(계획서 §4 의존 줄이 정본). 병합 이력: 3a #58 → 3c #59 → 3b #60 → 4a(이 절 — PR #61, 적대 검토 12건 반영 완료: 같은 절 '적대 검토 반영' 소절, 커밋 ⑧~⑭).
+- **다음 할 일: S3-2 PR-4b(마일스톤·통관 화면 + OEM 생산 일정 섹션·품목군 마일스톤 세트 섹션 — 인계 = 'S3-2 PR-4a' 절 PR-4b 인계 계약 + 맨 위 'S3-2 PR-4c' 절 PR-4b 인계 보강)** — 이어서 5a → 5b → 6 → 8(계획서 §4 의존 줄이 정본). 병합 대기: 4a(PR #61) → 4c(이 브랜치 — #61 head `ae0d225a6767` 위로 재배치 완료, 맨 위 'S3-2 PR-4c' 절).
+- (완료 2026-10-04 — PR-4c, 맨 위 'S3-2 PR-4c' 절 — PR #61 head 위 재배치) **다음 할 일: S3-2 PR-4c(OEM 생산 마일스톤 T13·M7~M9 + 품목군 마일스톤 세트 쓰기 경로 `/item-profiles/{id}/milestone-types` — 계획서 §4 PR-4c 행, 마이그레이션 0)** — 인계 = 맨 위 'S3-2 PR-4a' 절 끝 PR-4b/4c 인계 계약. 이어서 4b → 5a → 5b → 6 → 8(계획서 §4 의존 줄이 정본). 병합 이력: 3a #58 → 3c #59 → 3b #60 → 4a(이 절 — PR #61, 적대 검토 12건 반영 완료: 같은 절 '적대 검토 반영' 소절, 커밋 ⑧~⑭).
 - (완료 2026-10-04 — PR-4a, 맨 위 'S3-2 PR-4a' 절) **다음 할 일: S3-2 PR-4a(M15 마일스톤·롤오버·통보·통관 — 계획서 §4 PR-4a 행)** — PR-3b(선적 화면 — 프런트, 백엔드 앱 코드 0)는 구현 완료(맨 위 'S3-2 PR-3b' 절 — 경계 커밋 `be202b15bf80` 이후 커밋만 PR-3b, PR-16 부채 ⑤ SearchSelect 종결·실브라우저 관통 1회·결함 2건 수정). PR-3b 적대 검토 15건(med 5·low 10) 반영 완료(같은 절 '적대 검토 반영' 소절 — 커밋 ⑩~⑬). 병합 순서 정본 3a → 3c(#59) → 3b(#60) → 4a → 4c → 4b → 5a → 5b → 6 → 8. PR-4b는 선적 상세에 마일스톤 타임라인·통관 섹션을 더하고 목록·SO 선적 섹션 ETD/ETA 열(부채 R-3b-3)을 붙인다.
 - (완료 2026-10-04 — PR-3b, 맨 위 'S3-2 PR-3b' 절) **다음 할 일: S3-2 PR-3b(선적 화면 — 목록·상세·SO "선적 만들기" 2단·보드 "선적중" 열·SO 필터 IN_SHIPMENT·문서 흐름 SHIPMENT 노드·CSV 버튼)** — 인계 계약 = 맨 위 'S3-2 PR-3a' 절 "PR-3b 프런트 인계 계약" + 'S3-2 PR-3c' 절 "PR-3c 보강분"(CSV·문서 흐름 노드 모양). 정본: 계획서 §4 PR-3b 행·design-D D6~D8. 그 뒤 4a → 4c → 4b → 5a → 5b → 6 → 8(계획서 §4 의존 줄이 정본).
 - (완료 2026-10-04 — PR-3c, 맨 위 'S3-2 PR-3c' 절) **다음 할 일: S3-2 PR-3c(선적 CSV 내보내기·문서 흐름 노드) → PR-3b(선적 화면 — PR-3a 절 프런트 인계 계약)** — 계획서 §4 의존 줄이 정본.

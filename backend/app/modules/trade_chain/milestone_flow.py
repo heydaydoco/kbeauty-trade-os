@@ -1,6 +1,8 @@
-"""선적 마일스톤 쓰기 — 계획(롤오버)·실적·계획 초안·통보 기록 (S3-2 PR-4a / ADR-0080·0083 / design-C T6·T7·T8 / design-B B8·B9·B16).
+"""마일스톤 쓰기 — 선적 계획(롤오버)·실적·계획 초안·통보 기록 + OEM 생산 일정 계획·실적
+(S3-2 PR-4a·PR-4c / ADR-0078·0079·0080·0083·0085 / design-C T6·T7·T8 + design-integrated N-07 T13 / design-B B8·B9·B15·B16).
 
-모든 동작은 **사람 1클릭 + 한 트랜잭션**이다(외부 호출 0 — 알림은 아웃박스 `shipments.milestone.changed`뿐, 통보는 기록이지 발송이 아니다).
+모든 동작은 **사람 1클릭 + 한 트랜잭션**이다(외부 호출 0 — 알림은 아웃박스 `shipments.milestone.changed`(선적)·
+`purchase_orders.milestone.changed`(OEM)뿐, 통보는 기록이지 발송이 아니다).
 
 ■ 잠금 순서(ADR-0078 LOCK_ORDER): 계획·실적·초안 = 멱등 claim → 선적 `FOR UPDATE`(헤더 version 대조 없음 — 헤더 내용 불변) → 마일스톤 행
   `FOR UPDATE`(shipment_children) + **행 version** 대조. 통보 = 멱등 → (상대 거래처) partners `FOR KEY SHARE` → 선적 `FOR SHARE`(R-08).
@@ -14,10 +16,18 @@
   **멱등 저장 본문은 결정적인 `change`만**이고 재생 때 보드를 새로 조립한다(재생 시점의 today_kst·판정 — 적대 검토 반영 ⑨).
 ■ 통보는 변경 1건당 `NOTICE_LIMIT_PER_CHANGE`건까지(초과 422 NOTICE_LIMIT_REACHED — 소유 마일스톤 행 `FOR UPDATE` 아래에서 센다,
   적대 검토 반영 ⑧). 잠금 순서: 멱등 → 거래처 → 선적(SHARE) → shipment_children(마일스톤 행).
+■ **계획·실적 본체는 소유자 공통**(`_plan_change`·`_actual_change` — PR-4c): 행 `FOR UPDATE` → 행 version 409 → `require_writable`(소유자별
+  종류 422) → 범위·형태·시간대·미래·사유 422 → 대입·이력·아웃박스. 선적과 OEM이 **같은 함수**를 쓴다(소유자만 다르다 — 복제 0).
+■ **OEM 생산 일정(T13 — PR-4c)**: 멱등 claim → `purchase_orders` **`FOR SHARE`**(상태·구분 확인, PO 무수정 — PO 취소의 `FOR UPDATE`와
+  직렬화) → 마일스톤 행 `FOR UPDATE`(shipment_children 슬롯 — X-09) + 행 version → UPDATE + 이력 + 아웃박스(payload `owner_type=PURCHASE_ORDER`).
+  오류 순서: PO 404 → 취소 409 OWNER_NOT_ACTIVE → 행 version 409 → 일반 구매 PO 422 OWNER_NOT_OEM → 파생 422 DERIVED_NOT_EDITABLE·선적
+  종류 422 TYPE_NOT_APPLICABLE → 값 422(4a 개정 규율과 같은 순서). 멱등 재생 = 저장된 change + 지금 보드. 쓰기 역할 = 무역(관리자 상시
+  통과 — ADR-0079 ④). 알림·휴일 경고 없음(B15 — 표시만), 롤오버 배지 대상 아님(ROLLOVER_TYPES 밖 — B9).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -38,11 +48,16 @@ from app.modules.outbox import service as outbox
 from app.modules.partners import service as partners
 from app.modules.shipments import service as shipments
 from app.modules.shipments.models import Milestone, Shipment, ShipmentLine
-from app.modules.shipments.service import MilestoneValue
+from app.modules.shipments.service import MilestoneOwner, MilestoneValue
 from app.modules.trade_chain.milestone_view import (
+    OEM_RECORD_EDITABLE_STATES,
     RECORD_EDITABLE_STATES,
+    PoOwner,
     board_body,
     change_body,
+    oem_board_body,
+    po_owner,
+    require_oem,
 )
 from app.modules.trade_docs import schedule
 from app.modules.trade_docs.constants import (
@@ -51,8 +66,11 @@ from app.modules.trade_docs.constants import (
     BUSINESS_DATE_MIN,
     DATETIME_MILESTONES,
     DERIVED_MILESTONES,
+    DOC_TABLES,
+    OEM_MILESTONES,
     RELEASE_BOUND_ACTUALS,
     SHIPMENT_MILESTONES_BY_KIND,
+    DocKind,
     MilestoneChangeKind,
     MilestoneType,
 )
@@ -63,9 +81,19 @@ PLAN_ENDPOINT = "POST /api/v1/shipments/{id}/milestones/{type}/plan"
 ACTUAL_ENDPOINT = "POST /api/v1/shipments/{id}/milestones/{type}/actual"
 DRAFT_ENDPOINT = "POST /api/v1/shipments/{id}/milestones/plan-draft"
 NOTICE_ENDPOINT = "POST /api/v1/shipments/{id}/milestone-changes/{change_id}/notices"
+OEM_PLAN_ENDPOINT = "POST /api/v1/purchase-orders/{id}/milestones/{type}/plan"
+OEM_ACTUAL_ENDPOINT = "POST /api/v1/purchase-orders/{id}/milestones/{type}/actual"
 
 #: 아웃박스 이벤트(`<도메인>.<대상>.<사건>`) — payload 화이트리스트: 소유자·종류·변경 종류·전후 값(금액·원가 0).
 CHANGED_EVENT = "shipments.milestone.changed"
+#: OEM 생산 일정 변경 이벤트 — 선적과 **다른 event_type**(PR-4c 적대 검토 반영 ⑤ / N-07 정정). 알림 규칙은 event_type으로만 매칭하므로
+#: 같은 이름이면 선적용 규칙이 OEM 변경에도 발화해 B15 'OEM 알림 없음'을 어긴다 — 이름을 갈라 선적 규칙이 OEM에 절대 닿지 않게 한다(fail-closed).
+OEM_CHANGED_EVENT = "purchase_orders.milestone.changed"
+#: 소유자 종류 → 변경 이벤트 이름(아웃박스 aggregate_type은 소유 전표 표 이름 — DOC_TABLES).
+CHANGED_EVENTS: dict[str, str] = {
+    DocKind.SHIPMENT.value: CHANGED_EVENT,
+    DocKind.PURCHASE_ORDER.value: OEM_CHANGED_EVENT,
+}
 #: ETD·B/L·ETA 실적을 받는 선적 상태(R-01 — 출고지시 뒤에만). S4-2가 피킹~종결을 열면 함께 재판정(인계 계약).
 ACTUAL_RELEASE_STATES = frozenset({"RELEASE_ORDERED"})
 #: 날짜형 실적의 미래 여유(현지 날짜가 KST보다 하루 앞설 수 있는 UTC+10 이상 지역 — B8 ④). 시각형은 여유 0(R-18).
@@ -91,25 +119,57 @@ _INSTANT_END = datetime(3000, 1, 1, tzinfo=UTC)
 # ── 공통 검증 ─────────────────────────────────────────────────────────────────
 
 
+#: 소유자별 OWNER_NOT_ACTIVE 조치 문구(카탈로그는 소유자 중립 — 경로가 정확한 조치로 덮는다, PR-4c 적대 검토 반영 ③).
+SHIPMENT_INACTIVE_MESSAGE = (
+    "취소된 선적의 마일스톤은 수정할 수 없습니다. 필요하면 수주에서 새 선적을 만들어 주세요."
+)
+PO_INACTIVE_MESSAGE = (
+    "취소된 발주의 생산 일정은 수정할 수 없습니다. 필요하면 새 발주를 만들어 주세요."
+)
+
+
 def _require_owner_active(row: Shipment) -> None:
     if row.status not in RECORD_EDITABLE_STATES:
         raise AppError(
             ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE,
+            detail={"owner_type": MilestoneOwner.of_shipment(row.id).owner_type},
             log_context={"shipment_id": row.id, "status": row.status},
+            message_override=SHIPMENT_INACTIVE_MESSAGE,
         )
 
 
-def _require_type_writable(row: Shipment, milestone_type: str) -> None:
-    """종류 자체의 쓰기 가능 여부(행이 생길 수 없는 종류) — 파생 422 DERIVED_NOT_EDITABLE / 구분 비적용·OEM 422 TYPE_NOT_APPLICABLE."""
+def _require_type_writable(
+    milestone_type: str, applicable: frozenset[str], scope: dict[str, str]
+) -> None:
+    """종류 자체의 쓰기 가능 여부(행이 생길 수 없는 종류) — 파생 422 DERIVED_NOT_EDITABLE / 소유자 비적용 422 TYPE_NOT_APPLICABLE
+    (선적: 구분별 적용 집합 밖·OEM 종류 / OEM PO: OEM 4종 밖). `scope`는 detail에 싣는 소유자 범위(구분)."""
     if milestone_type in DERIVED_MILESTONES:
         raise AppError(
             ErrorCode.SHIPMENTS_MILESTONE_DERIVED_NOT_EDITABLE,
             detail={"milestone_type": milestone_type},
         )
-    if milestone_type not in SHIPMENT_MILESTONES_BY_KIND.get(row.shipment_kind, frozenset()):
+    if milestone_type not in applicable:
         raise AppError(
             ErrorCode.SHIPMENTS_MILESTONE_TYPE_NOT_APPLICABLE,
-            detail={"milestone_type": milestone_type, "shipment_kind": row.shipment_kind},
+            detail={"milestone_type": milestone_type, **scope},
+        )
+
+
+def _require_shipment_type_writable(row: Shipment, milestone_type: str) -> None:
+    _require_type_writable(
+        milestone_type,
+        SHIPMENT_MILESTONES_BY_KIND.get(row.shipment_kind, frozenset()),
+        {"shipment_kind": row.shipment_kind},
+    )
+
+
+def _require_shipment_actual_writable(row: Shipment, milestone_type: str) -> None:
+    """선적 실적 쓰기 가능 종류 — 종류 판정 + 신고수리 실적은 통관 기록에서만(422 ACTUAL_FROM_CUSTOMS_RECORD, X-02)."""
+    _require_shipment_type_writable(row, milestone_type)
+    if milestone_type == MilestoneType.CUSTOMS_CLEARED.value:
+        raise AppError(
+            ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD,
+            detail={"milestone_type": "신고수리 실적은 통관 기록의 수리일로 입력합니다."},
         )
 
 
@@ -222,20 +282,22 @@ def _payload_value(value: MilestoneValue) -> dict[str, str | None]:
 
 def _publish(
     session: Session,
-    row: Shipment,
+    owner: MilestoneOwner,
     milestone_type: str,
     change: Any,
     old: MilestoneValue,
     new: MilestoneValue,
 ) -> None:
+    """event_type·aggregate = 소유자별(선적 = `shipments.milestone.changed`·shipments / OEM = `purchase_orders.milestone.changed`·
+    purchase_orders) — payload `owner_type`·`owner_id`(design-integrated §2.7, OEM 이름 분리 = 적대 검토 반영 ⑤)."""
     outbox.publish(
         session,
-        event_type=CHANGED_EVENT,
-        aggregate_type="shipments",
-        aggregate_id=row.id,
+        event_type=CHANGED_EVENTS[owner.owner_type],
+        aggregate_type=DOC_TABLES[DocKind(owner.owner_type)],
+        aggregate_id=owner.owner_id,
         payload={
-            "owner_type": "SHIPMENT",
-            "owner_id": row.id,
+            "owner_type": owner.owner_type,
+            "owner_id": owner.owner_id,
             "milestone_type": milestone_type,
             "change_id": change.id,
             "change_kind": change.change_kind,
@@ -249,7 +311,7 @@ def _write(
     session: Session,
     *,
     actor: AuthenticatedUser,
-    row: Shipment,
+    owner: MilestoneOwner,
     milestone: Milestone | None,
     milestone_type: str,
     kind: str,
@@ -261,7 +323,7 @@ def _write(
     """값 대입 + 이력 1행 + 아웃박스 1건(같은 TX) → 응답의 change 조각."""
     if milestone is None:
         milestone = shipments.insert_milestone(
-            session, shipment_id=row.id, milestone_type=milestone_type, actor_id=actor.id
+            session, owner=owner, milestone_type=milestone_type, actor_id=actor.id
         )
     if planned:
         shipments.set_planned(milestone, new, actor_id=actor.id)
@@ -277,17 +339,20 @@ def _write(
         reason=reason,
         actor_id=actor.id,
     )
-    _publish(session, row, milestone_type, change, old, new)
+    _publish(session, owner, milestone_type, change, old, new)
     return {"id": change.id, "change_kind": change.change_kind}
 
 
 def _finish(
-    session: Session, claim: idempotency.Claim, row: Shipment, change: dict[str, Any] | None
+    session: Session,
+    claim: idempotency.Claim,
+    board: Callable[[], dict[str, Any]],
+    change: dict[str, Any] | None,
 ) -> tuple[int, dict[str, Any]]:
-    """멱등 저장 본문 = 결정적인 `change`만(보드는 재생 때 새로 조립 — 적대 검토 반영 ⑨)."""
+    """멱등 저장 본문 = 결정적인 `change`만(보드는 재생 때 새로 조립 — 적대 검토 반영 ⑨). `board` = 소유자별 보드 조립기(쓰기 뒤 호출)."""
     assert claim.record is not None
     idempotency.complete(session, claim.record, status_code=200, body={"change": change})
-    return 200, {"board": board_body(session, row), "change": change}
+    return 200, {"board": board(), "change": change}
 
 
 def _replay_with_board(
@@ -299,6 +364,110 @@ def _replay_with_board(
         "board": board_body(session, row),
         "change": replay.body.get("change"),
     }
+
+
+# ── 계획·실적 본체 (소유자 공통 — 선적 T6·T7 / OEM T13) ─────────────────────────────
+
+
+def _plan_change(
+    session: Session,
+    *,
+    actor: AuthenticatedUser,
+    owner: MilestoneOwner,
+    milestone_type: str,
+    payload: dict[str, Any],
+    require_writable: Callable[[], None],
+) -> dict[str, Any] | None:
+    """계획 설정(PLAN_SET)·변경(PLAN_CHANGED = 롤오버, 사유 필수) 본체 — 소유 헤더 잠금·소유 상태 409를 끝낸 호출자가 부른다.
+    행 `FOR UPDATE` → version 409 → `require_writable`(소유자별 종류 422) → 범위·형태·시간대 422 → 사유 422 → 대입·이력·아웃박스.
+    같은 값 = no-op(None — 이력 0)."""
+    milestone = shipments.find_milestone(session, owner, milestone_type, for_update=True)
+    _require_version(milestone, payload.get("version"))
+    require_writable()
+    new = _value(milestone_type, payload, on_key="planned_on", at_key="planned_at", required=True)
+    _require_shared_zone(milestone, new, other_at=milestone.actual_at if milestone else None)
+    reason = _reason(payload.get("reason"))
+    old = (
+        MilestoneValue(milestone.planned_on, milestone.planned_at, milestone.tz)
+        if milestone is not None
+        else MilestoneValue()
+    )
+    if _same(old, new):
+        return None
+    kind = (
+        MilestoneChangeKind.PLAN_SET.value if old.empty else MilestoneChangeKind.PLAN_CHANGED.value
+    )
+    if kind == MilestoneChangeKind.PLAN_CHANGED.value and reason is None:
+        raise AppError(
+            ErrorCode.SHIPMENTS_MILESTONE_REASON_REQUIRED,
+            detail={"reason": "계획 변경(롤오버) 사유를 입력해 주세요."},
+        )
+    return _write(
+        session,
+        actor=actor,
+        owner=owner,
+        milestone=milestone,
+        milestone_type=milestone_type,
+        kind=kind,
+        old=old,
+        new=new,
+        reason=reason,
+        planned=True,
+    )
+
+
+def _actual_change(
+    session: Session,
+    *,
+    actor: AuthenticatedUser,
+    owner: MilestoneOwner,
+    milestone_type: str,
+    payload: dict[str, Any],
+    allow: Callable[[MilestoneValue], None],
+    require_writable: Callable[[], None],
+) -> dict[str, Any] | None:
+    """실적 기록(ACTUAL_RECORDED)·정정/삭제(ACTUAL_CORRECTED — 사유 필수) 본체. 행 `FOR UPDATE` → version 409 → `require_writable`(종류 422)
+    → 값 키 422 → 범위·형태·시간대 422 → `allow`(소유자별 실적 규율 — 미래 금지 공통 + 선적 출고 결속) → 사유 422 → 대입·이력·아웃박스.
+    값 필드는 명시해야 한다(키 없음 = 422 — 실수로 실적을 지우는 빈 본문 차단, 지우기 = 명시적 null + 사유)."""
+    milestone = shipments.find_milestone(session, owner, milestone_type, for_update=True)
+    _require_version(milestone, payload.get("version"))
+    require_writable()
+    if "actual_on" not in payload and "actual_at" not in payload:
+        field = "actual_at" if milestone_type in DATETIME_MILESTONES else "actual_on"
+        raise invalid(field, "실적 값을 보내 주세요(지우려면 null과 사유).")
+    new = _value(milestone_type, payload, on_key="actual_on", at_key="actual_at", required=False)
+    _require_shared_zone(milestone, new, other_at=milestone.planned_at if milestone else None)
+    allow(new)
+    reason = _reason(payload.get("reason"))
+    old = (
+        MilestoneValue(milestone.actual_on, milestone.actual_at, milestone.tz)
+        if milestone is not None
+        else MilestoneValue()
+    )
+    if _same(old, new):
+        return None
+    kind = (
+        MilestoneChangeKind.ACTUAL_RECORDED.value
+        if old.empty
+        else MilestoneChangeKind.ACTUAL_CORRECTED.value
+    )
+    if kind == MilestoneChangeKind.ACTUAL_CORRECTED.value and reason is None:
+        raise AppError(
+            ErrorCode.SHIPMENTS_MILESTONE_REASON_REQUIRED,
+            detail={"reason": "실적 정정 사유를 입력해 주세요."},
+        )
+    return _write(
+        session,
+        actor=actor,
+        owner=owner,
+        milestone=milestone,
+        milestone_type=milestone_type,
+        kind=kind,
+        old=old,
+        new=new,
+        reason=reason,
+        planned=False,
+    )
 
 
 # ── 계획 (T6 — 설정·롤오버) ────────────────────────────────────────────────────
@@ -327,51 +496,22 @@ def record_milestone_plan(
         row = lock_document(session, Shipment, shipment_id)  # 404 · shipments FOR UPDATE
         _require_owner_active(row)
         # 409(행 version)가 422(종류 쓰기 불가)보다 먼저 — ADR-0079 ⑧(적대 검토 반영 ⑦). 쓸 수 없는 종류는 행이 없어 version 생략이 정답
-        milestone = shipments.find_milestone(session, row.id, milestone_type, for_update=True)
-        _require_version(milestone, payload.get("version"))
-        _require_type_writable(row, milestone_type)
-        new = _value(
-            milestone_type, payload, on_key="planned_on", at_key="planned_at", required=True
-        )
-        _require_shared_zone(milestone, new, other_at=milestone.actual_at if milestone else None)
-        reason = _reason(payload.get("reason"))
-        old = (
-            MilestoneValue(milestone.planned_on, milestone.planned_at, milestone.tz)
-            if milestone is not None
-            else MilestoneValue()
-        )
-        if _same(old, new):
-            return _finish(session, claim, row, None)
-        kind = (
-            MilestoneChangeKind.PLAN_SET.value
-            if old.empty
-            else MilestoneChangeKind.PLAN_CHANGED.value
-        )
-        if kind == MilestoneChangeKind.PLAN_CHANGED.value and reason is None:
-            raise AppError(
-                ErrorCode.SHIPMENTS_MILESTONE_REASON_REQUIRED,
-                detail={"reason": "계획 변경(롤오버) 사유를 입력해 주세요."},
-            )
-        change = _write(
+        change = _plan_change(
             session,
             actor=actor,
-            row=row,
-            milestone=milestone,
+            owner=MilestoneOwner.of_shipment(row.id),
             milestone_type=milestone_type,
-            kind=kind,
-            old=old,
-            new=new,
-            reason=reason,
-            planned=True,
+            payload=payload,
+            require_writable=lambda: _require_shipment_type_writable(row, milestone_type),
         )
-        return _finish(session, claim, row, change)
+        return _finish(session, claim, lambda: board_body(session, row), change)
 
 
 # ── 실적 (T7 — 기록·정정) ─────────────────────────────────────────────────────
 
 
-def _require_actual_allowed(row: Shipment, milestone_type: str, value: MilestoneValue) -> None:
-    """실적 값 규율 — 미래 금지(날짜형 KST 오늘+1일까지, 시각형 현재 UTC까지 — R-18) · ETD·B/L·ETA는 출고지시 뒤에만(R-01)."""
+def _require_not_future(value: MilestoneValue) -> None:
+    """실적 미래 금지(소유자 공통) — 날짜형 KST 오늘+1일까지(현지 날짜 여유), 시각형 현재 UTC까지(여유 0 — R-18)."""
     if value.empty:
         return
     if value.at is not None and value.at > utcnow():
@@ -384,6 +524,13 @@ def _require_actual_allowed(row: Shipment, milestone_type: str, value: Milestone
             ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_IN_FUTURE,
             detail={"actual_on": "아직 오지 않은 날짜입니다."},
         )
+
+
+def _require_actual_allowed(row: Shipment, milestone_type: str, value: MilestoneValue) -> None:
+    """선적 실적 값 규율 — 미래 금지(공통) · ETD·B/L·ETA는 출고지시 뒤에만(R-01)."""
+    if value.empty:
+        return
+    _require_not_future(value)
     if milestone_type in RELEASE_BOUND_ACTUALS and row.status not in ACTUAL_RELEASE_STATES:
         raise AppError(
             ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_BEFORE_RELEASE,
@@ -418,53 +565,16 @@ def record_milestone_actual(
         row = lock_document(session, Shipment, shipment_id)
         _require_owner_active(row)
         # 409(행 version)가 422(종류·신고수리 실적)보다 먼저 — ADR-0079 ⑧(적대 검토 반영 ⑦)
-        milestone = shipments.find_milestone(session, row.id, milestone_type, for_update=True)
-        _require_version(milestone, payload.get("version"))
-        _require_type_writable(row, milestone_type)
-        if milestone_type == MilestoneType.CUSTOMS_CLEARED.value:
-            raise AppError(
-                ErrorCode.SHIPMENTS_MILESTONE_ACTUAL_FROM_CUSTOMS_RECORD,
-                detail={"milestone_type": "신고수리 실적은 통관 기록의 수리일로 입력합니다."},
-            )
-        if "actual_on" not in payload and "actual_at" not in payload:
-            field = "actual_at" if milestone_type in DATETIME_MILESTONES else "actual_on"
-            raise invalid(field, "실적 값을 보내 주세요(지우려면 null과 사유).")
-        new = _value(
-            milestone_type, payload, on_key="actual_on", at_key="actual_at", required=False
-        )
-        _require_shared_zone(milestone, new, other_at=milestone.planned_at if milestone else None)
-        _require_actual_allowed(row, milestone_type, new)
-        reason = _reason(payload.get("reason"))
-        old = (
-            MilestoneValue(milestone.actual_on, milestone.actual_at, milestone.tz)
-            if milestone is not None
-            else MilestoneValue()
-        )
-        if _same(old, new):
-            return _finish(session, claim, row, None)
-        kind = (
-            MilestoneChangeKind.ACTUAL_RECORDED.value
-            if old.empty
-            else MilestoneChangeKind.ACTUAL_CORRECTED.value
-        )
-        if kind == MilestoneChangeKind.ACTUAL_CORRECTED.value and reason is None:
-            raise AppError(
-                ErrorCode.SHIPMENTS_MILESTONE_REASON_REQUIRED,
-                detail={"reason": "실적 정정 사유를 입력해 주세요."},
-            )
-        change = _write(
+        change = _actual_change(
             session,
             actor=actor,
-            row=row,
-            milestone=milestone,
+            owner=MilestoneOwner.of_shipment(row.id),
             milestone_type=milestone_type,
-            kind=kind,
-            old=old,
-            new=new,
-            reason=reason,
-            planned=False,
+            payload=payload,
+            allow=lambda value: _require_actual_allowed(row, milestone_type, value),
+            require_writable=lambda: _require_shipment_actual_writable(row, milestone_type),
         )
-        return _finish(session, claim, row, change)
+        return _finish(session, claim, lambda: board_body(session, row), change)
 
 
 # ── 계획 초안 (M4 — 사람 1클릭, 자동 생성 0) ─────────────────────────────────────
@@ -520,9 +630,10 @@ def draft_milestone_plan(
             ).scalars()
         )
         created = sorted(_draft_types(session, row) - existing)
+        owner = MilestoneOwner.of_shipment(row.id)
         for milestone_type in created:
             shipments.insert_milestone(
-                session, shipment_id=row.id, milestone_type=milestone_type, actor_id=actor.id
+                session, owner=owner, milestone_type=milestone_type, actor_id=actor.id
             )
         assert claim.record is not None
         idempotency.complete(
@@ -625,3 +736,107 @@ def record_milestone_notice(
         assert claim.record is not None
         idempotency.complete(session, claim.record, status_code=201, body=body)
         return 201, body
+
+
+# ── OEM 생산 일정 (T13 — PO 소유 4종: 원료수급·충진·포장·출하검사, 무역·관리자) ─────────────────
+
+
+def _require_po_active(po: PoOwner) -> None:
+    """취소된 PO(또는 S4-1 전까지 닿을 수 없는 입고·종결 상태)의 생산 일정 쓰기 = 409 OWNER_NOT_ACTIVE(N-05 — 선적과 같은 코드)."""
+    if po.status not in OEM_RECORD_EDITABLE_STATES:
+        raise AppError(
+            ErrorCode.SHIPMENTS_MILESTONE_OWNER_NOT_ACTIVE,
+            detail={"owner_type": po.owner.owner_type},
+            log_context={"purchase_order_id": po.id, "status": po.status},
+            message_override=PO_INACTIVE_MESSAGE,
+        )
+
+
+def _lock_oem_owner(session: Session, po_id: int) -> PoOwner:
+    """T13 소유 잠금 — PO `FOR SHARE`(없으면 404) → 취소 409 OWNER_NOT_ACTIVE. PO 무수정(상태·구분만 읽는다)."""
+    po = po_owner(session, po_id, lock=True)
+    _require_po_active(po)
+    return po
+
+
+def _require_oem_writable(po: PoOwner, milestone_type: str) -> None:
+    """소유자·종류 422 — 일반 구매 PO = OWNER_NOT_OEM → 파생 = DERIVED_NOT_EDITABLE → OEM 4종 밖 = TYPE_NOT_APPLICABLE.
+    행 version 409 **뒤**에 판정한다(선적 경로와 같은 4a 개정 순서 — 일반 구매 PO에는 행이 없어 version 생략이면 곧장 422)."""
+    require_oem(po)
+    _require_type_writable(milestone_type, OEM_MILESTONES, {"po_kind": po.po_kind})
+
+
+def _oem_replay(
+    session: Session, replay: idempotency.Replay, po_id: int, actor: AuthenticatedUser
+) -> tuple[int, dict[str, Any]]:
+    """멱등 재생 = 저장된 change + **지금** 보드(재조립 — 선적 `_replay_with_board`와 같은 규율: 그사이 다른 변경·PO 취소가 보드·버튼에 보인다)."""
+    po = po_owner(session, po_id, lock=False)
+    return replay.status_code, {
+        "board": oem_board_body(session, po, actor.roles),
+        "change": replay.body.get("change"),
+    }
+
+
+def record_oem_milestone_plan(
+    *,
+    actor: AuthenticatedUser,
+    idempotency_key: str,
+    po_id: int,
+    milestone_type: str,
+    payload: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    """OEM 생산 일정 계획 설정(PLAN_SET)·변경(PLAN_CHANGED, 사유 필수) — 본체는 선적과 같은 `_plan_change`(범위·사유 정화 공유)."""
+    with unit_of_work() as uow:
+        session = uow.session
+        claim = idempotency.claim(
+            session,
+            actor_user_id=actor.id,
+            endpoint=OEM_PLAN_ENDPOINT,
+            key=idempotency_key,
+            request_body={"po_id": po_id, "milestone_type": milestone_type, **payload},
+        )
+        if claim.replay is not None:
+            return _oem_replay(session, claim.replay, po_id, actor)
+        po = _lock_oem_owner(session, po_id)
+        change = _plan_change(
+            session,
+            actor=actor,
+            owner=po.owner,
+            milestone_type=milestone_type,
+            payload=payload,
+            require_writable=lambda: _require_oem_writable(po, milestone_type),
+        )
+        return _finish(session, claim, lambda: oem_board_body(session, po, actor.roles), change)
+
+
+def record_oem_milestone_actual(
+    *,
+    actor: AuthenticatedUser,
+    idempotency_key: str,
+    po_id: int,
+    milestone_type: str,
+    payload: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    """OEM 생산 일정 실적 기록·정정(사유 필수) — 미래 금지(KST 오늘+1일 여유)만, 출고 결속 없음. 본체는 선적과 같은 `_actual_change`."""
+    with unit_of_work() as uow:
+        session = uow.session
+        claim = idempotency.claim(
+            session,
+            actor_user_id=actor.id,
+            endpoint=OEM_ACTUAL_ENDPOINT,
+            key=idempotency_key,
+            request_body={"po_id": po_id, "milestone_type": milestone_type, **payload},
+        )
+        if claim.replay is not None:
+            return _oem_replay(session, claim.replay, po_id, actor)
+        po = _lock_oem_owner(session, po_id)
+        change = _actual_change(
+            session,
+            actor=actor,
+            owner=po.owner,
+            milestone_type=milestone_type,
+            payload=payload,
+            allow=_require_not_future,
+            require_writable=lambda: _require_oem_writable(po, milestone_type),
+        )
+        return _finish(session, claim, lambda: oem_board_body(session, po, actor.roles), change)

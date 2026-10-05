@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from app.modules.trade_docs.constants import MAX_LINES
+from app.modules.trade_docs.constants import MAX_LINES, MilestoneType
 from app.modules.trade_docs.schemas import IncotermOut, PaymentTermsOut, StatusLogOut
 
 __all__ = ["StatusLogOut"]  # 라우터가 이 모듈에서 가져온다(공용 조각의 재노출)
@@ -148,6 +148,14 @@ class MilestonePlanDraftRequest(BaseModel):
     """계획 초안 1클릭(M4) — 본문 없음(`{}`). 적용 종류의 빈 계획 행을 만들고 이미 있는 종류는 건너뛴다."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class ProfileMilestoneTypeAddRequest(BaseModel):
+    """품목군 마일스톤 세트에 종류 추가(S3-2 PR-4c — 관리자). 선적 저장형 8종만(파생·OEM 종류 = 도메인 422 TYPE_NOT_APPLICABLE, 모르는 값 = 스키마 422)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    milestone_type: MilestoneType
 
 
 class MilestoneNoticeRequest(BaseModel):
@@ -368,6 +376,31 @@ class MilestoneWriteOut(BaseModel):
     """M2·M3 응답(R-19) — 이력 행이 안 생기는 no-op이면 change = null. 같은 Idempotency-Key 재요청 = 같은 change.id."""
 
     board: MilestoneBoardOut
+    change: ChangeRefOut | None
+
+
+class OemMilestoneBoardOut(MilestoneBoardOut):
+    """OEM 생산 일정 보드(M7 — S3-2 PR-4c / design-D D7) — 원료수급 → 충진 → 포장 → 출하검사 4행(날짜형·파생 없음).
+    행 모양은 선적 보드와 같다(화면 타임라인 컴포넌트 재사용). 알림·휴일 배지 없음(`holiday_summary`는 늘 0), 통보 통로 없음(미연결 0)."""
+
+    po_id: int
+    #: 표시 편의(서버가 쓰기 시 다시 검사한다) — EDIT_MILESTONES(무역·관리자, 발주가 발행·공급사 확인 중일 때).
+    allowed_actions: list[str]
+
+
+class ProfileMilestoneTypeOut(BaseModel):
+    """품목군 마일스톤 세트 행 1개 — 제거는 `DELETE /item-profiles/{profile_id}/milestone-types/{id}`."""
+
+    id: int
+    item_profile_id: int
+    milestone_type: str
+    created_at: datetime
+
+
+class OemMilestoneWriteOut(BaseModel):
+    """M8 응답 — M2·M3과 같은 `{board, change}`(R-19 승계: no-op = null, 같은 Idempotency-Key 재요청 = 같은 change.id)."""
+
+    board: OemMilestoneBoardOut
     change: ChangeRefOut | None
 
 

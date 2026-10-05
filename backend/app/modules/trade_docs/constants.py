@@ -283,6 +283,13 @@ SHIPMENT_BOARD_ORDER: tuple[str, ...] = (
     MilestoneType.IMPORT_TAX_DUE.value,
     MilestoneType.PAYMENT_DUE.value,
 )
+#: OEM 생산 일정 보드의 행 순서(PO 상세 '생산 일정' 섹션 — design-D D7: 원료수급 → 충진 → 포장 → 출하검사). 날짜형 4행, 파생 없음.
+OEM_BOARD_ORDER: tuple[str, ...] = (
+    MilestoneType.RAW_MATERIAL_READY.value,
+    MilestoneType.FILLING.value,
+    MilestoneType.PACKING.value,
+    MilestoneType.OUTGOING_INSPECTION.value,
+)
 
 
 class MilestoneChangeKind(StrEnum):

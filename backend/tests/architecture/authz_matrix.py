@@ -47,6 +47,9 @@ GOVERNED_PREFIXES: tuple[str, ...] = (
     # PR-3c의 CSV(`/shipments/export.csv` — 전 역할)도 이 접두어가 통제한다(행만 추가).
     # SO 하위 참조 생성(`/sales-orders/{so_id}/shipments[/preview]`)은 위 SO 접두어가 통제한다(행만 추가).
     "/api/v1/shipments",
+    # S3-2 PR-4c — 품목군 마일스톤 세트(R-14 — 조회 = 전 역할, 추가·제거 = 관리자 전용). `/item-profiles` 전체는 통제 밖이라(서류·요건 세트는
+    # S1·S2 몫) 이 하위 경로만 등재한다 — 행 누락이 조용히 통과하지 않게(SA-10).
+    "/api/v1/item-profiles/{profile_id}/milestone-types",
 )
 
 EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
@@ -595,6 +598,59 @@ EXPECTED: dict[tuple[str, str], dict[RoleCode, str]] = {
         A: ALLOW,
         T: ALLOW,
         L: ALLOW,
+        C: DENY,
+        V: DENY,
+    },
+    # S3-2 PR-4c — OEM 생산 일정(M7~M9, PO 소유 4종 — design-integrated §2.9 / ADR-0079 ④). 조회 = 전 역할(원가 키 없음),
+    # 계획·실적 = 무역(관리자 상시 통과) — PO는 무역 소관이라 **물류 쓰기 0**(X-16, 선적 마일스톤과 다르다). `/api/v1/purchase-orders` 접두어가 통제.
+    ("GET", "/api/v1/purchase-orders/{po_id}/milestones"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("POST", "/api/v1/purchase-orders/{po_id}/milestones/{milestone_type}/plan"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("POST", "/api/v1/purchase-orders/{po_id}/milestones/{milestone_type}/actual"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("GET", "/api/v1/purchase-orders/{po_id}/milestone-changes"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    # S3-2 PR-4c — 품목군 마일스톤 세트(R-14 / ADR-0079 ⑥·0085 ④). 조회 = 전 역할, 추가·제거 = **관리자 전용**(인증 포함 전원 403 —
+    # 서류·요건 세트 선례의 CERT 편집과 다르다: §2 인증 편집은 시장·요건 템플릿 한정).
+    ("GET", "/api/v1/item-profiles/{profile_id}/milestone-types"): {
+        A: ALLOW,
+        T: ALLOW,
+        L: ALLOW,
+        C: ALLOW,
+        V: ALLOW,
+    },
+    ("POST", "/api/v1/item-profiles/{profile_id}/milestone-types"): {
+        A: ALLOW,
+        T: DENY,
+        L: DENY,
+        C: DENY,
+        V: DENY,
+    },
+    ("DELETE", "/api/v1/item-profiles/{profile_id}/milestone-types/{link_id}"): {
+        A: ALLOW,
+        T: DENY,
+        L: DENY,
         C: DENY,
         V: DENY,
     },

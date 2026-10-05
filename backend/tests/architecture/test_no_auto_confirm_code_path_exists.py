@@ -762,6 +762,9 @@ REGISTRY: tuple[Entry, ...] = (
             "record_milestone_actual",
             "draft_milestone_plan",
             "record_milestone_notice",
+            # S3-2 PR-4c — OEM 생산 일정 쓰기(T13 — 무역 1클릭, 자동 일정 0: PO 생성·전이·스케줄러가 부르지 않는다)
+            "record_oem_milestone_plan",
+            "record_oem_milestone_actual",
         )
     ),
     *(
@@ -789,6 +792,35 @@ REGISTRY: tuple[Entry, ...] = (
             notes="통관 기록 쓰기(추가·정정·삭제) — 라우터 1곳+행위자 필수. 사실 기록만(세율·HS 판정 0)",
         )
         for name in ("create_customs_record", "update_customs_record", "delete_customs_record")
+    ),
+    # S3-2 PR-4c — 품목군 마일스톤 세트 쓰기(관리자 1클릭 — 마스터 연결 행). 호출처 = 세트 라우터 1곳(시드·임포트·스케줄러·이관 0).
+    *(
+        Entry(
+            name=name,
+            defined_in="app.modules.trade_chain.milestone_set_flow",
+            allowed_files=frozenset(
+                {
+                    "modules/trade_chain/milestone_set_flow.py",
+                    "modules/trade_chain/milestone_router.py",
+                }
+            ),
+            forbidden_modules=frozenset(
+                {
+                    "platform",
+                    "imports",
+                    "handover",
+                    "notifications",
+                    "outbox",
+                    "worklist",
+                    "deadlines",
+                    "catalog",
+                    "requirements",
+                    "seeds",
+                }
+            ),
+            notes="품목군 마일스톤 세트 추가·제거 — 라우터 1곳+관리자 행위자 필수. 품목군·SKU 등록이 세트를 자동으로 채우지 않는다",
+        )
+        for name in ("add_profile_milestone_type", "remove_profile_milestone_type")
     ),
     Entry(
         name="record_shipment_comm_log",

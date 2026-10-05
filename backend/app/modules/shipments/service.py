@@ -501,12 +501,54 @@ def cancel_blockers(session: Session, shipment_id: int) -> CancelBlockers:
     return CancelBlockers(numbers, actuals)
 
 
+@dataclass(frozen=True, slots=True)
+class MilestoneOwner:
+    """마일스톤 소유자 — 선적 또는 OEM 생산 PO 중 **정확히 하나**(`ck_milestones_one_owner`, S3-2 PR-4c / design-B B2·B15).
+
+    소유 판정(PO 구분·상태)은 오케스트레이터(trade_chain)가 끝낸다 — 이 값은 행을 찾고 넣을 FK만 나른다(L1은 PO 모델 임포트 0).
+    """
+
+    shipment_id: int | None = None
+    po_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.shipment_id is None) == (self.po_id is None):
+            raise ValueError("마일스톤 소유자는 선적·PO 중 정확히 하나다")
+
+    @classmethod
+    def of_shipment(cls, shipment_id: int) -> MilestoneOwner:
+        return cls(shipment_id=shipment_id)
+
+    @classmethod
+    def of_po(cls, po_id: int) -> MilestoneOwner:
+        return cls(po_id=po_id)
+
+    @property
+    def owner_type(self) -> str:
+        """아웃박스 payload `owner_type`(design-integrated §2.7 — SHIPMENT·PURCHASE_ORDER)."""
+        return (
+            DocKind.SHIPMENT.value if self.shipment_id is not None else DocKind.PURCHASE_ORDER.value
+        )
+
+    @property
+    def owner_id(self) -> int:
+        owner = self.shipment_id if self.shipment_id is not None else self.po_id
+        assert owner is not None
+        return owner
+
+    def clause(self) -> Any:
+        """`milestones`에서 이 소유자의 행을 고르는 조건(소유자 FK 하나)."""
+        if self.shipment_id is not None:
+            return Milestone.shipment_id == self.shipment_id
+        return Milestone.po_id == self.po_id
+
+
 def find_milestone(
-    session: Session, shipment_id: int, milestone_type: str, *, for_update: bool
+    session: Session, owner: MilestoneOwner, milestone_type: str, *, for_update: bool
 ) -> Milestone | None:
-    """(선적, 종류) 살아 있는 마일스톤 행 — 없으면 None. `for_update` = shipment_children 잠금(헤더 잠금 뒤)."""
+    """(소유자, 종류) 살아 있는 마일스톤 행 — 없으면 None. `for_update` = shipment_children 잠금(소유 헤더 잠금 뒤)."""
     stmt = select(Milestone).where(
-        Milestone.shipment_id == shipment_id,
+        owner.clause(),
         Milestone.milestone_type == milestone_type,
         Milestone.deleted_at.is_(None),
     )
@@ -515,12 +557,23 @@ def find_milestone(
     return session.execute(stmt).scalar_one_or_none()
 
 
+def live_milestones(session: Session, owner: MilestoneOwner) -> list[Milestone]:
+    """소유자의 살아 있는 마일스톤 행 전부(보드 조립 — 질의 1회)."""
+    return list(
+        session.execute(
+            select(Milestone).where(owner.clause(), Milestone.deleted_at.is_(None))
+        ).scalars()
+    )
+
+
 def insert_milestone(
-    session: Session, *, shipment_id: int, milestone_type: str, actor_id: int
+    session: Session, *, owner: MilestoneOwner, milestone_type: str, actor_id: int
 ) -> Milestone:
-    """빈 마일스톤 행(값 없음) — 값은 호출자가 대입한다. (선적, 종류) 경합은 409 DUPLICATE_TYPE으로 번역."""
+    """빈 마일스톤 행(값 없음) — 값은 호출자가 대입한다. (소유자, 종류) 경합은 409 DUPLICATE_TYPE으로 번역(부분 유니크 2종).
+    OEM 4종 ⇔ PO 소유는 DB `ck_milestones_owner_type_scope`가 최후 방어선이다(서비스가 먼저 422)."""
     row = Milestone(
-        shipment_id=shipment_id,
+        shipment_id=owner.shipment_id,
+        po_id=owner.po_id,
         milestone_type=milestone_type,
         created_by_id=actor_id,
         updated_by_id=actor_id,
@@ -650,3 +703,61 @@ def profile_milestone_sets(session: Session, profile_ids: set[int]) -> dict[int,
     ).all():
         found.setdefault(int(profile_id), set()).add(str(milestone_type))
     return {key: frozenset(values) for key, values in found.items()}
+
+
+# ── 품목군 마일스톤 세트 착지 (S3-2 PR-4c — 쓰기 경로 `/item-profiles/{id}/milestone-types`, 판정은 trade_chain.milestone_set_flow) ──
+
+
+def find_profile_milestone_type(
+    session: Session, profile_id: int, milestone_type: str
+) -> ItemProfileMilestoneType | None:
+    """(품목군, 종류) 살아 있는 세트 행 — 무잠금 peek(중복 409를 INSERT 전에 detail과 함께 알린다. 경합은 부분 유니크 번역이 막는다)."""
+    return session.execute(
+        select(ItemProfileMilestoneType).where(
+            ItemProfileMilestoneType.profile_id == profile_id,
+            ItemProfileMilestoneType.milestone_type == milestone_type,
+            ItemProfileMilestoneType.deleted_at.is_(None),
+        )
+    ).scalar_one_or_none()
+
+
+def insert_profile_milestone_type(
+    session: Session, *, profile_id: int, milestone_type: str, actor_id: int
+) -> ItemProfileMilestoneType:
+    """세트에 종류 1행 — (품목군, 종류) 경합은 409 DUPLICATE_TYPE, 파생·OEM 종류는 422 TYPE_NOT_APPLICABLE로 번역(CHECK — 2차 방어선)."""
+    row = ItemProfileMilestoneType(
+        profile_id=profile_id,
+        milestone_type=milestone_type,
+        created_by_id=actor_id,
+        updated_by_id=actor_id,
+    )
+    session.add(row)
+    flush_translated(session)
+    return row
+
+
+def require_profile_milestone_type(
+    session: Session, profile_id: int, link_id: int
+) -> ItemProfileMilestoneType:
+    """경로의 세트 행이 경로의 품목군 소속이 아니면(삭제 포함) 404 — 부작용 0(`D:370` 부모-자식). 제거 경합은 행 `FOR UPDATE`로 직렬화."""
+    row = session.execute(
+        select(ItemProfileMilestoneType)
+        .where(
+            ItemProfileMilestoneType.id == link_id,
+            ItemProfileMilestoneType.profile_id == profile_id,
+            ItemProfileMilestoneType.deleted_at.is_(None),
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(log_context={"profile_id": profile_id, "link_id": link_id})
+    return row
+
+
+def soft_delete_profile_milestone_type(
+    profile_type: ItemProfileMilestoneType, *, actor_id: int
+) -> None:
+    """세트에서 종류 제거 = soft delete(재추가는 부활이 아니라 신규 — §17.4). 수신자 이름 `profile_type`은 soft delete 통로 스캔 등재명."""
+    profile_type.deleted_at = utcnow()
+    profile_type.updated_by_id = actor_id
