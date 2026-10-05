@@ -1,5 +1,26 @@
 # S3-3 계획 설계 — 부록 C: 동시성·권한·감사·잡
 
+> **통합 우선순위·정정 색인(2026-10-05 — S3-3 PR-1 ② 표지, 통합 §1.8 + §9 R-40)**: 이 부록과 `design-integrated.md`가 충돌하면 통합이 이긴다. 우선순위는 **통합 §9(적대 검토 정정 R-01~R-40) → 통합 §0~§8 → 이 부록**이다. 이 부록 **원문은 고치지 않았다**(계획 세션 쓰기 범위가 통합·계획서 2파일이었고, PR-1도 원문 대신 이 색인을 단다 — S3-2 R-27 방식의 머리 색인판). 아래 표의 위치를 읽을 때는 오른쪽 결정을 따른다. 표지 `[통합 X-nn]`·`[통합 N-nn]` = 통합 §1 해소 행, `[적대 R-nn]` = 통합 §9 정정 행. 표·통합·계획서가 인용하는 이 부록의 줄 번호(`sX:nn`)는 이 색인을 넣기 전(`1787f724fff2`) 기준이다 — 지금 파일에서는 이 머리 블록 줄 수만큼 아래에 있다. 수치는 §9 '갱신 수치'가 정본이다(신규 표 12·IMMUTABLE 코드 13 → 21[DESIGN 계수 11 → 19]·마이그레이션 8[M16·M16b·M17~M22]·에러 코드 45·PR 16·ADR 0088~0099 + 기존 부기 17·GC v1.6 14건).
+> 
+> | 위치(이 부록) | 표지 | 따를 결정(요지) |
+> |---|---|---|
+> | §0-2 표 1행(`trade_documents` 가정)·T5·T6·T7 | [통합 X-01·X-09·X-22·X-25] | CI 영속 모델 = sA `commercial_invoices`(커널 DocKind), T5 CI 발행은 거래처·SO 잠금·채권 INSERT 없음(살아 있는 채권 존재 읽기 → 409) |
+> | T1·C4 `company_profile`·C5 singleton·C6 `/company-profile`·CK-17 | [통합 X-07·X-08] | 불변 판 `company_profiles` + as-of(T1' = INSERT, 잠금 0 → [적대 R-15] advisory 잠금), 경로 `/company-profiles`, 로고·서명 = 부채 A-06 |
+> | §C1 "렌더 결과 비저장"·T3·C6 렌더 경로 | [통합 X-02·X-24]·[적대 R-30] | 렌더 산출물 **저장**(documents FILE + 불변 renditions), 경로 = `POST …/render` + 기존 다운로드, 근거 문구 = '업무 데이터 쓰기 0(감사 1행 예외)' |
+> | C2 `trade_documents` 슬롯 | [통합 X-17] | 슬롯 이름 = `commercial_invoices`(LOCK_ORDER 최종본 = 통합 §2.11) |
+> | C4 ② CI↔PL version 교차·`SOURCE_CHANGED` 422 | [통합 X-21·X-26] | STALE = 수하인·통지처 값 비교(파생), STALE CI로 S/I 발행 = 409 `EXPORT_DOCS.CI.SOURCE_CHANGED`, CI↔PL version 교차 규칙 철회 |
+> | C5 payments 복합 FK 축소 분기 | [적대 R-23] | 3열 `(receivable_id, partner_id, received_currency)` 확정 |
+> | C6 documents 물류 미배정·CI 발행 A·T | [통합 X-11·X-03] | 일치 — 근거만 정정(채권 결속이 아니라 '판매가·은행 정보가 담긴 청구 서류') |
+> | C6 documents DELETE(CERT 삭제 가능) | [적대 R-18] | 전표 소유 첨부 삭제 = A·T, 순서 404 → 403 → 409 |
+> | C7 ④·CK-07·CK-09 | [적대 R-03·R-28] | CK-09 입력 +`<img>`·`<a>`·`<font color>`·`&<>`(원문 출력·파일/네트워크 접근 0), CK-07 = 원가 키·`internal_note`·담당자·감사 행위자 0 |
+> | C11 "호출 파일 3개" | [통합 X-01 ⑥] | `converge_sales_order_completion` 호출 = 채권 flow·short-close flow **2파일** |
+> | C14 `TRADE_DOCS.DOCUMENT.*` 3종 | [통합 X-26] | 철회 — `EXPORT_DOCS.*` 도메인(에러 코드 신규 45종 = §2.6 + R-38) |
+> | T6 S/I 발행 잠금 | [적대 R-16] | shipments `FOR UPDATE`(CI 발행과 같은 직렬화 축) |
+> | T13 PI 입금 "무변경" | [적대 R-20] | **거래처 잠금 선행**(멱등 → partners NKU → `lock_chain(PI)`) — X-20의 'T13 무변경' 철회 |
+> | T15~T17 L/C 입력 | [적대 R-31·R-19] | `lc` 플래그 행 `FOR SHARE`(멱등 직후), 체크 마크 첫 마크·직전 마크 부분 유니크 + 복합 FK |
+> | CI-06 "3 입구" | [적대 R-24] | 2 입구 |
+> | `sC:328` `outbox/models.py:80-82` | [적대 R-37] | → `:32`(`event_type String(60)`) |
+
 - 기준: main `2092406`(S3-2 종결 — PR-8 #67). 사양 정본은 DESIGN.md이고, 일정은 WBS.md S3-3 행(W:127-132)과 v1.6 주석(W:132·W:251·W:258)을 따른다. 부채 정본은 PROGRESS 'S3-2 부채 최종 목록'(P:50-171)과 S3-1 계획 등재 P-01~P-60(P:1614-1675)이다.
 - 표기: `D:줄` = DESIGN.md, `W:줄` = WBS.md, `P:줄` = PROGRESS.md, `code:경로:줄` = `backend/app/` 아래 경로, `test:경로:줄` = `backend/tests/` 아래 경로, `fe:경로:줄` = `frontend/src/` 아래 경로, `ADR-nnnn` = `docs/adr/`. 줄 번호는 `2092406`에서 읽은 값이다.
 - 판정 방식: 오너 상시 지시(2026-09-29, CLAUDE.md "결정·개입 없이 끝까지")에 따라 판정 후보는 모두 **더 엄격한(fail-closed) 권장안으로 '자율 확정'**했다. PROGRESS·ADR 등재 시 "자율 확정 — 사후 번복 가능"으로 표기한다.

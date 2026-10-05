@@ -1,5 +1,31 @@
 # S3-3 계획 설계 — 부록 B: 채권·입금·여신 provider·대금만기
 
+> **통합 우선순위·정정 색인(2026-10-05 — S3-3 PR-1 ② 표지, 통합 §1.8 + §9 R-40)**: 이 부록과 `design-integrated.md`가 충돌하면 통합이 이긴다. 우선순위는 **통합 §9(적대 검토 정정 R-01~R-40) → 통합 §0~§8 → 이 부록**이다. 이 부록 **원문은 고치지 않았다**(계획 세션 쓰기 범위가 통합·계획서 2파일이었고, PR-1도 원문 대신 이 색인을 단다 — S3-2 R-27 방식의 머리 색인판). 아래 표의 위치를 읽을 때는 오른쪽 결정을 따른다. 표지 `[통합 X-nn]`·`[통합 N-nn]` = 통합 §1 해소 행, `[적대 R-nn]` = 통합 §9 정정 행. 표·통합·계획서가 인용하는 이 부록의 줄 번호(`sX:nn`)는 이 색인을 넣기 전(`1787f724fff2`) 기준이다 — 지금 파일에서는 이 머리 블록 줄 수만큼 아래에 있다. 수치는 §9 '갱신 수치'가 정본이다(신규 표 12·IMMUTABLE 코드 13 → 21[DESIGN 계수 11 → 19]·마이그레이션 8[M16·M16b·M17~M22]·에러 코드 45·PR 16·ADR 0088~0099 + 기존 부기 17·GC v1.6 14건).
+> 
+> | 위치(이 부록) | 표지 | 따를 결정(요지) |
+> |---|---|---|
+> | 머리·0-2 표의 부록 문자(C·D·E) | [통합 머리 '부록 문자 정정'] | "D 소관" → sC, "C 소관(lc_terms 본체)" → **sB 소유**, "E 소관(화면)" → sD |
+> | `sB:34` 0-2 표 "L/C 부록(C)" | [적대 R-01] | L/C 부록 부재(N-13) — L/C 본체 sB 소유 확정: 하자 체크 항목 카탈로그 14종(판정 0)·LT1~LT4·화면 계약(`tolerance_bounds`·`urgency` 서버값)·**MT700 인테이크 = S3-3 밖(S6-1, I-03)** |
+> | B1 ③·대안 (c)·B18 첫 행 "CI 경로가 생기면 닫힘" | [통합 X-01] | 채권 발생 = `POST /shipments/{id}/receivable` **단일 경로**(A·T), CI 발행·재발행은 receivables에 쓰지 않는다 |
+> | B2 `invoice_ref` NULL·복합 FK 2열 | [통합 X-06·X-15] | `invoice_ref` **필수**, 금액 복합 FK 3열 `(shipment_id, currency, gross_amount)` → `shipments(id, currency, total_amount)` |
+> | B3 payments 확장(M-B2)·축소 분기 | [적대 R-21·R-23] | payments 확장 = **M16b(PR-2d) 분리**, 복합 FK **`(receivable_id, partner_id, received_currency)` 3열 확정**(축소 분기 삭제) |
+> | B4 ②③ clamp 뒤 선수금 | [적대 R-29] | 전제 반증(미충당 선수금 표시). 남는 공백 = 종결 SO 미충당 선수금 > 0 → 검산 잡 ADMIN 알림(PR-6)·SO '초과 입금 의심' 배지(2c) |
+> | B5 ⑤ 초과분 | [적대 R-09] | **선수금 초과분 미개방**(PI 초과 입금 422 유지, WBS 대비 ⑩) — B-02 트리거 = 422 문의 1건 또는 R-29 알림 1건 |
+> | B5 ⑦ 닫힌(EXPIRED·CANCELLED) PI | [적대 R-13] | 입금 도착·**역기록 모두 409 유지**(닫힌 PI엔 살아 있는 SO 없음 — 충당 무관), 정정 경로 부재는 B-02 합류 |
+> | B5 이중 입력(P-14)·PI 입금 잠금 | [적대 R-20] | P-14(채권·PI 양 경로) = **PR-2d** + PI 패널 최소 확인 블록 동반, **T13 PI 입금도 거래처 잠금 선행** |
+> | B6 ①③④ 입구·Protocol·기본 provider | [적대 R-05·R-07·R-24] | Protocol = **`exposure_parts(session, partner_id, so_ids)`**(기존 `outstanding` 폐기), 등록 입구 **2개**(`create_app`·`cli.main`), 2b부터 기본 provider = UNEVALUABLE `RECEIVABLE_PROVIDER_NOT_REGISTERED` |
+> | B7 ② 호출처·B7 ③ "불변 CHECK" | [통합 X-01 ⑥·X-14] | `converge_sales_order_completion` 호출처 2곳(채권 발생·short-close), short-close 불변 = 일관성 CHECK + 종결 상태 + 단일 대입 통로(트리거 미채택) |
+> | B7 ④ 인용 `chain_ops.py:129` `SO_SHIPPING_STATES` | [적대 R-37] | → `code:modules/trade_docs/quantities.py:43-46` `CONSUMABLE_STATUSES[SO]` |
+> | B8 ④ 문면(선수금 미차감) | [적대 R-02] | **DESIGN 대비 ⑭(문면 변경)**로 등재 — 채권 항 = 선수금 FIFO 충당 후 미수(감소 방향·현금 사실), SO 항 미차감 유지(B-04), '유일한 의도적 예외' 문장은 2b에서 은퇴 |
+> | B9 ② 채권 발생 PI `FOR SHARE` | [통합 X-18] | 채권 발생(T8)은 PI 무잠금, PI SHARE를 잡은 TX는 SO를 `lock_chain`으로 잡지 않는다 |
+> | B10 ⑥ `lc_terms` 최소 열 | [통합 N-08]·[적대 R-01] | `lc_number` 가산, LT2 본문·검증(`SO_NOT_LC` 422·`SO_CLOSED` 409·`latest_shipment_on ≤ expiry_on`) |
+> | B12 ⑤ 구간·상태 필터 | [통합 X-28] | 목록 필터 = 저장 열만(파생 필터 금지 — 부채 D-03) |
+> | B13 ② 알림 대상 | [적대 R-08] | 대금만기·제시기한 알림 = **수출 선적만**(수입 = UNKNOWN 표시 유지·알림 0, I-04 — S6-2) |
+> | B16 서류 쪽 처리안 4행 | [통합 X-07·X-12·X-13] | 레터헤드 = 불변 판 표(sA), 중량·CBM = PL 2표(sA), TO ORDER = S/I `consignee_mode`+L/C 술어 |
+> | B19 PR-B1a/B1b/B2/B3 | [통합 §2.13]·[적대 R-21] | PR 순서 1 → 1b → 2a → **2d** → 2b → 2c → … → 7(16 PR), 마이그레이션 8건 |
+> | `sB:459` 깨질 기존 시험 | [적대 R-04·R-06·R-35] | + `test_confirm_credit_approval.py:121`·`test_credit_evaluation.py:196`·`test_doc_machines.py:141-153`, 가짜 provider 7개 재작성, provider 단언 시험 전수 목록화 |
+> | GB-27 "부트스트랩 3 입구" | [적대 R-24] | **2 입구**(`create_app`·`cli.main` — worker = `cli run-scheduler`) |
+
 - 기준: main `2092406`(S3-2 종결 — PR-8 #67). 사양 정본은 DESIGN.md이고, 일정은 WBS.md S3-3 행(W:127-132)과 v1.6 주석(W:132·W:251·W:258)을 따른다. 부채 정본은 PROGRESS 'S3-2 부채 최종 목록'(P:50-166)과 S3-1 계획 등재 P-01~P-60(P:1614-1675)이다.
 - 표기: `D:줄` = DESIGN.md, `W:줄` = WBS.md, `P:줄` = PROGRESS.md, `code:경로:줄` = `backend/app/` 아래 경로, `test:경로:줄` = `backend/tests/` 아래 경로, `ADR-nnnn` = `docs/adr/`. 줄 번호는 `2092406`에서 읽은 값이다.
 - 판정 방식: 오너 상시 지시(2026-09-29, CLAUDE.md "결정·개입 없이 끝까지")에 따라 판정 후보는 모두 **더 엄격한(fail-closed) 권장안으로 '자율 확정'**했다. 결정마다 근거와 되돌리기 비용을 적었다. PROGRESS·ADR 등재 시 "자율 확정 — 사후 번복 가능"으로 표기한다.

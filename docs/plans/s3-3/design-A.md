@@ -1,5 +1,27 @@
 # S3-3 계획서 부록 A — 서류 데이터 모델·생성기 (레터헤드·CI·PL·S/I·렌더링·파일 저장·검수 게이트)
 
+> **통합 우선순위·정정 색인(2026-10-05 — S3-3 PR-1 ② 표지, 통합 §1.8 + §9 R-40)**: 이 부록과 `design-integrated.md`가 충돌하면 통합이 이긴다. 우선순위는 **통합 §9(적대 검토 정정 R-01~R-40) → 통합 §0~§8 → 이 부록**이다. 이 부록 **원문은 고치지 않았다**(계획 세션 쓰기 범위가 통합·계획서 2파일이었고, PR-1도 원문 대신 이 색인을 단다 — S3-2 R-27 방식의 머리 색인판). 아래 표의 위치를 읽을 때는 오른쪽 결정을 따른다. 표지 `[통합 X-nn]`·`[통합 N-nn]` = 통합 §1 해소 행, `[적대 R-nn]` = 통합 §9 정정 행. 표·통합·계획서가 인용하는 이 부록의 줄 번호(`sX:nn`)는 이 색인을 넣기 전(`1787f724fff2`) 기준이다 — 지금 파일에서는 이 머리 블록 줄 수만큼 아래에 있다. 수치는 §9 '갱신 수치'가 정본이다(신규 표 12·IMMUTABLE 코드 13 → 21[DESIGN 계수 11 → 19]·마이그레이션 8[M16·M16b·M17~M22]·에러 코드 45·PR 16·ADR 0088~0099 + 기존 부기 17·GC v1.6 14건).
+> 
+> | 위치(이 부록) | 표지 | 따를 결정(요지) |
+> |---|---|---|
+> | §0 계약 1·2줄(`live_invoice_date`·`ChildLink(CI, receivables, ci_id)`는 "채권 부록이 등록") | [통합 X-01·X-04] | INVOICE_DATE 앵커 원천 = 채권 `invoice_on` 단일. `ChildLink(CI→receivables)`는 **PR-5a가** 등록 |
+> | §A1:40 표 QT 행·§A13:411 QT·PI 렌더 술어 "`status ≠ DRAFT`" | [적대 R-14] | 렌더 게이트 = 원천 헤더 **`frozen_at IS NOT NULL`**(DRAFT→CANCELLED QT 409 `EXPORT_DOCS.RENDITION.SOURCE_NOT_FROZEN`) |
+> | §A2 S/I 폐쇄 근거 | [적대 R-10] | CI·PL 폐쇄 = `D:187`·`D:444` 근거(①-a), **S/I 폐쇄 = 설계 선택 '원천 = 살아 있는 CI'**(①-b). 선적 원천 S/I 개방안 기각(ADR-0096) |
+> | §A3:97 `effective_from` "`≤ today_kst()`"뿐 | [적대 R-15] | 판 0개일 때만 과거 날짜, 이후 판은 `= today_kst()`·`≥ max(기존)`만(422 `EXPORT_DOCS.LETTERHEAD.BACKDATED`), 등록 = `pg_advisory_xact_lock` 직렬화 |
+> | §A8:276 부분 유니크(`supersedes_si_id`만) | [적대 R-16] | + `uq_shipping_instructions_ci_first (ci_id) WHERE supersedes_si_id IS NULL`·409 `EXPORT_DOCS.SI.ALREADY_ISSUED`·T6 shipments `FOR UPDATE` |
+> | §A11 단순 취소 "통관 기록 생존 무차단" | [통합 X-01 ④] | 유지. 단 살아 있는 채권이 있는 CI는 취소·재발행 409(`TRADE_DOCS.CANCEL.SUCCESSOR_ALIVE`) |
+> | §A12 `Paragraph` 장문 줄바꿈·라이브러리 버전 | [적대 R-03] | `markup_safe` 단일 이스케이프·`Paragraph` 호출 `doc_render/layout.py` 1곳(AST)·`reportlab ≥ 3.6.13` 단언·신뢰 스킴/호스트 비움 |
+> | §A12-④·§A13 렌더 멱등(파일 해시) | [적대 R-27] | 렌더 멱등 지문 = **요청 본문만**(파일 해시 제외), 해시 동일 시험은 PDF 한정, XLSX = 같은 키 → 같은 document_id |
+> | §A12 렌더 입력 뷰 | [적대 R-28] | 뷰 데이터클래스 허용 필드 고정 — `internal_note`·`assignee_id`·`created_by_id`·`updated_by_id` 0(G4·CK-07 확장) |
+> | §A13 "documents 다운로드 = 전 역할(현행)"·§A16 표 마지막 행 | [통합 X-02] | 생성물 다운로드만 축소 — QT·PI 생성물 A·T / CI·PL·S/I 생성물 A·T·L + audit `documents.generated.downloaded` 1행 |
+> | §A13 대안 (e) "GET 부작용 0" | [적대 R-30] | "업무 데이터 쓰기 0(감사 1행 예외 — `BACKUPS_VIEWED` 선례)" |
+> | §A13 전표 첨부 물류(L) 추가 제안 | [통합 X-11] | 전표 6종 소유 첨부 쓰기 = **A·T**(CERT 403을 404보다 먼저). 전표 소유 첨부 **삭제**도 A·T([적대 R-18]) |
+> | §A15 "11표 → 18표" | [통합 X-37]·[적대 R-22] | 코드 `IMMUTABLE_TABLES` **13 → 21**, DESIGN §17.5 S3-x 계수 **11 → 19**(X-37의 '14 → 22'도 R-22가 대체) |
+> | §A16 CI 발행 A·T·L·레터헤드 조회 전 역할 | [통합 X-03·X-08] | CI(+PL) 발행·재발행·취소 = **A·T**, 미리보기·렌더 재시도·FREE PATCH = A·T·L, 레터헤드 조회 = **A 전용** |
+> | §A16 CI 미리보기 은행 후보 | [적대 R-17] | `bank_candidates`·`bank.summary_text` = A·T만, L은 `bank.source`만, 목록·CSV 계좌번호 열 0 |
+> | §A20 "`live_ci_for_shipment` → 기일 앵커" | [통합 X-04] | 앵커 = 채권 `invoice_on`(CI가 있으면 채권이 CI `doc_date`를 복사 — X-01 ③) |
+> | §A1·§A12 언어 변형 | [적대 R-33] | 언어 변형 = QT·PI(EN·KO)만, CI·PL·S/I = EN만(WBS 대비 ⑪·부채 A-03) |
+
 - 성격: 설계 결정이다(구현 아님). 기준은 main `2092406`(S3-2 종결)이다. 근거 정본은 DESIGN.md §3·§4.1·§4.7·§7.1·§7.2·§7.5·§7.6·§7.7·§7.9·§7.10·§15·§17·§18·§20 B·§22, WBS.md S3-3 행(`W:127-132`)·S4-2 행(`W:150-155`)·v1.6 주석, PROGRESS.md 'S3-2 PR-8 / S3-2 종결'의 **S3-2 부채 최종 목록**(`P:56-165`)·'## 현재'(`P:1689-1690`)다.
 - 표기: `D:줄`=DESIGN.md, `W:줄`=WBS.md, `P:줄`=PROGRESS.md, `code:경로:줄`=`backend/app/` 기준 현행 코드, `tests:경로:줄`=`backend/tests/` 기준, `mig:파일`=`backend/migrations/versions/`. 줄 번호는 `2092406`에서 실측한 값이다.
 - 판정: 전 안건 **자율 확정**이다(오너 상시 지시 2026-09-29 "결정·개입 없이 끝까지" — 판정 후보는 더 엄격한 fail-closed 권장안으로 확정, 사후 번복 가능, ADR-0011 부기). "미정" 결론은 두지 않는다.
