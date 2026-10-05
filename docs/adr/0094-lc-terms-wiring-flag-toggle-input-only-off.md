@@ -1,0 +1,16 @@
+# ADR-0094: L/C — `lc_terms`(L/C 번호·개정 SUPERSEDED)·제시 기록·하자 체크 마크(판정 필드 0·항목 카탈로그 14종)·S3-2 산식 배선만·tolerance 상한 초과 채권 422·플래그 토글(P-10)·OFF = 입력만(§20 H 해석)·MT700 인테이크 미구현·수입 L/C 미배선
+
+- **상태**: 자율 확정 — 사후 번복 가능 (S3-3 계획 2026-10-05 — 오너 지시 2026-09-29에 따라 판정 후보는 더 엄격한(fail-closed) 권장안으로 확정, ADR-0011 부기)
+- **날짜**: 2026-10-05
+- **관련**: DESIGN.md §7.10·§20 H(S3-3 [M4] 보강 ⑦·⑧, §20 ② — 문면 해석 변경)·§7.6 / WBS S3-3 산출물 'lc_terms(feature flag·하자 체크리스트 화면)'(v1.7 주석 ③·⑫)·v1.6 주석 '산식 재정의 금지' / ADR-0055·0081 / PROGRESS P-10·Q-06·Q-08·G-09 / docs/plans/s3-3-plan.md · docs/plans/s3-3/design-integrated.md(§9 적대 검토 정정 R-01~R-40 우선) — sB B10·B11, sC T15~T18, X-13, N-08·N-09·N-13, R-01·R-08·R-19·R-31 / 구현 PR-4a(M20)·PR-4b(화면)
+- **번복 비용 큰 결정 — 오너 확인 권장 4순위**: DESIGN §20 H '기능 플래그 오프 완전 비활성'을 '입력 진입 비활성'으로 해석하는 결정이다(번복 = 술어 1곳, 낮음 — 그러나 사양 해석이라 오너 확인 권장). 함께 DESIGN §7.10 'MT700 인테이크 → 초안'을 S3-3에서 구현하지 않는 문면 변경(DESIGN 대비 ⑬)과 수입 L/C 미배선(WBS 대비 ⑫)을 적는다. 오너 상시 지시(2026-09-29 "결정·개입 없이 끝까지")에 따라 자율 확정해 진행한다. 오너가 번복하면 이 ADR을 '대체' 표기로 갱신하고 새 ADR을 쓴다(PROGRESS 'S3-3 계획 확정·PR-1' 절 '오너 확인 권장 4건').
+
+**맥락** — S3-1 프로덕션에서 L/C 선택은 플래그 행 공급 경로가 없어 닫혀 있다(P-10). S3-2는 L/C 대금만기·제시기한·tolerance를 순수 함수로 고정하고 운영 경로를 UNKNOWN(`LC_TERMS_NOT_REGISTERED`)으로 두었다(ADR-0081). 부록 A~E 어디에도 'L/C 부록'이 없어 항목·API·화면이 비어 있었다(R-01).
+
+**결정** — ① **M20** `lc_terms`(SO당 살아 있는 1 — 409 `ALREADY_ACTIVE`, `lc_number` VARCHAR(60) 대문자 정규화·살아 있는 번호 유일 — 409 `NUMBER_IN_USE`, 개정 = 이전 행 SUPERSEDED + 신규 INSERT 1TX, 통화 = 기존 `uq_sales_orders_id_currency` 복합 FK, `latest_shipment_on ≤ expiry_on` CHECK, `presentation_days` 1~365 기본 21)·`lc_presentations`(선적당 1 — 제시·네고·인수일 ≤ KST 오늘)·`lc_checklist_marks`(IMMUTABLE — 사람 체크 + 근거 필수, **'적합'·'하자 없음' 판정 필드 0**, 첫 마크·직전 마크 부분 유니크 + 복합 FK — R-19). ② API LT1~LT4(`extra="forbid"`, PATCH 없음): 결제유형 ≠ LC 422 `LC_TERMS.LC.SO_NOT_LC`, SO CANCELLED·COMPLETED 409 `SO_CLOSED`. ③ **하자 체크 항목 카탈로그 14종**(`LcCheckItem` StrEnum — UCP600 조항은 **표시용 출처**, 판정 아님). ④ S3-2 순수 함수에 **배선만**(`lc_inputs_for` → `milestone_view` 1곳, `schedule.py` 함수 본문 diff 0), 응답 `tolerance_bounds`(서버 문자열)·`urgency ∈ {OVERDUE, IMMINENT, NONE}`(기일 스캔 문턱과 같은 원천). ⑤ tolerance 상한 초과 채권 발생 422 `RECEIVABLES.RECEIVABLE.LC_AMOUNT_EXCEEDED`(경계 포함 — 하한 미달 판정은 부채 B-07). ⑥ **플래그 토글** `PUT /feature-flags/{code}`·`GET /feature-flags`(ADMIN, 폐쇄 레지스트리 `{"lc"}`, 시드 0 — 첫 PUT이 INSERT), G-09(CLI) 구현 없이 종결. ⑦ **OFF = 새 입력 진입만 닫는다**(L/C 결제유형 선택·조건 등록·개정·제시 기록·체크 마크 — 기존 L/C의 기한 계산·표시·알림은 계속). 입력 3종은 플래그 행 `FOR SHARE`(멱등 직후 — 토글과 직렬화, R-31). ⑧ `lc_allows_order_consignee`(없으면 False) 술어를 S/I(ADR-0095)에 제공. ⑨ **MT700 인테이크 미구현 — 수기 입력만**(S6-1 AI 레이어, 부채 I-03). ⑩ **수입 L/C 미배선**(`lc_terms` = SO 전용 — 수입 대금만기·제시기한은 UNKNOWN 표시 유지·알림 0, 부채 I-04·S6-2).
+
+**근거** — 산식을 재정의하지 않고 입력만 배선하면 S3-2가 고정한 K 시험(GC-A16·A17)이 그대로 운영 경로를 지킨다. OFF가 기존 L/C의 기한까지 지우면 열려 있는 L/C의 제시기한·대금만기 알림이 조용히 사라지는 fail-open이 된다. 하자 '적합' 판정은 법적 판정(§15 L3 금지)이라 사람 체크 기록만 둔다.
+
+**기각한 대안** — OFF = 완전 비활성(기존 L/C 기한 소멸 — fail-open), 플래그 시드 ON(fail-closed 반대), MT700 AI 인테이크를 S3-3에서(AI 레이어 S6-1 범위 — 자동 확정 금지 경계), 하자 체크 결과 필드(법적 판정), 1 L/C : N SO(tolerance 이중 사용 — 부채 C-D2), 이중 통화 L/C(부채 B-08), lc_terms를 PO까지(수입 L/C는 매입 채무 축 — S6-2).
+
+**되돌리기 비용** — **낮음** — OFF 의미는 술어 1곳, 항목 StrEnum 추가는 열 변경 0. `lc_terms` 표 자체는 중간(운영 L/C 행이 생긴 뒤).
