@@ -1,5 +1,46 @@
 # PROGRESS
 
+## S3-3 PR-1b (공통 기반 — Idempotency-Key 형식 422·KST '오늘' 고정 지점 일반화·샤드 소요 시간 재갱신, 마이그레이션 0) — 구현 기록 (2026-10-05)
+- **상태: 구현 완료·검증 완료(push·PR·병합은 오케스트레이터 몫)**. 경계 커밋 = **`8071bfca297c`**(PR #68 S3-3 PR-1 head) — 이 절의 커밋은 그 뒤 것만이다. 정본: 계획서 §4 PR-1b 행 · design-integrated §2.4·§2.10·§9 R-37 · design-C C5 ②·C13 ③ · design-E PR-1b.
+- 커밋(12자리): `434b77e50c36` ① P-39 키 형식 422 / `6dcbdfbd17fe` ② `TODAY_IMPORT_POINTS` 이름 변경·일반화+커버리지 시험 / `3decb6086fa2` ③ 벌크 300자 키 시험 뒤집기 / `22ec55ab97f4` ④ `.shard_durations.json` 재갱신 / `79dbb00954ca` ⑤ 변이 생존 2건 보강 / (이 절) PROGRESS.
+
+### 무엇을 (계획서 PR-1b 행 3항)
+1. **P-39(= PR-16 ⑨ = S3-1 D-D13) 해소** — `get_idempotency_key`(`backend/app/api/deps.py`)가 키를 **1~128자 + 보이지 않는 글자 금지**로 검사, 위반 = 422 `COMMON.IDEMPOTENCY.KEY_INVALID`(신규 코드·카탈로그 문구). 상한 `IDEMPOTENCY_KEY_MAX_LENGTH = 128`(`idempotency/service.py`)을 DB `idempotency_keys.idempotency_key String(128)`과 시험으로 결속. 키 없음·빈 값은 종전대로 400 `KEY_REQUIRED`. 로그에는 키 원문 대신 길이만. 변이 M1(길이 검사 제거)에서 129자 키가 실제로 **500(22001 unhandled)**이 나는 것을 재현 — 결함 실재 확인.
+2. **R-37 — `MILESTONE_TODAY_IMPORT_POINTS` → `TODAY_IMPORT_POINTS`**(`backend/tests/support/kst.py`) 이름 변경·일반화: 커버 패키지 `TODAY_PINNED_PACKAGES` = 통합 §2.10의 7개(trade_chain·receivables·payments·lc_terms·commercial_invoices·renditions·letterhead — 미존재 5개는 생기는 순간 시험이 본다) + trade_docs. 지점 5 → **14**(trade_chain 11·`payments.service`·`trade_docs.validation`·선적 팩토리). `pin_today_kst`가 **원본 `app.core.time.today_kst`도 함께 고정**(함수 안 임포트 `trade_docs.verify`·모듈 속성 접근 경로). 신설 `tests/architecture/test_today_pin_coverage.py`(CK-15): 최상위 이름 임포트 ⊆ 지점 목록 · 별칭 임포트 금지 · 낡은 지점·중복 0 · 30개 상한(C-D4 트리거) · 스캔 자기검사 · 고정 뒤 시계 하루 밀기에도 원본·전 지점·함수 안 임포트가 한 날. 종전 `test_milestone_contract`의 마일스톤 전용 커버리지 시험은 여기로 일반화해 옮겼다(삭제 1·신설 4). `docs/testing.md` 고정 규율 갱신.
+3. **Q-15 — `.shard_durations.json` 재갱신**: 209파일/5171건(2026-10-04) → **237파일/5804건**(2026-10-05), 미등재 파일(평균값 배정) **28 → 0**. 아래 '실측 근거'.
+
+### 실측 근거 — 샤드 소요 시간 (Q-15)
+- **CI 아티팩트를 쓰지 못했다**: `shard-durations` 아티팩트(main `2092406c77ad` run, id 11326650254 — 만료 안 됨)는 목록 조회는 됐으나 다운로드가 blob 호스트로 리다이렉트되고 이 세션의 `gh`가 그 리다이렉트를 거부했다. 그래서 저장소 절차(`tests/support/shard_tools.py` 머리 (b))대로 **로컬 전체 1회 실행**에서 생성: `pytest -q -p no:cacheprovider --junitxml=junit.xml -o junit_family=xunit1`(전용 PG 5468, 2043.46s — 아래 전체 pytest와 같은 1회) → `python -m tests.support.shard_tools durations junit.xml` = "파일 237개 · 테스트 5804건 · 2026.8초"(테스트당 0.3492초).
+- **3샤드 LPT 예상 편차(로컬 실측을 진값으로)**: 구 파일로 배정 시 샤드 [666.2, 650.3, 710.4]초 — max/min **1.092**(차 60.1초) / 신 파일로 배정 시 [675.6 ×3] — 1.000(같은 자료라 정의상 균등 — 진짜 편차는 CI 러너에서 본다). 로컬은 CI 러너와 속도가 달라 절대값은 다르나 LPT는 비율만 쓴다.
+- **실행 검증 못 했음**: CI 러너 실측 샤드 편차(통합 §8 13 '1b 첫 CI') — 이 PR 첫 CI의 `backend-coverage` 잡 '샤드 완전성' 출력과 샤드별 잡 소요로 확인한다(오케스트레이터). 재갱신은 2b·5a 병합 후 다시(E-01).
+
+### 편차·자율 확정 (전부 더 엄격한 쪽, "자율 확정")
+1. 키 금지 글자를 '제어문자'보다 넓게 `app.core.text.is_invisible_char`(Cc·Cf·Zl·Zp·한글 채움)로 — 이름·사유 위생과 같은 판정(제로폭·방향 뒤집기 키 차단).
+2. 빈 헤더 값은 '1자 미만'이지만 422가 아니라 종전 400 `KEY_REQUIRED` 유지(키 없음과 같은 의미 — 키 없음 400을 단언하는 기존 시험 3곳의 계약과 일관).
+3. 커버 패키지에 통합 목록 밖 **trade_docs** 추가(서류 날짜 판정이 S3-3 서류 생성기와 맞물림 — design-C C13 ③의 `trade_documents` 의도 흡수).
+4. `pin_today_kst`가 원본 `app.core.time.today_kst`도 고정(함수 안 임포트 경로 커버 — 종전엔 미고정).
+5. 시험 파일 고정 규율(`test_milestone_contract._MILESTONE_TEST_NAME`) 대상 이름에 receivable·payment·aging·L/C(`lc_terms`·`letter_of_credit`·`_lc`)·commercial_invoice·rendition·letterhead를 **미리** 추가 — S3-3 신규 시험이 고정 없이 `today_kst`를 읽는 순간 실패. 현존 해당 이름 시험 4개는 `today_kst` 미사용이라 영향 0.
+6. 기존 시험 `test_a_bulk_key_longer_than_the_key_column_still_works_and_replays`(S3-1 PR-15a — D-D13 전제로 300자 키 '정상'을 고정)를 **`test_a_bulk_key_over_the_limit_is_rejected_and_a_128_char_key_replays`로 뒤집음**(300자 422·128자 정상/재생/409). 설계 근거: 통합 §9·design-E "기존 전 엔드포인트에 같은 검사 적용". `bulk_scope_key`의 sha256 파생은 키 공간 분리 목적이라 유지(주석만 갱신).
+
+### 검증 (실행 확인 — 전용 PG 5468·5469, `/home/user/venv-kbos`)
+- `ruff check app tests` 통과 · `ruff format --check` 567파일 통과 · `mypy app` **304파일 무오류**. (시험 파일 mypy 시 `tests/factories/gates.py:267` no-any-return 1건 — 기존·무관, CI는 `mypy app`만 돈다.)
+- 관련 시험: 새 키 형식 23 + pin 사용 시험 10파일 + 아키텍처 2파일 = **203 passed** / 벌크 37 passed / 샤드 단위 79 passed.
+- `tests/architecture` **716 passed**(②까지), 최종 `tests/architecture + tests/unit` **1767 passed**(329.82s).
+- **전체 pytest 1회**(②까지의 트리, 5468): **5769 passed · 1 failed · 34 skipped**(2043.46s) — 실패 1 = 위 편차 6의 벌크 시험(P-39가 의도적으로 뒤집은 전제). ③에서 기대값을 고치고 그 파일 37 passed. **③·⑤ 이후 전체 재실행은 하지 않았다 — 실행 검증 못 했음**(③은 시험 1개 기대값·주석, ⑤는 아키텍처 시험 추가뿐이고 아키텍처+단위 전체는 최종 트리로 통과).
+- 수집: **5817**(경계 `8071bfca297c` 실측 5774 → +43: 키 형식 23·에러 카탈로그 매개변수 3(신규 코드 1 × 3시험)·pin 커버리지 4·이름 패턴 14·옛 커버리지 시험 −1, 벌크 시험은 1:1 교체 / ② 시점 5804). group_j **609** · group_k **2280**.
+
+### 변이 (사본 트리에서 1개씩 적용 → 해당 시험 → 원복, 전용 PG 5469) — **12/12 kill**(1차 10/12 → ⑤ 보강 후)
+M1 길이 검사 제거(→ 500 재현) · M2 `>`→`>=`(128자 거부) · M3 보이지 않는 글자 검사 제거 · M4 상한 상수 129 · M5 KEY_INVALID→KEY_REQUIRED · M6 지점 누락 payments.service · M7 지점 누락 chain_ops · M8 커버 패키지 trade_chain 제거 · M9 원본 고정 제거(1차 생존 → 시계 하루 밀기 시험으로 kill) · M10 별칭 검사 제거 · M11 trade_chain에 미등재 이름 임포트 추가 · M12 이름 패턴에서 S3-3 이름 제거(1차 생존 → 패턴 자기검사로 kill).
+
+### §22 11렌즈 (PR-1b)
+①기능 키 형식 422·고정 일반화·durations ②데이터 스키마 변경 0(마이그레이션 0 — 상한은 기존 열 길이에 맞춤) ③트랜잭션 검사는 의존성 단계(DB 접근 전) ④동시성·멱등 129자 키 500 제거·128자 재생 유지·벌크 키 지문 유지 ⑤보안 보이지 않는 글자 차단·키 원문 로그 미기록 ⑥시간 KST 고정 지점 14·원본 고정·커버리지 시험 ⑦성능 검사 O(128) ⑧테스트 J+23·K 커버리지·변이 12/12 ⑨운영 샤드 균형(미등재 0) ⑩문서 testing.md 고정 규율·PROGRESS ⑪워크스루 해당 없음(사용자 화면 변화 0 — 프런트 키는 UUID 36자).
+
+### 부채 (신규·처리 — 조용히 넘기지 않는다)
+- **처리**: P-39(= PR-16 ⑨ = D-D13) **종결** · Q-15 1차 이행(이월 E-01로 계속 — 2b·5a 후 재갱신) · R-37 반영.
+- **신규 1b-1**: CI 아티팩트 다운로드 불가(세션 `gh`가 blob 리다이렉트 거부) → durations는 로컬 실측. 2b·5a 후 재갱신(E-01) 때도 같은 제약이면 로컬 실측 — 소유 CI / 트리거: 첫 CI 샤드 편차가 max/min 1.3 초과면 그 PR에서 로컬 재생성.
+- **신규 1b-2**: `docs/testing.md` 그룹 수 표(J 586·K 2260)는 S3-2 종결 수치 그대로 — S3-3 종결(PR-7)에서 일괄 갱신(현재 실측 J 609·K 2280).
+- **유지**: C-D4(`TODAY_IMPORT_POINTS` 30개 초과 시 모듈 속성 접근 전환 — 현재 14, 시험이 상한 감시).
+
 ## S3-3 계획 확정·PR-1 (서류 생성기·채권/입금 — 계획 자율 확정 + 문서 등재) — 기록 (2026-10-05)
 - **상태: 계획 자율 확정**(오너 지시 2026-09-29 — "PowerShell 없이 클라우드에서 끝까지, 결정·개입 없이", ADR-0011 부기). 웹 세션 판정 절차는 생략했고 판정 후보는 전부 **더 엄격한(fail-closed) 권장안으로 '자율 확정'**했다(사후 번복 가능). **남은 판정 후보 0건.** 기준 커밋 main `2092406`(S3-2 종결 — PR-8 #67). 기준선(S3-2 종결 절 실측): pytest 5774 수집 · vitest 83파일 1474 · golden 85 · concurrency 68 · 커버리지 게이트 94(CI 3샤드) · `alembic heads` `281da4794717` · ADR 최대 0087 · JOB 14 · 상태 총수 30/152/182 · IMMUTABLE 13표.
 - **PR-1 범위 = 문서 전용(코드·테스트·마이그레이션 변경 0)**. 커밋(12자리): `1787f724fff2` ① 계획서 `docs/plans/s3-3-plan.md`+부록 `docs/plans/s3-3/design-A~E.md`+`design-integrated.md`(모순·중복 37 + 누락 13 해소·3렌즈 적대 검토 R-01~R-40 반영) / `e0e69f4220c0` ② 부록 A~E 머리 정정 색인(통합 §1.8·R-40) / `dbb94664e3e6` DESIGN [M4] 보강 15문단 / `41dade74e904` ADR-0088~0099 신설 12건 / `def5e2da864d` 기존 ADR 부기 17건 / `4e995814b4f9` WBS v1.7 / `ff15f968e504` GC v1.6 / `4bc07280ae64` runbook 초안 줄 / (이 절) PROGRESS.
@@ -1862,7 +1903,8 @@
 - **S2-2 (인증 인스턴스·상태머신) — 종결(2026-08-12).** PR #17 `44d415268392`(3테이블·상태머신 27전이·날짜 스윕·CLI — ADR-0037~0040, GC v1.3 C9·C10) + PR #18 `640916e5a2ec`(documents CERTIFICATION 확장·태스크 서류 링크·§4.8 자동 적용 — ADR-0041·0042). 상세는 아래 "현재" 절의 직전 세션 상세 항목이 정본. **종결 시점 정본 기준선: pytest 1094·vitest 79·커버리지 게이트 94·CI 6잡.**
 
 ## 현재
-- **S3-3 계획 자율 확정·PR-1 문서 등재(2026-10-05 — 맨 위 'S3-3 계획 확정·PR-1' 절)**. 다음 할 일: **S3-3 PR-1b(공통 기반 — 마이그레이션 0)** — ① Idempotency-Key 1~128자·제어문자 금지 → 422 `COMMON.IDEMPOTENCY.KEY_INVALID`(P-39 = PR-16 ⑨ — `api/deps.py:94-109`, J: 129자 422·128자 정상·제어문자 422) ② `tests/support/kst.py`의 `MILESTONE_TODAY_IMPORT_POINTS` → `TODAY_IMPORT_POINTS` 이름 변경·일반화 + 이름 임포트 지점 커버리지 시험(R-37 — K: 누락 변이 kill) ③ `.shard_durations.json` 재갱신(Q-15 — 첫 CI에서 샤드 편차 실측). 정본: 계획서 §4 PR-1b 행·design-integrated §2.4·§9 R-37. 그 뒤 2a → 2d → 2b → 2c → 3a → 3b → 3c → 4a → 4b → 5a → 5b → 5c → 6 → 7(16 PR — 계획서 §4 의존 줄이 정본). **오너 확인 권장 4건**(채권·CI 분리 / 노출 산식 / S4-2 전 CI 운영 발행 0 / L/C 플래그 OFF 해석)은 자율 확정으로 진행 중 — 같은 절 표. PR-1은 push·PR·병합 대기(오케스트레이터 몫).
+- **S3-3 PR-1b 구현 완료(2026-10-05 — 맨 위 'S3-3 PR-1b' 절)** — P-39 키 형식 422·`TODAY_IMPORT_POINTS` 일반화+커버리지·durations 재갱신(경계 `8071bfca297c` 이후 커밋만, 변이 12/12). 다음 할 일: **S3-3 PR-2a**(계획서 §4 PR-2a 행이 정본 — 채권 원장, 마이그레이션 M16 `down_revision` = `281da4794717`). 그 뒤 2d → 2b → 2c → 3a → 3b → 3c → 4a → 4b → 5a → 5b → 5c → 6 → 7. PR-1b는 push·PR·병합 대기(오케스트레이터 몫 — PR-1 #68 병합 뒤 최신 main 위로 재배치·재검증, 첫 CI에서 샤드 편차 실측). **오너 확인 권장 4건**은 자율 확정으로 진행 중(S3-3 계획 확정 절 표).
+- (완료 2026-10-05 — PR-1b) **S3-3 계획 자율 확정·PR-1 문서 등재(2026-10-05 — 맨 위 'S3-3 계획 확정·PR-1' 절)**. 다음 할 일: **S3-3 PR-1b(공통 기반 — 마이그레이션 0)** — ① Idempotency-Key 1~128자·제어문자 금지 → 422 `COMMON.IDEMPOTENCY.KEY_INVALID`(P-39 = PR-16 ⑨ — `api/deps.py:94-109`, J: 129자 422·128자 정상·제어문자 422) ② `tests/support/kst.py`의 `MILESTONE_TODAY_IMPORT_POINTS` → `TODAY_IMPORT_POINTS` 이름 변경·일반화 + 이름 임포트 지점 커버리지 시험(R-37 — K: 누락 변이 kill) ③ `.shard_durations.json` 재갱신(Q-15 — 첫 CI에서 샤드 편차 실측). 정본: 계획서 §4 PR-1b 행·design-integrated §2.4·§9 R-37. 그 뒤 2a → 2d → 2b → 2c → 3a → 3b → 3c → 4a → 4b → 5a → 5b → 5c → 6 → 7(16 PR — 계획서 §4 의존 줄이 정본). **오너 확인 권장 4건**(채권·CI 분리 / 노출 산식 / S4-2 전 CI 운영 발행 0 / L/C 플래그 OFF 해석)은 자율 확정으로 진행 중 — 같은 절 표. PR-1은 push·PR·병합 대기(오케스트레이터 몫).
 - (완료 2026-10-05 — 위 S3-3 계획 확정·PR-1로 대체) **S3-2 종결(2026-10-05, PR-8 — 맨 위 'S3-2 PR-8 / S3-2 종결' 절)**. 다음 할 일: **S3-3(서류 생성기·채권/입금) 계획 세션** — WBS S3-3 행 + v1.6 주석(lc_terms → S3-2 산식 배선·SO COMPLETED/short-close = provider `reflected=True`와 같은 PR·대금만기/제시기한 알림 판정) + 부채 최종표의 S3-3 소유분(Q-04·Q-05·Q-06·Q-08·R-3a-5·P-01·P-10·P-11). PR-8은 오케스트레이터 push·PR·병합 대기.
 - (완료 2026-10-05 — PR-8) **다음 할 일: S3-2 PR-8(마감 — 계획서 §4 PR-8 행)**. PR-6(무역 기일 스캔 잡 `trade-deadline-scan` — 백엔드, 마이그레이션 0)은 구현 완료(맨 위 'S3-2 PR-6' 절 — 경계 커밋 `7b9bedfddc10`[PR #64 PR-5a head] 이후 커밋만, JOB 14·변이 15/15·dev CLI 실기동). 병합 대기: 5a(PR #64) → 5b(별도 진행) → 6(이 브랜치 — 앞 PR 병합 뒤 최신 main 위로 재배치·재검증 필요, 충돌 예상 = PROGRESS 맨 위 절·'## 현재'뿐).
 - (완료 2026-10-05 — PR-6, 맨 위 'S3-2 PR-6' 절) **다음 할 일: S3-2 PR-6(기일 스캔 잡 `trade-deadline-scan` 06:40·CLI 수동 실행·JOB 13→14 — 계획서 §4 PR-6 행)** → PR-8(계획서 §4 의존 줄이 정본). 병합 대기: 5a(PR #64) → 5b(이 브랜치 — 경계 `7b9bedfddc10`[PR #64 head] 이후 커밋만, 5a 병합 뒤 최신 main 위로 재배치·재검증).
