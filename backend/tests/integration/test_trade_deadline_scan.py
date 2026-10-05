@@ -32,7 +32,7 @@ from app.modules.trade_chain.deadline_scan import scan_trade_deadlines
 from app.modules.trade_chain.expiry_sweep import sweep_expired_documents
 from app.modules.worklist.models import AlertRule
 from tests.factories.shipments import confirmed_so, raw_shipment
-from tests.factories.trade import raw_pi, raw_po, raw_quotation, unique
+from tests.factories.trade import raw_pi, raw_po, raw_quotation, raw_so, unique
 from tests.support.factories import create_user
 
 pytestmark = pytest.mark.group_h
@@ -141,7 +141,9 @@ def _customs_accepted(shipment_id: int, accepted: date, kind: str = "EXPORT") ->
 
 def _alerts(entity_type: str | None = None, entity_id: int | None = None) -> list[tuple[Any, ...]]:
     """(dedup_key, recipient, severity, title, body, acknowledged?) — 기일·에스컬레이션 키만(jobs.failed 등 제외)."""
-    clauses = ["(dedup_key LIKE 'deadline:%' OR dedup_key LIKE 'esc:%')"]
+    clauses = [
+        "(dedup_key LIKE 'deadline:%' OR dedup_key LIKE 'esc:%' OR dedup_key LIKE 'deadline-unresolved:%')"
+    ]
     params: dict[str, Any] = {}
     if entity_type is not None:
         clauses.append("entity_type = :et")
@@ -173,8 +175,10 @@ def _ack_all(user_id: int) -> None:
 def _scan(now: datetime = NOW, **kwargs: Any) -> dict[str, int]:
     """주입 시각으로 스캔하고, 방금 만든 알림의 `created_at`을 그 시각으로 맞춘다 — 알림 생성 시각(DB now())이 시험의 가상 시계와
     같아야 에스컬레이션의 '스캔일 KST 0시 이전 알림만' 판정이 실행 날짜와 무관하게 재현된다."""
+    before = int(_rows("SELECT coalesce(max(id), 0) FROM alerts")[0][0])
     counts = scan_trade_deadlines(now=now, **kwargs)
-    _exec("UPDATE alerts SET created_at = :t WHERE created_at > :t", t=now)
+    # 이번 스캔이 만든 알림만(id > before) 양방향으로 맞춘다 — 가상 시계가 실제 시각보다 미래여도 과거여도 같다(적대 검토 ⑧)
+    _exec("UPDATE alerts SET created_at = :t WHERE id > :b", t=now, b=before)
     return counts
 
 
@@ -268,7 +272,10 @@ def test_a_same_day_rerun_does_not_escalate_alerts_it_just_created(admins: tuple
     first = _scan()
     assert first["threshold"] == 2 and first["escalated"] == 0
     assert _scan(NOW + timedelta(hours=3))["escalated"] == 0
-    assert _scan(NOW + timedelta(days=1))["escalated"] == len(admins)
+    assert (
+        _scan(NOW + timedelta(days=1))["escalated"] == 0
+    )  # 정확히 24시간 — 근거는 24시간보다 오래된 알림만(created_at < now−24h)
+    assert _scan(NOW + timedelta(days=1, minutes=1))["escalated"] == len(admins)
 
 
 def test_escalation_does_not_mix_milestone_types_on_the_same_shipment(
@@ -299,6 +306,119 @@ def test_escalation_does_not_mix_milestone_types_on_the_same_shipment(
     _scan(NOW + timedelta(days=3))
     esc = [k for k in _keys("shipments", shipment) if k.startswith("esc:")]
     assert esc and all(":DOC_CUTOFF/" in k for k in esc)
+
+
+def test_a_direct_assignee_change_does_not_make_the_new_assignee_escalate(
+    admins: tuple[int, int],
+) -> None:
+    """A가 D-7을 받은 뒤 선적 담당을 C로 직접 바꿈(일괄 이관 아님 — 옛 알림은 A 앞에 남음) → D-2: 에스컬레이션 0(근거 = 지금 수신자 C의
+    미확인뿐 — 적대 검토 ④), D-3은 C에게"""
+    a = create_user(f"{unique('tds-a')}@example.com", roles=(RoleCode.LOGISTICS,))
+    c = create_user(f"{unique('tds-c')}@example.com", roles=(RoleCode.LOGISTICS,))
+    shipment = _shipment(assignee=a)
+    _plan_at(shipment, "CARGO_CLOSING", _at(5))
+    _scan()
+    _exec("UPDATE shipments SET assignee_id = :c WHERE id = :i", c=c, i=shipment)
+    later = _scan(NOW + timedelta(days=3))
+    assert later["escalated"] == 0
+    assert {r[1] for r in _alerts("shipments", shipment) if "/D-3@" in r[0]} == {c}
+
+
+def test_an_inactive_assignee_does_not_cause_a_false_escalation(admins: tuple[int, int]) -> None:
+    """A가 D-7을 받고 비활성화 → D-2: 기일 알림은 ADMIN 폴백으로 가지만 A의 옛 미확인은 근거가 아니다(에스컬레이션 0 — 적대 검토 ④)"""
+    a = create_user(f"{unique('tds-a')}@example.com", roles=(RoleCode.LOGISTICS,))
+    shipment = _shipment(assignee=a)
+    _plan_at(shipment, "CARGO_CLOSING", _at(5))
+    _scan()
+    _exec("UPDATE users SET is_active = false WHERE id = :u", u=a)
+    later = _scan(NOW + timedelta(days=3))
+    assert later["escalated"] == 0
+    assert {r[1] for r in _alerts("shipments", shipment) if "/D-3@" in r[0]} == set(admins)
+
+
+def test_a_fallback_escalation_names_the_rule_or_admin_recipients(admins: tuple[int, int]) -> None:
+    """폴백 수신자(관리자)가 D-7을 하루 넘게 안 읽으면 에스컬레이션 — 문구는 '수신자(규칙·관리자)가'(담당자가 아님)"""
+    shipment = _shipment(inactive_assignee=True)
+    _plan_at(shipment, "CARGO_CLOSING", _at(5))
+    _scan()
+    assert _scan(NOW + timedelta(days=3))["escalated"] == len(admins)
+    esc = [r for r in _alerts("shipments", shipment) if r[0].startswith("esc:")]
+    assert esc and all("수신자(규칙·관리자)가" in r[4] for r in esc)
+
+
+def test_a_misfired_late_night_run_does_not_escalate_the_next_morning(
+    admins: tuple[int, int],
+) -> None:
+    """미스파이어 — 전날 KST 23:00에 처음 돈 스캔이 D-7·D-3을 만들고 다음 날 06:40 정규 실행: 7시간 40분 전 알림은 근거가 아니다
+    (기준 = min(KST 0시, now−24h) — 적대 검토 ⑦). 그다음 날에는 하루 넘게 미확인이라 에스컬레이션"""
+    shipment = _shipment()
+    _plan_at(shipment, "CARGO_CLOSING", datetime(2026, 10, 6, 0, 0, tzinfo=UTC), tz="Asia/Seoul")
+    first = _scan(datetime(2026, 10, 3, 14, 0, tzinfo=UTC))  # KST 10-03 23:00 — D-3
+    assert first["threshold"] == 2
+    morning = _scan(datetime(2026, 10, 3, 21, 40, tzinfo=UTC))  # KST 10-04 06:40 — D-2
+    assert morning["escalated"] == 0
+    assert _scan(datetime(2026, 10, 4, 21, 40, tzinfo=UTC))["escalated"] == len(admins)
+
+
+def _inject_between_verdicts(monkeypatch: pytest.MonkeyPatch, change: Any) -> None:
+    """첫 판정 직후(발송 직전 재확인 전)에 다른 트랜잭션의 커밋을 끼워 넣는다 — 경합 재현."""
+    real = deadline_scan._shipment_verdict
+    calls = {"n": 0}
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        result = real(*args, **kwargs)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            change()
+        return result
+
+    monkeypatch.setattr(deadline_scan, "_shipment_verdict", wrapped)
+
+
+@pytest.mark.group_j
+def test_an_actual_recorded_mid_scan_is_not_alerted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """스캔-실적 입력 경합 — 첫 판정 뒤 실적이 커밋되면 발송 직전 재확인에서 빠진다(알림 0, deferred 1 — 적대 검토 ⑥)"""
+    shipment = _shipment()
+    milestone = _plan_at(shipment, "CARGO_CLOSING", _at(1))
+    _inject_between_verdicts(
+        monkeypatch,
+        lambda: _exec("UPDATE milestones SET actual_at = :a WHERE id = :i", a=_at(-1), i=milestone),
+    )
+    counts = _scan()
+    assert counts["threshold"] == 0 and counts["deferred"] == 1
+    assert _keys("shipments", shipment) == []
+
+
+@pytest.mark.group_j
+def test_a_loading_fulfilment_recorded_mid_scan_is_not_alerted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """적재기한 — 첫 판정 뒤 ETD 실적이 커밋되면(이행) 통관·실적 원천을 다시 읽어 발송하지 않는다"""
+    shipment = _shipment()
+    _customs_accepted(shipment, date(2026, 9, 8))
+    _inject_between_verdicts(
+        monkeypatch, lambda: _plan_on(shipment, "ETD", date(2026, 10, 1), actual=date(2026, 10, 1))
+    )
+    counts = _scan()
+    assert counts["threshold"] == 0 and counts["deferred"] == 1
+    assert _keys("shipments", shipment) == []
+
+
+@pytest.mark.group_j
+def test_a_handover_committed_mid_scan_defers_the_shipment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """스캔-이관 경합 — 첫 판정 뒤 담당자가 바뀌면 그 건은 보내지 않고 다음 실행에 맡긴다(옛 담당자에게 새 알림 0 — 적대 검토 ⑤)"""
+    shipment = _shipment()
+    c = create_user(f"{unique('tds-c')}@example.com", roles=(RoleCode.LOGISTICS,))
+    _plan_at(shipment, "CARGO_CLOSING", _at(5))
+    _inject_between_verdicts(
+        monkeypatch,
+        lambda: _exec("UPDATE shipments SET assignee_id = :c WHERE id = :i", c=c, i=shipment),
+    )
+    counts = _scan()
+    assert counts["threshold"] == 0 and counts["deferred"] == 1
+    monkeypatch.undo()
+    _scan()
+    assert {r[1] for r in _alerts("shipments", shipment)} == {c}
 
 
 # ── H-03 · GC-A21 롤오버 ─────────────────────────────────────────────────────
@@ -346,9 +466,12 @@ def test_gc_a21_datetime_overdue_compares_utc_instants_not_dates() -> None:
     _plan_at(shipment, "CARGO_CLOSING", deadline, tz="America/Los_Angeles")
     early = _scan(datetime(2026, 10, 10, 21, 40, tzinfo=UTC))
     assert early["overdue"] == 0 and early["threshold"] == 3
-    assert _scan(deadline)["overdue"] == 0
+    at_deadline = _scan(deadline)
+    assert (
+        at_deadline["overdue"] == 0 and at_deadline["escalated"] == 0
+    )  # 2시간 20분 전 알림 — 24시간 미만은 근거가 아니다
     late = _scan(deadline + timedelta(seconds=1))
-    assert late["overdue"] == 1
+    assert late["overdue"] == 1 and late["escalated"] == 0
     overdue = [r for r in _alerts("shipments", shipment) if "/overdue@" in r[0]]
     assert overdue and "@2026-10-11T000000Z:" in overdue[0][0]
     assert "현지 2026-10-10 17:00 America/Los_Angeles" in overdue[0][4]
@@ -356,11 +479,15 @@ def test_gc_a21_datetime_overdue_compares_utc_instants_not_dates() -> None:
 
 @pytest.mark.golden
 def test_gc_a21_the_scan_day_is_the_kst_date_of_the_instant() -> None:
-    """GC-A21 ③ — 날짜형 기일 10-10: 2026-10-02T14:59Z(KST 10-02 → D-8) 0건 / 15:00Z(KST 10-03 → D-7) 1건"""
+    """GC-A21 ③ — 문서 값 그대로: 2026-10-03T14:59Z 스캔 = KST **10-03**, 15:00Z = KST **10-04**. 날짜형 기일 10-11이면 14:59Z는
+    D-8(알림 0)·15:00Z는 D-7(알림 1)"""
     shipment = _shipment(kind="IMPORT")
-    _plan_on(shipment, "IMPORT_TAX_DUE", date(2026, 10, 10))
-    assert _scan(datetime(2026, 10, 2, 14, 59, tzinfo=UTC))["threshold"] == 0
-    assert _scan(datetime(2026, 10, 2, 15, 0, tzinfo=UTC))["threshold"] == 1
+    _plan_on(shipment, "IMPORT_TAX_DUE", date(2026, 10, 11))
+    assert _scan(datetime(2026, 10, 3, 14, 59, tzinfo=UTC))["threshold"] == 0
+    assert _scan(datetime(2026, 10, 3, 15, 0, tzinfo=UTC))["threshold"] == 1
+    assert [k.split(":")[3] for k in _keys("shipments", shipment)] == [
+        "IMPORT_TAX_DUE/D-7@2026-10-11"
+    ]
 
 
 # ── 충족 신호·적재기한 ───────────────────────────────────────────────────────
@@ -439,7 +566,8 @@ def test_lc_payment_and_presentation_deadlines_never_alert_with_the_flag_off() -
 
 
 def test_oem_production_milestones_never_alert() -> None:
-    """OEM 생산 일정(PO 소유 4종)은 스캔 대상이 아니다(B15 '알림 없음') — 기일이 지났어도 0"""
+    """OEM 생산 일정(PO 소유 4종)은 대상이 아니다(B15 '알림 없음') — OEM PO를 원천으로 한 수입선적을 **실제 스캔 후보**(서류마감 +30)로
+    만들고 OEM 4종 기일을 모두 지나게 해도 OEM 키 0(적대 검토 ⑨ — 후보가 아니라 0건인 공회전 방지)"""
     po_id = raw_po(po_kind="OEM_PRODUCTION")
     with owner_engine.begin() as connection:
         for milestone_type in ("RAW_MATERIAL_READY", "FILLING", "PACKING", "OUTGOING_INSPECTION"):
@@ -449,9 +577,14 @@ def test_oem_production_milestones_never_alert() -> None:
                 ),
                 {"p": po_id, "t": milestone_type, "d": TODAY - timedelta(days=1)},
             )
+    shipment = raw_shipment(confirmed_so()["id"], kind="IMPORT", po_id=po_id)
+    _plan_at(shipment, "DOC_CUTOFF", _at(30))
     counts = _scan()
+    assert counts["shipments"] == 1
     assert counts["threshold"] == counts["overdue"] == 0
-    assert _alerts("purchase_orders") == [] and _keys() == []
+    assert _alerts("purchase_orders") == []
+    oem = ("RAW_MATERIAL_READY", "FILLING", "PACKING", "OUTGOING_INSPECTION")
+    assert not [k for k in _keys() if any(t in k for t in oem)]
 
 
 def test_cancelled_and_deleted_shipments_are_not_scanned() -> None:
@@ -527,14 +660,38 @@ def test_a_handover_is_reflected_at_once_without_resending(admins: tuple[int, in
 
 
 def test_an_unknown_timezone_is_alerted_once_as_unresolved_not_guessed() -> None:
-    """tzdata가 모르는 시간대 → D-N·도과를 KST로 추정하지 않고 '판정 불가' 1건(재실행 0) — 조용한 누락 금지"""
+    """tzdata가 모르는 시간대 → D-N은 KST로 추정하지 않고 '판정 불가' 1건(재실행 0), 기일 전이면 문턱 알림 0 — 조용한 누락 금지"""
     shipment = _shipment()
-    _plan_at(shipment, "CARGO_CLOSING", _at(-1), tz="Mars/Olympus_Mons")
+    _plan_at(shipment, "CARGO_CLOSING", _at(1), tz="Mars/Olympus_Mons")
     counts = _scan()
     assert counts["unresolved"] == 1 and counts["overdue"] == counts["threshold"] == 0
     (row,) = _alerts("shipments", shipment)
-    assert "/UNRESOLVED@" in row[0] and row[2] == "CRITICAL" and "시간대" in row[4]
+    assert row[0].startswith("deadline-unresolved:") and "/UNRESOLVED@" in row[0]
+    assert row[2] == "CRITICAL" and "시간대" in row[4]
     assert _scan()["unresolved"] == 0
+
+
+def test_an_unknown_timezone_deadline_is_still_overdue_by_utc_and_escalates(
+    admins: tuple[int, int],
+) -> None:
+    """시간대를 몰라도 도과는 UTC 비교로 확정이다(적대 검토 ②) — 지난 기일이면 판정 불가 + 도과 알림, 24시간 넘게 미확인이면 에스컬레이션"""
+    shipment = _shipment()
+    _plan_at(shipment, "CARGO_CLOSING", _at(-1), tz="Mars/Olympus_Mons")
+    counts = _scan()
+    assert counts["unresolved"] == 1 and counts["overdue"] == 1 and counts["threshold"] == 0
+    overdue = [k for k in _keys("shipments", shipment) if "/overdue@" in k]
+    assert overdue and overdue[0].startswith("deadline:shipments:")
+    assert _scan(NOW + timedelta(days=2))["escalated"] == len(admins)
+
+
+def test_an_unresolved_alert_is_never_escalation_evidence(admins: tuple[int, int]) -> None:
+    """판정 불가 알림(미확인)만 남아 있으면 기일이 지나도 에스컬레이션 근거가 아니다(키 종류 분리 — 적대 검토 ③). 그날 만든 도과 알림도 근거 아님"""
+    shipment = _shipment()
+    _plan_at(shipment, "CARGO_CLOSING", _at(1), tz="Mars/Olympus_Mons")
+    _scan()  # 판정 불가 1건(미확인)
+    later = _scan(NOW + timedelta(days=2))  # 이제 도과 — 판정 불가 알림은 하루 넘게 미확인
+    assert later["overdue"] == 1 and later["escalated"] == 0
+    assert not [k for k in _keys("shipments", shipment) if k.startswith("esc:")]
 
 
 # ── 견적·PI 만료 임박(H-07 · GC-A21 ②) ───────────────────────────────────────
@@ -546,7 +703,9 @@ def test_gc_a21_quotation_and_pi_candidates_are_the_expiry_sweep_candidates() ->
     valid_until = 오늘 → D-0 대상(문턱 3개) / ISSUED PI D-3 → 알림 / 일부입금 PI → 0"""
     d7 = raw_quotation("ISSUED", valid_until=date(2026, 10, 10))
     held = raw_quotation("ISSUED", valid_until=date(2026, 10, 10))
-    raw_pi(held, "ISSUED", valid_until=date(2026, 12, 31))  # 후속이 부모를 붙잡는다
+    raw_pi(held, "ISSUED", valid_until=date(2026, 12, 31))  # 후속(PI)이 부모를 붙잡는다
+    so_held = raw_quotation("ISSUED", valid_until=date(2026, 10, 10))
+    raw_so("RECEIVED", qt_id=so_held)  # 문서 값: 살아 있는 SO가 있는 QT
     converted = raw_quotation("CONVERTED", valid_until=date(2026, 10, 10))
     today_qt = raw_quotation("ISSUED", valid_until=TODAY)
     pi_d3 = raw_pi(
@@ -562,6 +721,7 @@ def test_gc_a21_quotation_and_pi_candidates_are_the_expiry_sweep_candidates() ->
     _scan()
     assert [k.split(":")[3] for k in _keys("quotations", d7)] == ["VALIDITY/D-7@2026-10-10"]
     assert _keys("quotations", held) == [] and _keys("quotations", converted) == []
+    assert _keys("quotations", so_held) == []
     assert {k.split(":")[3] for k in _keys("quotations", today_qt)} == {
         f"VALIDITY/D-{n}@{TODAY}" for n in (7, 3, 1)
     }
@@ -570,6 +730,9 @@ def test_gc_a21_quotation_and_pi_candidates_are_the_expiry_sweep_candidates() ->
         "VALIDITY/D-3@2026-10-06",
     }
     assert _keys("proforma_invoices", paid_pi) == []
+    # 문서 값: valid_until = 오늘인 QT는 다음 날 스윕이 EXPIRED로 닫는다(D-0까지 알림 대상이던 그 문서)
+    assert sweep_expired_documents(base_date=TODAY + timedelta(days=1))["expired_qt"] >= 1
+    assert _rows("SELECT status FROM quotations WHERE id = :i", i=today_qt) == [("EXPIRED",)]
 
 
 def test_a_lapsed_quotation_is_the_sweeps_business_not_an_overdue_alert() -> None:
@@ -613,7 +776,7 @@ def test_a_board_row_without_a_verdict_fails_the_shipment_instead_of_skipping() 
     }
     with pytest.raises(RuntimeError, match="판정"):
         deadline_scan.shipment_dues(
-            {"rows": [row]}, shipment_id=1, doc_number="SH-X", assignee_id=1
+            {"rows": [row]}, shipment_id=1, doc_number="SH-X", assignee_id=1, now=NOW
         )
 
 
@@ -657,6 +820,12 @@ def test_the_scan_writes_alerts_only_no_events_and_no_document_rows() -> None:
     shipment = _shipment()
     _plan_at(shipment, "CARGO_CLOSING", _at(1))
     qt = raw_quotation("ISSUED", valid_until=TODAY + timedelta(days=2))
+    pi = raw_pi(
+        raw_quotation("CONVERTED", valid_until=date(2026, 12, 31)),
+        "ISSUED",
+        valid_until=TODAY + timedelta(days=2),
+    )
+    _customs_accepted(shipment, TODAY - timedelta(days=27))
 
     def snapshot() -> tuple[Any, ...]:
         return (
@@ -664,6 +833,9 @@ def test_the_scan_writes_alerts_only_no_events_and_no_document_rows() -> None:
             _rows("SELECT xmin::text, * FROM shipments WHERE id = :i", i=shipment),
             _rows("SELECT xmin::text, * FROM milestones WHERE shipment_id = :i", i=shipment),
             _rows("SELECT xmin::text, * FROM quotations WHERE id = :i", i=qt),
+            _rows("SELECT xmin::text, * FROM proforma_invoices WHERE id = :i", i=pi),
+            _rows("SELECT xmin::text, * FROM customs_records WHERE shipment_id = :i", i=shipment),
+            _rows("SELECT xmin::text, * FROM sales_orders ORDER BY id"),
             _rows("SELECT count(*) FROM milestone_changes"),
         )
 

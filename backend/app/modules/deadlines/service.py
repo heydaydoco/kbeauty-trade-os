@@ -165,7 +165,12 @@ def _like_literal(value: str) -> str:
 
 
 def has_unacknowledged_alert(
-    session: Session, *, key_prefix: str, stamp: str, created_before: datetime | None = None
+    session: Session,
+    *,
+    key_prefix: str,
+    stamp: str,
+    created_before: datetime | None = None,
+    recipient_ids: tuple[int, ...] | None = None,
 ) -> bool:
     """`{key_prefix}…@{stamp}:{수신자}` 모양 dedup 키의 살아 있는 미확인 알림이 있는가 (D-3 에스컬레이션 판정 — 공용).
 
@@ -174,6 +179,8 @@ def has_unacknowledged_alert(
       아무 글자와 맞아 다른 종류 알림을 섞지 않게(S3-2 PR-6 — 통합 X-25 "에스컬레이션 조회 prefix는 TYPE까지").
     ★ `created_before`(선택) — 그 시각 이전에 만든 알림만 센다. 무역 스캔은 '스캔일 KST 0시'를 준다: 같은 날 앞선 실행(CLI 재실행·
       미스파이어 수렴)이 방금 만든 알림은 "안 읽었다"가 아니라 "받을 틈이 없었다"다(S2-3 ① 취지 — 실기동 재실행에서 확인).
+    ★ `recipient_ids`(선택) — 그 사람들이 받은 알림만 센다(무역 스캔 = `resolve_recipients` 결과). 인증·문서 축은 아직 인자 없이
+      부른다(부채 R-6-1·R-6-5).
     """
     pattern = f"{_like_literal(key_prefix)}%@{_like_literal(stamp)}:%"
     conditions: list[ColumnElement[bool]] = [
@@ -183,6 +190,9 @@ def has_unacknowledged_alert(
     ]
     if created_before is not None:
         conditions.append(Alert.created_at < created_before)
+    if recipient_ids is not None:
+        # 지금의 수신자가 받은 알림만 — 담당 변경 전 사람·비활성 계정의 옛 미확인이 새 수신자의 '안 읽음'이 되지 않게(PR-6 적대 검토 ④)
+        conditions.append(Alert.recipient_user_id.in_(recipient_ids))
     return bool(session.execute(select(exists().where(*conditions))).scalar_one())
 
 

@@ -13,12 +13,14 @@
   이행 판정). 정의 이원화 금지 — 스캔이 따로 계산하면 화면의 'D-3'과 알림의 'D-3'이 갈린다.
     D-N 문턱 = 날짜형은 유효일, 시각형은 `scan_date`(min(현지, KST) — 이른 경고).
     **도과 = 시각형은 `now_utc > effective_at`**(R-20 — 날짜 비교면 기한 전 최대 ~16시간 '도과' 오표시), 날짜형은 `오늘(KST) > 날짜`.
-  시각형 행의 시간대를 tzdata가 모르면(TZ_UNRESOLVED) D-N·도과를 추정하지 않고 **'기일 판정 불가' 알림 1건**을 낸다(조용한 누락 금지).
+  시각형 행의 시간대를 tzdata가 모르면(TZ_UNRESOLVED) D-N은 추정하지 않고 **'기일 판정 불가' 알림 1건**(키 종류 `deadline-unresolved:` —
+  에스컬레이션 근거에서 분리)을 내며, **도과만큼은 시간대 없이 UTC 비교(`now > at_utc`)로 판정해 도과 알림**을 낸다(적대 검토 ②③).
 ■ **견적·PI(B18)** — 후보 = 만료 스윕과 같은 정의(`EXPIRY_CANDIDATE_STATUS`·삭제 아님·`is_lapsed` 아님·살아 있는 후속 없음).
   `valid_until` 당일까지 유효(D-0 포함), 경과분은 스윕이 EXPIRED로 닫으므로 도과 알림은 없다.
 ■ **의미론 = S2-3 승계**(`deadlines` 공용 함수 — `days_left`·`passed_thresholds`·`policy`·`has_unacknowledged_alert`):
-    문턱은 '지났다'로 판정(지각 발송) · 도과 건에 지난 문턱 소급 없음 · D-3 이내 + 같은 종류·같은 기일의 **스캔일 KST 0시 이전에 만든** 미확인 →
-    ADMIN 에스컬레이션(이번 스캔·같은 날 앞선 실행이 만든 알림은 '받을 틈이 없었다' — 자율 확정) · 수신자 = 담당자 → 규칙 → ADMIN 폴백(`Routing.DEADLINE`) · 문턱 = `alert_rules.config.thresholds`,
+    문턱은 '지났다'로 판정(지각 발송) · 도과 건에 지난 문턱 소급 없음 · D-3 이내 + 같은 종류·같은 기일의 기일 알림 중 **지금의 수신자가
+    받았고 min(스캔일 KST 0시, now−24h) 이전에 만든** 미확인 → ADMIN 에스컬레이션(같은 날·24시간 안에 만든 알림은 '받을 틈이 없었다',
+    담당 변경·비활성 담당자의 옛 알림은 새 수신자의 미확인이 아니다 — 자율 확정·적대 검토 ④⑦) · 수신자 = 담당자 → 규칙 → ADMIN 폴백(`Routing.DEADLINE`) · 문턱 = `alert_rules.config.thresholds`,
     규칙이 없으면 **D-7/3/1**.
 ■ **dedup = DB 부분 유니크**(`alerts.dedup_key`, `ON CONFLICT DO NOTHING` — 확인 후 INSERT 없음):
     `deadline:shipments:{선적 id}:{종류}/{문턱}@{기일}:{수신자}` · `deadline:quotations|proforma_invoices:{id}:VALIDITY/{문턱}@{valid_until}:{수신자}`
@@ -27,13 +29,15 @@
 ■ **실행 규율** — 한 실행의 기준 시각 1개(`now` → KST 오늘)로 전 건을 판정한다. 후보 id는 keyset 페이지(`page_size`)로 읽고 **건마다
   독립 트랜잭션**(§17.6 — 한 건 실패가 나머지를 막지 않는다, 롤백된 건의 알림은 집계하지 않는다). 열린 unit_of_work 안에서 부르면 거부한다
   (합류하면 건별 독립 커밋이 소리 없이 깨진다 — `purge_in_batches` 선례). 1건이라도 실패하면 호출자(스케줄러)가 잡을 FAILED로 올린다.
+  **발송 직전 재확인**(잠금 없음): 같은 트랜잭션에서 캐시를 버리고 다시 판정해 담당자·실적·통관·계획이 바뀐 기일은 보내지 않고
+  다음 실행에 맡긴다(`deferred` 집계 — 이관·실적 입력 경합, 적대 검토 ⑤⑥).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import exists, or_, select
@@ -103,10 +107,26 @@ class Due:
     segment: str  # 마일스톤 종류 코드 또는 VALIDITY
     stamp: str  # dedup 키의 기일(날짜형 YYYY-MM-DD, 시각형 UTC YYYY-MM-DDTHHMMSSZ)
     shown: str  # 본문에 보일 기일 문구(시각형은 KST 병기)
-    remaining: int  # D-N(시각형은 scan_date 기준)
+    remaining: int | None  # D-N(시각형은 scan_date 기준) — None = 시간대 해석 불가(도과만 판정)
     overdue: bool
     title: str  # 알림 제목 꼬리(전표 번호·종류명)
     assignee_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class Unresolved:
+    """시간대를 해석할 수 없는 시각형 기일 1개(판정 불가 알림 대상)."""
+
+    milestone_type: str
+    stamp: str
+    shown: str  # KST 표기
+
+
+#: 판정 불가 알림의 키 종류 — 기일 알림(`deadline:`)과 분리해 에스컬레이션 근거·문턱 키와 섞이지 않게 한다.
+KIND_UNRESOLVED = "deadline-unresolved"
+
+#: 에스컬레이션 근거 알림의 최소 경과 시간(스캔일 KST 0시 기준과 함께 — `escalation_cutoff`).
+ESCALATION_MIN_AGE = timedelta(hours=24)
 
 
 #: 알림 본문의 종류명(한국어 UI — 코드값 노출 금지).
@@ -152,14 +172,21 @@ def _title(text: str) -> str:
 
 
 def shipment_dues(
-    board: dict[str, Any], *, shipment_id: int, doc_number: str, assignee_id: int | None
-) -> tuple[list[Due], list[tuple[str, str, str]]]:
-    """보드(화면과 같은 조립 결과) → (알림 판정 대상 기일, 판정 불가[종류, 기일 표기]) — 순수 함수.
+    board: dict[str, Any],
+    *,
+    shipment_id: int,
+    doc_number: str,
+    assignee_id: int | None,
+    now: datetime,
+) -> tuple[list[Due], list[Unresolved]]:
+    """보드(화면과 같은 조립 결과) → (알림 판정 대상 기일, 판정 불가 행) — 순수 함수.
 
     보드 행의 `days_left`·`is_overdue`가 판정의 유일 원천이다(시각형 도과 = UTC 비교, D-N = scan_date — milestone_view가 계산).
+    시간대를 해석할 수 없는 시각형 행(TZ_UNRESOLVED)은 D-N을 추정하지 않지만, **도과만큼은 시간대와 무관한 UTC 시각 비교**
+    (`now > at_utc`)로 판정해 도과 기일로 낸다(적대 검토 ② — 판정 불가 알림만 내고 도과를 숨기지 않는다).
     """
     dues: list[Due] = []
-    unresolved: list[tuple[str, str, str]] = []
+    unresolved: list[Unresolved] = []
     for row in board["rows"]:
         milestone_type = row["milestone_type"]
         if milestone_type not in SCAN_TYPES or not row["applicable"]:
@@ -181,7 +208,24 @@ def shipment_dues(
                 instant = datetime.fromisoformat(planned["at_utc"])
                 stamp = instant_stamp(instant)
                 if row["unknown_reason"] == schedule.DueReason.TZ_UNRESOLVED.value:
-                    unresolved.append((milestone_type, stamp, _instant_shown(instant, None)))
+                    kst_shown = _instant_shown(instant, None)
+                    unresolved.append(Unresolved(milestone_type, stamp, kst_shown))
+                    if (
+                        now > instant
+                    ):  # 도과는 UTC 비교라 시간대 없이도 확정이다 — D-N 문턱은 추정하지 않는다
+                        dues.append(
+                            Due(
+                                entity_type="shipments",
+                                entity_id=shipment_id,
+                                segment=milestone_type,
+                                stamp=stamp,
+                                shown=kst_shown,
+                                remaining=None,
+                                overdue=True,
+                                title=f"{doc_number} {name}",
+                                assignee_id=assignee_id,
+                            )
+                        )
                     continue
                 shown = _instant_shown(instant, planned.get("tz"))
             else:
@@ -209,25 +253,49 @@ def shipment_dues(
 # ── 알림 1건 판정(S2-3 의미론) ────────────────────────────────────────────────
 
 
+def escalation_cutoff(now: datetime, today: date) -> datetime:
+    """에스컬레이션 근거가 되는 알림의 생성 시각 상한 = min(스캔일 KST 0시, now − 24시간).
+
+    같은 날 앞선 실행(CLI 재실행)뿐 아니라 **전날 늦게 만든 알림**(미스파이어 수렴으로 잡이 밤늦게 돈 경우 등)도 '받을 틈이
+    없었다'로 본다 — 최소 24시간 미확인이어야 관리자를 부른다(적대 검토 ⑦, ADR-0084 부기)."""
+    day_start = datetime(today.year, today.month, today.day, tzinfo=KST).astimezone(UTC)
+    return min(day_start, now - ESCALATION_MIN_AGE)
+
+
+def _who(recipients: notifications.Recipients, assignee_id: int | None) -> str:
+    if not recipients.fallback and recipients.user_ids == (assignee_id,):
+        return "담당자가"
+    return "수신자(규칙·관리자)가"
+
+
 def _alert_due(
-    session: Session, due: Due, policy: deadlines.Policy, *, day_start: datetime
+    session: Session, due: Due, policy: deadlines.Policy, *, escalate_before: datetime
 ) -> dict[str, int]:
     """에스컬레이션 → 도과 또는 지난 문턱. 반환 = 이 건이 **새로** 만든 알림 수(커밋 뒤 합산).
 
-    `day_start` = 스캔일 KST 0시(UTC) — 에스컬레이션은 그 전에 만든 미확인 알림만 근거로 삼는다(같은 날 재실행이 방금 만든 알림으로
-    관리자를 부르지 않는다 — 자율 확정)."""
+    에스컬레이션 근거 = 같은 종류·같은 기일의 기일 알림 중 ⓐ `escalate_before` 이전에 만들었고 ⓑ **지금 이 기일의 수신자**(담당자 →
+    규칙 → ADMIN 폴백 — `resolve_recipients` 결과)가 받은 미확인 알림(적대 검토 ④ — 담당 변경·비활성 담당자의 옛 알림이 새 수신자를
+    '안 읽었다'로 만들지 않는다). 판정 불가 알림은 키 종류가 달라(`deadline-unresolved:`) 근거가 아니다(적대 검토 ③)."""
     made = {"threshold": 0, "overdue": 0, "escalated": 0}
-    label = deadlines.d_label(due.remaining)  # 사람 표기 D-N / D+N
+    label = deadlines.d_label(due.remaining) if due.remaining is not None else "도과"
     name = _TYPE_NAME_KO[due.segment]
+    recipients = notifications.resolve_recipients(
+        session, rule=policy.rule, assignee_id=due.assignee_id, routing=Routing.DEADLINE
+    )
 
-    # ① 에스컬레이션 — D-3 이내(도과 포함)이고 **같은 종류·같은 기일**의 미확인 기일 알림이 남아 있을 때(이번 알림보다 먼저 판정).
-    if due.remaining <= deadlines.ESCALATION_DAYS and deadlines.has_unacknowledged_alert(
-        session,
-        key_prefix=_key(deadlines.KIND_DEADLINE, due, ""),
-        stamp=due.stamp,
-        created_before=day_start,
+    # ① 에스컬레이션 — D-3 이내(도과 포함)이고 근거 알림이 남아 있을 때(이번 알림보다 먼저 판정).
+    near = due.overdue or (due.remaining is not None and due.remaining <= deadlines.ESCALATION_DAYS)
+    if (
+        near
+        and recipients.user_ids
+        and deadlines.has_unacknowledged_alert(
+            session,
+            key_prefix=_key(deadlines.KIND_DEADLINE, due, ""),
+            stamp=due.stamp,
+            created_before=escalate_before,
+            recipient_ids=recipients.user_ids,
+        )
     ):
-        who = "담당자가" if due.assignee_id is not None else "수신자(규칙·관리자)가"
         made["escalated"] += len(
             notifications.notify(
                 session,
@@ -236,8 +304,8 @@ def _alert_due(
                 ),
                 title=_title(f"미확인 무역 기일 에스컬레이션 — {due.title}"),
                 body=(
-                    f"{name} {due.shown}({label})까지 {deadlines.ESCALATION_DAYS}일 이내인데 {who} 기일 알림을 "
-                    "확인하지 않았습니다. 진행 상황을 확인해 주세요."
+                    f"{name} {due.shown}({label})까지 {deadlines.ESCALATION_DAYS}일 이내인데 "
+                    f"{_who(recipients, due.assignee_id)} 기일 알림을 확인하지 않았습니다. 진행 상황을 확인해 주세요."
                 ),
                 severity="CRITICAL",
                 routing=Routing.ADMIN,
@@ -268,6 +336,8 @@ def _alert_due(
             )
         )
         return made
+    if due.remaining is None:
+        return made  # D-N을 모르는 기일에 문턱을 추정하지 않는다(도과 아님 — 판정 불가 알림만)
 
     # ③ 지난 문턱 전부(지각 발송 포함) — 이미 있는 키는 코어가 생략한다.
     for threshold in deadlines.passed_thresholds(due.remaining, policy.thresholds):
@@ -291,20 +361,20 @@ def _alert_unresolved(
     shipment_id: int,
     doc_number: str,
     assignee_id: int | None,
-    milestone_type: str,
-    stamp: str,
-    shown: str,
+    item: Unresolved,
     policy: deadlines.Policy,
 ) -> int:
-    """시각형 기일의 시간대를 해석할 수 없다 — D-N·도과를 KST로 추정하지 않고 '판정 불가'를 1회 알린다(fail-visible)."""
-    name = _TYPE_NAME_KO[milestone_type]
+    """시각형 기일의 시간대를 해석할 수 없다 — D-N을 KST로 추정하지 않고 '판정 불가'를 1회 알린다(fail-visible).
+
+    키 종류는 `deadline-unresolved:`(기일 알림 `deadline:`과 분리) — 에스컬레이션 근거·문턱 키와 섞이지 않는다(적대 검토 ③)."""
+    name = _TYPE_NAME_KO[item.milestone_type]
     return len(
         notifications.notify(
             session,
-            subject_key=f"{deadlines.KIND_DEADLINE}:shipments:{shipment_id}:{milestone_type}/UNRESOLVED@{stamp}",
+            subject_key=f"{KIND_UNRESOLVED}:shipments:{shipment_id}:{item.milestone_type}/UNRESOLVED@{item.stamp}",
             title=_title(f"무역 기일 판정 불가 — {doc_number} {name}"),
             body=(
-                f"{name}({shown})의 시간대를 해석할 수 없어 D-N·도과를 판정하지 못했습니다. "
+                f"{name}({item.shown})의 시간대를 해석할 수 없어 D-N을 판정하지 못했습니다(도과는 UTC 시각으로 따로 알립니다). "
                 "선적 상세에서 시간대를 다시 입력해 주세요."
             ),
             severity="CRITICAL",
@@ -318,48 +388,75 @@ def _alert_unresolved(
     )
 
 
-def _day_start(today: date) -> datetime:
-    """스캔일(KST)의 0시 — UTC 시각."""
-    return datetime(today.year, today.month, today.day, tzinfo=KST).astimezone(UTC)
-
-
 # ── 건별 작업(한 건 = 한 트랜잭션) ────────────────────────────────────────────
 
 
-def _scan_shipment(
-    session: Session, shipment_id: int, today: date, now: datetime
-) -> dict[str, int]:
-    row = session.execute(
+def _live_shipment(session: Session, shipment_id: int) -> Shipment | None:
+    found: Shipment | None = session.execute(
         select(Shipment).where(
             Shipment.id == shipment_id,
             Shipment.deleted_at.is_(None),
             Shipment.status.not_in(tuple(TERMINAL_STATUSES[DocKind.SHIPMENT])),
         )
     ).scalar_one_or_none()
-    if row is None:  # 후보 수집 뒤 취소·삭제됐다 — 건너뛴다
-        return {}
+    return found
+
+
+def _shipment_verdict(
+    session: Session, shipment_id: int, today: date, now: datetime
+) -> tuple[int | None, list[Due], list[Unresolved]] | None:
+    """(담당자, 기일, 판정 불가) — 선적이 죽었으면 None."""
+    row = _live_shipment(session, shipment_id)
+    if row is None:
+        return None
     board = milestone_view.assemble(session, row, today=today, now=now).board
     dues, unresolved = shipment_dues(
-        board, shipment_id=row.id, doc_number=row.doc_number, assignee_id=row.assignee_id
+        board, shipment_id=row.id, doc_number=row.doc_number, assignee_id=row.assignee_id, now=now
     )
+    return row.assignee_id, dues, unresolved
+
+
+def _scan_shipment(
+    session: Session, shipment_id: int, today: date, now: datetime
+) -> dict[str, int]:
+    first = _shipment_verdict(session, shipment_id, today, now)
+    if first is None:  # 후보 수집 뒤 취소·삭제됐다 — 건너뛴다
+        return {}
+    assignee_id, dues, unresolved = first
     made: dict[str, int] = {"shipments": 1}
     if not dues and not unresolved:
         return made
+    # 발송 직전 재확인(적대 검토 ⑤⑥ — 잠금 없음): 같은 TX에서 캐시를 버리고 선적·마일스톤·통관을 다시 읽어 판정을 다시 낸다.
+    # 담당자가 바뀌었거나(이관 경합) 실적이 들어왔거나(실적 입력 경합) 통관·계획이 바뀌어 처음 판정과 다른 기일은 보내지 않고
+    # 다음 실행에 맡긴다(READ COMMITTED — 새 문장은 그 사이 커밋을 본다).
+    session.expire_all()
+    second = _shipment_verdict(session, shipment_id, today, now)
+    if second is None or second[0] != assignee_id:
+        made["deferred"] = len(dues) + len(unresolved)
+        return made
+    fresh_dues, fresh_unresolved = set(second[1]), set(second[2])
+    sendable = [due for due in dues if due in fresh_dues]
+    sendable_unresolved = [item for item in unresolved if item in fresh_unresolved]
+    deferred = len(dues) - len(sendable) + len(unresolved) - len(sendable_unresolved)
+    if deferred:
+        made["deferred"] = deferred
+    row = _live_shipment(session, shipment_id)
+    assert row is not None
+    doc_number = row.doc_number
     policy = deadlines.policy(session, SHIPMENT_EVENT, defaults=DEFAULT_THRESHOLDS)
-    for due in dues:
-        for key, value in _alert_due(session, due, policy, day_start=_day_start(today)).items():
-            made[key] = made.get(key, 0) + value
-    for milestone_type, stamp, shown in unresolved:
+    cutoff = escalation_cutoff(now, today)
+    for item in sendable_unresolved:
         made["unresolved"] = made.get("unresolved", 0) + _alert_unresolved(
             session,
-            shipment_id=row.id,
-            doc_number=row.doc_number,
-            assignee_id=row.assignee_id,
-            milestone_type=milestone_type,
-            stamp=stamp,
-            shown=shown,
+            shipment_id=shipment_id,
+            doc_number=doc_number,
+            assignee_id=assignee_id,
+            item=item,
             policy=policy,
         )
+    for due in sendable:
+        for key, value in _alert_due(session, due, policy, escalate_before=cutoff).items():
+            made[key] = made.get(key, 0) + value
     return made
 
 
@@ -372,7 +469,7 @@ _VALIDITY_TARGETS: dict[str, tuple[DocKind, type[Quotation] | type[ProformaInvoi
 def _validity_work(entity_type: str) -> Callable[[Session, int, date, datetime], dict[str, int]]:
     kind, model, event_type = _VALIDITY_TARGETS[entity_type]
 
-    def work(session: Session, doc_id: int, today: date, _now: datetime) -> dict[str, int]:
+    def verdict(session: Session, doc_id: int, today: date) -> Due | None:
         found = session.execute(
             select(model).where(
                 model.id == doc_id,
@@ -385,13 +482,13 @@ def _validity_work(entity_type: str) -> Callable[[Session, int, date, datetime],
             Quotation | ProformaInvoice | None, found
         )  # 두 모델 합집합 select — mypy가 Base로 좁힌다
         if row is None or row.valid_until is None:
-            return {}
+            return None
         # 만료 스윕과 같은 술어 — 경과분은 스윕이 닫는다(도과 알림 없음), 살아 있는 후속이 부모를 붙잡으면 알림도 없다(X-18)
         if is_lapsed(kind, row.status, row.valid_until, today):
-            return {}
+            return None
         if has_live_children(session, kind, row.id):
-            return {}
-        due = Due(
+            return None
+        return Due(
             entity_type=entity_type,
             entity_id=row.id,
             segment=VALIDITY_SEGMENT,
@@ -402,9 +499,19 @@ def _validity_work(entity_type: str) -> Callable[[Session, int, date, datetime],
             title=f"{row.doc_number} 유효기간",
             assignee_id=row.assignee_id,
         )
+
+    def work(session: Session, doc_id: int, today: date, now: datetime) -> dict[str, int]:
+        due = verdict(session, doc_id, today)
+        if due is None:
+            return {}
         made: dict[str, int] = {entity_type: 1}
+        session.expire_all()  # 발송 직전 재확인(담당 이관·후속 생성·유효기간 정정 경합 — 다르면 다음 실행에)
+        if verdict(session, doc_id, today) != due:
+            made["deferred"] = 1
+            return made
         policy = deadlines.policy(session, event_type, defaults=DEFAULT_THRESHOLDS)
-        for key, value in _alert_due(session, due, policy, day_start=_day_start(today)).items():
+        cutoff = escalation_cutoff(now, today)
+        for key, value in _alert_due(session, due, policy, escalate_before=cutoff).items():
             made[key] = made.get(key, 0) + value
         return made
 
@@ -522,7 +629,8 @@ def scan_trade_deadlines(
 
     Returns:
         {"shipments", "quotations", "proforma_invoices"(스캔한 건수), "threshold", "overdue", "escalated", "unresolved"
-        (**새로** 만든 알림 수 — dedup 생략분 제외), "failed"(건별 트랜잭션 실패 수)}.
+        (**새로** 만든 알림 수 — dedup 생략분 제외), "deferred"(발송 직전 재확인에서 바뀌어 다음 실행에 맡긴 기일 수),
+        "failed"(건별 트랜잭션 실패 수)}.
     """
     if page_size < 1:
         raise ValueError("page_size는 1 이상이어야 합니다.")
@@ -540,6 +648,7 @@ def scan_trade_deadlines(
         "overdue": 0,
         "escalated": 0,
         "unresolved": 0,
+        "deferred": 0,
         "failed": 0,
     }
     for ids in _candidates(_shipment_candidate_page, page_size):
