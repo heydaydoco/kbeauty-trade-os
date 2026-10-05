@@ -1,9 +1,11 @@
 // 선적 목록 `/shipments` (S3-2 PR-3b — design-D D5·D13 / PROGRESS 'S3-2 PR-3a' 인계 계약 S1 / PR-3c S20 CSV).
 //
 // 규약: 한국어 break-keep · 좁은 셀·헤더·국가 nowrap · 숫자·기준값 가운데 정렬 · 금액은 서버 문자열 그대로(산술 0).
-// ★ 선적은 목록에서 만들지 않는다 — 수주 상세의 '선적 만들기'(SO 참조 2단)로만 태어난다(원천 없는 생성 화면 금지 — design-D D5).
+// ★ 선적은 목록에서 만들지 않는다 — 수주 상세의 '선적 만들기'(SO 참조 2단)·발주 상세의 '수입선적 만들기'(PO 참조 2단 — PR-5b)로만 태어난다
+//   (원천 없는 생성 화면 금지 — design-D D5).
 // ★ 조회는 전 역할. 주소의 `?q=`·`?status=`는 첫 조건으로만 읽는다(수주 취소 409 '먼저 취소할 선적' 링크의 진입점).
-// ★ 수입선적(PR-5a)은 금액 축이 없다 — 합계 칸은 수출만, 수입은 '—'(0으로 그리지 않는다).
+// ★ 수입선적(PR-5a)은 금액 축이 없다 — 응답에 통화·합계 키 자체가 없어 합계 칸은 수출만, 그 밖은 '—'(`shipmentTotalText` — 0으로 그리지 않는다).
+// ★ 수입의 동결 상태(RELEASE_ORDERED)는 '선적 확정'으로 보인다(부채 R-5a-8 — 화면 문구만, 상태 코드 무변경).
 // ★ ETD·ETA 열(S3-2 PR-4b — 부채 R-3b-3 해소): 서버 유효값(실적 우선) 'YYYY-MM-DD' 문자열 그대로 + 실적/예정 표지, 값 없으면 '—'.
 
 import { useState } from "react";
@@ -20,6 +22,8 @@ import {
   SHIPMENT_STATUS_FILTERS,
   countryName,
   shipmentKindLabel,
+  shipmentStatusText,
+  shipmentTotalText,
   type ShipmentListItem,
 } from "../lib/shipment";
 
@@ -33,13 +37,18 @@ function filterQuery(filters: { status: string; q: string }) {
   return params.toString();
 }
 
-export function ShipmentStatusBadge({ status }: { status: string }) {
+/** 선적 상태 배지 — `kind`를 주면 구분 문구(수입 RELEASE_ORDERED = '선적 확정'), 없으면 공용 라벨. */
+export function ShipmentStatusBadge({ status, kind }: { status: string; kind?: string }) {
   return (
     <span className={`cell-nowrap rounded border px-2 py-0.5 text-xs ${statusBadgeClass(status)}`}>
-      {shipmentStatusLabel(status)}
+      {kind === undefined ? shipmentStatusLabel(status) : shipmentStatusText(status, kind)}
     </span>
   );
 }
+
+/** 상태 필터 문구 — 목록은 수출·수입이 섞이므로 동결 상태는 두 이름을 함께 적는다. */
+const statusFilterLabel = (code: string): string =>
+  code === "RELEASE_ORDERED" ? "출고지시(수입: 선적 확정)" : shipmentStatusLabel(code);
 
 /** "KR → US" — 이름은 보조 정보(title·스크린리더)로, 칸은 좁게(nowrap). */
 export function CountryRoute({ origin, dest }: { origin: string; dest: string }) {
@@ -105,7 +114,8 @@ function ShipmentListView({ initial }: { initial: { status: string; q: string } 
         <div>
           <h1 className="text-2xl font-bold">선적</h1>
           <p className="mt-1 break-keep text-sm text-gray-500">
-            확정된 수주 상세의 &lsquo;선적 만들기&rsquo;로 만듭니다(통화·환율·조건·품목은 수주에서 복사). 한 수주를 여러 번 나눠 선적할 수 있습니다.
+            수출선적은 확정된 수주 상세의 &lsquo;선적 만들기&rsquo;로(통화·환율·조건·품목은 수주에서 복사), 수입선적은 발주 상세의
+            &lsquo;수입선적 만들기&rsquo;로 만듭니다(금액은 복사하지 않습니다). 한 전표를 여러 번 나눠 선적할 수 있습니다.
           </p>
         </div>
         <button
@@ -139,7 +149,7 @@ function ShipmentListView({ initial }: { initial: { status: string; q: string } 
             <option value="">전체</option>
             {SHIPMENT_STATUS_FILTERS.map((code) => (
               <option key={code} value={code}>
-                {shipmentStatusLabel(code)}
+                {statusFilterLabel(code)}
               </option>
             ))}
           </select>
@@ -201,7 +211,7 @@ function ShipmentListView({ initial }: { initial: { status: string; q: string } 
                   </td>
                   <td className="num cell-nowrap px-4 py-2">{row.doc_date}</td>
                   <td className="px-4 py-2 text-center">
-                    <ShipmentStatusBadge status={row.status} />
+                    <ShipmentStatusBadge status={row.status} kind={row.shipment_kind} />
                   </td>
                   <td className="cell-nowrap px-4 py-2 text-center">{shipmentKindLabel(row.shipment_kind)}</td>
                   <td className="cell-nowrap px-4 py-2">
@@ -227,7 +237,7 @@ function ShipmentListView({ initial }: { initial: { status: string; q: string } 
                   </td>
                   <td className="num cell-nowrap px-4 py-2">{row.line_count}</td>
                   <td className="num cell-nowrap px-4 py-2">
-                    {row.shipment_kind === "EXPORT" ? `${row.total_text} ${row.currency}` : "—"}
+                    {shipmentTotalText(row)}
                   </td>
                   <td className="cell-nowrap px-4 py-2">{row.assignee.display_name ?? `#${row.assignee.id}`}</td>
                 </tr>

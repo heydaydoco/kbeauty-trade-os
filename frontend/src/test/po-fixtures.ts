@@ -2,6 +2,7 @@
 // Full(원가 열람 역할)과 CostHidden(원가 키 자체가 없음) 두 형태를 모두 만든다.
 
 import type {
+  ExpectedReceipt,
   PoLine,
   PurchaseOrderDetail,
   PurchaseOrderPreview,
@@ -17,6 +18,9 @@ export const SENTINEL_UNIT = "7654321.98";
 export const SENTINEL_LINE = "76543219.80";
 export const SENTINELS = [SENTINEL_TOTAL, SENTINEL_UNIT, SENTINEL_LINE, "7654321987"];
 
+/** 수입선적 없는 라인의 입고예정(S3-2 PR-5a 계산값 — 상세 응답에 항상 실린다, 원가 무관). */
+export const RECEIPT_NONE: ExpectedReceipt = { status: "NONE", value: null, basis: null, shipment_count: 0, unscheduled_count: 0 };
+
 export const PO_LINE: PoLine = {
   id: 41,
   line_no: 1,
@@ -27,6 +31,8 @@ export const PO_LINE: PoLine = {
   sku_kind: "SINGLE",
   quantity: 10,
   requested_delivery_date: "2026-10-20",
+  assignable_quantity: 10,
+  expected_receipt: RECEIPT_NONE,
   unit_cost: 765432198,
   unit_cost_text: SENTINEL_UNIT,
   line_cost: 7654321980,
@@ -45,6 +51,9 @@ export const PO_LINE_HIDDEN: PoLine = {
   sku_kind: "SINGLE",
   quantity: 10,
   requested_delivery_date: "2026-10-20",
+  // 배정 가능량·입고예정은 원가 무관 — CostHidden에도 같은 값(PR-5a).
+  assignable_quantity: 10,
+  expected_receipt: RECEIPT_NONE,
 };
 
 const BASE_SUMMARY = {

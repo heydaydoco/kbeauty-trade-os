@@ -240,6 +240,8 @@ interface ValueDialogProps<B extends MilestoneBoard> {
   onReload: () => void;
   /** 사유 칸 아래 안내(예: 발주에 붙는 자유 텍스트의 원가 금지 — ADR-0057 `NO_COST_IN_FREE_TEXT`). */
   reasonHint?: ReactNode;
+  /** 선적 동결 전이 이름(실적 안내문) — 수출 '출고지시'(기본), 수입 '선적 확정'(S3-2 PR-5b — 부채 R-5a-8). */
+  freezeActionLabel?: string;
 }
 
 function existingInstant(row: MilestoneRow): InstantValue | null {
@@ -261,6 +263,7 @@ export function MilestoneValueDialog<B extends MilestoneBoard>({
   onClose,
   onReload,
   reasonHint,
+  freezeActionLabel,
 }: ValueDialogProps<B>) {
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const firstRef = useRef<HTMLInputElement | null>(null);
@@ -507,7 +510,8 @@ export function MilestoneValueDialog<B extends MilestoneBoard>({
           {mode === "actual" && row.milestone_type !== "CUSTOMS_CLEARED" && (
             <p className="break-keep text-xs text-gray-500">
               실제로 일어난 날짜·시각만 기록합니다(아직 오지 않은 날짜·시각은 서버가 거절합니다).
-              {["ETD", "BL_ISSUED", "ETA"].includes(row.milestone_type) && " ETD·B/L 발행·ETA 실적은 출고지시 뒤에만 기록합니다."}
+              {["ETD", "BL_ISSUED", "ETA"].includes(row.milestone_type) &&
+                ` ETD·B/L 발행·ETA 실적은 ${freezeActionLabel ?? "출고지시"} 뒤에만 기록합니다.`}
             </p>
           )}
 

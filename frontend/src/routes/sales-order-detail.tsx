@@ -48,7 +48,7 @@ import {
 import { occupantNotice, soErrorMessage } from "../lib/sales-order-errors";
 import { QUANTITY_EXCEEDS_OPEN_CODE } from "../lib/proforma";
 import { hasRole, useSession } from "../lib/session";
-import { shipmentKindLabel, soShipmentsKey, successorNumbers, type ShipmentListItem } from "../lib/shipment";
+import { shipmentKindLabel, shipmentTotalText, soShipmentsKey, successorNumbers, type ShipmentListItem } from "../lib/shipment";
 import type { Market } from "./markets";
 import { SalesOrderStatusBadge, SourceLinks } from "./sales-orders";
 import { CountryRoute, EffectiveDateCell, ShipmentStatusBadge } from "./shipments";
@@ -491,7 +491,7 @@ function ShipmentsSection({ so, canCreate, onReload }: { so: SalesOrderDetail; c
                   </td>
                   <td className="num cell-nowrap px-3 py-2">{row.doc_date}</td>
                   <td className="px-3 py-2 text-center">
-                    <ShipmentStatusBadge status={row.status} />
+                    <ShipmentStatusBadge status={row.status} kind={row.shipment_kind} />
                   </td>
                   <td className="cell-nowrap px-3 py-2 text-center">{shipmentKindLabel(row.shipment_kind)}</td>
                   <td className="px-3 py-2 text-center">
@@ -504,9 +504,7 @@ function ShipmentsSection({ so, canCreate, onReload }: { so: SalesOrderDetail; c
                     <EffectiveDateCell value={row.eta} />
                   </td>
                   <td className="num cell-nowrap px-3 py-2">{row.line_count}</td>
-                  <td className="num cell-nowrap px-3 py-2">
-                    {row.total_text} {row.currency}
-                  </td>
+                  <td className="num cell-nowrap px-3 py-2">{shipmentTotalText(row)}</td>
                 </tr>
               ))}
             </tbody>
