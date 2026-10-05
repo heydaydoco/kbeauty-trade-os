@@ -10,6 +10,9 @@ L1: 이 모듈은 **전이를 하지 않는다**(공급사 확인[OC]·취소는
 ■ **원가 마스킹**(ADR-0057 ⑤·ADR-0024): 서비스는 `include_cost`로 응답 dict에서 원가 키를 **아예 만들지 않고**(키 삭제 아님), 라우터가 역할별 스키마로 나간다.
   원가 값은 에러 detail·로그·예외 문구·이벤트 payload·audit에 싣지 않는다(이름 기반 로그 마스킹은 값 추론을 막지 못한다).
 ■ 감사: 전표 생성·전이·편집은 audit_log에 기록하지 않는다(상태이력+아웃박스가 정본 — X-24). 원가 전후 값이 기록될 곳이 구조적으로 없다.
+■ **S3-2 PR-5a** — 상세 라인에 원가와 무관한 파생값 2개를 싣는다(역할 무관 — Full·CostHidden 같은 값): `assignable_quantity`(수입선적 배정 가능량 —
+  409 판정과 같은 `open_quantity(kinds=ASSIGNABLE_KINDS)`)·`expected_receipt`(입고예정 계산값 — 커널 `receipts.po_line_receipts`, 열 없음 ADR-0085).
+  PO 잔량(FULFILL)·PO 상태는 수입선적으로 바뀌지 않는다(ADR-0077). 선적 모델은 임포트하지 않는다(L1→L1 금지 — 커널이 테이블 이름으로 읽는다).
 ■ 마스터(SKU·매입가)를 읽는 곳은 `trade_docs.lines`(SKU 검사)와 여기의 `price_at` 호출뿐이고 `price_type="PURCHASE"` 리터럴은 이 모듈 밖에 없다.
 """
 
@@ -35,7 +38,13 @@ from app.modules.identity.service import AuthenticatedUser
 from app.modules.partners import service as partners
 from app.modules.purchase_orders.models import PurchaseOrder, PurchaseOrderLine
 from app.modules.trade_docs import editing
-from app.modules.trade_docs.constants import MAX_SAFE_INTEGER, DocKind, PoKind, PriceBasis
+from app.modules.trade_docs.constants import (
+    MAX_SAFE_INTEGER,
+    PO_SUPPLIER_TYPES,
+    DocKind,
+    PoKind,
+    PriceBasis,
+)
 from app.modules.trade_docs.doc_number import issue_document_number
 from app.modules.trade_docs.fx import require_known_currency, resolve_fx
 from app.modules.trade_docs.incoterms import Incoterm, build_incoterm
@@ -49,6 +58,9 @@ from app.modules.trade_docs.payment_terms import (
     build_payment_terms,
     require_lc_enabled,
 )
+from app.modules.trade_docs.quantities import ASSIGNABLE_KINDS, open_quantity
+from app.modules.trade_docs.receipts import po_line_receipts
+from app.modules.trade_docs.schedule import ReceiptEstimate
 from app.modules.trade_docs.snapshot import validate_quantity
 from app.modules.trade_docs.transition import record_birth
 from app.modules.trade_docs.validation import (
@@ -261,12 +273,14 @@ def _plan(
     except ValueError:
         raise invalid("po_kind", "발주 구분을 확인해 주세요.") from None
     # 공급사 유형 검증(생성 1회 — F3): PURCHASE=SUPPLIER∨OEM, OEM_PRODUCTION=OEM 필수. FOR KEY SHARE(lock=True).
+    # 유형 표는 커널 단일 출처(`PO_SUPPLIER_TYPES` — 수입선적 생성의 거래 상대 재검증과 같은 표, S3-2 PR-5a).
+    supplier_types, supplier_label = PO_SUPPLIER_TYPES[po_kind]
     partner = partners.require_partner_of_any_type(
         session,
         payload["supplier_partner_id"],
-        ("OEM",) if po_kind == PoKind.OEM_PRODUCTION.value else ("SUPPLIER", "OEM"),
+        supplier_types,
         field="supplier_partner_id",
-        type_label="OEM" if po_kind == PoKind.OEM_PRODUCTION.value else "공급사 또는 OEM",
+        type_label=supplier_label,
         lock=lock,
     )
 
@@ -497,7 +511,23 @@ def preview_purchase_order(*, actor: AuthenticatedUser, payload: dict[str, Any])
 # ── 응답 조립 ───────────────────────────────────────────────────────────────
 
 
-def _line_body(line: PurchaseOrderLine, *, include_cost: bool) -> dict[str, Any]:
+def _receipt_body(estimate: ReceiptEstimate) -> dict[str, Any]:
+    return {
+        "status": estimate.status.value,
+        "value": estimate.value.isoformat() if estimate.value else None,
+        "basis": estimate.basis.value if estimate.basis else None,
+        "shipment_count": estimate.shipment_count,
+        "unscheduled_count": estimate.unscheduled_count,
+    }
+
+
+def _line_body(
+    line: PurchaseOrderLine,
+    *,
+    include_cost: bool,
+    assignable: int,
+    receipt: ReceiptEstimate,
+) -> dict[str, Any]:
     body: dict[str, Any] = {
         "id": line.id,
         "line_no": line.line_no,
@@ -510,6 +540,9 @@ def _line_body(line: PurchaseOrderLine, *, include_cost: bool) -> dict[str, Any]
         "requested_delivery_date": (
             line.requested_delivery_date.isoformat() if line.requested_delivery_date else None
         ),
+        # S3-2 PR-5a — 원가와 무관한 수량·날짜 파생값(역할 무관): 수입선적 배정 가능량·입고예정 계산값(열 없음 — ADR-0077·0085)
+        "assignable_quantity": assignable,
+        "expected_receipt": _receipt_body(receipt),
     }
     if include_cost:  # 원가 키는 **만들지 않는다**(만든 뒤 지우지 않는다 — ADR-0024)
         cur = line.currency
@@ -563,6 +596,10 @@ def detail_body(session: Session, row: PurchaseOrder, *, include_cost: bool) -> 
         .all()
     )
     body = _summary_body(row, include_cost=include_cost)
+    line_ids = [line.id for line in lines]
+    # 배정 가능량 = 라인 수량 − 살아 있는 수입선적(IN_TRANSIT) 합 — 409 판정과 같은 함수·같은 kind(질의 2회), 입고예정 = 질의 1회(라인 수 무관)
+    assignable = open_quantity(session, "PO_LINE", line_ids, kinds=ASSIGNABLE_KINDS)
+    receipts = po_line_receipts(session, line_ids)
     body.update(
         {
             "payment_terms": {
@@ -580,7 +617,15 @@ def detail_body(session: Session, row: PurchaseOrder, *, include_cost: bool) -> 
             "internal_note": row.internal_note,
             "frozen_at": row.frozen_at.isoformat(),
             "last_line_no": row.last_line_no,
-            "lines": [_line_body(line, include_cost=include_cost) for line in lines],
+            "lines": [
+                _line_body(
+                    line,
+                    include_cost=include_cost,
+                    assignable=assignable[line.id].open,
+                    receipt=receipts[line.id],
+                )
+                for line in lines
+            ],
         }
     )
     if include_cost:  # 환율·소수 자릿수는 통화를 역추론하게 하므로 원가 권한자에게만 준다

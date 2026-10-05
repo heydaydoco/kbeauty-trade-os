@@ -295,10 +295,11 @@ class ErrorCode(StrEnum):
     SHIPMENTS_PARTY_ROLE_NOT_ALLOWED = "SHIPMENTS.PARTY.ROLE_NOT_ALLOWED"
     #: 당사자 거래처의 영문명이 비어 있다(서류 영문 원천 결측 — 거래처 화면에서 보완, fail-visible).
     SHIPMENTS_PARTY_ENGLISH_NAME_MISSING = "SHIPMENTS.PARTY.ENGLISH_NAME_MISSING"
+    #: 수입선적 수량이 PO 라인의 배정 가능량(PO 라인 수량 − 살아 있는 수입선적 수량)을 넘었다(S3-2 PR-5a / ADR-0077 ④ — PO 잔량 `EXCEEDS_OPEN`과 다른 코드).
+    SHIPMENTS_QUANTITY_EXCEEDS_ASSIGNABLE = "SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE"
 
     # 선적 마일스톤·통관 (S3-2 PR-4a / ADR-0080·0083 / design-integrated §2.6·§9 R-01·R-18·R-26 — 이 PR이 쓰는 17종.
-    # 남은 2종[MILESTONE.OWNER_NOT_OEM·QUANTITY.EXCEEDS_ASSIGNABLE]은 소비 PR[4c·5a]이 더한다 — 죽은 코드 금지.
-    # PR-4c가 OWNER_NOT_OEM을 더했다 — 아래 마일스톤 묶음 끝)
+    # 남은 2종은 소비 PR이 더했다 — MILESTONE.OWNER_NOT_OEM은 PR-4c(아래 마일스톤 묶음 끝), QUANTITY.EXCEEDS_ASSIGNABLE은 PR-5a(위 당사자 묶음 끝) — 죽은 코드 금지)
     #: 살아 있는 통관 기록이 있는 선적은 취소할 수 없다(역순 원칙의 사실 기록판 — 통관 기록을 사유와 함께 먼저 삭제).
     SHIPMENTS_SHIPMENT_CUSTOMS_RECORD_ALIVE = "SHIPMENTS.SHIPMENT.CUSTOMS_RECORD_ALIVE"
     #: ETD·B/L 발행·ETA 실적이 살아 있는 선적은 취소할 수 없다(R-01 — 실적을 사유와 함께 정정·삭제한 뒤 취소).

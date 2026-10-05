@@ -285,7 +285,8 @@ def test_migration_m06_depends_only_on_m01_tables() -> None:
 
 
 def test_po_routes_are_exposed_and_the_list_is_paginated_by_default() -> None:
-    """라우터 누락은 조용한 미노출이다 — PO 엔드포인트 12개(S3-2 PR-4c OEM 생산 일정 4 포함)가 OpenAPI에 실재하고 목록은 페이지네이션(기본 50)·DELETE가 없다"""
+    """라우터 누락은 조용한 미노출이다 — PO 엔드포인트 12개(S3-2 PR-4c OEM 생산 일정 4 포함) + S3-2 PR-5a PO 하위 수입선적 생성·미리보기 2개(선적 라우터)가
+    OpenAPI에 실재하고 목록은 페이지네이션(기본 50)·DELETE가 없다"""
     schema = app.openapi()
     operations = {
         (method.upper(), path)
@@ -307,6 +308,9 @@ def test_po_routes_are_exposed_and_the_list_is_paginated_by_default() -> None:
         ("POST", "/api/v1/purchase-orders/{po_id}/milestones/{milestone_type}/plan"),
         ("POST", "/api/v1/purchase-orders/{po_id}/milestones/{milestone_type}/actual"),
         ("GET", "/api/v1/purchase-orders/{po_id}/milestone-changes"),
+        # S3-2 PR-5a — 수입선적(선적 라우터 `po_shipment_router` — 응답은 선적 스키마, 원가 필드 0)
+        ("POST", "/api/v1/purchase-orders/{po_id}/shipments/preview"),
+        ("POST", "/api/v1/purchase-orders/{po_id}/shipments"),
     }
     params = {p["name"]: p for p in schema["paths"]["/api/v1/purchase-orders"]["get"]["parameters"]}
     assert params["size"]["schema"]["default"] == 50 and params["size"]["schema"]["maximum"] == 200

@@ -37,6 +37,23 @@ def rows(sql: str, **params: Any) -> list[dict[str, Any]]:
         return [dict(r) for r in connection.execute(text(sql), params).mappings()]
 
 
+#: 선적 쓰기의 흔적 전부 — 선적·라인·당사자·상태 이력·이벤트·멱등 키 행 수 + 채번 카운터 합(SUM last_number).
+_FOOTPRINT_SQL = (
+    "SELECT count(*) FROM shipments",
+    "SELECT count(*) FROM shipment_lines",
+    "SELECT count(*) FROM shipment_parties",
+    "SELECT count(*) FROM shipment_status_log",
+    "SELECT count(*) FROM events",
+    "SELECT count(*) FROM idempotency_keys",
+    "SELECT COALESCE(SUM(last_number), 0) FROM doc_number_seq",
+)
+
+
+def write_footprint() -> tuple[int, ...]:
+    """'저장·채번 0' 단언용 스냅샷 — 미리보기(비저장)·J-08(롤백)이 같은 목록을 쓴다(한쪽만 넓어지는 일 없게)."""
+    return tuple(int(scalar(sql)) for sql in _FOOTPRINT_SQL)
+
+
 def confirmed_so(
     quantities: tuple[int, ...] = (10,),
     *,
@@ -184,6 +201,55 @@ def created(
     client: TestClient, so_id: int, lines: list[tuple[int, int]], **kwargs: Any
 ) -> dict[str, Any]:
     response = create_shipment(client, so_id, lines, **kwargs)
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+# ── 수입선적(S3-2 PR-5a — PO 참조 생성) ──────────────────────────────────────────
+
+PO = "/api/v1/purchase-orders"
+
+
+def import_body(
+    lines: list[tuple[int, int]],
+    *,
+    origin: str = "CN",
+    dest: str = "KR",
+    parties: list[dict[str, Any]] | None = None,
+    internal_note: str | None = None,
+) -> dict[str, Any]:
+    """PO 참조 수입선적 생성 본문 — lines = [(po_line_id, quantity)]."""
+    body: dict[str, Any] = {
+        "lines": [{"po_line_id": line_id, "quantity": qty} for line_id, qty in lines],
+        "origin_country_code": origin,
+        "dest_country_code": dest,
+    }
+    if parties is not None:
+        body["parties"] = parties
+    if internal_note is not None:
+        body["internal_note"] = internal_note
+    return body
+
+
+def create_import_shipment(
+    client: TestClient,
+    po_id: int,
+    lines: list[tuple[int, int]],
+    *,
+    headers: dict[str, str] | None = None,
+    **kwargs: Any,
+) -> Any:
+    """`POST /purchase-orders/{id}/shipments` 응답(상태 확인은 호출자)."""
+    return client.post(
+        f"{PO}/{po_id}/shipments", json=import_body(lines, **kwargs), headers=headers or idem()
+    )
+
+
+def created_import(
+    client: TestClient, po_id: int, lines: list[tuple[int, int]], **kwargs: Any
+) -> dict[str, Any]:
+    response = create_import_shipment(client, po_id, lines, **kwargs)
     assert response.status_code == 201, response.text
     body: dict[str, Any] = response.json()
     return body

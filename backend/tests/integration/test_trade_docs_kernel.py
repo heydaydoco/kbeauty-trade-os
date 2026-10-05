@@ -236,6 +236,20 @@ def test_open_quantity_default_is_unchanged_for_registered_consumers() -> None:
     in_transit = [(spec.name, spec.kind) for spec in specs if spec.kind != "FULFILL"]
     assert in_transit == [("SHIPMENT_LINE.po_line_id", "IN_TRANSIT")]
     assert all(spec.kind == "FULFILL" for spec in quantities.LINE_CONSUMERS["SO_LINE"])
+    # S3-2 PR-5a — 배정 가능량 필터는 IN_TRANSIT 하나(기본 잔량 필터와 겹치지 않는다 — 같은 값이면 PO 잔량과 배정 가능량이 섞인다)
+    assert frozenset({"IN_TRANSIT"}) == quantities.ASSIGNABLE_KINDS
+    assert not quantities.ASSIGNABLE_KINDS & quantities.DEFAULT_OPEN_KINDS
+
+
+def test_assignable_check_raises_its_own_code_with_per_line_assignable_quantity() -> None:
+    """S3-2 PR-5a(ADR-0077 ④) — 배정 가능량 초과는 409 `SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE`(PO 잔량 코드 `EXCEEDS_OPEN`과 다름),
+    detail = 초과한 라인별 배정 가능량(금액 없음). 경계: 요청 = 배정 가능량은 통과, +1은 거부, 모르는 라인은 0으로 거부(fail-closed)"""
+    available = {7: OpenQuantity(100, 60), 8: OpenQuantity(5, 0)}
+    quantities.require_within_assignable(available, {7: 40, 8: 5})  # 정확히 배정 가능량 — 통과
+    with pytest.raises(AppError) as caught:
+        quantities.require_within_assignable(available, {7: 41, 8: 5, 9: 1})
+    assert str(caught.value.code) == "SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE"
+    assert caught.value.detail == {"assignable_quantity": {"7": 40, "9": 0}}
 
 
 @pytest.fixture

@@ -1,16 +1,19 @@
-"""선적 요청·응답 (S3-2 PR-3a / design-D D2-1 S1~S4·S7~S15·D3 / design-integrated §2.9·§9 R-15).
+"""선적 요청·응답 (S3-2 PR-3a·PR-5a / design-D D2-1 S1~S15·D3 / design-integrated §2.9·§9 R-15).
 
 요청 스키마는 전부 `extra="forbid"`이고 **SKU·단가·통화·환율·거래처·Incoterms·결제조건·구분·상태·번호·증빙일 필드가 구조적으로 없다**
 (원천 사본 — 재입력 금지 `D:175` ①, 증빙일은 생성 시 서버가 KST 오늘로 1회 설정 — R-15). 생성 본문은 원천 라인 id·수량·국가 2개·
 선택적 당사자·내부 메모뿐이다. 범용 전이의 `to_status`는 `Literal["CANCELLED"]` 1값이다(출고지시는 전용 경로 `release-order`).
+
+응답(S3-2 PR-5a): 상세·목록은 **구분 판별자 합집합**(`shipment_kind` EXPORT|IMPORT)이다. 수입선적 변형에는 통화·소수 자릿수·환율·합계·라인
+단가/금액/통화/무상 필드가 **아예 없다**(PO 원가 비복사 — 원가 열람 역할로도 0, GC-G3·R-3c-2). 수입 미리보기도 같다.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, StrictStr, TypeAdapter
 
 from app.modules.trade_docs.constants import MAX_LINES, MilestoneType
 from app.modules.trade_docs.schemas import IncotermOut, PaymentTermsOut, StatusLogOut
@@ -55,6 +58,27 @@ class ShipmentCreateFromSo(BaseModel):
     internal_note: StrictStr | None = Field(default=None, max_length=1000)
 
 
+class ShipmentLineFromPo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    po_line_id: StrictInt = Field(ge=1)
+    quantity: StrictInt
+
+
+class ShipmentCreateFromPo(BaseModel):
+    """PO 참조 수입선적 생성·미리보기 본문(S5·S6 — S3-2 PR-5a). 수출 본문과 같은 모양이고 원천 라인이 PO 라인이다.
+
+    **단가·원가·통화·환율·공급사·조건 필드가 구조적으로 없다**(서버가 원천 PO에서 복사 — 원가는 복사하지 않는다, ADR-0024)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lines: list[ShipmentLineFromPo] = Field(min_length=1, max_length=MAX_LINES)
+    origin_country_code: StrictStr = Field(pattern=COUNTRY_PATTERN)
+    dest_country_code: StrictStr = Field(pattern=COUNTRY_PATTERN)
+    parties: list[PartyIn] | None = Field(default=None, max_length=5)
+    internal_note: StrictStr | None = Field(default=None, max_length=1000)
+
+
 class ShipmentUpdateRequest(BaseModel):
     """헤더 편집(S7) — FREE 2열(메모·담당자)은 상태 무관, 국가 2열은 계획(PLANNED) 중에만(그 밖은 409 FROZEN). 보낸 필드만 바뀐다."""
 
@@ -68,7 +92,7 @@ class ShipmentUpdateRequest(BaseModel):
 
 
 class ShipmentLineAddRequest(BaseModel):
-    """라인 추가(S8) — 원천 SO 라인 1줄과 수량. 헤더 version 필수(라인 편집 = 헤더 version +1)."""
+    """라인 추가(S8) — 원천 라인 1줄(수출 = SO 라인 / 수입 = PO 라인 — 선적의 원천 전표 소속)과 수량. 헤더 version 필수(라인 편집 = 헤더 version +1)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -233,12 +257,12 @@ class ShipmentSkuOut(BaseModel):
 
 
 class SourceLineOut(BaseModel):
-    """원천 라인 대비 — 수출 = SO 라인 수량·잔량(이 선적 포함 소비 후). 화면은 산술하지 않는다."""
+    """원천 라인 대비 — 수출 = SO 라인 수량·선적 잔량, 수입 = PO 라인 수량·배정 가능량(이 선적 포함 소비 후). 화면은 산술하지 않는다."""
 
     id: int
     line_no: int
     quantity: int
-    #: 원천 라인의 남은 수량(살아 있는 선적 전부를 뺀 값 — 저장 아님).
+    #: 원천 라인의 남은 수량(살아 있는 선적 전부를 뺀 값 — 저장 아님). 수입은 **배정 가능량**(PO 잔량 아님 — PO 잔량은 입고에서만 준다).
     remaining_after: int
 
 
@@ -256,21 +280,35 @@ class AvailabilityOut(BaseModel):
     status: Literal["NOT_IMPLEMENTED"]
 
 
-class ShipmentLineOut(BaseModel):
+class _ShipmentLineCommon(BaseModel):
+    """수출·수입 라인 공통 — **금액·통화 계열 필드가 없다**(수입 라인은 이 공통 부분과 원천 PO 라인 id뿐 — S3-2 PR-5a, G3)."""
+
     id: int
     line_no: int
-    so_line_id: int | None
     sku: ShipmentSkuOut
     quantity: int
+    #: 원천 라인 대비 — 수출 = SO 라인 수량·선적 잔량 / 수입 = PO 라인 수량·**배정 가능량**(이 선적 포함 살아 있는 수입선적 반영 후).
+    source_line: SourceLineOut
+    dg: DgOut
+    availability: AvailabilityOut
+
+
+class ShipmentLineOut(_ShipmentLineCommon):
+    """수출선적 라인 — 판매가 축(SO 단가 사본, 마스킹 비대상)."""
+
+    so_line_id: int | None
     currency: str
     unit_price_amount: int | None
     unit_price_text: str | None
     is_free: bool
     line_amount: int
     line_amount_text: str
-    source_line: SourceLineOut
-    dg: DgOut
-    availability: AvailabilityOut
+
+
+class ImportShipmentLineOut(_ShipmentLineCommon):
+    """수입선적 라인 — **단가·금액·통화·무상 표식 키가 아예 없다**(null이 아니라 미포함 — design-D D3, PO 원가 비복사 ADR-0024 10번째 채널 미개설)."""
+
+    po_line_id: int
 
 
 class ShipmentPartyOut(BaseModel):
@@ -279,7 +317,7 @@ class ShipmentPartyOut(BaseModel):
     partner_id: int
     name_en: str
     address_en: str | None
-    #: 원천 거래처 자동 스냅샷 행(수출 CONSIGNEE) — 삭제·교체 불가.
+    #: 원천 거래처 자동 스냅샷 행(수출 CONSIGNEE = SO 바이어·수입 SHIPPER = PO 공급사) — 삭제·교체 불가.
     auto: bool
     version: int
 
@@ -456,32 +494,25 @@ class CustomsSummaryOut(BaseModel):
     latest_accepted_on: date | None
 
 
-class ShipmentDetail(BaseModel):
+class _ShipmentDetailCommon(BaseModel):
+    """수출·수입 상세 공통 — **금액·통화 계열 필드가 없다**(통화·소수 자릿수·환율·합계는 수출 변형에만 — S3-2 PR-5a, G3·R-3c-2)."""
+
     id: int
     doc_number: str
     doc_date: date
     status: str
-    shipment_kind: str
     version: int
     frozen_at: datetime | None
     source: ShipmentSourceOut
     counterparty: CounterpartyOut
     origin_country_code: str
     dest_country_code: str
-    currency: str
-    minor_units: int
-    #: 고정 환율(원천 사본 — 선적 시점 신규 입력 없음).
-    fx_rate: str | None
-    fx_rate_date: date | None
     payment_terms: PaymentTermsOut
     incoterm: IncotermOut
-    total_amount: int
-    total_text: str
     internal_note: str | None
     assignee: AssigneeOut
     last_line_no: int
     dg_line_count: int
-    lines: list[ShipmentLineOut]
     parties: list[ShipmentPartyOut]
     #: 마일스톤 보드(PR-4a) — 쓰기 후 재조회는 `GET /shipments/{id}/milestones`(같은 형태).
     milestones: MilestoneBoardOut
@@ -493,19 +524,53 @@ class ShipmentDetail(BaseModel):
     updated_at: datetime
 
 
-class ShipmentListItem(BaseModel):
+class ExportShipmentDetail(_ShipmentDetailCommon):
+    """수출선적 상세 — 통화·고정 환율(원천 SO 사본)·판매가 합계(마스킹 비대상 — 여신·판매 합계 선례)."""
+
+    shipment_kind: Literal["EXPORT"]
+    currency: str
+    minor_units: int
+    #: 고정 환율(원천 사본 — 선적 시점 신규 입력 없음).
+    fx_rate: str | None
+    fx_rate_date: date | None
+    total_amount: int
+    total_text: str
+    lines: list[ShipmentLineOut]
+
+
+class ImportShipmentDetail(_ShipmentDetailCommon):
+    """수입선적 상세 — **통화·소수 자릿수·환율·합계 키가 아예 없다**(null이 아니라 미포함). 원천 PO 통화·환율은 PO CostHidden이 원가 비열람
+    역할에게 가리는 필드라(`^currency$`·`fx_rate`·`minor_units`) 선적이 우회 통로가 되지 않게 전 역할에게 같은 모양이다(원가 열람 역할로도 0 —
+    GC-G3, ADR-0024 10번째 채널 미개설). CSV의 통화·합계 빈칸(PR-3c)과 같은 판정이다(R-3c-2 해소)."""
+
+    shipment_kind: Literal["IMPORT"]
+    lines: list[ImportShipmentLineOut]
+
+
+#: 상세 응답 — 구분(`shipment_kind`)이 판별자인 합집합(수출·수입이 **필드 집합부터 다르다** — 원가 갈림이 아니라 구분 갈림이라 역할 분기 없음).
+#: FastAPI가 반환 주석으로 응답을 재검증해도 판별자가 갈래를 정하므로 수출 금액 필드가 지워지거나 수입에 금액이 붙는 일이 없다(시험 고정).
+ShipmentDetail = Annotated[
+    ExportShipmentDetail | ImportShipmentDetail, Field(discriminator="shipment_kind")
+]
+_DETAIL_ADAPTER: TypeAdapter[ExportShipmentDetail | ImportShipmentDetail] = TypeAdapter(
+    ShipmentDetail
+)
+
+
+def shipment_detail_out(body: dict[str, Any]) -> ExportShipmentDetail | ImportShipmentDetail:
+    """서비스가 만든 상세 dict → 구분에 맞는 응답 모델(판별자 `shipment_kind`). 라우터가 응답 직전에 부른다."""
+    return _DETAIL_ADAPTER.validate_python(body)
+
+
+class _ShipmentListItemCommon(BaseModel):
     id: int
     doc_number: str
     doc_date: date
     status: str
-    shipment_kind: str
     source: ShipmentSourceOut
     counterparty_name: str
     origin_country_code: str
     dest_country_code: str
-    currency: str
-    total_amount: int
-    total_text: str
     line_count: int
     #: ETD·ETA 유효값(실적 우선, 없으면 계획 — 'YYYY-MM-DD' 현지 날짜, `new Date()` 금지). 행이 없거나 값이 없으면 null(design-D D3).
     etd: EffectiveOut | None
@@ -513,6 +578,33 @@ class ShipmentListItem(BaseModel):
     assignee: AssigneeOut
     created_at: datetime
     updated_at: datetime
+
+
+class ExportShipmentListItem(_ShipmentListItemCommon):
+    shipment_kind: Literal["EXPORT"]
+    currency: str
+    total_amount: int
+    total_text: str
+
+
+class ImportShipmentListItem(_ShipmentListItemCommon):
+    """수입선적 목록 행 — 통화·합계 키 없음(상세와 같은 판정 — CSV는 같은 열을 빈칸으로)."""
+
+    shipment_kind: Literal["IMPORT"]
+
+
+ShipmentListItem = Annotated[
+    ExportShipmentListItem | ImportShipmentListItem, Field(discriminator="shipment_kind")
+]
+_LIST_ITEM_ADAPTER: TypeAdapter[ExportShipmentListItem | ImportShipmentListItem] = TypeAdapter(
+    ShipmentListItem
+)
+
+
+def shipment_list_item_out(
+    body: dict[str, Any],
+) -> ExportShipmentListItem | ImportShipmentListItem:
+    return _LIST_ITEM_ADAPTER.validate_python(body)
 
 
 class ShipmentPreviewLine(BaseModel):
@@ -559,4 +651,34 @@ class ShipmentPreview(BaseModel):
     total_amount: int
     total_text: str
     lines: list[ShipmentPreviewLine]
+    parties: list[ShipmentPreviewParty]
+
+
+class ImportShipmentPreviewLine(BaseModel):
+    """수입 미리보기 라인 — **단가·금액·통화·무상 키 없음**(G3). 배정 가능량 = PO 라인 수량 − 살아 있는 수입선적 수량(PO 잔량 아님)."""
+
+    po_line_id: int
+    line_no: int
+    sku: ShipmentSkuOut
+    quantity: int
+    #: 이 선적 전 배정 가능량 / 이 선적 뒤 남을 배정 가능량(파생 — 화면 산술 0).
+    assignable_before: int
+    remaining_after: int
+    dg: DgOut
+
+
+class ImportShipmentPreview(BaseModel):
+    """수입선적 비저장 미리보기(S5 — S3-2 PR-5a). 채번·이벤트·멱등 키·잠금 0, 생성과 같은 검증. **통화·환율·합계 키 없음**(수입 상세와 같은 판정 — G3)."""
+
+    po_id: int
+    po_doc_number: str
+    po_status: str
+    doc_date: date
+    shipment_kind: Literal["IMPORT"]
+    counterparty: CounterpartyOut
+    origin_country_code: str
+    dest_country_code: str
+    payment_terms: PaymentTermsOut
+    incoterm: IncotermOut
+    lines: list[ImportShipmentPreviewLine]
     parties: list[ShipmentPreviewParty]

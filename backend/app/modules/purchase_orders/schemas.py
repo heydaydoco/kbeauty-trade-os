@@ -84,6 +84,23 @@ class PurchaseOrderMetaUpdateRequest(BaseModel):
     oc_reference: StrictStr | None = Field(default=None, max_length=100)
 
 
+# ── 응답: 원가와 무관한 라인 파생값 — Full·CostHidden 양쪽 동일(S3-2 PR-5a) ─────────────────────
+
+
+class ExpectedReceiptOut(BaseModel):
+    """PO 라인 입고예정 — **계산값**(열 없음 · design-B B17 · ADR-0085). 그 라인을 참조하는 살아 있는 수입선적들의 ETA 유효값(실적 우선) 중
+    가장 늦은 날. ETA가 없는 선적이 하나라도 있으면 UNSCHEDULED(`value` null — 아는 날짜로 대신 채우지 않는다), 선적이 없으면 NONE('입고예정 미정').
+    `basis` = 전 선적 ETA가 실적이면 ACTUAL, 하나라도 계획이면 PLANNED. 원가·금액과 무관해 원가 비열람 역할에게도 같다."""
+
+    status: Literal["NONE", "UNSCHEDULED", "SCHEDULED"]
+    #: 'YYYY-MM-DD'(도착 현지 날짜 — `new Date()` 금지). SCHEDULED일 때만 값이 있다.
+    value: date | None
+    basis: Literal["ACTUAL", "PLANNED"] | None
+    #: 이 라인을 참조하는 살아 있는 수입선적 수 / 그중 ETA가 없는 선적 수.
+    shipment_count: int
+    unscheduled_count: int
+
+
 # ── 응답: 원가를 볼 수 있는 역할(ADMIN·TRADE·LOGISTICS·CERT) ──────────────────────────
 
 
@@ -97,6 +114,11 @@ class PoLineOut(BaseModel):
     sku_kind: str
     quantity: int
     requested_delivery_date: date | None
+    #: 파생값(S3-2 PR-5a) — 수입선적 **배정 가능량** = 라인 수량 − 살아 있는 수입선적 수량(PO 잔량 아님 — PO 잔량은 입고에서만 준다, ADR-0077).
+    #: 상세 응답에는 항상 실린다(None = 이 필드가 생기기 전에 저장된 멱등 재생 본문뿐).
+    assignable_quantity: int | None = None
+    #: 입고예정 계산값(S3-2 PR-5a — 위 `ExpectedReceiptOut`). None은 위와 같은 재생 본문뿐이다.
+    expected_receipt: ExpectedReceiptOut | None = None
     #: 정수 최소단위 + 표시용 십진 문자열(프런트 산술 0).
     unit_cost: int
     unit_cost_text: str
@@ -188,6 +210,9 @@ class PoLineCostHiddenOut(BaseModel):
     sku_kind: str
     quantity: int
     requested_delivery_date: date | None
+    #: S3-2 PR-5a — 원가와 무관한 수량·날짜 파생값(Full과 같은 값 — 물류·조회 역할의 입고 준비 정보).
+    assignable_quantity: int | None = None
+    expected_receipt: ExpectedReceiptOut | None = None
 
 
 class PurchaseOrderCostHiddenSummary(BaseModel):

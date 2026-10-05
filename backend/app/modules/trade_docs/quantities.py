@@ -73,6 +73,10 @@ CONSUMER_KINDS: frozenset[str] = frozenset({"FULFILL", "IN_TRANSIT"})
 #: `open_quantity`의 기본 kind 필터 — 잔량 = 주문량 − FULFILL 소비(기존 4종 전표 동작 그대로).
 DEFAULT_OPEN_KINDS: frozenset[str] = frozenset({"FULFILL"})
 
+#: 수입선적 **배정 가능량**의 kind 필터(S3-2 PR-5a / ADR-0077 ④) — 배정 가능량 = PO 라인 수량 − 살아 있는 IN_TRANSIT 합.
+#: 같은 함수(`open_quantity`)·같은 반환형(`OpenQuantity.open`)에서 파생한다(§8.3 "시그니처 하나"). PO 잔량(기본 = FULFILL)과는 다른 값이다.
+ASSIGNABLE_KINDS: frozenset[str] = frozenset({"IN_TRANSIT"})
+
 #: 원천 라인 종류별 소비자. S3-1 등록 3건(X-19) — 선적·입고 소비(S3-2·S4-1)는 각 세션이 더한다.
 #: 소비 = 살아 있는 후속 전표(취소·만료 아님)의 라인 수량 합이다 — 만료·취소 PI의 수량은 QT로 **환원**된다(파생이라 자동).
 LINE_CONSUMERS: dict[str, tuple[ConsumerSpec, ...]] = {
@@ -216,6 +220,23 @@ def require_within_open(quantities: dict[int, OpenQuantity], requested: dict[int
         raise AppError(
             ErrorCode.TRADE_DOCS_QUANTITY_EXCEEDS_OPEN,
             detail={"open_quantity": {str(k): v for k, v in exceeded.items()}},
+        )
+
+
+def require_within_assignable(
+    quantities: dict[int, OpenQuantity], requested: dict[int, int]
+) -> None:
+    """요청 수량 ≤ 배정 가능량(`quantities` = `open_quantity(..., kinds=ASSIGNABLE_KINDS)`) — 초과는 409 `SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE`
+    (detail: 라인별 배정 가능량 — 금액 없음). PO 잔량 초과(`EXCEEDS_OPEN`)와 코드를 나눈다(의미가 달라 같은 코드면 오독 — ADR-0077 ④)."""
+    exceeded = {
+        line_id: (quantities[line_id].open if line_id in quantities else 0)
+        for line_id, want in requested.items()
+        if line_id not in quantities or want > quantities[line_id].open
+    }
+    if exceeded:
+        raise AppError(
+            ErrorCode.SHIPMENTS_QUANTITY_EXCEEDS_ASSIGNABLE,
+            detail={"assignable_quantity": {str(k): v for k, v in exceeded.items()}},
         )
 
 

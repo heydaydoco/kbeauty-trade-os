@@ -1,11 +1,13 @@
-"""선적 엔드포인트 — 목록·CSV·상세·상태이력·SO 참조 생성(미리보기·생성)·헤더·라인·출고지시·취소·당사자 (S3-2 PR-3a·PR-3c / design-D D2-1 S1~S20 / ADR-0079).
+"""선적 엔드포인트 — 목록·CSV·상세·상태이력·SO/PO 참조 생성(미리보기·생성)·헤더·라인·출고지시·취소·당사자
+(S3-2 PR-3a·PR-3c·PR-5a / design-D D2-1 S1~S20 / ADR-0079).
 
 권한은 **경로 단위**다(라우터 가드만으로 403이 존재 검사 전에 성립 — 401→403→404→409→422, `D:370`):
-  조회(목록·CSV·상세·이력) = 전 역할 / 생성·미리보기·라인·취소 = 무역(SO 잔량 소비·SO 수렴 = 상업 사실) / 헤더(메모·담당·국가)·출고지시·당사자 = 무역 + **물류**
-  (물류 첫 전표 쓰기 — ADR-0079). 관리자는 `require_roles`에서 상시 통과한다.
+  조회(목록·CSV·상세·이력) = 전 역할 / 생성·미리보기(수출 SO·수입 PO)·라인·취소 = 무역(원천 잔량·배정 가능량 소비·SO 수렴 = 상업 사실) /
+  헤더(메모·담당·국가)·출고지시·당사자 = 무역 + **물류**(물류 첫 전표 쓰기 — ADR-0079). 관리자는 `require_roles`에서 상시 통과한다.
 쓰기는 전부 사람 1클릭이고 생성·라인 추가·출고지시·취소·당사자 추가는 `Idempotency-Key` 필수, 기존 행 수정은 `version` 필수(409).
-이 라우터가 `create_shipment_from_sales_order`·`release_shipment_order`·`transition_shipment`의 **유일한 호출처**다(자동 선적·자동 출고지시 0 —
-test_no_auto_confirm_code_path_exists). 출고지시는 범용 `/transitions`로 못 넘는다(`to_status` Literal = 취소 1값).
+이 라우터가 `create_shipment_from_sales_order`·`create_shipment_from_purchase_order`·`release_shipment_order`·`transition_shipment`의
+**유일한 호출처**다(자동 선적·자동 출고지시 0 — test_no_auto_confirm_code_path_exists). 출고지시는 범용 `/transitions`로 못 넘는다(`to_status` Literal = 취소 1값).
+상세 응답은 구분 판별자 합집합(`ShipmentDetail` — 수입선적은 금액·통화 키 없음, G3)이다.
 """
 
 from __future__ import annotations
@@ -20,7 +22,9 @@ from app.core.csv_export import csv_response
 from app.core.pagination import Page, PageParams
 from app.modules.identity.models import RoleCode
 from app.modules.shipments.schemas import (
+    ImportShipmentPreview,
     PartyAddRequest,
+    ShipmentCreateFromPo,
     ShipmentCreateFromSo,
     ShipmentDetail,
     ShipmentLineAddRequest,
@@ -32,6 +36,8 @@ from app.modules.shipments.schemas import (
     ShipmentUpdateRequest,
     ShipmentVersionRequest,
     StatusLogOut,
+    shipment_detail_out,
+    shipment_list_item_out,
 )
 from app.modules.trade_chain import shipment_flow, shipment_view
 from app.modules.trade_docs.constants import DocKind
@@ -46,6 +52,9 @@ assert set(ShipmentTarget.__args__) == public_transition_targets(DocKind.SHIPMEN
 
 router = APIRouter(prefix="/shipments", tags=["shipments"])
 so_router = APIRouter(prefix="/sales-orders", tags=["shipments"])
+#: S3-2 PR-5a — PO 하위 수입선적 생성(`/purchase-orders/{po_id}/shipments[/preview]`). PO 라우터와 **다른 객체**다 — 응답은 선적 스키마(원가 필드 0)라
+#: PO 원가 갈림(`detail_response`)을 거치지 않고, PO 원가 경계 스캔(`response_model=None`)의 대상도 아니다.
+po_shipment_router = APIRouter(prefix="/purchase-orders", tags=["shipments"])
 
 
 # ── SO 참조 생성 ──────────────────────────────────────────────────────────────
@@ -82,7 +91,44 @@ def create_shipment(
         actor=current, idempotency_key=key, so_id=so_id, payload=payload.model_dump()
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
+
+
+# ── PO 참조 생성 (수입선적 — S3-2 PR-5a / design-D S5·S6) ─────────────────────────────
+
+
+@po_shipment_router.post(
+    "/{po_id}/shipments/preview",
+    summary="수입선적 미리보기 (비저장 — 배정 가능량 안에서, 금액·통화 키 없음[원가 비복사])",
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def preview_import_shipment(
+    po_id: Annotated[int, Path(ge=1)], payload: ShipmentCreateFromPo, current: CurrentUser
+) -> ImportShipmentPreview:
+    body = shipment_flow.preview_shipment_from_purchase_order(
+        actor=current, po_id=po_id, payload=payload.model_dump()
+    )
+    return ImportShipmentPreview.model_validate(body)
+
+
+@po_shipment_router.post(
+    "/{po_id}/shipments",
+    summary="PO 참조 수입선적 생성 (계획 PLANNED — 배정 가능량 안에서, PO 상태·잔량 무변경·원가 비복사)",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_roles(*CAN_WRITE)],
+)
+def create_import_shipment(
+    po_id: Annotated[int, Path(ge=1)],
+    payload: ShipmentCreateFromPo,
+    current: CurrentUser,
+    key: IdempotencyKey,
+    response: Response,
+) -> ShipmentDetail:
+    status_code, body = shipment_flow.create_shipment_from_purchase_order(
+        actor=current, idempotency_key=key, po_id=po_id, payload=payload.model_dump()
+    )
+    response.status_code = status_code
+    return shipment_detail_out(body)
 
 
 # ── 조회 ───────────────────────────────────────────────────────────────────
@@ -122,7 +168,7 @@ def list_shipments(
         limit=params.limit,
         **filters,  # type: ignore[arg-type]
     )
-    return Page.of([ShipmentListItem.model_validate(item) for item in items], total, params)
+    return Page.of([shipment_list_item_out(item) for item in items], total, params)
 
 
 @router.get(
@@ -137,7 +183,7 @@ def export_shipments_csv(current: CurrentUser, filters: Filters) -> StreamingRes
 # ★ `/{shipment_id}`는 `/export.csv`보다 **뒤에** 선언해야 한다(앞에 두면 int 경로 검증이 먼저 잡아 422).
 @router.get("/{shipment_id}", summary="선적 상세 (헤더·라인·당사자·가용 자리 — 전 역할)")
 def get_shipment(shipment_id: Annotated[int, Path(ge=1)], current: CurrentUser) -> ShipmentDetail:
-    return ShipmentDetail.model_validate(shipment_view.get_shipment(shipment_id, current.roles))
+    return shipment_detail_out(shipment_view.get_shipment(shipment_id, current.roles))
 
 
 @router.get("/{shipment_id}/status-log", summary="선적 상태 이력 (페이지 — 불변)")
@@ -166,7 +212,7 @@ def update_shipment(
     body = shipment_flow.update_shipment(
         actor=current, shipment_id=shipment_id, payload=payload.model_dump(exclude_unset=True)
     )
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.post(
@@ -186,7 +232,7 @@ def add_shipment_line(
         actor=current, idempotency_key=key, shipment_id=shipment_id, payload=payload.model_dump()
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.patch(
@@ -203,7 +249,7 @@ def update_shipment_line(
     body = shipment_flow.update_line(
         actor=current, shipment_id=shipment_id, line_id=line_id, payload=payload.model_dump()
     )
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.delete(
@@ -220,7 +266,7 @@ def remove_shipment_line(
     body = shipment_flow.remove_line(
         actor=current, shipment_id=shipment_id, line_id=line_id, version=version
     )
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 # ── 출고지시·취소 ──────────────────────────────────────────────────────────────
@@ -242,7 +288,7 @@ def release_shipment_order(
         actor=current, idempotency_key=key, shipment_id=shipment_id, version=payload.version
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.post(
@@ -266,7 +312,7 @@ def transition_shipment(
         reason=payload.reason,
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 # ── 당사자 ───────────────────────────────────────────────────────────────────
@@ -289,7 +335,7 @@ def add_shipment_party(
         actor=current, idempotency_key=key, shipment_id=shipment_id, payload=payload.model_dump()
     )
     response.status_code = status_code
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
 
 
 @router.delete(
@@ -306,4 +352,4 @@ def remove_shipment_party(
     body = shipment_flow.remove_party(
         actor=current, shipment_id=shipment_id, party_id=party_id, version=version
     )
-    return ShipmentDetail.model_validate(body)
+    return shipment_detail_out(body)
