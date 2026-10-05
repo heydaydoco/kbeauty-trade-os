@@ -925,3 +925,28 @@ def test_the_cli_runs_the_same_scan(capsys: pytest.CaptureFixture[str]) -> None:
     assert "문턱 0" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         cli.main([JOB, "--base-date", "2026-10-03"])
+
+
+@pytest.mark.group_j
+def test_a_successor_created_mid_scan_stops_the_quotation_alert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """견적 D-N 경합 — 첫 판정 뒤 살아 있는 SO가 커밋되면(후속이 부모를 붙잡음) 발송 직전 재확인에서 빠진다(알림 0, deferred 1)"""
+    qt = raw_quotation("ISSUED", valid_until=TODAY + timedelta(days=2))
+    so_owner = create_user(
+        f"{unique('tds-so')}@example.com", roles=(RoleCode.TRADE,)
+    )  # 끼워 넣는 쪽은 스캔 TX 밖에서 커밋
+    real = deadline_scan.has_live_children
+    calls = {"n": 0}
+
+    def wrapped(*args: Any, **kwargs: Any) -> bool:
+        result = real(*args, **kwargs)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raw_so("RECEIVED", qt_id=qt, assignee_id=so_owner)
+        return result
+
+    monkeypatch.setattr(deadline_scan, "has_live_children", wrapped)
+    counts = _scan()
+    assert counts["quotations"] == 1 and counts["deferred"] == 1 and counts["threshold"] == 0
+    assert _keys("quotations", qt) == []

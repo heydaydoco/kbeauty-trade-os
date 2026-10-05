@@ -2,7 +2,7 @@
 
 ## S3-2 PR-6 (무역 기일 스캔 잡 `trade-deadline-scan` — 백엔드, 마이그레이션 0) — 구현 기록 (2026-10-05)
 - **기준(경계 커밋)**: PR #64(PR-5a) head **`7b9bedfddc10`**(main `5f4bd37` = PR-4b까지 병합 위)에서 격리 워크트리로 시작(`reset --hard 7b9bedfddc10`). **이 커밋 뒤의 커밋만 PR-6**이다. PR-5b(프런트)는 별도 에이전트가 같은 기준에서 진행 — 겹치는 파일 예상: 이 PROGRESS 맨 위 절·'## 현재'뿐(PR-6은 프런트 0). push·PR 없음. 정본: 계획서 §4 PR-6 행 → design-integrated §9(R-17·R-20) → §2.7·§2.8 → 부록 B §B13·B18·C §C11 → ADR-0084·0058 → DESIGN §17·§18·§22.
-- **커밋(12자리)**: `73a25acf4c6c` ① 기일 엔진 공용화 / `963eea6a8591` ② 스캔·잡·CLI·보호 시험·시험 / `4bebf58c7e06` ③ 에스컬레이션 '스캔일 KST 0시 이전 알림만'(실기동 발견)·시험 보강 / `a8b005292af2` ④ 판정 없는 대상 행 fail-visible·runbook·ADR 부기 / (이 커밋) ⑤ PROGRESS.
+- **커밋(12자리 — PR #66 기준, main `38210bf`[PR-5b 병합] 위로 재배치됨)**: `6e38031c2536` ① 기일 엔진 공용화 / `0e6cc256c73a` ② 스캔·잡·CLI·보호 시험·시험 / `66ba36c8022f` ③ 에스컬레이션 '스캔일 KST 0시 이전 알림만'(실기동 발견)·시험 보강 / `7cdf9d2d2441` ④ 판정 없는 대상 행 fail-visible·runbook·ADR 부기 / `931f7e73cb27` ⑤ PROGRESS / `cecd7f4bbeeb` ⑥ 적대 검토 반영(코드·시험) / (이 커밋) ⑦ 적대 검토 반영(경합 시험 1·runbook·ADR 부기·이 절). (재배치 전 로컬 해시 `73a25acf4c6c`·`963eea6a8591`·`4bebf58c7e06`·`a8b005292af2`·`a55b11ebc1e3`는 같은 내용)
 
 ### 무엇을 (계획서 §4 PR-6 행 = 최종 기준)
 - **① 공용화(복제 금지)** — `deadlines.policy(session, event_type, *, defaults=)`(구 `_policy` 공개 승격 — 인증·문서 2축은 인자 없이 D-180/90/30 그대로), `deadlines.has_unacknowledged_alert(key_prefix, stamp, created_before=)`(LIKE `%`·`_` 이스케이프 — 종류 세그먼트 `DOC_CUTOFF`의 `_` 오매칭 0, 기존 인증 경로도 이 함수로 위임), `deadlines.d_label` 공개. `milestone_view.assemble(…, today=, now=)` 기준 시각 주입(화면은 생략 = 지금). `trade_docs.expiry.EXPIRY_CANDIDATE_STATUS` — 만료 스윕과 D-N 알림의 후보 상태 단일 출처(스윕 동작 무변경).
@@ -34,11 +34,26 @@
 ### §22 11렌즈 (PR-6)
 ①**기능 통과** — 계획 행(잡·CLI·JOB 14·보호 시험)·검증 H(ack 재발송 0·D-3 에스컬레이션·롤오버 새 기일·이관 즉시 반영·ADMIN 폴백·L/C 오프 0)·I(스케줄 14·실패 1건 → FAILED)·GC-A21 golden ②**데이터 통과** — 마이그레이션 0, 파생값 저장 0(계산값), 드리프트 0 ③**트랜잭션 통과** — 건별 1TX, TX 안 외부 호출 0(인앱 알림 INSERT뿐 — 아웃박스 이벤트도 0), 열린 UoW 합류 거부 ④**동시성·멱등 통과** — dedup = DB 부분 유니크 `ON CONFLICT DO NOTHING`(확인 후 INSERT 0), 같은 시각·같은 날 재실행 신규 0, 잡 중복 기동은 기존 advisory lock ⑤**보안·권한 통과** — 엔드포인트 신설 0(CLI·잡뿐), 수신자 = 담당자/규칙/ADMIN(비활성 계정 제외), 알림 본문에 금액·원가 0 ⑥**시간 통과** — 한 실행 = 한 기준 시각(KST 오늘 도출), 시각형 도과 UTC 비교·D-N scan_date, 본문 KST+현지 병기, 시험은 시각 주입(실행 시각·KST 자정 무관) ⑦**성능 통과** — 후보 keyset 페이지 500 + SQL 거르기(대상 행 있는 선적만), 건당 고정 질의(보드 조립) ⑧**테스트 통과** — +35(golden 4), 변이 15/15 ⑨**운영 통과** — runbook 잡 표 14행·알림 대응 5항·CLI 재실행 ⑩**문서 통과** — ADR-0084 이행 부기·이 절 ⑪**워크스루 부분** — 화면 0(알림센터는 기존). dev CLI 실기동으로 대체.
 
+### 적대 검토 반영 (4렌즈 + 반증 — high 0·확정 1[med → 반증 뒤 low]·low 11, 전건 더 엄격한 쪽으로 반영, 2026-10-05, 커밋 ⑥⑦)
+1. **'알림만' 아키텍처 시험 우회 구멍(확정)** — 언급·문자열 검사만으로는 `from sqlalchemy import update as u`·`setattr`·`text()`·`merge`로 빠져나갔다. → `_alert_only_violations`: 앱 모듈 **서브모듈 허용 목록**(shipments = `models`만, trade_chain = `milestone_view`만, trade_docs = 쓰는 5개), sqlalchemy 이름 허용 목록(`exists`·`or_`·`select`·`Session`), **호출 이름 허용 목록** + 금지 집합(`setattr`·`text`·`merge`·`add`·`delete`·`update`·`insert`·`flush`·`with_for_update`·전이/잠금/발행), 속성 대입·증강 대입 금지(`__name__` 표지만), 구독 대입은 로컬 집계(`made`·`counts`)만, 쓰기 SQL 문자열(대소문자 무시) 금지. **자기검사 말뭉치 19건**(각각 위반으로 잡힘) + 깨끗한 코드 무위반 1건. J 시험 xmin 비교에 `proforma_invoices`·`customs_records`·`sales_orders` 추가.
+2. **TZ_UNRESOLVED 도과 은폐** — D-N은 여전히 추정하지 않되 도과는 시간대 무관 UTC 비교(`now > at_utc`)로 판정해 도과 알림·에스컬레이션 판정을 태운다(`Due.remaining = None`).
+3. **판정 불가 알림이 에스컬레이션 근거가 됨** — 키 종류를 `deadline-unresolved:`로 분리(기일 `deadline:` prefix에 안 걸림).
+4. **근거 = 아무 수신자의 미확인** — `has_unacknowledged_alert(recipient_ids=)` 신설, 무역 축은 `resolve_recipients` 결과만. 직접 담당 변경·비활성 담당자에서 거짓 에스컬레이션 0(H 시험 2), 폴백이면 문구 '수신자(규칙·관리자)가'(시험). 인증·문서 축 적용은 부채 R-6-5(R-6-1과 함께).
+5·6. **스캔-이관·스캔-실적 입력 경합** — 발송 직전 같은 TX에서 `expire_all()` 후 판정을 다시 내(선적·마일스톤·통관 재조회, 견적/PI는 상태·유효기간·후속·담당 재조회) 처음 판정과 같은 기일만 보낸다. 다르면 `deferred`(다음 실행) — 잠금 없음. 시험 4(실적·적재 ETD 실적·담당 변경·견적 후속 생성을 첫 판정 직후 끼워 넣음).
+7. **에스컬레이션 기준 = 경과 시간** — `escalation_cutoff = min(스캔일 KST 0시, now − 24h)`. 미스파이어(전날 KST 23:00 첫 실행 → 다음 날 06:40) 에스컬레이션 0·그다음 날 발동, 정확히 24시간 = 0·24시간+1분 = 발동(시험). ADR-0084 부기 갱신.
+8. **시험 헬퍼 created_at 보정 한 방향** — 이번 스캔이 만든 알림(`id > before`)만 양방향으로 맞춤. GC-A21 ④ 정각·+1초 스캔 `escalated == 0` 단언.
+9. **OEM 무알림 시험 공회전** — OEM PO를 원천으로 한 수입선적 + 서류마감 +30으로 실제 후보화, `counts['shipments'] == 1`·OEM 4종 키 0 단언.
+10. **GC-A21 golden 값 불일치** — 문서 값 그대로: 2026-10-03T14:59Z(KST 10-03 → D-8, 0건)·15:00Z(KST 10-04 → D-7, 1건) / 살아 있는 **SO** 자식이 있는 QT 0건 / `sweep_expired_documents(base_date=TODAY+1)` 뒤 D-0 QT EXPIRED.
+11. 나머지 low(`has_unacknowledged_alert` 중복 지적 포함)는 위 1~10의 같은 지점이라 함께 닫힘(근거 조회 함수 단일 — 인증 경로도 위임 유지).
+- **검증(실행 확인)**: `ruff check .`·`ruff format --check .`(607 files)·`mypy app` Success(304) / `test_trade_deadline_scan.py` **44 passed** / 관련(`test_deadline_scan`·`test_daily_briefing`·`test_scheduler`·`test_document_expiry_sweep`·`e2e/test_scheduled_jobs`·아키텍처 2파일) **212 passed** / `tests/architecture` 전체 **712 passed**(⑥ 코드 기준 — ⑦은 시험 1건 추가뿐) / 수집 **5769**(PR #66 기준)·golden 85 / dev CLI 재실행(최종 코드): 1차 "문턱 8·도과 1·에스컬레이션 0·실패 0" → 2차 신규 0, events 3 → 3. **전체 pytest는 이번 반영 뒤 다시 돌리지 않았다 — 실행 검증 못 했음**(⑤ 시점 1회 green: 5701 passed·34 skipped).
+- **변이(스크래치 사본 + PG 5463)**: **9/9 kill** — R1 `update` 별칭 import → 알림 전용 시험 / R2 `setattr` → 같은 시험 / R3 UNRESOLVED 키 분리 원복 → 판정 불가 시험·근거 제외 시험(단독 실행에서도 kill) / R4 수신자 필터 원복 → 직접 담당 변경 시험 / R5 24h 기준 원복 → 같은 날 재실행 시험 / R6 선적 발송 직전 재확인 제거 → 실적 경합 시험 / R7 UNRESOLVED 도과 판정 제거 → 도과 시험 / R8 견적/PI 재확인 제거 → 1차 **생존**(경합 시험 부재) → 후속 생성 경합 시험 추가 후 kill. 사본은 점검 후 삭제.
+
 ### 부채 (신규 — 조용히 넘기지 않는다)
 - **R-6-1** 인증·문서 축 `deadline-scan`도 같은 날 재실행 시 방금 만든 알림으로 에스컬레이션할 수 있다(S2-3 구조 동일 — PR-6은 무역 축만 `created_before` 적용, 기존 동작 무변경). 소유 = 기일 엔진 / 트리거 = S3-2 PR-8 또는 사용자 보고.
 - **R-6-2** 대금만기·L/C 제시기한 알림 0(ADR-0084 ⑥ 승계) — 소유 = S3-3 receivables·lc_terms(충족 신호 공급 시 대상 가산).
 - **R-6-3** RESERVED 선적 상태(PICKING~CLOSED)도 스캔 대상(편차 8) — 소유 = S4-2(종결 엣지 개방 시 CLOSED 제외 재판정).
 - **R-6-4** 알림 본문의 종류명은 백엔드 사전(`_TYPE_NAME_KO`)이고 프런트 마일스톤 라벨과 별도 출처 — 소유 = 화면 정리 세션 / 트리거 = 라벨 변경 시.
+- **R-6-5** 인증·문서 축 `deadline-scan`의 에스컬레이션 근거는 아직 '아무 수신자·스캔 앞 시점'이다(무역 축만 `recipient_ids`·24h 기준) — R-6-1과 한 번에 정리. 소유 = 기일 엔진 / 트리거 = S3-2 PR-8 또는 사용자 보고.
 ## S3-2 PR-5b (수입선적 화면 — PO 상세 "수입선적 만들기"·라인 배정 가능량/입고예정·수입선적 판별자 타입, 프런트 — 백엔드 앱 코드 0) — 구현 기록 (2026-10-05)
 - **기준(경계 커밋)**: PR #64(PR-5a) head **`7b9bedfddc10`**(main `5f4bd37`[PR-4b까지 병합] 위)에서 격리 워크트리로 시작(`git reset --hard 7b9bedfddc10`). **이 커밋 뒤의 커밋만 PR-5b**다. 5a 백엔드는 수정하지 않았다 — `git diff --stat 7b9bedfddc10 HEAD -- backend/app` **빈 출력**(실행 확인), 백엔드 변경은 시험 파일 1개(`tests/e2e/test_import_shipment_screen_flow.py`)뿐. push·PR 없음. 정본: 계획서 §4 PR-5b 행(검증 = vitest 금액 칸 0·e2e A) → 맨 아래 'S3-2 PR-5a' 절 'PR-5b 인계 계약' → 실제 백엔드 코드(`shipments/schemas.py` 판별자 합집합·`trade_chain/shipment_router.py` PO 하위 경로·`shipment_view.py` 수입 갈래·`purchase_orders/schemas.py` `ExpectedReceiptOut`) → DESIGN §17·§18·§22.
 - **커밋(12자리)**: `70a34456fd55` ① 판별자 합집합 타입·수입선적 상세 금액 칸 0·'선적 확정' 문구·참조 생성 2단 코어 공용화 / `5b8bd81d98fc` ② 발주 상세 배정 가능량·입고예정 열·'수입선적' 섹션·'수입선적 만들기'·취소 409 후속 / `a19505a3261c` ③ e2e A 화면 경로 / `c56fe1f80709` ④ 발주 라인 품명 최소 폭(390px 실브라우저 발견) / (이 커밋) ⑤ PROGRESS.
