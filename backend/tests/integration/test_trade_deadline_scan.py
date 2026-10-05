@@ -171,7 +171,11 @@ def _ack_all(user_id: int) -> None:
 
 
 def _scan(now: datetime = NOW, **kwargs: Any) -> dict[str, int]:
-    return scan_trade_deadlines(now=now, **kwargs)
+    """주입 시각으로 스캔하고, 방금 만든 알림의 `created_at`을 그 시각으로 맞춘다 — 알림 생성 시각(DB now())이 시험의 가상 시계와
+    같아야 에스컬레이션의 '스캔일 KST 0시 이전 알림만' 판정이 실행 날짜와 무관하게 재현된다."""
+    counts = scan_trade_deadlines(now=now, **kwargs)
+    _exec("UPDATE alerts SET created_at = :t WHERE created_at > :t", t=now)
+    return counts
 
 
 def _at(days: int, hour: int = 9) -> datetime:
@@ -204,6 +208,10 @@ def test_passed_thresholds_fire_once_to_the_assignee_and_an_acked_alert_is_never
     _ack_all(owner)
     again = _scan()
     assert again["threshold"] == again["escalated"] == 0
+    next_day = _scan(
+        NOW + timedelta(days=1)
+    )  # 다음 날 D-4 — 확인한 D-7은 다시 나가지 않는다(키에 실행일 없음)
+    assert next_day["threshold"] == next_day["escalated"] == 0
     assert len(_alerts("shipments", shipment)) == 1
 
 
@@ -251,6 +259,16 @@ def test_d3_escalation_goes_to_admins_only_while_the_same_deadline_alert_is_unac
         _assignee(read)
     )  # 오늘 받은 D-3도 확인 — 재실행에서 확인한 건은 에스컬레이션 대상이 아니다
     assert _scan(later)["escalated"] == 0  # 같은 기일의 에스컬레이션은 1회(키 dedup)
+
+
+def test_a_same_day_rerun_does_not_escalate_alerts_it_just_created(admins: tuple[int, int]) -> None:
+    """D-2에 처음 스캔(D-7·D-3 생성) → 같은 날 재실행 에스컬레이션 0('받을 틈이 없었다' — 실기동 재실행에서 확인) → 다음 날 미확인이면 1회"""
+    shipment = _shipment()
+    _plan_at(shipment, "CARGO_CLOSING", _at(2))
+    first = _scan()
+    assert first["threshold"] == 2 and first["escalated"] == 0
+    assert _scan(NOW + timedelta(hours=3))["escalated"] == 0
+    assert _scan(NOW + timedelta(days=1))["escalated"] == len(admins)
 
 
 def test_escalation_does_not_mix_milestone_types_on_the_same_shipment(
@@ -394,6 +412,9 @@ def test_lc_payment_and_presentation_deadlines_never_alert_with_the_flag_off() -
     lc = _shipment(terms="LC")
     tt = _shipment()
     for shipment in (lc, tt):
+        _plan_at(
+            shipment, "DOC_CUTOFF", _at(30)
+        )  # 스캔 후보로 만든다(먼 기일 — 문턱 전) — 후보 거르기에 기대 0건이 되지 않게
         _plan_on(shipment, "ETD", TODAY + timedelta(days=1))
         _plan_on(shipment, "BL_ISSUED", TODAY + timedelta(days=1))
         _plan_on(shipment, "ETA", TODAY + timedelta(days=2))
@@ -405,6 +426,9 @@ def test_lc_payment_and_presentation_deadlines_never_alert_with_the_flag_off() -
         == "UNKNOWN"
     )
     counts = _scan()
+    assert (
+        counts["shipments"] == 2
+    )  # 두 선적 모두 스캔했다(보드 조립 — 대금만기는 T/T라 산정 OK, L/C는 UNKNOWN)
     assert counts["threshold"] == counts["overdue"] == 0
     keys = _keys("shipments")
     assert not [
@@ -557,6 +581,22 @@ def test_a_lapsed_quotation_is_the_sweeps_business_not_an_overdue_alert() -> Non
     swept = sweep_expired_documents(base_date=TODAY)
     assert swept["expired_qt"] == 1
     assert _rows("SELECT status FROM quotations WHERE id = :i", i=alive) == [("ISSUED",)]
+
+
+@pytest.mark.group_k
+def test_the_scan_targets_are_pinned() -> None:
+    """대상 종류는 정확히 4종 — 대금만기·제시기한(충족 신호 S3-3)·OEM 생산 4종(B15)·ETD·ETA·B/L·PSI·신고수리는 넣지 않는다(ADR-0084 ②⑥).
+    종류를 늘리려면 이 집합과 ADR을 같이 고친다(dedup 키 계보 — 가산만)."""
+    from app.modules.trade_docs.constants import OEM_MILESTONES
+
+    assert {
+        "DOC_CUTOFF",
+        "CARGO_CLOSING",
+        "IMPORT_TAX_DUE",
+        "LOADING_DEADLINE",
+    } == deadline_scan.SCAN_TYPES
+    assert not deadline_scan.SCAN_TYPES & OEM_MILESTONES
+    assert deadline_scan.DEFAULT_THRESHOLDS == (7, 3, 1)
 
 
 # ── 문턱 해석 공용화 회귀(deadlines.policy 공개 승격) ─────────────────────────

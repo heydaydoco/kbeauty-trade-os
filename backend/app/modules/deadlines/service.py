@@ -37,10 +37,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
@@ -164,25 +164,26 @@ def _like_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def has_unacknowledged_alert(session: Session, *, key_prefix: str, stamp: str) -> bool:
+def has_unacknowledged_alert(
+    session: Session, *, key_prefix: str, stamp: str, created_before: datetime | None = None
+) -> bool:
     """`{key_prefix}…@{stamp}:{수신자}` 모양 dedup 키의 살아 있는 미확인 알림이 있는가 (D-3 에스컬레이션 판정 — 공용).
 
     ★ 기일(`stamp`)이 다른 알림은 세지 않는다 — 옛 기일(지난 주기·롤오버 전)의 미확인은 새 기일의 판정 근거가 아니다.
     ★ prefix·stamp는 글자 그대로 비교한다(LIKE 와일드카드 이스케이프) — 무역 키의 종류 세그먼트(`DOC_CUTOFF` 등)의 `_`가
       아무 글자와 맞아 다른 종류 알림을 섞지 않게(S3-2 PR-6 — 통합 X-25 "에스컬레이션 조회 prefix는 TYPE까지").
+    ★ `created_before`(선택) — 그 시각 이전에 만든 알림만 센다. 무역 스캔은 '스캔일 KST 0시'를 준다: 같은 날 앞선 실행(CLI 재실행·
+      미스파이어 수렴)이 방금 만든 알림은 "안 읽었다"가 아니라 "받을 틈이 없었다"다(S2-3 ① 취지 — 실기동 재실행에서 확인).
     """
     pattern = f"{_like_literal(key_prefix)}%@{_like_literal(stamp)}:%"
-    return bool(
-        session.execute(
-            select(
-                exists().where(
-                    Alert.dedup_key.like(pattern, escape="\\"),
-                    Alert.acknowledged_at.is_(None),
-                    Alert.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one()
-    )
+    conditions: list[ColumnElement[bool]] = [
+        Alert.dedup_key.like(pattern, escape="\\"),
+        Alert.acknowledged_at.is_(None),
+        Alert.deleted_at.is_(None),
+    ]
+    if created_before is not None:
+        conditions.append(Alert.created_at < created_before)
+    return bool(session.execute(select(exists().where(*conditions))).scalar_one())
 
 
 # ── 스캔 대상 ────────────────────────────────────────────────────────────────

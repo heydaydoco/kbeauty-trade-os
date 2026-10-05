@@ -208,15 +208,23 @@ def shipment_dues(
 # ── 알림 1건 판정(S2-3 의미론) ────────────────────────────────────────────────
 
 
-def _alert_due(session: Session, due: Due, policy: deadlines.Policy) -> dict[str, int]:
-    """에스컬레이션 → 도과 또는 지난 문턱. 반환 = 이 건이 **새로** 만든 알림 수(커밋 뒤 합산)."""
+def _alert_due(
+    session: Session, due: Due, policy: deadlines.Policy, *, day_start: datetime
+) -> dict[str, int]:
+    """에스컬레이션 → 도과 또는 지난 문턱. 반환 = 이 건이 **새로** 만든 알림 수(커밋 뒤 합산).
+
+    `day_start` = 스캔일 KST 0시(UTC) — 에스컬레이션은 그 전에 만든 미확인 알림만 근거로 삼는다(같은 날 재실행이 방금 만든 알림으로
+    관리자를 부르지 않는다 — 자율 확정)."""
     made = {"threshold": 0, "overdue": 0, "escalated": 0}
     label = deadlines.d_label(due.remaining)  # 사람 표기 D-N / D+N
     name = _TYPE_NAME_KO[due.segment]
 
     # ① 에스컬레이션 — D-3 이내(도과 포함)이고 **같은 종류·같은 기일**의 미확인 기일 알림이 남아 있을 때(이번 알림보다 먼저 판정).
     if due.remaining <= deadlines.ESCALATION_DAYS and deadlines.has_unacknowledged_alert(
-        session, key_prefix=_key(deadlines.KIND_DEADLINE, due, ""), stamp=due.stamp
+        session,
+        key_prefix=_key(deadlines.KIND_DEADLINE, due, ""),
+        stamp=due.stamp,
+        created_before=day_start,
     ):
         who = "담당자가" if due.assignee_id is not None else "수신자(규칙·관리자)가"
         made["escalated"] += len(
@@ -309,6 +317,11 @@ def _alert_unresolved(
     )
 
 
+def _day_start(today: date) -> datetime:
+    """스캔일(KST)의 0시 — UTC 시각."""
+    return datetime(today.year, today.month, today.day, tzinfo=KST).astimezone(UTC)
+
+
 # ── 건별 작업(한 건 = 한 트랜잭션) ────────────────────────────────────────────
 
 
@@ -333,7 +346,7 @@ def _scan_shipment(
         return made
     policy = deadlines.policy(session, SHIPMENT_EVENT, defaults=DEFAULT_THRESHOLDS)
     for due in dues:
-        for key, value in _alert_due(session, due, policy).items():
+        for key, value in _alert_due(session, due, policy, day_start=_day_start(today)).items():
             made[key] = made.get(key, 0) + value
     for milestone_type, stamp, shown in unresolved:
         made["unresolved"] = made.get("unresolved", 0) + _alert_unresolved(
@@ -390,7 +403,7 @@ def _validity_work(entity_type: str) -> Callable[[Session, int, date, datetime],
         )
         made: dict[str, int] = {entity_type: 1}
         policy = deadlines.policy(session, event_type, defaults=DEFAULT_THRESHOLDS)
-        for key, value in _alert_due(session, due, policy).items():
+        for key, value in _alert_due(session, due, policy, day_start=_day_start(today)).items():
             made[key] = made.get(key, 0) + value
         return made
 
