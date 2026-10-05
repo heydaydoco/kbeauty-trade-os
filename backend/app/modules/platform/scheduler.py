@@ -58,7 +58,7 @@ from app.modules.notifications import dispatcher
 from app.modules.notifications import service as notifications
 from app.modules.platform import backups, storage
 from app.modules.platform.models import ScheduledJob
-from app.modules.trade_chain import expiry_sweep
+from app.modules.trade_chain import deadline_scan, expiry_sweep
 from app.modules.trade_docs import verify as trade_docs_verify
 
 #: 동시 기동 방지용 advisory lock 키 (임의 상수 — 이 앱의 실행기 전용).
@@ -188,6 +188,10 @@ def _run_document_expiry_sweep() -> dict[str, int]:
     return _fail_if_any_failed(expiry_sweep.sweep_expired_documents(), what="견적·PI 만료 스윕")
 
 
+def _run_trade_deadline_scan() -> dict[str, int]:
+    return _fail_if_any_failed(deadline_scan.scan_trade_deadlines(), what="무역 기일 스캔")
+
+
 def _run_idempotency_purge() -> dict[str, int]:
     return {"deleted": idempotency.purge_expired_all()}
 
@@ -280,6 +284,14 @@ JOB_REGISTRY: tuple[JobSpec, ...] = (
         # (ADR-0056 4금 논증). 인증 스윕(06:00) 뒤·기일 스캔(06:30) 앞.
         schedule="daily@06:10",
         run=_run_document_expiry_sweep,
+    ),
+    JobSpec(
+        code="trade-deadline-scan",
+        name_ko="무역 기일 스캔(선적 서류마감·Cargo Closing·수입 세금·적재기한 + 견적/PI 만료 임박 알림)",
+        # S3-2 PR-6(ADR-0084) — 알림만 만든다: 전표 상태 무변경·전이/잠금/채번 0·대외 발송 0·아웃박스 이벤트 0(4금 밖). 인증·문서 기일 스캔(06:30) 뒤·
+        # 정체 스캔(07:00) 앞 — 만료 스윕(06:10)이 그날 경과분을 닫은 뒤라 견적·PI 후보가 스윕과 겹치지 않고, 브리핑(09:00)의 미확인 집계에 들어간다.
+        schedule="daily@06:40",
+        run=_run_trade_deadline_scan,
     ),
     JobSpec(
         code="approval-stagnation-scan",

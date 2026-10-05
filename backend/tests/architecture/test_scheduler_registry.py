@@ -176,15 +176,24 @@ def test_registered_jobs_stay_clear_of_the_four_bans() -> None:
             "session-purge",
             # S3-2 PR-1b — 승인 무결성 대사(READ ONLY 트랜잭션 대사 + ADMIN 인앱 알림뿐 — 승인 상태 무수정·자동 정정 없음·대외 발송 없음, ADR-0087 ⑤)
             "approval-integrity-check",
+            # S3-2 PR-6 — 무역 기일 스캔(읽기 + alerts INSERT뿐 — 전표 상태 불변·전이/잠금/채번 0·대외 발송·아웃박스 이벤트 0·발주·원장 무접촉,
+            # ADR-0084 4금 논증)
+            "trade-deadline-scan",
         }
     )
 
 
-def test_the_registry_has_exactly_thirteen_jobs_with_the_s3_2_pr1b_schedules() -> None:
-    """총수 대사 — S3-1 종결 12행(X-45·ADR-0058 ①) + S3-2 PR-1b `approval-integrity-check` 1행 = **13행**(R-17 중간값 — PR-6이 14로 올린다).
-    청소 잡 2종은 백업(03:00)·복원 리허설(04:00) 뒤·저장소 점검(05:00) 앞. 무결성 대사는 합계 검산(05:30) 뒤·인증 스윕(06:00) 앞."""
+def test_the_registry_has_exactly_fourteen_jobs_with_the_s3_2_schedules() -> None:
+    """총수 대사 — S3-1 종결 12행(X-45·ADR-0058 ①) + S3-2 PR-1b `approval-integrity-check` + PR-6 `trade-deadline-scan` = **14행**(R-17 최종 핀).
+    청소 잡 2종은 백업(03:00)·복원 리허설(04:00) 뒤·저장소 점검(05:00) 앞. 무결성 대사는 합계 검산(05:30) 뒤·인증 스윕(06:00) 앞.
+    무역 기일 스캔은 인증·문서 기일 스캔(06:30) 뒤·정체 스캔(07:00) 앞(만료 스윕 06:10 뒤 — 견적·PI 후보가 스윕과 겹치지 않는다)."""
     schedules = {spec.code: spec.schedule for spec in scheduler.JOB_REGISTRY}
-    assert len(scheduler.JOB_REGISTRY) == 13
+    assert len(scheduler.JOB_REGISTRY) == 14
+    assert schedules["trade-deadline-scan"] == "daily@06:40"
+    assert schedules["document-expiry-sweep"] < schedules["trade-deadline-scan"]
+    assert (
+        schedules["deadline-scan"] < schedules["trade-deadline-scan"] < schedules["stagnation-scan"]
+    )
     assert schedules["approval-integrity-check"] == "daily@05:40"
     assert schedules["idempotency-purge"] == "daily@04:20"
     assert schedules["session-purge"] == "daily@04:25"

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -974,13 +975,14 @@ def _trade_chain_imports(tree: ast.Module) -> set[str]:
 
 
 def test_scheduler_and_cli_reach_only_the_totals_check_and_the_expiry_sweep() -> None:
-    """스케줄러·CLI가 임포트하는 전표 모듈은 검산(trade_docs.verify)과 **만료 스윕(trade_chain.expiry_sweep) 하나뿐**이다 —
-    발행·전이·확정 함수(lifecycle·reference·payment_status)와 전표 CRUD 모듈은 언급조차 못 한다"""
+    """스케줄러·CLI가 임포트하는 전표 모듈은 검산(trade_docs.verify)과 **만료 스윕(trade_chain.expiry_sweep)·무역 기일 스캔
+    (trade_chain.deadline_scan — S3-2 PR-6, 알림만) 둘뿐**이다 — 발행·전이·확정 함수(lifecycle·reference·payment_status)와 전표 CRUD
+    모듈은 언급조차 못 한다. 스캔을 이 시험 밖 새 모듈에 두어 우회하지 않는다(design-C C11 ③ — 아래 별도 시험이 스캔 본체를 고정)."""
     from tests.support.astscan import imported_modules
 
     for rel in ("modules/platform/scheduler.py", "cli.py"):
         tree = app_sources()[rel]
-        assert _trade_chain_imports(tree) == {"expiry_sweep"}, rel
+        assert _trade_chain_imports(tree) == {"expiry_sweep", "deadline_scan"}, rel
         modules = imported_modules(tree)
         assert not modules & {"quotations", "proforma_invoices", "bank_accounts"}, rel
         for forbidden in (
@@ -1021,6 +1023,53 @@ def test_the_expiry_sweep_creates_exactly_two_edges_and_touches_no_orders_or_num
         "payments",
     }, used
     assert not _mentions(tree, "issue_document_number") and not _mentions(tree, "notify")
+
+
+def test_the_trade_deadline_scan_only_creates_alerts() -> None:
+    """무역 기일 스캔(S3-2 PR-6 — ADR-0084 4금 논증)은 **알림만** 만든다 — 전이·탄생 기록·사슬/전표 잠금·발행·확정·채번·아웃박스 발행을
+    임포트·언급하지 않고, 쓰기 통로는 `notify` 하나다(전표 행 UPDATE·DELETE·add·상태 대입 0). trade_chain 안에서는 보드 조립
+    (`milestone_view` — 화면과 같은 판정 함수)만 부른다(design-C C11 ③ 신규 단언)."""
+    from tests.support.astscan import imported_modules
+
+    tree = app_sources()["modules/trade_chain/deadline_scan.py"]
+    used = imported_modules(tree)
+    assert not used & {
+        "sales_orders",
+        "purchase_orders",
+        "numbering",
+        "outbox",
+        "platform",
+        "approvals",
+        "credit",
+        "payments",
+        "order_intake",
+        "order_board",
+        "handover",
+        "imports",
+    }, used
+    assert _trade_chain_imports(tree) == {"milestone_view"}
+    for forbidden in (
+        "record_transition",
+        "record_birth",
+        "lock_chain",
+        "lock_document",
+        "lock_lines_for_consumption",
+        "issue_quotation",
+        "issue_document_number",
+        "confirm_sales_order",
+        "converge_sales_order_shipping",
+        "converge_payment_status",
+        "publish",
+        "with_for_update",
+    ):
+        assert not _mentions(tree, forbidden), forbidden
+    assert _mentions(tree, "notify")
+    source = Path(
+        inspect.getsourcefile(import_module("app.modules.trade_chain.deadline_scan")) or ""
+    ).read_text(encoding="utf-8")
+    for forbidden_text in ("session.add", "update(", "delete(", "insert("):
+        assert forbidden_text not in source, forbidden_text
+    assert re.search(r"\.status\s*=(?!=)", source) is None  # 상태 대입 0(비교 `==`는 후보 술어)
 
 
 def test_the_scanner_flags_a_forbidden_mention_and_a_forbidden_import() -> None:
