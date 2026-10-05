@@ -1,0 +1,16 @@
+# ADR-0088: 채권 모델 — 수출 선적당 살아 있는 1건·발생 = 사람 1클릭 전용 경로 단일(CI 발행과 분리)·금액 복합 FK·만기 파생·미수 단일 정의·aging + `DUE_UNKNOWN`·INVOICE_DATE 앵커 = 채권 `invoice_on`·OPENING 이월
+
+- **상태**: 자율 확정 — 사후 번복 가능 (S3-3 계획 2026-10-05 — 오너 지시 2026-09-29에 따라 판정 후보는 더 엄격한(fail-closed) 권장안으로 확정, ADR-0011 부기)
+- **날짜**: 2026-10-05
+- **관련**: DESIGN.md §7.1·§7.10·§3·§17.4·§17.5(S3-3 [M4] 보강 — §7.1 문면 변경) / WBS S3-3 산출물 'receivables(만기 자동·aging)'·DoD 'aging 정확'(v1.7 주석 ②) / ADR-0052·0064·0081 / PROGRESS P-51·Q-04 / docs/plans/s3-3-plan.md · docs/plans/s3-3/design-integrated.md(§9 적대 검토 정정 R-01~R-40 우선) — sB B1·B2·B4·B12·B14·B15, X-01·X-04·X-06·X-15·X-16, R-02·R-12·R-21 / 구현 PR-2a(·PR-5a `ci_id`·CI 값 복사)
+- **번복 비용 큰 결정 — 오너 확인 권장 1순위**: DESIGN §7.1 사슬 문면(`선적 → CI/PL → … → 채권`)을 바꾸는 결정(채권이 CI 없이 생긴다)이고, S4-2가 '채권 선행 선적의 CI'를 재판정할 때의 전환 비용을 지금 확정한다. 오너 상시 지시(2026-09-29 "결정·개입 없이 끝까지")에 따라 자율 확정해 진행한다. 오너가 번복하면 이 ADR을 '대체' 표기로 갱신하고 새 ADR을 쓴다(PROGRESS 'S3-3 계획 확정·PR-1' 절 '오너 확인 권장 4건').
+
+**맥락** — WBS는 채권 '만기 자동·aging'을, DESIGN §7.1은 사슬 `선적 → CI/PL → 수출신고 → C/O → 채권`을 적는다. 그런데 CI·PL 발행은 검수(INSPECTED) 이후만 허용되고(`D:187`·§20 B) 검수 상태는 S4-2에서야 도달 가능하다(ADR-0096). 부록 B·C는 'CI 발행 = 채권 발생 1TX'를 제안했는데, 그대로면 S3-3~S4-2 운영 채권이 0건이 되어 aging·SO 완료·대금만기 충족 신호·노출 차감(P-01)이 전부 죽는다(통합 X-01).
+
+**결정** — ① 채권 = **수출 선적당 살아 있는 1건**(`uq_receivables_shipment_live`), 발생 = **사람 1클릭 전용 경로 `POST /shipments/{id}/receivable`(+미리보기) 단일**(A·T) — 출고지시 이후 살아 있는 수출 선적만(PLANNED 409 `SHIPMENT_NOT_FROZEN`·수입 422 `NOT_EXPORT`). ② **CI 발행은 채권을 만들지도 바꾸지도 않는다**. 살아 있는 CI가 있는 선적의 채권은 `invoice_on`·`invoice_ref`를 본문으로 받지 않고(422 `INVOICE_FIELDS_FROM_CI`) 서버가 CI `doc_date`·`doc_number`를 복사해 `ci_id`로 잇는다(M21 — `ChildLink(CI→receivables)`로 CI 취소·재발행 차단). 채권이 먼저 있는 선적의 CI 발행 = 409 `EXPORT_DOCS.CI.RECEIVABLE_EXISTS`(S4-2 재판정 — 부채 I-01). ③ 금액 = 선적 `total_amount` — 복합 FK `(shipment_id, currency, gross_amount)` → `shipments(id, currency, total_amount)`(위반 409 `AMOUNT_MISMATCH`), `(shipment_id, so_id)`·`(so_id, partner_id)` 복합 FK로 수입선적·타 거래처 구조 차단, `invoice_ref` 필수(외부 인보이스 번호 — S5-3·P7의 연결 키). ④ 상태 OPEN·CANCELLED, 채번 없음, 금액·원천 열 UPDATE 42501(열 단위 GRANT), 취소 = ADMIN·순입금 0 선행·COMPLETED SO 409. ⑤ **만기 비저장 파생**(OPENING만 `due_on` 저장). ⑥ **INVOICE_DATE 앵커 단일 원천 = 채권 `invoice_on`**(`AnchorContext.invoice` 가산·INVOICE_DATE 분기만 — 산식 본문 무변경, 없으면 UNKNOWN `INVOICE_NOT_ISSUED`, ETD 대체 금지). ⑦ **미수 = 총액 − 채권 입금 − 선수금 FIFO 충당**(파생, `receivables/outstanding.py` 단일 정의 — 쓰기 함수 없는 서브모듈, 미수 ≥ 0, 입금 상태 파생). ⑧ aging 30/60/90 + `DUE_UNKNOWN`(미도래 아님·적색), 거래처×통화 합, 기준일 = 서버 KST 오늘. ⑨ OPENING 이월(P-51) = ADMIN 등록·`(partner_id, invoice_ref)` 부분 유니크(409 `OPENING.DUPLICATE_REF`)·`due_on ≥ invoice_on`. ⑩ 신규 비공백 CHECK = `BLANK_CHAR_CLASS`(R-12). 사슬 `ChildLink(SHIPMENT→receivables)`·LOCK_ORDER `receivables` 슬롯(ADR-0097).
+
+**근거** — 청구 기록(상업 사실)을 무역 1클릭으로 남기면 채권 축이 S4-2를 기다리지 않는다. 청구 기록과 서류의 불일치는 경로 폐쇄 대신 '값 원천 고정(CI가 있으면 복사)'과 '선행 409'로 0이 된다. 만기를 저장하지 않아 결제조건·앵커 실적 정정이 자동 반영되고, 금액은 야간 검산보다 강한 1차망(복합 FK)으로 고정된다(`D:374`).
+
+**기각한 대안** — CI 발행 TX가 채권 발생을 합류(S3-3 운영 채권 0 — DoD 운영 의미 소멸), 2TX 아웃박스 합류(정합 창), 앵커 원천 = 살아 있는 CI `doc_date`(S4-2까지 INVOICE_DATE 만기 전부 UNKNOWN), 만기 저장 열(정정 시 재계산 잡 필요), `invoice_ref` NULL 허용(외부 인보이스 연결 키 상실), 선적 1건 다중 인보이스(부분 청구 — 부채 B-01).
+
+**되돌리기 비용** — **중간** — S4-2가 경로를 단일화하면 엔드포인트 폐쇄 + 호출부 1곳 + 기존 채권의 `ci_id` 백필 판정. 채권 행이 쌓인 뒤의 모델 교체는 높음(데이터 이관). 미수 정의·aging은 파생이라 낮음.

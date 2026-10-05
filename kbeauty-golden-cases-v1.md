@@ -1,4 +1,4 @@
-# kbeauty-trade-os 골든 케이스 명세 v1.5
+# kbeauty-trade-os 골든 케이스 명세 v1.6
 
 > **용도**: 구현 모델(Opus/Sonnet)의 산출물이 "이 케이스들을 통과하는가"로 검수한다. 코드 스타일이 아니라 **거동(behavior)**을 고정하는 문서다.
 > **우선순위 규칙**: 이 문서와 `DESIGN.md`가 충돌하면 **DESIGN.md가 우선**한다. 충돌 발견 시 구현하지 말고 보고할 것.
@@ -62,6 +62,7 @@
 - 성공 방향 — 한도 내 확정 성공 / 초과 SO도 **승인 후** 확정 성공. 경계는 strict(`노출 > 한도`만 초과 — 같으면 통과).
 - 거부 방향 — 초과이고 승인이 없으면 확정 거부(**관리자 포함**, `TRADE_CHAIN.CONFIRM.GATE_BLOCKED`의 CREDIT 항목) / 통화 비교 불능(UNEVALUABLE)은 **승인이 있어도** 거부(승인 경로 없음) / SO 쪼개기(한도 100에 60+60을 순차 확정)는 두 번째에서 초과로 걸린다.
 - 비고: WBS S3-1 DoD ③과 1:1. 미수는 S3-1에 없어 '미수 미반영' 배지가 표시된다(DESIGN §7.10 [M4] 보강).
+- 비고 부기(v1.6 — S3-3 PR-2b 이후, 문면 불변): 미수가 노출에 반영된다(미수 provider 실구현 등록). '미수 미반영' 배지는 은퇴하고, 기본 provider로 평가되는 경로는 **UNEVALUABLE `RECEIVABLE_PROVIDER_NOT_REGISTERED`**(승인 경로 없이 거부 — GC-A13 계보)다(ADR-0090, 적대 R-07·R-35). 위 성공·거부 방향의 기대값은 미수 0인 거래처에서 그대로다.
 
 **GC-A12. 입금 역기록** *(v1.4 추가 — S3-1 통합 계획 판정 2026-09-30, PR-10)*
 - Given: 기록된 선수금 입금 / When: 역기록 / Then: 원본 행은 불변이고 **반대 부호의 신규 기록**이 생기며 PI 상태가 누적 입금에 맞게 복원된다. 같은 입금의 재역기록은 거부된다(`PAYMENTS.PAYMENT.ALREADY_REVERSED`).
@@ -73,6 +74,7 @@
 - 경계 — 잠금 대기 초과·교착(55P03·40P01)은 UNKNOWN으로 삼키지 않고 409 `COMMON.CONCURRENCY.LOCK_BUSY`로 전파된다.
 - 성공 방향(자기검사) — 전 게이트 PASS이면 확정 성공.
 - 비고: DESIGN §7.4 [M4] 보강 — "평가 불능을 통과로 취급 금지"의 골든 고정(미수 항만 의도적 예외이며 배지로 fail-visible).
+- 비고 부기(v1.6 — S3-3 PR-2b 이후, 문면 불변): 위 괄호의 '미수 항만 의도적 예외'는 **은퇴**한다 — 미수 provider가 기본값이면 평가는 UNKNOWN 계열(여신 UNEVALUABLE `RECEIVABLE_PROVIDER_NOT_REGISTERED`)이고 확정은 거부된다(ADR-0090, 적대 R-07·R-35). 예외 없는 fail-closed가 이 케이스의 최종 형태다.
 
 **GC-A14. 부분선적 1:N 잔량 — 양방향** *(v1.5 추가 — S3-2 통합 계획 자율 확정 2026-10-04, PR-3a·4a)*
 - Given: 확정 SO 라인 수량 **10 EA**
@@ -128,6 +130,68 @@
 - KST 경계: 2026-10-03T14:59Z 스캔 = KST **10-03**, 15:00Z = KST **10-04**.
 - 시각형 도과: CARGO_CLOSING 2026-10-11T00:00Z(`America/Los_Angeles` — 현지 10-10 17:00), 스캔 2026-10-10T21:40Z(KST 10-11 06:40) → **도과 아님**(D-N 문턱은 기준일 10-10) / 2026-10-11T00:00:01Z → **도과**(UTC 시각 비교 — 날짜 비교로 판정하면 실패).
 - 비고: 설계 표 행 24·29~31·36. 대금만기·제시기한 알림은 S3-2에서 내지 않는다(충족 신호 S3-3).
+
+**GC-A22. CI↔PL 교차 불일치는 저장 거부 — 행 0·번호 0** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-5a)*
+- Given: 검수 완료 상태의 수출 선적(시험 전용 팩토리 — 운영 경로는 GC-A25), 선적 라인 SKU-A **100 EA** / When: CI 라인 100 EA·PL 포장 내용물 합 **99 EA**로 발행 / Then: **422 `EXPORT_DOCS.VALIDATION.FAILED`**(`detail.items[].code` = CI↔PL 수량 불일치), CI·라인·PL·상태이력 행 **0**, CI 번호 **소비 0**(다음 성공 발행이 같은 순번을 받는다), 렌더 파일 0.
+- 성공 방향(자기검사) — 같은 선적에 PL 내용물 합 **100 EA** → 발행 성공(CI·PL 같은 번호).
+- 미리보기(저장 0)는 같은 입력에 같은 BLOCK 항목을 200으로 보여 준다(검증 = 순수 함수 1개 — 미리보기·발행 공용).
+- 비고: WBS S3-3 DoD ① "교차 불일치 서류 저장 거부"·검증 B "교차 일치"와 1:1. 서비스 층 시험(운영 발행은 S4-2까지 닫힘 — ADR-0096). 설계 표 sA §A21 B①.
+
+**GC-A23. G.W. ≥ N.W. — 등호 통과** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-5a)*
+- 거부 방향 — 포장 1개 N.W. **10,000 g**·G.W. **9,999 g** → 서비스 **422**(`EXPORT_DOCS.VALIDATION.FAILED`, 항목 G.W.<N.W.) / 같은 값을 `packing_list_packages`에 직접 INSERT → **DB CHECK 23514**(서비스를 우회해도 거부).
+- 경계(자기검사) — G.W. **10,000 g** = N.W. **10,000 g** → **통과**(같으면 거부하면 실패).
+- 비고: 중량은 그램 정수(float 0), CBM은 mm 정수에서 파생. 검증 B "G.W."와 1:1. 설계 표 sA §A21 B②.
+
+**GC-A24. 무상(금액 0) 서류 생성** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-3b·5a)*
+- QT·PI — 전 라인 단가 0인 동결 QT·PI 렌더(PDF) → **성공**, 추출 텍스트에 **'NO COMMERCIAL VALUE'**(템플릿 공통 상수 `FREE_OF_CHARGE_TEXT` — 문구 단일 출처) (PR-3b).
+- CI — 전 라인 0원 CI 발행(서비스 층) → **성공**, 은행 블록 **없음**(은행 미지정이 BLOCK이 되지 않는다 — 무상만), PDF에 같은 문구 (PR-5a).
+- 거부 방향(자기검사) — 유상 CI에서 은행 미지정 → **422**(같은 통화 계좌가 1개여도 자동 선택 0).
+- 비고: WBS S3-3 DoD ② "무상(금액 0) 생성 가능"·검증 B "무상"과 1:1(설계 표 sA §A21 B③, 통합 N-10).
+
+**GC-A25. 검수 미완료 선적의 CI·PL 생성 차단 — 실제 경로** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-5a)*
+- Given: **실제 API 경로**로 만든 출고지시(RELEASE_ORDERED) 수출 선적 / When: CI(+PL) 발행 / Then: **409 `EXPORT_DOCS.SHIPMENT.NOT_INSPECTED`**, 행·번호·파일 0. 같은 선적의 CI 미리보기는 **200**(게이트 항목 표시 — 저장 0). PLANNED 선적 미리보기는 409 `EXPORT_DOCS.PREVIEW.SHIPMENT_NOT_FROZEN`.
+- 변이(자기검사) — 발행 가능 상태 상수(`INSPECTED·RELEASED·SHIPPED`)에 RELEASE_ORDERED를 더한 변이에서 이 시험이 **실패**해야 한다(kill).
+- 시험 전용 상태 팩토리(`force_shipment_status_for_test`)는 앱 코드에서 호출 0(AST 스캔)이다 — 운영에서 INSPECTED는 S4-2 전까지 도달 불가.
+- 비고: DESIGN §7.2 'CI/PL 생성은 검수완료 이후만'·§20 B 마지막 항목의 S3-3 서비스 층 고정(ADR-0096 — 운영 층은 S4-2가 다시 확인).
+
+**GC-A26. 채권 일부입금 전환 — 상태·초과·역기록** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-2d)*
+- Given: 수출 선적 채권 **600,000**(USD 최소단위, TT_DEFERRED — 선수금 0) / 입금 200,000 → **PARTIALLY_PAID**(미수 400,000) / 입금 400,000 → **PAID**(미수 0) / 마지막 입금 역기록 → **PARTIALLY_PAID**(미수 400,000 — 원본 행 불변, 음수 신규 행) / 400,001 입금 → **422 `PAYMENTS.PAYMENT.EXCEEDS_DUE`**, 400,000 → PAID.
+- 선수금 충당 — 같은 SO의 PI 선수금 300,000 입금 완료 상태에서 채권 600,000 발생 → 미수 **300,000**(FIFO 충당), 채권 입금 300,000 → **PAID** / 추가 1 → **422**. 그 뒤 PI 선수금 300,000이 더 들어오면 미수 **0 유지**(음수 미수 0)·미충당 선수금 **300,000** 표시.
+- 비고: WBS S3-3 검증 A "일부입금 전환"과 1:1. 입금 상태는 저장하지 않고 파생(미수 정의 1곳 — `receivables/outstanding.py`). 설계 표 sB GB-11·12·13.
+
+**GC-A27. aging 30/60/90 경계 8점 — 만기 미상은 '미도래'가 아니다** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-2a)*
+- 기준일(서버 KST 오늘) **2027-01-31**: 만기 2027-01-31 → **NOT_DUE**(경과 0 — 만기 당일은 미도래) / 2027-01-01 → **D1_30**(30) / 2026-12-31 → **D31_60**(31) / 2026-12-02 → **D31_60**(60) / 2026-12-01 → **D61_90**(61) / 2026-11-02 → **D61_90**(90) / 2026-11-01 → **D91_PLUS**(91) / 만기 UNKNOWN → **DUE_UNKNOWN**(NOT_DUE로 넣으면 실패 — 사유 코드 동반).
+- 통화 — 같은 거래처의 USD·EUR 채권은 **통화별 합**으로만 낸다(통화 간 합산 0). 기준일 파라미터는 없다(요청으로 과거 기준일을 줄 수 없음).
+- 비고: WBS S3-3 DoD ③ "aging 정확"과 1:1. 경과일은 Python 재계산값(2026-10-05). 설계 표 sB GB-25.
+
+**GC-A28. 노출 공백 0·이중 계산 0 — 채권 전환 전후** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-2b)*
+- TT_DEFERRED — 한도 USD, SO **1,000,000**(1,000개 × 1,000) 확정 → 선적 600개 생성·출고지시: 노출 **1,000,000**(선적은 차감 근거가 아니다 — 공백 0) → 그 선적 채권 600,000 발생: 노출 **1,000,000 = SO 잔여 400,000 + 미수 600,000**(**정확히 불변** — 이중 0).
+- TT_ADVANCE 30%(선수금 300,000 입금) — 같은 흐름에서 채권 발생 후 노출 **700,000**(감소분 = 충당 선수금 300,000 — 현금 사실). 남은 400개 선적·채권 400,000 발생 → SO **COMPLETED**(같은 TX), 노출 = 미수 **600,000**(SO 항 제외와 채권 전환이 원자적).
+- 환산 묶음 — 한도 KRW, SO USD 환율 1,350.5(1 USD = 1,350.5 KRW, USD 최소단위 = 센트), SO **1,000,002** → 채권 **600,001** 발생 전후 노출 모두 **13,505,027 KRW**(SO 묶음 = 잔여 400,001 + 미수 600,001을 SO 통화로 합한 뒤 1회 HALF_UP). 항별로 환산하면 5,402,014 + 8,103,014 = **13,505,028**이 되어 실패한다.
+- 혼합(R-05) — SO 2건·OPENING 1건·COMPLETED SO 미수 1건이 섞이면 SO마다 1회, SO 밖 미수는 행마다 1회 환산한다(환산 불가 1건이라도 있으면 UNEVALUABLE — 0 대체 0).
+- provider — 앱 생성(`create_app`)·CLI(`cli.main` — worker 포함) **2 입구** 모두 기동 후 `not is_default_provider()` / 기본 provider로 평가 → **UNEVALUABLE `RECEIVABLE_PROVIDER_NOT_REGISTERED`**(WITHIN_LIMIT·EXCEEDED가 나오면 실패).
+- 비고: WBS S3-3 DoD ④(v1.5) "미수 provider 등록 후 선적 확정~미수 발생 구간 노출 공백 0·이중 계산 0"과 1:1. 환산값은 Python 재계산(2026-10-05). 설계 표 sB B8·GB-01~03·GB-27, 적대 R-05·R-07·R-24.
+
+**GC-A29. SO COMPLETED·잔량 종결(short-close)** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-2b)*
+- 자동 완료 — SO 1,000개를 선적 2건(600·400)으로 나눠 **둘 다 채권 발생** → 두 번째 채권 발생 TX에서 SO **IN_SHIPMENT→COMPLETED**(자동 엣지 — 상태이력 사유·행위자 = 클릭한 사람). 채권이 하나라도 없으면 IN_SHIPMENT 유지.
+- 잔량 종결 — 선적 600개·채권 발생 뒤 잔량 400을 short-close(사유 입력) → **COMPLETED** / 사유 빈칸 → **422** / 채권 없는 살아 있는 출고지시 선적이 있으면 → **409 `SALES_ORDERS.SHORT_CLOSE.SHIPMENT_PENDING`**.
+- 종결 안정 — COMPLETED SO에 새 선적 → **409** / COMPLETED SO의 채권 취소 → **409 `RECEIVABLES.RECEIVABLE.SO_COMPLETED`** / COMPLETED에서 나가는 엣지 0.
+- 비고: DESIGN §7.2 SO '선적진행→완료'·WBS v1.6 주석(같은 PR). ADR-0091(ADR-0076 대체). 설계 표 sB GB-08~10.
+
+**GC-A30. 대금만기·L/C 배선 — 원천 고정·API 경로·tolerance** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-2a·4a·5a)*
+- INVOICE_DATE 앵커 — 결제조건 인보이스일+60, 채권 `invoice_on` **2026-11-02** → 대금만기 **2027-01-01**(ACTUAL) / 채권 없음 → **UNKNOWN `INVOICE_NOT_ISSUED`**(ETD·오늘로 대체하면 실패) (PR-2a).
+- CI 원천 — 살아 있는 CI(발행일 2026-11-05)가 있는 선적의 채권 등록 본문에 `invoice_on`·`invoice_ref`를 보내면 → **422 `RECEIVABLES.RECEIVABLE.INVOICE_FIELDS_FROM_CI`**, 보내지 않으면 채권 `invoice_on` = **2026-11-05**·`invoice_ref` = CI 번호 (PR-5a).
+- L/C(API 경로) — SIGHT, `lc_terms` 유효기일 2027-03-31·제시일수 21, B/L 실적 2027-03-01, 네고 2027-03-10 → 선적 마일스톤 응답의 제시기한 **2027-03-22**·대금만기 **2027-03-10** / L/C SO인데 `lc_terms` 없음 → **UNKNOWN `LC_TERMS_NOT_REGISTERED`**(GC-A16 무변경) (PR-4a).
+- tolerance — L/C 금액 1,000,000·+5% → 상한 **1,050,000**: 채권 합 1,050,000 → **성공**(경계 포함) / 1,050,001 → **422 `RECEIVABLES.RECEIVABLE.LC_AMOUNT_EXCEEDED`** (PR-4a — 2a 채권 발생 함수 분기).
+- 비고: WBS S3-3 v1.6 주석 '`lc_terms` → S3-2 산식 배선(재정의 금지)'·DESIGN §20 K "L/C 제시기한 MIN·tolerance" API 경로. 설계 표 sB GB-17~20, 통합 X-01·X-04.
+
+**GC-A31. 대금만기·제시기한 알림 — 충족 신호·후보·수출만** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-6)*
+- 미등록 fail-closed — 출고지시 수출 선적, 대금만기 D-3, **채권 없음** → 알림 **1**(SO 담당자). 채권 발생·전액 입금(미수 0) 뒤 재스캔 → **0** / 미수 > 0인 채 만기+1 → **도과 1**.
+- 판정 불가 — 대금만기 UNKNOWN + ETD 실적 있음 → UNRESOLVED **1회** / ETD 실적 없음 → **0**.
+- 제시 — 제시기한 D-1 알림 뒤 `presented_on` 기록 → 재스캔 **0**. `lc` 플래그 OFF 뒤에도 기존 L/C의 제시기한 계산·알림은 **계속**(신규 L/C 입력만 422).
+- 후보 회귀 — ETD·B/L·ETA 실적이 **다 들어간** 동결 수출 선적도 대금만기 후보다(현 후보에서 빠지면 실패 — PR-6 첫 커밋의 실패하는 시험). OPENING 채권 만기 알림의 이동처(`receivables`)가 존재한다.
+- 수출만 — 수입 선적의 대금만기·L/C 제시기한 알림 **0**(UNKNOWN 표시 유지 — 부채 I-04).
+- 비고: S3-2 부채 Q-08(+R-6-2)의 수출분 종결. JOB 14 유지(`trade-deadline-scan` 대상 확장). 설계 표 sB GB-21~24·26, 통합 X-30·X-32, 적대 R-08.
 
 ## B. FTA / 원산지
 
@@ -230,6 +294,14 @@
 - Given: 확정 SO 라인 수량 **10 EA** / When: 서로 다른 Idempotency-Key로 7 EA 선적 2건을 **실제 동시 실행**(스레드 2개) / Then: **정확히 1건 성공·1건 409**(`TRADE_DOCS.QUANTITY.EXCEEDS_OPEN`), 잔량 **3**, 500·교착(40P01) **0**. 잠금을 제거한 변이에서는 이 테스트가 실패해야 한다.
 - 비고: GC-F1 규칙(순차 실행은 증거 불인정). 직렬화 = SO 헤더 `FOR UPDATE` 선점 → 라인 `FOR UPDATE`(id 순) — SHARE→UPDATE 승격 금지(DESIGN §8.3·§17.2 S3-2 [M4] 보강).
 
+**GC-F5. 노출 구성 변경 경합 — 평가는 '전' 아니면 '후'** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-2b)*
+- Given: 한도 관리 거래처의 SO 확정 평가(잠금 평가)와 같은 거래처 선적의 채권 발생 / When: 평가의 SO 항 계산 직후 Barrier에서 채권 발생을 **실제 동시**에 실행 / Then: 평가가 본 노출 ∈ **{채권 발생 전, 채권 발생 후}**(중간 상태 — SO 항은 전, 미수 항은 후 — 0), 500·40P01 0. 거래처 잠금 선행을 제거한 변이에서 이 시험이 **실패**해야 한다.
+- 비고: GC-F1 규칙(순차 실행은 증거 불인정). 직렬화 = 노출 구성 변경 쓰기의 `lock_buyer_for_credit` 선행(DESIGN §17.2 S3-3 [M4] 보강, ADR-0097). DoD "공백 0·이중 0"의 동시성 조건.
+
+**GC-F6. 같은 선적 채권 동시 발생** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-2a)*
+- Given: 출고지시 수출 선적 1건 / When: 서로 다른 Idempotency-Key로 채권 발생 2건을 **실제 동시 실행** / Then: **정확히 1건 성공·1건 409 `RECEIVABLES.RECEIVABLE.ALREADY_OPEN`**, 채권 행 1, 500·교착(40P01) **0**. 같은 키 재요청은 같은 응답 1건.
+- 비고: GC-F1 규칙. 1차 직렬화 = 선적 `FOR UPDATE`, 2차망 = 부분 유니크 `uq_receivables_shipment_live`(제거 변이에서도 1건만 남는지 확인).
+
 ## G. 수입원가
 
 **GC-G1. 관세·부가세 계산**
@@ -244,6 +316,11 @@
 **GC-G3. 수입선적 원가 비복사 — 원가 열람 역할로도 0** *(v1.5 추가 — S3-2 통합 계획 자율 확정 2026-10-04, PR-5a)*
 - Given: 센티널 원가 값이 들어 있는 PO / When: 그 PO로 수입선적을 만들고 **무역·관리자(원가 열람 가능 역할)**로 선적 상세·목록·`/shipments/export.csv`를 조회 / Then: 응답·CSV·outbox 이벤트 payload 어디에도 원가 키(`*_cost`·단가·금액)와 센티널 값이 **0회**. 선적 라인 단가는 NULL·금액 0이다.
 - 비고: ADR-0024 PO 원가 9채널 봉쇄에 **10번째 채널을 열지 않는다**(마스킹 분기가 아니라 복사 자체가 없음). GC-G2 계보.
+
+**GC-G4. 서류 원가 채널 0 — 렌더·발행·첨부** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-3a·3b·5a)*
+- Given: 센티널 원가 값이 들어 있는 PO·SKU 매입가 / When: QT·PI 렌더 컨텍스트·CI 발행 스냅샷·S/I·렌더 파일(PDF 텍스트·XLSX 셀)을 만든다 / Then: 원가 키(`*_cost`·매입가)와 센티널 값 **0회**. 렌더 입력 뷰에는 `internal_note`·`assignee_id`·`created_by_id`·`updated_by_id`도 **0**(허용 필드 고정 — 적대 R-28).
+- 경로 부재 — PO 소유 첨부 → **422**(owner 미개방) / 수입선적 소유 첨부 → **422 `DOCUMENTS.OWNER.KIND_NOT_ALLOWED`** / 수입선적 CI·S/I·미리보기 → **422 `EXPORT_DOCS.SHIPMENT.KIND_NOT_SUPPORTED`**. 원가 열람 역할로도 같다(마스킹 분기가 아니라 경로 부재).
+- 비고: ADR-0024 PO 원가 9채널 봉쇄에 **10번째 채널을 열지 않는다**(GC-G2·G3 계보). 배치는 S3-1 부기 'G = 파일 해시 멱등·원가 마스킹' 승계.
 
 ## H. 자동화 경계 (ADR-09)
 
@@ -273,6 +350,12 @@
 - Given: 수동 등록 또는 CSV(결정적 파서) 입구로 들어온 주문(모든 검증 통과·품번 전건 매핑) / Then: **PENDING으로만 착지**하고(착지 함수에 상태 인자가 없다) CONFIRMED는 사람 1클릭 함수 **한 곳**에서만 만들어진다. 신뢰도·검증 통과 여부와 무관하다.
 - 비고: GC-H1(AI 추출 자동확정 금지)의 CSV 확장. ADR-09의 "조건부 자동 확정" 예외는 S3-1에서 구현하지 않는다(S5-4 소비).
 
+**GC-H7. 청구 기록·서류는 사람 1클릭에서만 — CI 발행은 채권을 만들지 않는다** *(v1.6 추가 — S3-3 통합 계획 자율 확정 2026-10-05, PR-2b·5a)*
+- Given: 출고지시된 수출 선적 / Then: 채권은 `POST /shipments/{id}/receivable`(사람 1클릭)에서만 생긴다 — **CI 발행(서비스 층) 뒤 receivables 행 수 불변**(0 → 0), 스케줄러·CLI·기일 스캔·검산 잡 경로로 채권·CI·S/I 생성 **0**(아키텍처 스캔 — 호출처 핀).
+- SO COMPLETED는 채권 발생·잔량 종결 **트랜잭션 안에서만** 생긴다(다른 호출처 0). RECEIVED→CONFIRMED 자동 0 유지.
+- CI·S/I 발행·렌더가 만드는 outbox 행은 생성 이벤트뿐이고 **대외 발송 채널 행 0**(메일·웹훅 발송 0).
+- 비고: DESIGN §15 4금(장부 확정·대외 발송)과 ADR-09. GC-H6(인테이크 자동 확정 불가)의 청구·서류 판. 통합 §7 REGISTRY 엔트리 6.
+
 ---
 
 ## 검수 절차 (리뷰어 세션용 프롬프트)
@@ -289,6 +372,7 @@
 - 케이스 추가/수정 시 v1.1, v1.2로 올리고 변경 이력을 문서 하단에 기록. 케이스 삭제는 금지(폐기 시 DEPRECATED 표기 + 사유).
 
 ## 변경 이력
+- **v1.6 (2026-10-05)** — GC-A22~A31(CI↔PL 교차 불일치 거부·G.W.≥N.W.·무상 서류·검수 미완료 CI 차단·채권 일부입금 전환·aging 경계·노출 공백 0/이중 0·SO COMPLETED/short-close·대금만기/L/C 배선·대금만기/제시기한 알림)·GC-F5·F6(노출 구성 변경 경합·채권 동시 발생)·GC-G4(서류 원가 채널 0)·GC-H7(청구 기록·서류 자동 생성 0) **14건 추가**(삭제·케이스 문면 변경 0) + **GC-A11·A13 비고 부기**(문면 불변 — S3-3 PR-2b 이후 '미수 미반영' 배지·의도적 예외 은퇴, 적대 R-35). 근거: S3-3 통합 계획 자율 확정 2026-10-05(오너 지시 2026-09-29 — ADR-0011 부기)이며 WBS 매핑표에 S3-3 배정 0건 실측(v1.1~v1.5 선례와 같은 상황). 케이스는 WBS S3-3 DoD 4항(① A22 ② A24 ③ A27 ④ A28)·검증(B — A22·A23·A24·A25, A — A26)과 대응하고 WBS v1.7 매핑표에 S3-3으로 배정했다. **배치**: 서류·채권 케이스는 C(인증·규제) 대신 **A 연번**, 동시성 F, 원가 G, 자동화 경계 H(S3-2 R-12 선례 — 삭제 금지 규칙상 등재 전 그룹 확정). 경계 값은 설계 표(sA §A21·sB §B8·§B21 GB-01~28·sC §C15)에서 옮겼고 날짜 산술(인보이스일+60·B/L+21·aging 경과일 8점)·KRW 환산 HALF_UP(묶음 13,505,027 vs 항별 13,505,028)·tolerance 상한(1,050,000)은 Python으로 재계산했다(2026-10-05 실행 확인). **GC-A28의 환산 값은 설계 표 GB-03(SO 1,000,001·채권 600,001)이 묶음·항별 환산 결과가 같아(둘 다 13,505,014) 변이를 잡지 못하므로 SO 1,000,002·채권 600,001로 바꿔 판별력을 갖게 했다**(자율 확정 — 더 엄격). PR 배정: A22·A23·A25=PR-5a, A24=PR-3b·5a, A26=PR-2d(적대 R-21 — 입금 확장 분리), A27=PR-2a, A28·A29=PR-2b, A30=PR-2a·4a·5a, A31=PR-6, F5=PR-2b, F6=PR-2a, G4=PR-3a·3b·5a, H7=PR-2b·5a. 각 케이스는 구현 PR에서 pytest `golden` 마커와 docstring 케이스 번호로 옮긴다(이 문서 갱신 시점에 코드는 없다). **`pytest -m golden` 대사 기준: S3-2 종결 85건 + 이 14건 → S3-3 PR-7에서 99건 이상**(케이스마다 마커 최소 1).
 - **v1.5 부기 (2026-10-05, S3-2 PR-8 종결 대사 — 케이스 문면 변경 없음, 버전 유지)** — v1.5 10건 **전부** 구현 PR이 pytest `golden` 마커와 docstring 케이스 번호로 옮겼다(S3-1 PR-16의 '조용한 누락' 재발 0 — 이번 대사에서 새로 붙인 마커 없음). `pytest -m golden` = **85건**(S3-1 종결 43 + S3-2 42, 기준 ≥53 충족 — 수집 실측, main `4bb71b144ee0` + PR-8). 위치(케이스 → 시험, 경로는 `backend/tests/` 기준): **A14**(5) = `e2e/test_shipments.py`의 `test_gc_a14_partial_shipments_drive_the_remaining_quantity_and_the_so_state`·`test_gc_a14_a_live_shipment_blocks_so_cancel_with_successor_alive` · `integration/test_shipment_chain.py::test_gc_a14_in_shipment_so_cancel_says_successor_alive_before_the_state_check` · `e2e/test_shipment_milestones.py::test_gc_a14_live_actual_blocks_cancel_until_corrected_with_a_reason` · `e2e/test_shipment_customs.py::test_gc_a14_live_customs_record_blocks_cancel_until_deleted_with_a_reason` / **A15**(2) = `e2e/test_import_shipments.py::test_gc_a15_import_shipment_never_changes_po_open_quantity_or_status` · `integration/test_import_shipment_concurrency.py::test_j06_two_concurrent_import_shipments_never_exceed_the_assignable_quantity` / **A16**(10)·**A17**(4) = `unit/test_trade_schedule.py`의 `test_gc_a16_*` 10건·`test_gc_a17_*` 4건(설계 표 B20 행 번호 병기) / **A18**(5) = 같은 파일 `test_gc_a18_*` 3건 + `e2e/test_shipment_customs.py`의 `test_gc_a18_acceptance_drives_the_loading_deadline_with_partial_and_max_fulfilment`·`test_gc_a18_future_customs_dates_are_rejected_without_slack` / **A19**(6) = 같은 파일 `test_gc_a19_*` 3건 + `e2e/test_holidays.py::test_gc_a19_declared_data_drives_holiday_unverified_and_clear` + `e2e/test_shipment_milestones.py`의 `test_dod2_gc_a19_eta_local_holiday_warns_both_ways_and_unverified`·`test_gc_a19_a_holiday_on_the_payment_due_date_does_not_move_it` / **A20**(4) = `e2e/test_shipment_milestones.py`의 `test_gc_a20_*` 4건 / **A21**(4) = `integration/test_trade_deadline_scan.py`의 `test_gc_a21_*` 4건(PR-6 적대 검토 반영 후 문서 값 그대로 — KST 경계 14:59Z/15:00Z·살아 있는 SO 자식) / **F4**(1) = `integration/test_shipment_concurrency.py::test_gc_f4_concurrent_partial_shipments_7_plus_7_on_10` / **G3**(1) = `e2e/test_import_shipments.py::test_gc_g3_no_cost_key_or_sentinel_reaches_any_import_surface`. 일부 docstring은 설계 표 행 번호를 앞세운다(`GC-37(A18 …)`·`GC-21(A20)`·`GC-18(A19)` 등 — 케이스 번호는 괄호 안). 입구~출구 관통은 `e2e/test_s3_2_walkthrough.py`(H·J·K 대표 — 골든 아님).
 - **v1.5 (2026-10-04)** — GC-A14~A21(부분선적 1:N 잔량·수입선적 PO 잔량 불변·대금만기 분기·L/C 제시기한/tolerance·적재의무/수리일 원천·ETA 휴일 경고·롤오버 이력·선적 기일 스캔)·GC-F4(동시 부분선적)·GC-G3(수입선적 원가 비복사) **10건 추가**(삭제·문면 변경 0). 근거: S3-2 통합 계획 자율 확정 2026-10-04(오너 지시 2026-09-29 — ADR-0011 부기)이며 WBS 매핑표에 S3-2 배정 0건 실측(v1.1~v1.4 선례와 같은 상황). 케이스는 WBS S3-2 DoD 3항(① A16·A17 ② A19 ③ A14)·검증(A — A14·A15, K — A17)과 대응하고 WBS v1.6 매핑표에 S3-2로 배정했다. **배치**: 무역 기일 케이스는 설계 초안의 C(인증·규제) 연번 대신 **A 연번**으로, 수입선적 원가 단언은 A15에서 **G(수입원가)로 분리**했다 — 삭제 금지 규칙상 등재 후 재배치가 불가하므로 등재 전에 그룹 정의에 맞췄다(S3-2 계획 적대 검토 R-12). 경계 값은 순수 함수에 주입한 손계산·Python 검증값이다(날짜 산술·KST 변환·tolerance 반올림 — 2026-10-04 실행 확인). PR 배정: A14=PR-3a(실적 가드 줄은 4a), A15=PR-5a, A16·A17=PR-2a, A18=PR-2a·4a, A19=PR-2a·4a·4b, A20=PR-4a, A21=PR-6, F4=PR-3a, G3=PR-5a. 각 케이스는 구현 PR에서 pytest `golden` 마커와 docstring 케이스 번호로 옮긴다(이 문서 갱신 시점에 코드는 없다). **`pytest -m golden` 대사 기준: S3-1 종결 43건 + 이 10건 → S3-2 PR-8에서 53건 이상**(케이스마다 마커 최소 1 — 마커 수 ≥ 케이스 수).
 - **v1.4 부기 (2026-10-04, S3-1 PR-16 종결 대사 — 케이스 문면 변경 없음, 버전 유지)** — v1.4 이력의 "14건"은 **15건**의 오기다(A6~A13 8·F2·F3 2·G2 1·H3~H6 4 — 실측 계수). 각 케이스를 구현 PR이 pytest `golden` 마커로 옮기지 않은 채 남아 있던 것을(G2·H5 외 13건은 마커·케이스 번호 둘 다 없음) PR-16이 기존 시험에 마커와 docstring 케이스 번호를 붙여 고정했다(새 시험 신설 없음 — 문면을 이미 단언하던 시험): A6=`integration/test_confirmed_prices_and_fx_are_immutable.py::test_confirmed_prices_and_fx_are_immutable` · A7=`e2e/test_sales_orders.py::test_a_duplicate_buyer_po_is_rejected_with_the_occupying_document` · A8=`e2e/test_sales_order_editing.py::test_reverse_order_cancellation_restores_balances_across_the_chain` · A9=`e2e/test_sales_orders.py::test_dod_one_the_whole_chain_needs_only_ids_and_versions` · A10=`integration/test_gate_evaluators.py`의 등호 경계·비활성 양방향 2건 · A11=`integration/test_confirm_credit_approval.py`의 ADMIN 포함 거부·승인 후 확정 2건 · A12=`integration/test_payment_service.py::test_a_reversal_row_is_the_exact_negative_…` · A13=`integration/test_gate_framework.py::test_a_sql_error_inside_an_evaluator_becomes_unknown_…` · F2=`integration/test_confirm_concurrency.py::test_two_concurrent_confirmations_cannot_both_fit_under_the_limit` · F3=`integration/test_order_board_concurrency.py::test_twenty_users_bulk_…` · G2=`e2e/test_purchase_order_cost_masking.py::test_gc_g2_one_sweep_…` · H3=`integration/test_confirm_credit_approval.py::test_the_requester_cannot_approve_their_own_request_…` · H4=같은 파일 `test_editing_the_order_after_approval_voids_…` · H5=`integration/test_approval_delegations.py`의 양끝 포함·KST 날짜·대결 기록 3건 · H6=`e2e/test_order_intakes.py::test_there_is_no_http_route_that_lands_an_intake_as_anything_but_pending`. `pytest -m golden` 43건 통과(실행 확인). 입구~출구 관통은 `e2e/test_s3_1_walkthrough.py`(H·J 대표 — 골든 아님).

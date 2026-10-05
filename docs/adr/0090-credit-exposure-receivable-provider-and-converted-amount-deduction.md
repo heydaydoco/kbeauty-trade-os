@@ -1,0 +1,16 @@
+# ADR-0090: 여신 노출 전환 — 미수 provider 실구현 2 입구 등록(P-08)·채권 전환분 차감(P-01)·Protocol `exposure_parts`·SO 묶음 1회 환산·기본 provider = UNEVALUABLE·노출 구성 변경 쓰기 = 거래처 잠금 선행
+
+- **상태**: 자율 확정 — 사후 번복 가능 (S3-3 계획 2026-10-05 — 오너 지시 2026-09-29에 따라 판정 후보는 더 엄격한(fail-closed) 권장안으로 확정, ADR-0011 부기)
+- **날짜**: 2026-10-05
+- **관련**: DESIGN.md §7.10(S3-1 부기 ①·④ / S3-3 [M4] 보강 ④·⑤ — 문면 변경)·§17.2 / WBS S3-3 v1.5 '미수 provider 등록(기본 구현 잔존 금지 테스트)'·DoD '노출 공백 0·이중 계산 0' / ADR-0064·0076(대체 — ADR-0091) / PROGRESS P-01·P-08·P-15 / docs/plans/s3-3-plan.md · docs/plans/s3-3/design-integrated.md(§9 적대 검토 정정 R-01~R-40 우선) — sB B6·B8·B9, sC C3, X-20, R-04·R-05·R-06·R-07·R-24 / 구현 PR-2b(원자 — 쪼개지 않음)
+- **번복 비용 큰 결정 — 오너 확인 권장 2순위**: DESIGN §7.10 S3-1 부기 ① '미결 SO 합'을 '미결 SO 잔여(총액 − 채권 전환분) 합'으로, ④ '선수금 미차감'을 '채권 항 충당 후 미수'로 바꾸는 **문면 변경 2건**이다(R-02). 공백이 실재하면 과소 노출 위에서 이미 확정된 수주는 소급할 수 없다. 오너 상시 지시(2026-09-29 "결정·개입 없이 끝까지")에 따라 자율 확정해 진행한다. 오너가 번복하면 이 ADR을 '대체' 표기로 갱신하고 새 ADR을 쓴다(PROGRESS 'S3-3 계획 확정·PR-1' 절 '오너 확인 권장 4건').
+
+**맥락** — S3-1은 미수 provider 기본 구현(`reflected=False`)을 두고 '미수 미반영' 배지로 드러냈다(유일한 의도적 예외 — 막으면 S3-3 전 모든 확정이 정지). S3-2는 선적분 노출 차감(P-01)을 provider 등록과 같은 PR로 미뤘다(ADR-0076). 기존 Protocol `outstanding(session, partner_id, limit_currency)`은 거래처 전체 미수를 이미 한도 통화로 환산한 값이라 SO 묶음 환산을 만들 수 없다(R-05). provider는 모듈 전역이라 등록 상태가 시험 실행 순서·샤드에 따라 달라진다(R-04).
+
+**결정** — ① **Protocol 재정의** `exposure_parts(session, partner_id, so_ids) -> ReceivableExposure` 1개 — `by_so`(SO별 `invoiced_gross`·`outstanding`, **SO 통화 원액**) + `unattached`(OPENING·`so_ids` 밖 SO의 미수 — 행 단위 통화·환율). 기존 `outstanding`·`ReceivableTerm`은 **폐기**(두 정의 금지). ② **노출 = Σ 미결 SO (총액 − 채권 전환분) + 미수** — 차감 근거는 **채권 전환분뿐**(선적 생성·출고지시는 차감하지 않는다 → 선적 확정~채권 발생 공백 0, 같은 금액은 한 항에만 → 이중 0). `CLOSED_STATUSES` 무변경. ③ **환산은 평가 함수만** — SO마다 `(총액 − invoiced_gross) + outstanding`을 SO 통화로 합한 뒤 **1회 HALF_UP**, unattached는 행마다 1회, 환산 불가 = UNEVALUABLE. ④ provider 실구현을 `app/bootstrap.py` `register_runtime_providers()`로 **2 입구**(`create_app`·`cli.main` — worker = `cli run-scheduler`, R-24)에서 등록하고 documents 해석기도 같은 함수에서 등록(R-04 (d)), 시험은 세션 autouse 픽스처 + `use_receivable_provider(fake)` 저장/복원 컨텍스트, 무작위 순서 2회로 상태 의존 0. ⑤ **기본 provider로 평가하면 UNEVALUABLE `RECEIVABLE_PROVIDER_NOT_REGISTERED`**(R-07 — '부분 노출' 경로·`exposure_is_partial`·'미수 미반영' 배지 은퇴). 결속 시험 = 'COMPLETED로 들어가는 엣지가 존재하면 ⇒ 기본 provider 평가는 WITHIN_LIMIT 불가'(`test_doc_machines.py:141-153` 대체). ⑥ **노출 구성을 바꾸는 쓰기 = `lock_buyer_for_credit` 선행**(채권 발생·OPENING·채권 취소·채권 입금·역기록 양 분기·PI 입금·short-close — ADR-0097). ⑦ 가짜 provider 7개를 `exposure_parts`로 재작성(`AttributeError`를 실패 목록에 넣지 않는다), S3-1 여신 시험은 0 미수 가짜로 기대값 무변경 확인 후 진행(PR-2b 커밋 ①).
+
+**근거** — WBS DoD '노출 공백 0·이중 계산 0'은 차감 근거를 '채권 전환'이라는 단일 사건으로 둘 때만 증명된다(sB B8 증명표·속성 시험). 항별 환산은 반올림 차를 만들고, 거래처 전체 미수를 provider가 미리 환산하면 SO 묶음 1회 환산이 불가능하다. 2b부터 COMPLETED SO가 노출에서 빠지므로 기본 provider로 평가하는 경로가 남으면 그 SO 금액이 통째로 빠지는 과소 노출(fail-open)이 된다 — 그래서 기본 provider = 평가 불능으로 바꾼다.
+
+**기각한 대안** — 선적 생성·출고지시 시점 차감(채권 전 공백·이중 위험), 기존 `outstanding` 유지 + `invoiced_by_sales_order` 가산(SO 묶음 환산 불가 — R-05), 기반 클래스 기본 구현 0 반환('못 셈 = 0' 재발 — R-06), import 부작용 등록(순서·샤드 의존 — R-04), 3 입구(worker는 cli와 같은 경로 — R-24), 기본 provider 허용 유지(과소 노출 — R-07), 문면대로 선수금 미차감(완납 채권 선수금 영구 잔존 → 운영 정지 — R-02).
+
+**되돌리기 비용** — **중간** — Protocol·평가 함수·가짜 7개·결속 시험이 같이 움직인다. 반대로 공백이 실재하면 **높음**(과소 노출 위의 확정은 소급 불가 — ADR-0076 근거 승계). 기본 provider 분기는 낮음(1곳).
