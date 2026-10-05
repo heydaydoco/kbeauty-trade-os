@@ -599,6 +599,24 @@ def test_the_scan_targets_are_pinned() -> None:
     assert deadline_scan.DEFAULT_THRESHOLDS == (7, 3, 1)
 
 
+@pytest.mark.group_k
+def test_a_board_row_without_a_verdict_fails_the_shipment_instead_of_skipping() -> None:
+    """대상 행인데 보드가 D-N·도과를 내지 않으면(도달 불가 방어) 조용히 건너뛰지 않고 예외 — 건별 실패 집계 → 잡 FAILED(fail-visible)"""
+    row = {
+        "milestone_type": "DOC_CUTOFF",
+        "applicable": True,
+        "actual": None,
+        "planned": {"at_utc": "2026-10-05T00:00:00+00:00", "tz": "Asia/Seoul"},
+        "unknown_reason": None,
+        "days_left": None,
+        "is_overdue": None,
+    }
+    with pytest.raises(RuntimeError, match="판정"):
+        deadline_scan.shipment_dues(
+            {"rows": [row]}, shipment_id=1, doc_number="SH-X", assignee_id=1
+        )
+
+
 # ── 문턱 해석 공용화 회귀(deadlines.policy 공개 승격) ─────────────────────────
 
 

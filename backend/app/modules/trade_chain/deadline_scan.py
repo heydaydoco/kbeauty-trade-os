@@ -17,8 +17,8 @@
 ■ **견적·PI(B18)** — 후보 = 만료 스윕과 같은 정의(`EXPIRY_CANDIDATE_STATUS`·삭제 아님·`is_lapsed` 아님·살아 있는 후속 없음).
   `valid_until` 당일까지 유효(D-0 포함), 경과분은 스윕이 EXPIRED로 닫으므로 도과 알림은 없다.
 ■ **의미론 = S2-3 승계**(`deadlines` 공용 함수 — `days_left`·`passed_thresholds`·`policy`·`has_unacknowledged_alert`):
-    문턱은 '지났다'로 판정(지각 발송) · 도과 건에 지난 문턱 소급 없음 · D-3 이내 + 같은 기일 미확인 → ADMIN 에스컬레이션(이번 스캔이
-    만드는 알림보다 **먼저** 판정) · 수신자 = 담당자 → 규칙 → ADMIN 폴백(`Routing.DEADLINE`) · 문턱 = `alert_rules.config.thresholds`,
+    문턱은 '지났다'로 판정(지각 발송) · 도과 건에 지난 문턱 소급 없음 · D-3 이내 + 같은 종류·같은 기일의 **스캔일 KST 0시 이전에 만든** 미확인 →
+    ADMIN 에스컬레이션(이번 스캔·같은 날 앞선 실행이 만든 알림은 '받을 틈이 없었다' — 자율 확정) · 수신자 = 담당자 → 규칙 → ADMIN 폴백(`Routing.DEADLINE`) · 문턱 = `alert_rules.config.thresholds`,
     규칙이 없으면 **D-7/3/1**.
 ■ **dedup = DB 부분 유니크**(`alerts.dedup_key`, `ON CONFLICT DO NOTHING` — 확인 후 INSERT 없음):
     `deadline:shipments:{선적 id}:{종류}/{문턱}@{기일}:{수신자}` · `deadline:quotations|proforma_invoices:{id}:VALIDITY/{문턱}@{valid_until}:{수신자}`
@@ -188,7 +188,8 @@ def shipment_dues(
                 stamp = str(row["planned"])
                 shown = stamp
         if row["days_left"] is None or row["is_overdue"] is None:
-            continue  # 보드가 판정을 내지 않은 행(방어 — 위 조건으로 도달 불가)
+            # 위 조건이면 보드는 늘 판정을 낸다(CHECK가 시각형 tz를 강제) — 그래도 비면 조용히 건너뛰지 않고 이 건을 실패로 올린다(fail-visible)
+            raise RuntimeError(f"보드가 기일 판정을 내지 않았습니다: {milestone_type}")
         dues.append(
             Due(
                 entity_type="shipments",
