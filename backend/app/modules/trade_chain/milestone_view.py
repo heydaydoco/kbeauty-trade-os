@@ -158,10 +158,16 @@ class Assembled:
     customs_accepted: list[date | None]
 
 
-def assemble(session: Session, row: Shipment) -> Assembled:
-    """선적 1건의 마일스톤 보드 + 통관 수리일 목록(상세의 통관 요약이 재사용 — 질의 재실행 0)."""
-    today = today_kst()
-    now = utcnow()
+def assemble(
+    session: Session, row: Shipment, *, today: date | None = None, now: datetime | None = None
+) -> Assembled:
+    """선적 1건의 마일스톤 보드 + 통관 수리일 목록(상세의 통관 요약이 재사용 — 질의 재실행 0).
+
+    `today`·`now` 주입 = 무역 기일 스캔(PR-6 `deadline_scan`)이 **한 실행의 기준 시각 하나**로 전 건을 판정하게 한다(건마다 시계를
+    다시 읽으면 KST 자정을 걸친 실행에서 건별 '오늘'이 갈린다). 생략하면 지금(화면 조회).
+    """
+    today = today if today is not None else today_kst()
+    now = now if now is not None else utcnow()
     kind_set = SHIPMENT_MILESTONES_BY_KIND.get(row.shipment_kind, frozenset())
     stored = {
         m.milestone_type: m
