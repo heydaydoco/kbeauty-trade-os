@@ -724,13 +724,18 @@ def test_reusing_a_bulk_key_for_a_different_request_is_refused_as_a_whole() -> N
 
 
 @pytest.mark.group_j
-def test_a_bulk_key_longer_than_the_key_column_still_works_and_replays() -> None:
-    """헤더 키 길이는 검증되지 않는다(D-D13) — 300자 벌크 키도 500이 아니라 정상 처리·같은 키 재요청 재생·다른 요청 409(지문 대조 키는 sha256 파생)"""
+def test_a_bulk_key_over_the_limit_is_rejected_and_a_128_char_key_replays() -> None:
+    """P-39(= D-D13) 해소 — 129자 이상 벌크 키는 입구에서 422 `KEY_INVALID`(어떤 건도 실행 안 함·담당 불변), 128자 키는 정상 처리·
+    같은 키 재요청 재생·다른 요청 409(지문 대조 키는 sha256 파생). S3-3 PR-1b가 종전 '300자도 정상' 시험을 뒤집었다."""
     so = ready_so()
     owner = board_user(TRADE)
-    headers = {"Idempotency-Key": "k" * 300}
     body = _so_targets([so])
     with logged_in(TRADE) as client:
+        too_long = bulk(
+            client, "ASSIGN", body, assignee_id=owner, headers={"Idempotency-Key": "k" * 300}
+        )
+        assert too_long.status_code == 422 and code_of(too_long) == "COMMON.IDEMPOTENCY.KEY_INVALID"
+        headers = {"Idempotency-Key": "k" * 128}
         first = _ok(bulk(client, "ASSIGN", body, assignee_id=owner, headers=headers))
         again = _ok(bulk(client, "ASSIGN", body, assignee_id=owner, headers=headers))
         other = bulk(client, "ASSIGN", body, assignee_id=board_user(TRADE), headers=headers)

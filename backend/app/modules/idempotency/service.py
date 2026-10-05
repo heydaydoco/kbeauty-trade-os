@@ -44,6 +44,10 @@ KEY_TTL = timedelta(hours=24)
 #: 클라이언트가 보내는 헤더 이름 (프런트 lib/api.ts와 동일해야 한다).
 IDEMPOTENCY_HEADER = "Idempotency-Key"
 
+#: 키 최대 길이(글자) — `IdempotencyKey.idempotency_key`의 `String(128)`과 같아야 한다(시험이 대조). 넘는 키는 입구에서 422로 막는다
+#: (P-39 — 막지 않으면 DB 22001이 500으로 샌다). 프런트가 만드는 키는 UUID 36자다.
+IDEMPOTENCY_KEY_MAX_LENGTH = 128
+
 
 @dataclass(frozen=True, slots=True)
 class Replay:

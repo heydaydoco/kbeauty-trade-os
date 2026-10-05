@@ -184,26 +184,13 @@ def test_milestone_types_match_the_db_check_and_derived_types_are_outside_it() -
         assert types >= RELEASE_BOUND_ACTUALS, kind
 
 
-def test_the_today_pin_covers_every_milestone_import_point() -> None:
-    """적대 검토 반영 ⑩ 자기검사 — 마일스톤·통관·선적 흐름 중 `today_kst`를 부르는 trade_chain 모듈은 전부 고정 목록에 있고
-    (새 import 지점이 생기면 이 시험이 지목), autouse 고정이 실제로 같은 날을 돌려준다"""
-    from tests.support.kst import MILESTONE_TODAY_IMPORT_POINTS
-
-    pinned = {module.__name__ for module in MILESTONE_TODAY_IMPORT_POINTS}
-    readers = {
-        "app." + rel.removesuffix(".py").replace("/", ".")
-        for rel, tree in app_sources().items()
-        if rel.startswith("modules/trade_chain/")
-        and rel.split("/")[-1].startswith(("milestone_", "customs_", "shipment_"))
-        and "today_kst" in referenced_names(tree)
-    }
-    assert readers, "공회전 — today_kst를 부르는 모듈을 하나도 못 찾음"
-    assert readers <= pinned, readers - pinned
-    assert len({module.today_kst() for module in MILESTONE_TODAY_IMPORT_POINTS}) == 1
-
-
-#: '마일스톤 계열' 시험 모듈 — 이름에 milestone·customs가 든 시험 파일(선적 마일스톤·통관·OEM 생산 일정·품목군 세트).
-_MILESTONE_TEST_NAME = re.compile(r"^test_.*(milestone|customs).*\.py$")
+#: '오늘'을 다루는 계열 시험 모듈 — 이름에 milestone·customs(선적 마일스톤·통관·OEM 생산 일정·품목군 세트)와 S3-3 PR-1b가 미리 더한
+#: receivable·payment·aging·L/C(`lc_terms`·`letter_of_credit`·`_lc`)·commercial_invoice·rendition·letterhead가 든 시험 파일
+#: (S3-3 신규 시험이 고정 없이 `today_kst`를 읽는 순간 지목 — 자율 확정, `tests/architecture/test_today_pin_coverage.py`와 짝).
+_MILESTONE_TEST_NAME = re.compile(
+    r"^test_.*(milestone|customs|receivable|payment|aging|lc_terms|letter_of_credit|_lc(?=[_.])"
+    r"|commercial_invoice|rendition|letterhead).*\.py$"
+)
 
 
 def _pin_problems(rel: str, tree: ast.Module) -> list[str]:
@@ -263,3 +250,27 @@ def test_the_pin_scan_catches_a_missing_pin() -> None:
         "def f(m):\n    pin_today_kst(m, sys.modules[__name__])\n"
     )
     assert _pin_problems("c.py", good) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "covered"),
+    [
+        ("test_shipment_milestones.py", True),
+        ("test_shipment_customs.py", True),
+        ("test_receivable_aging.py", True),
+        ("test_receivables.py", True),
+        ("test_payment_service.py", True),
+        ("test_ar_aging_buckets.py", True),
+        ("test_lc_terms_flow.py", True),
+        ("test_letter_of_credit.py", True),
+        ("test_shipment_lc_checklist.py", True),
+        ("test_commercial_invoices.py", True),
+        ("test_renditions.py", True),
+        ("test_letterhead.py", True),
+        ("test_calc_totals.py", False),  # 'lc' 부분 문자열 오탐 금지
+        ("test_shipments.py", False),
+    ],
+)
+def test_the_today_test_name_pattern_covers_s3_3_files(name: str, covered: bool) -> None:
+    """S3-3 PR-1b 자기검사 — 고정 규율 대상 이름 패턴이 S3-3 채권·입금·aging·L/C·CI·렌더·레터헤드 시험 파일을 잡고 오탐은 없다"""
+    assert bool(_MILESTONE_TEST_NAME.match(name)) is covered

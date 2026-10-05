@@ -45,6 +45,7 @@ docker compose run --rm web npm run test -- --run # 프런트
 - 커밋을 동반하므로 **같은 test DB에 pytest를 두 개 동시에 돌리지 않는다**(pytest-xdist 등 병렬 실행 금지 — 서로의 TRUNCATE가 상대의 행을 지워 정상 코드가 빨개진다. PROGRESS 주의 인계 ③). 병렬이 필요하면 **DB를 나눈다** — CI 샤드가 그렇게 한다(아래).
 - 잠금을 쓰는 시험은 **변이 점검**으로 잠금 제거 시 실패하는지 확인한다(예: 청소 잡 SKIP LOCKED 제거 → `test_a_locked_claim_is_skipped_not_waited_on…` kill).
 - 시간 경계가 있는 시험은 **같은 '오늘'**(KST — `today_kst()`)을 시험과 대상 코드가 공유하게 고정한다(KST 자정·UTC 날짜 차이로 하루 어긋나는 결함 — PR #50 CI 23:55~00:04 KST 실측).
+  고정은 `tests/support/kst.pin_today_kst(monkeypatch, 시험모듈)` 하나로 한다 — 원본 `app.core.time.today_kst`와 `TODAY_IMPORT_POINTS`(이름 임포트 지점)를 함께 바꾼다. `TODAY_PINNED_PACKAGES`(trade_chain·receivables·payments·lc_terms·commercial_invoices·renditions·letterhead·trade_docs) 아래에 `from app.core.time import today_kst`를 새로 쓰면 그 모듈을 `TODAY_IMPORT_POINTS`에 등재한다 — 빠지면 `tests/architecture/test_today_pin_coverage.py`가 즉시 실패한다(별칭 임포트 금지). 이름에 milestone·customs·receivable·payment·aging·L/C·commercial_invoice·rendition·letterhead가 든 시험 파일은 `today_kst`를 읽으면 고정 호출이 필수다(`test_milestone_contract`). S3-3 PR-1b(R-37).
 
 ## 워크스루(렌즈 11) 3층 증거 (ADR-0086 — 브라우저 e2e 도구 미채택)
 
