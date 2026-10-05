@@ -358,7 +358,8 @@ function PurchaseOrderDetailView() {
                 <tr>
                   <th className="cell-nowrap px-3 py-2 text-center">번호</th>
                   <th className="cell-nowrap px-3 py-2">SKU</th>
-                  <th className="cell-nowrap px-3 py-2">품명</th>
+                  {/* 390px 실브라우저 발견(PR-5b) — 열이 늘어 품명이 글자 단위로 꺾였다. 최소 폭을 두고 표는 래퍼 안에서 가로 스크롤. */}
+                  <th className="cell-nowrap min-w-32 px-3 py-2">품명</th>
                   <th className="cell-nowrap px-3 py-2 text-center">수량</th>
                   <th className="cell-nowrap px-3 py-2 text-center">요청납기</th>
                   <th className="cell-nowrap px-3 py-2 text-center">수입선적 배정 가능</th>

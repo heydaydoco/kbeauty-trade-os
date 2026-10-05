@@ -88,6 +88,8 @@ describe("발주 상세 라인 — 배정 가능량·입고예정(원가 무관 
     const headers = within(region).getAllByRole("columnheader").map((th) => th.textContent);
     expect(headers).toContain("수입선적 배정 가능");
     expect(headers).toContain("입고예정");
+    // 390px에서 열이 늘어 품명이 글자 단위로 꺾이지 않게 최소 폭(실브라우저 발견).
+    expect(within(region).getByRole("columnheader", { name: "품명" }).className).toMatch(/min-w-\d+/);
     const row = lineRow("SKU-001");
     expect(cellUnder(row, "수입선적 배정 가능")).toHaveTextContent(/^10$/);
     expect(cellUnder(row, "수입선적 배정 가능").className).toContain("num");
