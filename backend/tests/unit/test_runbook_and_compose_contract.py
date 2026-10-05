@@ -97,6 +97,58 @@ def test_the_input_mapping_points_at_fields_that_really_exist() -> None:
 
 
 @needs_repo
+def test_the_shipment_rows_of_the_form_point_at_fields_that_really_exist() -> None:
+    """수기 양식 4-2(선적 — S3-2 PR-8)의 대응표가 가리키는 필드가 실제 요청 스키마에 있다(이름이 바뀌면 양식이 먼저 깨진다)"""
+    from app.modules.shipments.schemas import (
+        CustomsRecordCreateRequest,
+        MilestoneActualRequest,
+        MilestoneNoticeRequest,
+        MilestonePlanRequest,
+    )
+
+    form = _text(FORM)
+    for korean in (
+        "4-2. 선적인 경우",
+        "선적 만들기",
+        "수입선적 만들기",
+        "계획 변경",
+        "실적 입력",
+        "통관 기록 추가",
+    ):
+        assert korean in form, korean
+    for field in ("actual_on", "actual_at", "declaration_no", "declared_on", "accepted_on"):
+        assert f"`{field}`" in form, field
+    assert {"actual_on", "actual_at", "reason"} <= set(MilestoneActualRequest.model_fields)
+    assert {"planned_on", "planned_at", "reason"} <= set(MilestonePlanRequest.model_fields)
+    assert {"declaration_no", "declared_on", "accepted_on", "note"} <= set(
+        CustomsRecordCreateRequest.model_fields
+    )
+    assert {"occurred_on", "summary"} <= set(MilestoneNoticeRequest.model_fields)
+
+
+@needs_repo
+def test_the_s3_2_opening_section_carries_the_operating_rules() -> None:
+    """runbook S3-2 운영 개시(PR-8)가 계획서 PR-8 행의 항목을 전부 담는다 — 휴일 선언·물류 계정 경로·잡 14행·DG 경고·통관 이슈 임시 규칙·수기 양식"""
+    prod = _text(RUNBOOK / "prod.md")
+    section = prod[prod.index("## S3-2 운영 개시") :]
+    for needle in (
+        "create-admin",
+        "사용자·역할",
+        "회수",
+        "휴일 캘린더 등록",
+        "근거 링크",
+        "확인 불가",
+        "위험물(DG)",
+        "통관 이슈 임시 규칙",
+        "forms/manual-record-form.md",
+        "trade-deadline-scan",
+    ):
+        assert needle in section, needle
+    assert "### 잡 표 — 레지스트리 14행" in prod and "### ⑧ 배치 14개" in prod
+    assert "사용자 역할을 바꾸는 화면은 아직 없다" not in prod  # PR-7 이후 낡은 문장 잔존 금지
+
+
+@needs_repo
 def test_the_sop_states_the_date_rule_the_steps_and_the_one_time_reconciliation() -> None:
     sop = _text(SOP)
     assert "증빙일 = 실제 발생일" in sop and "입력일 = 복구일" in sop
