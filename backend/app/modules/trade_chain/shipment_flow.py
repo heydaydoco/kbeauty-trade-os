@@ -261,8 +261,13 @@ def clean_note(raw: object, *, field: str = "internal_note") -> str | None:
     return text.strip() or None
 
 
-def _copied_header(source: Any, *, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """원천(SO·PO) → 선적 헤더 사본(통화·고정 환율·결제조건 4열·Incoterms 3열·담당자 — 마스터 재조회 금지)·증빙일 = KST 오늘 1회(R-15)·국가·메모."""
+def _copied_header(
+    source: Any, *, kind: str, payload: dict[str, Any], note: str | None
+) -> dict[str, Any]:
+    """원천(SO·PO) → 선적 헤더 사본(통화·고정 환율·결제조건 4열·Incoterms 3열·담당자 — 마스터 재조회 금지)·증빙일 = KST 오늘 1회(R-15)·국가·메모.
+
+    `note`는 호출자가 잠금 전에 `clean_note`로 검사·정규화한 값이다(순수 입력 422가 잠금 뒤 판정[수량 409]보다 먼저 — 적대 검토 반영).
+    """
     return {
         "doc_date": today_kst(),  # R-15 — 원천 복사가 아니라 생성 시 1회(이후 ORIGIN 불변)
         "currency": source.currency,
@@ -279,7 +284,7 @@ def _copied_header(source: Any, *, kind: str, payload: dict[str, Any]) -> dict[s
         "shipment_kind": kind,
         "origin_country_code": payload["origin_country_code"],
         "dest_country_code": payload["dest_country_code"],
-        "internal_note": clean_note(payload.get("internal_note")),
+        "internal_note": note,
     }
 
 
@@ -374,6 +379,8 @@ def _plan(
     )  # 거래처는 ORIGIN(불변)이라 잠금 전 무잠금 조회로 얻어도 안전하다
     if peek.status not in CONSUMABLE_STATUSES[SO_KIND]:
         raise _not_consumable(SO_KIND, peek.status)
+    # 순수 입력 검사(메모)는 잠금 전에 — 수량 409(라인 잠금 뒤)보다 먼저 드러난다(ADR-0079 ⑧ 404→409[상태]→422→409[수량])
+    note = clean_note(payload.get("internal_note"))
     kind = ShipmentKind.EXPORT.value
     _check_party_roles(requested_parties, kind)
     buyer, partner_rows = _lock_partners(
@@ -382,17 +389,17 @@ def _plan(
         requested_parties,
         lock=lock,
     )
-    so = (
-        lock_document(session, SalesOrder, so_id) if lock else peek
-    )  # SO FOR UPDATE 선점(승격 금지)
+    # 당사자 스냅샷(영문명·주소 422)은 거래처를 잠그며 읽은 바로 그 행으로 — SO·라인 잠금 전에 판정(읽은 값 = 저장 값, TOCTOU 창 없음)
+    parties = _plan_parties(kind, buyer, "so_id", requested_parties, partner_rows)
+    # SO FOR UPDATE 선점(승격 금지)
+    so = lock_document(session, SalesOrder, so_id) if lock else peek
     source_lines, take, open_before = _select_so_lines(
         session, so, list(payload["lines"]), lock=lock
     )
     editing.require_line_capacity(0, len(source_lines))
-    parties = _plan_parties(kind, buyer, "so_id", requested_parties, partner_rows)
     lines = [_line_from_so(line, take[line.id]) for line in source_lines]
     editing.compute_total([item.amount for item in lines])  # 2^53 초과 422 — 미리보기도 같은 검증
-    header = _copied_header(so, kind=kind, payload=payload)
+    header = _copied_header(so, kind=kind, payload=payload, note=note)
     header.update(
         {
             "so_id": so.id,
@@ -496,6 +503,8 @@ def _plan_import(
     peek = _read_po(session, po_id)
     if peek.status not in CONSUMABLE_STATUSES[PO_KIND]:
         raise _not_consumable(PO_KIND, peek.status)
+    # 순수 입력 검사(메모)는 잠금 전에 — 배정 가능량 409(라인 잠금 뒤)보다 먼저(ADR-0079 ⑧)
+    note = clean_note(payload.get("internal_note"))
     kind = ShipmentKind.IMPORT.value
     _check_party_roles(requested_parties, kind)
     supplier_types, supplier_label = PO_SUPPLIER_TYPES[peek.po_kind]
@@ -505,15 +514,16 @@ def _plan_import(
         requested_parties,
         lock=lock,
     )
+    # 송하인 스냅샷(공급사 영문명·주소 422)은 거래처를 잠그며 읽은 행으로 — PO·라인 잠금 전에 판정(읽은 값 = 저장 값)
+    parties = _plan_parties(kind, supplier, "po_id", requested_parties, partner_rows)
     source_lines, take, assignable_before = _select_po_lines(
         session, po_id, peek.status, list(payload["lines"]), lock=lock
     )
     # 잠금(FOR SHARE) 뒤 헤더를 다시 읽는다 — 담당자(FREE)는 바뀔 수 있고, 생성은 잠근 시점의 값을 복사한다(미리보기는 peek 그대로)
     po = _read_po(session, po_id) if lock else peek
     editing.require_line_capacity(0, len(source_lines))
-    parties = _plan_parties(kind, supplier, "po_id", requested_parties, partner_rows)
     lines = [_line_from_po(line, take[int(line.id)]) for line in source_lines]
-    header = _copied_header(po, kind=kind, payload=payload)
+    header = _copied_header(po, kind=kind, payload=payload, note=note)
     header.update(
         {
             "po_id": int(po.id),

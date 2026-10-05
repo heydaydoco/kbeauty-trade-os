@@ -37,6 +37,23 @@ def rows(sql: str, **params: Any) -> list[dict[str, Any]]:
         return [dict(r) for r in connection.execute(text(sql), params).mappings()]
 
 
+#: 선적 쓰기의 흔적 전부 — 선적·라인·당사자·상태 이력·이벤트·멱등 키 행 수 + 채번 카운터 합(SUM last_number).
+_FOOTPRINT_SQL = (
+    "SELECT count(*) FROM shipments",
+    "SELECT count(*) FROM shipment_lines",
+    "SELECT count(*) FROM shipment_parties",
+    "SELECT count(*) FROM shipment_status_log",
+    "SELECT count(*) FROM events",
+    "SELECT count(*) FROM idempotency_keys",
+    "SELECT COALESCE(SUM(last_number), 0) FROM doc_number_seq",
+)
+
+
+def write_footprint() -> tuple[int, ...]:
+    """'저장·채번 0' 단언용 스냅샷 — 미리보기(비저장)·J-08(롤백)이 같은 목록을 쓴다(한쪽만 넓어지는 일 없게)."""
+    return tuple(int(scalar(sql)) for sql in _FOOTPRINT_SQL)
+
+
 def confirmed_so(
     quantities: tuple[int, ...] = (10,),
     *,

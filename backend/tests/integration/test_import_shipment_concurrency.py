@@ -26,7 +26,7 @@ from app.modules.trade_chain import lifecycle, shipment_flow
 from app.modules.trade_docs.locking import LOCK_ORDER
 from app.modules.trade_docs.quantities import ASSIGNABLE_KINDS, open_quantity
 from tests.factories.approvals import make_user
-from tests.factories.shipments import import_body, scalar
+from tests.factories.shipments import import_body, scalar, write_footprint
 from tests.factories.trade import (
     create_po_via_api,
     create_purchase_priced_sku,
@@ -100,6 +100,24 @@ def test_j06_two_concurrent_import_shipments_never_exceed_the_assignable_quantit
     assert sum(o.ok for o in outcomes) == 1
     assert _codes(outcomes) == ["SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE"]
     assert _open(line) == (100, 40)
+    assert _po_state(po["id"]) == before
+
+
+def test_twenty_importers_on_one_po_line_of_15_get_exactly_15() -> None:
+    """J-03 수입판(J-06 결정화 — 적대 검토 ⑤) — PO 라인 15에 20명이 1개씩 동시 수입선적 → 성공 정확히 15·EXCEEDS_ASSIGNABLE 5·
+    배정 가능량 0·PO 잔량 15 그대로·PO 상태/version 불변·번호 15개 중복 0·500·40P01 0(라인 FOR UPDATE 직렬화가 없으면 초과 성공이 난다)"""
+    po = _issued_po((15,))
+    line = po["lines"][0]["id"]
+    before = _po_state(po["id"])
+    actors = [make_user(RoleCode.TRADE) for _ in range(20)]
+    outcomes = run_concurrently(
+        lambda i: _create(actors[i], po["id"], [(line, 1)]), workers=20, timeout=60
+    )
+    _no_db_errors(outcomes)
+    assert sum(o.ok for o in outcomes) == 15
+    assert _codes(outcomes) == ["SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE"] * 5
+    assert len({o.value[1]["doc_number"] for o in outcomes if o.ok}) == 15
+    assert _open(line) == (15, 0)
     assert _po_state(po["id"]) == before
 
 
@@ -195,21 +213,7 @@ def test_j08_a_failure_after_insert_rolls_the_import_creation_back_entirely(
     po = _issued_po((10,))
     actor = make_user(RoleCode.TRADE)
 
-    def counts() -> tuple[Any, ...]:
-        return tuple(
-            scalar(sql)
-            for sql in (
-                "SELECT count(*) FROM shipments",
-                "SELECT count(*) FROM shipment_lines",
-                "SELECT count(*) FROM shipment_parties",
-                "SELECT count(*) FROM shipment_status_log",
-                "SELECT count(*) FROM events",
-                "SELECT count(*) FROM idempotency_keys",
-                "SELECT COALESCE(SUM(last_number), 0) FROM doc_number_seq",
-            )
-        )
-
-    before = (counts(), _po_state(po["id"]))
+    before = (write_footprint(), _po_state(po["id"]))
 
     class _Boom(RuntimeError):
         pass
@@ -220,7 +224,7 @@ def test_j08_a_failure_after_insert_rolls_the_import_creation_back_entirely(
     monkeypatch.setattr(shipment_flow, "converge_parent", boom)
     with pytest.raises(_Boom):
         _create(actor, po["id"], [(po["lines"][0]["id"], 4)])
-    assert (counts(), _po_state(po["id"])) == before
+    assert (write_footprint(), _po_state(po["id"])) == before
     assert _open(po["lines"][0]["id"]) == (10, 10)
 
 

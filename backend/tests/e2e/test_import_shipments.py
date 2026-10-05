@@ -29,6 +29,7 @@ from tests.factories.shipments import (
     cancel,
     confirmed_so,
     create_import_shipment,
+    create_shipment,
     created,
     created_import,
     import_body,
@@ -37,6 +38,7 @@ from tests.factories.shipments import (
     rows,
     scalar,
     shipment_version,
+    write_footprint,
 )
 from tests.factories.trade import (
     SENTINEL_UNIT_COST,
@@ -303,7 +305,12 @@ def test_gc_g3_no_cost_key_or_sentinel_reaches_any_import_surface() -> None:
             csv = client.get(f"{SHIPMENTS}/export.csv", params={"po_id": po["id"]})
             assert detail.status_code == listing.status_code == csv.status_code == 200, role
             assert leaked_keys(detail.json()) == set(), (role, leaked_keys(detail.json()))
-            assert all(leaked_keys(item) == set() for item in listing.json()["items"]), role
+            # 대상 행이 실제로 있어야 '키 0'이 공회전이 아니다 — 목록·CSV 모두 이 선적 1행을 먼저 찾는다
+            [item] = [i for i in listing.json()["items"] if i["id"] == body["id"]]
+            assert item["shipment_kind"] == "IMPORT" and leaked_keys(item) == set(), role
+            assert all(leaked_keys(i) == set() for i in listing.json()["items"]), role
+            csv_rows = [ln for ln in csv.text.splitlines() if body["doc_number"] in ln]
+            assert len(csv_rows) == 1, (role, csv_rows)
             surfaces += [detail.text, listing.text, csv.text]
     for blob in surfaces:
         for sentinel in SENTINELS:
@@ -461,14 +468,10 @@ def test_partial_import_shipments_split_the_assignable_quantity_and_lines_edit_w
 
 
 def test_preview_saves_nothing_and_matches_creation_checks(trade: TestClient) -> None:
-    """미리보기 — 저장·채번·이벤트·멱등 키 0, 생성과 같은 검증(초과 409·소속 422)·같은 값(배정 가능량 전/후·자동 송하인)"""
+    """미리보기 — 저장(선적·라인·당사자·상태 이력)·채번 카운터·이벤트·멱등 키 0, 생성과 같은 검증(초과 409·소속 422)·같은 값(배정 가능량 전/후·자동 송하인)"""
     po = sentinel_po(trade, quantities=(12,))
     line = po["lines"][0]["id"]
-    counts = (
-        "SELECT (SELECT count(*) FROM shipments) AS s, (SELECT count(*) FROM events) AS e,"
-        " (SELECT count(*) FROM idempotency_keys) AS k"
-    )
-    before = rows(counts)
+    before = write_footprint()
     preview = trade.post(f"{PO}/{po['id']}/shipments/preview", json=import_body([(line, 5)]))
     assert preview.status_code == 200, preview.text
     body = preview.json()
@@ -478,7 +481,7 @@ def test_preview_saves_nothing_and_matches_creation_checks(trade: TestClient) ->
     assert [p["role"] for p in body["parties"] if p["auto"]] == ["SHIPPER"]
     over = trade.post(f"{PO}/{po['id']}/shipments/preview", json=import_body([(line, 13)]))
     assert over.status_code == 409 and _code(over) == "SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE"
-    assert rows(counts) == before
+    assert write_footprint() == before
 
 
 # ── A·K. 오류 우선순위·입력 검증·상태 ──────────────────────────────────────────────
@@ -548,7 +551,9 @@ def test_import_errors_follow_404_409_422_and_reject_bad_inputs(trade: TestClien
         assert bad_note.status_code == 422 and list(bad_note.json()["error"]["detail"]) == [
             "internal_note"
         ], note
+    assert int(scalar("SELECT count(*) FROM shipments WHERE po_id = :p", p=po["id"])) == 0
     multi_line = created_import(trade, po["id"], [(line, 1)], internal_note="첫 줄\n둘째\t줄")
+    assert int(scalar("SELECT count(*) FROM shipments WHERE po_id = :p", p=po["id"])) == 1
     assert multi_line["internal_note"] == "첫 줄\n둘째\t줄"  # 줄바꿈·탭은 메모에 허용
     assert (
         int(
@@ -561,6 +566,35 @@ def test_import_errors_follow_404_409_422_and_reject_bad_inputs(trade: TestClien
         )
         == 0
     )
+
+
+def test_pure_input_422_comes_before_the_assignable_409_on_import_and_export(
+    trade: TestClient,
+) -> None:
+    """적대 검토 ① — 순수 입력 422(메모의 보이지 않는 글자)·거래처 영문명 422는 잠금 뒤 판정인 수량 409보다 먼저다(ADR-0079 ⑧).
+    초과 수량 + 나쁜 메모 = 422 `detail.internal_note`(수입·수출 같은 순서), 초과 수량 + 공급사 영문명 결측 = 422 ENGLISH_NAME_MISSING — 저장 0"""
+    po = sentinel_po(trade, quantities=(5,))
+    line = po["lines"][0]["id"]
+    nameless = sentinel_po(trade, quantities=(5,), supplier=create_supplier(name_en=None))
+    so = confirmed_so((5,))
+    before = write_footprint()
+    both = create_import_shipment(trade, po["id"], [(line, 6)], internal_note="메모\u200b")
+    assert both.status_code == 422 and list(both.json()["error"]["detail"]) == ["internal_note"]
+    preview = trade.post(
+        f"{PO}/{po['id']}/shipments/preview",
+        json=import_body([(line, 6)], internal_note="메모\u200b"),
+    )
+    assert preview.status_code == 422 and list(preview.json()["error"]["detail"]) == [
+        "internal_note"
+    ]
+    no_name = create_import_shipment(trade, nameless["id"], [(nameless["lines"][0]["id"], 6)])
+    assert no_name.status_code == 422 and _code(no_name) == "SHIPMENTS.PARTY.ENGLISH_NAME_MISSING"
+    export = create_shipment(trade, so["id"], [(so["line_ids"][0], 6)], internal_note="메모\u200b")
+    assert export.status_code == 422 and list(export.json()["error"]["detail"]) == ["internal_note"]
+    assert write_footprint() == before
+    # 대조: 메모가 깨끗하면 같은 초과 수량은 409(입력이 통과해야 수량 판정에 닿는다)
+    over = create_import_shipment(trade, po["id"], [(line, 6)], internal_note="정상 메모")
+    assert over.status_code == 409 and _code(over) == "SHIPMENTS.QUANTITY.EXCEEDS_ASSIGNABLE"
 
 
 def test_supplier_confirmed_po_is_consumable_and_import_milestones_and_customs_work(
