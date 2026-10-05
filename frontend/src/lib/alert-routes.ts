@@ -21,3 +21,20 @@ export function alertRoute(entityType: string | null, entityId: number | null): 
   const build = ALERT_ROUTES[entityType];
   return build === undefined ? null : build(entityId);
 }
+
+// 알림 대상 종류의 화면 이름(한국어 UI — S3-2 PR-8 워크스루 발견: 알림센터 '대상' 열이 `shipments #1`처럼 표 이름 원문이었다).
+// 모르는 종류는 "기타"(design-D 라벨 규칙) — 원문 코드는 화면이 title로 남긴다.
+const ALERT_TARGET_LABEL: Record<string, string> = {
+  quotations: "견적",
+  proforma_invoices: "PI",
+  sales_orders: "수주",
+  order_intakes: "주문 접수",
+  purchase_orders: "발주",
+  shipments: "선적",
+  approvals: "승인",
+  certifications: "인증",
+};
+
+export function alertTargetLabel(entityType: string): string {
+  return ALERT_TARGET_LABEL[entityType] ?? "기타";
+}
