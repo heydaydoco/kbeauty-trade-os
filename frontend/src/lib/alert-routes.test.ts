@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alertRoute } from "./alert-routes";
+import { alertRoute, alertTargetLabel } from "./alert-routes";
 
 describe("알림 이동 표", () => {
   it("quotations 알림은 견적 상세로 이동한다", () => {
@@ -41,5 +41,24 @@ describe("알림 이동 표", () => {
     expect(alertRoute("certifications", 3)).toBeNull();
     expect(alertRoute(null, null)).toBeNull();
     expect(alertRoute("quotations", null)).toBeNull();
+  });
+
+  it("대상 종류는 한국어 화면 이름으로 보인다 — 표 이름 원문(shipments 등)을 그대로 보이지 않는다 (S3-2 PR-8 워크스루)", () => {
+    expect(alertTargetLabel("shipments")).toBe("선적");
+    expect(alertTargetLabel("quotations")).toBe("견적");
+    expect(alertTargetLabel("proforma_invoices")).toBe("PI");
+    expect(alertTargetLabel("sales_orders")).toBe("수주");
+    expect(alertTargetLabel("purchase_orders")).toBe("발주");
+    expect(alertTargetLabel("order_intakes")).toBe("주문 접수");
+    expect(alertTargetLabel("approvals")).toBe("승인");
+    expect(alertTargetLabel("certifications")).toBe("인증");
+    expect(alertTargetLabel("backups")).toBe("기타");
+  });
+
+  it("이동 표의 모든 종류에 화면 이름이 있다(새 종류를 이동 표에만 더하면 실패)", () => {
+    for (const type of ["quotations", "proforma_invoices", "sales_orders", "order_intakes", "purchase_orders", "shipments", "approvals"]) {
+      expect(alertRoute(type, 1)).not.toBeNull();
+      expect(alertTargetLabel(type)).not.toBe("기타");
+    }
   });
 });

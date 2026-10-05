@@ -212,10 +212,11 @@ describe("내비·알림", () => {
       ],
     ]);
     renderWithProviders(<AppRoutes />, { route: "/alerts" });
-    const link = await screen.findByRole("link", { name: "quotations #7 열기" });
+    // 대상 이름은 한국어 종류 이름(S3-2 PR-8 — 표 이름 원문 'quotations #7' 아님)
+    const link = await screen.findByRole("link", { name: "견적 #7 열기" });
     expect(link).toHaveAttribute("href", "/quotations/7");
     // 표에 없는 종류는 링크 없이 글자만.
-    expect(screen.getByText("certifications #3")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /certifications/ })).not.toBeInTheDocument();
+    expect(screen.getByText("인증 #3")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /인증 #3/ })).not.toBeInTheDocument();
   });
 });

@@ -123,6 +123,16 @@ describe("알림센터", () => {
     expect(screen.getAllByRole("button", { name: "확인" })).toHaveLength(1);
     // 2026-08-12T01:46Z = KST 10:46
     expect(screen.getByText(/10:46 \(KST\)/)).toBeInTheDocument();
+    // 대상 열은 한국어 종류 이름(표 이름 원문 아님 — S3-2 PR-8 워크스루), 원문 코드는 title로만
+    expect(screen.getAllByText("인증 #3")[0]).toHaveAttribute("title", "certifications");
+    expect(screen.queryByText("certifications #3")).toBeNull();
+  });
+
+  it("내용 칸은 최소 폭을 가져 390px에서 글자 단위로 꺾이지 않는다(표는 상자 안에서 가로 스크롤 — 소스 계약, jsdom은 레이아웃을 못 잰다)", async () => {
+    const source = (await import("./alerts.tsx?raw")).default as string;
+    expect(source).toMatch(/<th className="min-w-\[14rem\] px-4 py-2">내용<\/th>/);
+    expect(source).toMatch(/<td className="min-w-\[14rem\] break-keep px-4 py-2">/);
+    expect(source).toContain('className="mt-3 overflow-x-auto rounded-lg border border-gray-200"');
   });
 
   it("확인 버튼이 ack를 부른다", async () => {

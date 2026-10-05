@@ -10,7 +10,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router";
-import { alertRoute } from "../lib/alert-routes";
+import { alertRoute, alertTargetLabel } from "../lib/alert-routes";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
 import { apiFetch } from "../lib/api";
@@ -86,14 +86,14 @@ function recipientLabel(rule: AlertRule): string {
 /** 알림 대상 — 이동 표(lib/alert-routes)에 있는 종류만 링크, 없으면 글자만(없는 화면으로 보내지 않는다). */
 function AlertTarget({ alert }: { alert: Alert }) {
   if (!alert.entity_type) return <>{orEmpty(null)}</>;
-  const text = `${alert.entity_type} #${alert.entity_id}`;
+  const text = `${alertTargetLabel(alert.entity_type)} #${alert.entity_id}`;
   const target = alertRoute(alert.entity_type, alert.entity_id);
   return target ? (
-    <Link to={target} className="underline" aria-label={`${text} 열기`}>
+    <Link to={target} className="underline" aria-label={`${text} 열기`} title={alert.entity_type}>
       {text}
     </Link>
   ) : (
-    <>{text}</>
+    <span title={alert.entity_type}>{text}</span>
   );
 }
 
@@ -199,7 +199,8 @@ export function AlertsPage() {
             <thead className="bg-gray-50 text-left text-gray-600">
               <tr>
                 <th className="cell-nowrap px-4 py-2">등급</th>
-                <th className="px-4 py-2">내용</th>
+                {/* 내용 칸 최소 폭 — 390px에서 표가 화면 폭에 맞춰 줄며 제목·본문이 글자 단위로 꺾이던 결함(S3-2 PR-8 워크스루). 표는 상자 안에서 가로로 민다. */}
+                <th className="min-w-[14rem] px-4 py-2">내용</th>
                 <th className="cell-nowrap px-4 py-2">대상</th>
                 <th className="cell-nowrap px-4 py-2 text-center">확인</th>
               </tr>
@@ -210,7 +211,7 @@ export function AlertsPage() {
                   <td className="cell-nowrap px-4 py-2 text-center">
                     {SEVERITY_LABEL[alert.severity] ?? alert.severity}
                   </td>
-                  <td className="break-keep px-4 py-2">
+                  <td className="min-w-[14rem] break-keep px-4 py-2">
                     <p className="font-medium">{alert.title}</p>
                     {alert.body && <p className="mt-1 text-gray-500">{alert.body}</p>}
                   </td>
