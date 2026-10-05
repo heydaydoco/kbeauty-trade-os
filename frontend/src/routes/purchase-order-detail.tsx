@@ -10,12 +10,18 @@
 //   원가 값은 상태·URL·로컬 스토리지·콘솔에 따로 보관·출력하지 않는다. 자유 텍스트(내부 메모·취소 사유·OC 참조) 옆에 원가 금지 안내를 둔다.
 // - 합계·라인 금액은 서버 문자열만 그대로 표시한다. 프런트 산술 0.
 // - (S3-2 PR-4b) OEM 생산 발주는 '생산 일정' 섹션(원료수급·충진·포장·출하검사 — 버튼은 보드 allowed_actions만, 원가 키 없음)을 더한다.
+// - (S3-2 PR-5b) 라인에 수입선적 **배정 가능량**·**입고예정**(서버 파생값 — 원가 무관, 전 역할 같은 값) 열, '수입선적' 섹션(이 발주의 수입선적
+//   목록 — 금액 열 없음) + '수입선적 만들기'(PO 참조 2단 — 무역·관리자 + 발행·공급사 확인 + 배정 가능량 합 > 0). 입고예정 날짜는 문자열
+//   그대로(`new Date` 금지). 두 필드가 없는 재생 본문(R-5a-6)은 '정보 없음 — 새로고침'. 취소 409 `SUCCESSOR_ALIVE`는 먼저 취소할 수입선적 링크.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { ConfirmDialog, useDialogBehavior } from "../components/confirm-dialog";
+import { ListPager } from "../components/list-pager";
+import { ListState } from "../components/list-state";
 import { OemScheduleSection } from "../components/milestone-oem-section";
+import { ImportShipmentCreateDialog } from "../components/shipment-create-dialog";
 import { DocField, EMPTY, incotermText, paymentTermsText, show } from "../components/proforma-facts";
 import { StatusTimeline } from "../components/status-timeline";
 import { ApiError, apiFetch } from "../lib/api";
@@ -29,17 +35,24 @@ import {
   canEditPurchaseOrderOc,
   purchaseOrderStatusLabel,
 } from "../lib/doc-status";
-import { usePagedQuery } from "../lib/paging";
+import { usePagedList, usePagedQuery } from "../lib/paging";
 import { clearTotalMismatch, peekTotalMismatch } from "../lib/po-total-notice";
 import {
+  IMPORT_SHIPPABLE_PO_STATUSES,
   NO_COST_IN_FREE_TEXT,
   PURCHASE_ORDERS_QUERY_KEY,
+  assignableTotal,
+  expectedReceiptText,
   hasCost,
+  lacksReceiptFields,
   purchaseOrderDetailKey,
+  type PoLine,
   type PurchaseOrderDetail,
 } from "../lib/purchase-order";
 import { hasRole, useSession } from "../lib/session";
+import { poShipmentsKey, successorNumbers, type ShipmentListItem } from "../lib/shipment";
 import { PurchaseOrderStatusBadge } from "./purchase-orders";
+import { CountryRoute, EffectiveDateCell, ShipmentStatusBadge } from "./shipments";
 
 interface UserLookup {
   id: number;
@@ -325,6 +338,20 @@ function PurchaseOrderDetailView() {
           <h2 id="po-lines-title" className="text-lg font-semibold">
             라인
           </h2>
+          <p className="mt-1 break-keep text-xs text-gray-500">
+            &lsquo;수입선적 배정 가능&rsquo;은 발주 수량 중 아직 수입선적에 배정하지 않은 수량입니다(입고 전 발주 잔량과 다릅니다).
+            &lsquo;입고예정&rsquo;은 그 라인을 실은 수입선적들의 ETA 중 가장 늦은 날입니다(실적이 있으면 실적).
+          </p>
+          {lacksReceiptFields(po.lines) && (
+            <div role="status" className="mt-2 rounded border border-gray-400 p-3 text-sm">
+              <p className="break-keep">
+                이 응답에는 배정 가능량·입고예정 정보가 없습니다(이전에 저장된 응답) — 정보 없음. &lsquo;최신 내용 불러오기&rsquo;로 새로고침해 주세요.
+              </p>
+              <button type="button" onClick={reload} className="cell-nowrap mt-2 rounded border border-gray-400 px-3 py-1">
+                최신 내용 불러오기
+              </button>
+            </div>
+          )}
           <div className="mt-2 overflow-x-auto rounded-lg border border-gray-200">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-left text-gray-600">
@@ -334,6 +361,8 @@ function PurchaseOrderDetailView() {
                   <th className="cell-nowrap px-3 py-2">품명</th>
                   <th className="cell-nowrap px-3 py-2 text-center">수량</th>
                   <th className="cell-nowrap px-3 py-2 text-center">요청납기</th>
+                  <th className="cell-nowrap px-3 py-2 text-center">수입선적 배정 가능</th>
+                  <th className="cell-nowrap px-3 py-2 text-center">입고예정</th>
                   {showCost && <th className="cell-nowrap px-3 py-2 text-center">단가</th>}
                   {showCost && <th className="cell-nowrap px-3 py-2 text-center">기준</th>}
                   {showCost && <th className="cell-nowrap px-3 py-2 text-center">금액</th>}
@@ -347,6 +376,12 @@ function PurchaseOrderDetailView() {
                     <td className="break-keep px-3 py-2">{line.sku_name_ko}</td>
                     <td className="num cell-nowrap px-3 py-2">{line.quantity}</td>
                     <td className="num cell-nowrap px-3 py-2">{line.requested_delivery_date ?? EMPTY}</td>
+                    <td className="num cell-nowrap px-3 py-2">
+                      {typeof line.assignable_quantity === "number" ? line.assignable_quantity : <span className="text-gray-500">정보 없음</span>}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <ExpectedReceiptCell line={line} />
+                    </td>
                     {showCost && <td className="num cell-nowrap px-3 py-2">{show(line.unit_cost_text)}</td>}
                     {showCost && (
                       <td className="cell-nowrap px-3 py-2 text-center">
@@ -360,7 +395,7 @@ function PurchaseOrderDetailView() {
               {showCost && (
                 <tfoot>
                   <tr className="border-t border-gray-200 bg-gray-50 font-semibold">
-                    <td colSpan={7} className="cell-nowrap px-3 py-2 text-right">
+                    <td colSpan={9} className="cell-nowrap px-3 py-2 text-right">
                       합계 (서버 계산)
                     </td>
                     <td className="num cell-nowrap px-3 py-2">
@@ -372,6 +407,8 @@ function PurchaseOrderDetailView() {
             </table>
           </div>
         </section>
+
+        <ImportShipmentsSection po={po} canCreate={canWrite} onReload={reload} />
 
         {/* OEM 생산 일정(S3-2 PR-4b — design-D D7): OEM 생산 발주에만(일반 구매 발주는 서버 422 OWNER_NOT_OEM — 섹션 자체를 두지 않는다). */}
         {po.po_kind === "OEM_PRODUCTION" && <OemScheduleSection poId={po.id} />}
@@ -415,10 +452,154 @@ function PurchaseOrderDetailView() {
             </p>
           }
           pending={transition.isPending}
-          error={transition.error ? errorMessage(transition.error, undefined, NOUN) : null}
+          error={transition.error ? cancelErrorView(transition.error) : null}
           onReload={transitionConflict ? reload : undefined}
           onCancel={closeAction}
           onConfirm={(reason) => submitTransition({ to: "CANCELLED", version: base, reason })}
+        />
+      )}
+    </section>
+  );
+}
+
+// ── 수입선적(S3-2 PR-5b) — 라인 입고예정 칸·취소 409 후속·이 발주의 수입선적 목록 + '수입선적 만들기'(PO 참조 2단) ─────────
+
+/**
+ * 입고예정 칸 — NONE "입고예정 미정(수입선적 없음)" / UNSCHEDULED "ETA 미정 n건" / SCHEDULED 날짜 문자열 그대로 + 실적·예정 표지.
+ * 배정 가능량 > 0이면 "미배정 n"을 함께 적는다(입고예정 값이 미배정 수량을 덮지 않는다). 값이 없거나 모양이 어긋나면 '정보 없음'(날짜를 지어내지 않는다).
+ */
+function ExpectedReceiptCell({ line }: { line: PoLine }) {
+  const receipt = line.expected_receipt;
+  const label = expectedReceiptText(receipt);
+  const unassigned = typeof line.assignable_quantity === "number" && line.assignable_quantity > 0 ? line.assignable_quantity : null;
+  return (
+    <span className="flex flex-col items-center gap-0.5">
+      {label === null ? (
+        <span className="cell-nowrap text-gray-500">정보 없음</span>
+      ) : receipt?.status === "SCHEDULED" ? (
+        <span className="num cell-nowrap">
+          {label}{" "}
+          <span
+            className={`text-xs ${receipt.basis === "ACTUAL" ? "rounded border border-gray-400 px-1 text-gray-700" : "text-gray-500"}`}
+          >
+            {receipt.basis === "ACTUAL" ? "실적" : "예정"}
+          </span>
+        </span>
+      ) : (
+        <span className="break-keep text-gray-600">{label}</span>
+      )}
+      {unassigned !== null && <span className="cell-nowrap text-xs text-gray-500">미배정 {unassigned}</span>}
+    </span>
+  );
+}
+
+/** 취소 409 `SUCCESSOR_ALIVE` — 서버 문구 + 먼저 취소할 수입선적 링크(선적 목록 검색으로 연다). 그 밖은 문구만. */
+function cancelErrorView(error: unknown): ReactNode {
+  const message = errorMessage(error, undefined, NOUN);
+  const successors = successorNumbers(error);
+  if (successors.length === 0) return message;
+  return (
+    <>
+      {message}
+      <span className="mt-1 block">
+        수입선적을 먼저 취소해 주세요:{" "}
+        {successors.map((number, index) => (
+          <span key={number}>
+            {index > 0 && ", "}
+            <Link to={`/shipments?q=${encodeURIComponent(number)}`} className="cell-nowrap underline">
+              {number}
+            </Link>
+          </span>
+        ))}
+      </span>
+    </>
+  );
+}
+
+/**
+ * 이 발주의 수입선적(`GET /shipments?po_id=` — 수입 응답엔 금액·통화 키가 없어 **합계 열을 두지 않는다**) + '수입선적 만들기'.
+ * 버튼 노출 = 무역·관리자 + 발행·공급사 확인 + 라인 배정 가능량 합 > 0(서버가 다시 검사 — 물류·인증·조회 403). 표시 편의일 뿐 서버가 정본.
+ */
+function ImportShipmentsSection({ po, canCreate, onReload }: { po: PurchaseOrderDetail; canCreate: boolean; onReload: () => void }) {
+  const [creating, setCreating] = useState(false);
+  const list = usePagedList<ShipmentListItem>(poShipmentsKey(po.id), `/v1/shipments?po_id=${po.id}`, true, { staleTime: 0 });
+  const total = assignableTotal(po.lines);
+  const shippable = IMPORT_SHIPPABLE_PO_STATUSES.has(po.status);
+  const showCreate = canCreate && shippable && total > 0;
+
+  return (
+    <section aria-labelledby="po-shipments-title">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 id="po-shipments-title" className="text-lg font-semibold">
+          수입선적
+        </h2>
+        {showCreate && (
+          <button type="button" onClick={() => setCreating(true)} className="cell-nowrap rounded bg-gray-900 px-3 py-2 text-sm text-white">
+            수입선적 만들기
+          </button>
+        )}
+      </div>
+      <p className="mt-1 break-keep text-xs text-gray-500">
+        {!shippable
+          ? "발행·공급사 확인 상태의 발주에서만 수입선적을 만들 수 있습니다."
+          : total <= 0
+            ? "배정 가능량이 없습니다 — 모든 수량이 수입선적에 배정되었습니다(수입선적을 취소하면 돌아옵니다)."
+            : canCreate
+              ? "배정 가능량 안에서 여러 수입선적으로 나눠 만들 수 있습니다. 발주의 상태·수량은 바뀌지 않으며, 단가·금액은 복사하지 않습니다."
+              : "수입선적은 무역 담당·관리자가 만듭니다."}
+      </p>
+      <ListPager data={list.data} page={list.page} onPageChange={list.setPage} className="mt-2" />
+      <div className="mt-2 overflow-x-auto rounded-lg border border-gray-200">
+        <ListState isPending={list.isPending} error={list.error} isEmpty={list.data?.items.length === 0} emptyHint="이 발주의 수입선적이 없습니다.">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left text-gray-600">
+              <tr>
+                <th scope="col" className="cell-nowrap px-3 py-2">선적번호</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">증빙일</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">상태</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">출발 → 도착</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">ETD</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">ETA</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">라인</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data?.items.map((row) => (
+                <tr key={row.id} className="border-t border-gray-100">
+                  <td className="cell-nowrap px-3 py-2">
+                    <Link to={`/shipments/${row.id}`} className="underline">
+                      {row.doc_number}
+                    </Link>
+                  </td>
+                  <td className="num cell-nowrap px-3 py-2">{row.doc_date}</td>
+                  <td className="px-3 py-2 text-center">
+                    <ShipmentStatusBadge status={row.status} kind={row.shipment_kind} />
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <CountryRoute origin={row.origin_country_code} dest={row.dest_country_code} />
+                  </td>
+                  <td className="num cell-nowrap px-3 py-2">
+                    <EffectiveDateCell value={row.etd} />
+                  </td>
+                  <td className="num cell-nowrap px-3 py-2">
+                    <EffectiveDateCell value={row.eta} />
+                  </td>
+                  <td className="num cell-nowrap px-3 py-2">{row.line_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </ListState>
+      </div>
+      {/* 열린 대화상자는 배정 가능량이 0이 되어도(409 뒤 재조회) 닫지 않는다 — 서버 안내를 읽고 사람이 닫는다. 여는 버튼만 조건부. */}
+      {creating && canCreate && (
+        <ImportShipmentCreateDialog
+          po={po}
+          onClose={() => setCreating(false)}
+          onReload={() => {
+            setCreating(false);
+            onReload();
+          }}
         />
       )}
     </section>
