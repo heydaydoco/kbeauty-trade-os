@@ -415,7 +415,8 @@ def bulk_fingerprint(
 
 
 def bulk_scope_key(bulk_key: str) -> str:
-    """요청 지문 대조용 키 — 원 키의 sha256 hex 64자. 헤더 키 길이는 검증되지 않으므로(D-D13) 원 키를 그대로 저장하면 128자 초과에서 DB 오류(500)가 난다."""
+    """요청 지문 대조용 키 — 원 키의 sha256 hex 64자(건별 파생 키·원 키와 키 공간을 나눈다). 헤더 키는 입구에서 1~128자로 검사된다
+    (P-39 = D-D13, S3-3 PR-1b — 종전엔 미검증이라 원 키를 그대로 저장하면 128자 초과에서 500이었다) — 해시 파생은 그대로 둔다."""
     return sha256(f"{bulk_key}|BULK".encode()).hexdigest()
 
 
