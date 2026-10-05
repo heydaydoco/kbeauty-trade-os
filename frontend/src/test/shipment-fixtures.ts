@@ -1,12 +1,24 @@
-// 선적 화면 테스트 픽스처 (S3-2 PR-3b) — 응답 모양은 backend shipments/schemas.py(ShipmentDetail·ShipmentListItem·ShipmentPreview) 그대로.
+// 선적 화면 테스트 픽스처 (S3-2 PR-3b·PR-5b) — 응답 모양은 backend shipments/schemas.py 그대로.
+// ★ (PR-5b) 수출·수입은 판별자 합집합 — 수입 픽스처(`importShipmentDetail`·`importShipmentListItem`·`importShipmentPreview`)에는
+//   금액·통화 키가 **없다**(백엔드 ImportShipmentDetail·ImportShipmentListItem·ImportShipmentPreview 그대로 — 0·null로 흉내 내지 않는다).
 
-import type { ShipmentDetail, ShipmentLine, ShipmentListItem, ShipmentParty, ShipmentPreview } from "../lib/shipment";
+import type {
+  ExportShipmentDetail,
+  ExportShipmentLine,
+  ExportShipmentListItem,
+  ImportShipmentDetail,
+  ImportShipmentLine,
+  ImportShipmentListItem,
+  ImportShipmentPreview,
+  ShipmentParty,
+  ShipmentPreview,
+} from "../lib/shipment";
 import { exportBoard } from "./milestone-fixtures";
 
 // 서버 응답의 자릿수 필드 — 화면이 쓰지 않는 값이라 변수로 둔다(응답 모양 재현).
 const SERVER_MINOR_UNITS = 2;
 
-export const SHIPMENT_LINE: ShipmentLine = {
+export const SHIPMENT_LINE: ExportShipmentLine = {
   id: 501,
   line_no: 1,
   so_line_id: 41,
@@ -43,7 +55,7 @@ export const FORWARDER_PARTY: ShipmentParty = {
   version: 2,
 };
 
-export function shipmentDetail(over: Partial<ShipmentDetail> = {}): ShipmentDetail {
+export function shipmentDetail(over: Partial<ExportShipmentDetail> = {}): ExportShipmentDetail {
   return {
     id: 31,
     doc_number: "SH-2026-0001",
@@ -80,7 +92,7 @@ export function shipmentDetail(over: Partial<ShipmentDetail> = {}): ShipmentDeta
   };
 }
 
-export function shipmentListItem(over: Partial<ShipmentListItem> = {}): ShipmentListItem {
+export function shipmentListItem(over: Partial<ExportShipmentListItem> = {}): ExportShipmentListItem {
   return {
     id: 31,
     doc_number: "SH-2026-0001",
@@ -139,6 +151,110 @@ export function shipmentPreview(over: Partial<ShipmentPreview> = {}): ShipmentPr
       },
     ],
     parties: [{ role: "CONSIGNEE", partner_id: 3, name_en: "ABC Trading Inc.", address_en: null, auto: true }],
+    ...over,
+  };
+}
+
+// ── 수입선적(PR-5a 응답 — 금액·통화 키 없음) ──
+
+/** 수입선적 라인 — `po_line_id` + 원천 PO 라인(번호·발주 수량·배정 가능량). 단가·금액·통화·무상 키 없음. */
+export const IMPORT_LINE: ImportShipmentLine = {
+  id: 601,
+  line_no: 1,
+  po_line_id: 77,
+  sku: { id: 5, code: "SKU-001", name_ko: "수분 세럼", name_en: "Hydra Serum", kind: "SINGLE" },
+  quantity: 60,
+  source_line: { id: 77, line_no: 1, quantity: 100, remaining_after: 40 },
+  dg: { flag: false, un_number: null, dg_class: null },
+  availability: { status: "NOT_IMPLEMENTED" },
+};
+
+/** 수입 자동 송하인(PO 공급사 영문 스냅샷). */
+export const AUTO_SHIPPER: ShipmentParty = {
+  id: 81,
+  role: "SHIPPER",
+  partner_id: 6,
+  name_en: "Seoul Cosmetics Co., Ltd.",
+  address_en: "12 Gangnam-daero\nSeoul",
+  auto: true,
+  version: 1,
+};
+
+export function importShipmentDetail(over: Partial<ImportShipmentDetail> = {}): ImportShipmentDetail {
+  return {
+    id: 41,
+    doc_number: "SH-2026-0011",
+    doc_date: "2026-10-04",
+    status: "PLANNED",
+    shipment_kind: "IMPORT",
+    version: 1,
+    frozen_at: null,
+    source: { kind: "PURCHASE_ORDER", id: 4, doc_number: "PO-2026-0004", status: "ISSUED" },
+    counterparty: { partner_id: 6, name: "서울코스메틱" },
+    origin_country_code: "CN",
+    dest_country_code: "KR",
+    payment_terms: { payment_type: "TT_DEFERRED", advance_pct: null, advance_pct_bp: null, balance_anchor: "BL_DATE", balance_days: 30 },
+    incoterm: { code: "FOB", place: "Shanghai", year: 2020 },
+    internal_note: null,
+    assignee: { id: 1, display_name: "무역 담당" },
+    last_line_no: 1,
+    dg_line_count: 0,
+    lines: [IMPORT_LINE],
+    parties: [AUTO_SHIPPER],
+    milestones: exportBoard(),
+    customs_summary: { live_count: 0, pending_count: 0, latest_accepted_on: null },
+    allowed_actions: ["RELEASE_ORDER", "CANCEL", "EDIT_LINES", "EDIT_COUNTRIES", "EDIT_META", "EDIT_PARTIES"],
+    created_at: "2026-10-04T01:00:00Z",
+    updated_at: "2026-10-04T02:30:00Z",
+    ...over,
+  };
+}
+
+export function importShipmentListItem(over: Partial<ImportShipmentListItem> = {}): ImportShipmentListItem {
+  return {
+    id: 41,
+    doc_number: "SH-2026-0011",
+    doc_date: "2026-10-04",
+    status: "PLANNED",
+    shipment_kind: "IMPORT",
+    source: { kind: "PURCHASE_ORDER", id: 4, doc_number: "PO-2026-0004", status: "ISSUED" },
+    counterparty_name: "서울코스메틱",
+    origin_country_code: "CN",
+    dest_country_code: "KR",
+    line_count: 1,
+    etd: null,
+    eta: null,
+    assignee: { id: 1, display_name: "무역 담당" },
+    created_at: "2026-10-04T01:00:00Z",
+    updated_at: "2026-10-04T02:30:00Z",
+    ...over,
+  };
+}
+
+export function importShipmentPreview(over: Partial<ImportShipmentPreview> = {}): ImportShipmentPreview {
+  return {
+    po_id: 4,
+    po_doc_number: "PO-2026-0004",
+    po_status: "ISSUED",
+    doc_date: "2026-10-04",
+    shipment_kind: "IMPORT",
+    counterparty: { partner_id: 6, name: "서울코스메틱" },
+    origin_country_code: "CN",
+    dest_country_code: "KR",
+    payment_terms: { payment_type: "TT_DEFERRED", advance_pct: null, advance_pct_bp: null, balance_anchor: "BL_DATE", balance_days: 30 },
+    incoterm: { code: "FOB", place: "Shanghai", year: 2020 },
+    lines: [
+      {
+        po_line_id: 77,
+        line_no: 1,
+        sku: { id: 5, code: "SKU-001", name_ko: "수분 세럼", name_en: "Hydra Serum", kind: "SINGLE" },
+        quantity: 60,
+        assignable_before: 100,
+        remaining_after: 40,
+        dg: { flag: false, un_number: null, dg_class: null },
+      },
+    ],
+    parties: [{ role: "SHIPPER", partner_id: 6, name_en: "Seoul Cosmetics Co., Ltd.", address_en: null, auto: true }],
     ...over,
   };
 }

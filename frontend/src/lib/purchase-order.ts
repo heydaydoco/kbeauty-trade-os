@@ -6,6 +6,19 @@
 
 import type { Incoterm, PaymentTerms } from "./proforma";
 
+/**
+ * PO 라인 입고예정(S3-2 PR-5a 계산값 — 열 없음, design-B B17·ADR-0085). 그 라인을 참조하는 살아 있는 수입선적들의 ETA 유효값(실적 우선) 중
+ * 가장 늦은 날. ETA 없는 선적이 하나라도 있으면 UNSCHEDULED(`value` null), 선적이 없으면 NONE. 원가 무관 — 전 역할 같은 값.
+ */
+export interface ExpectedReceipt {
+  status: "NONE" | "UNSCHEDULED" | "SCHEDULED";
+  /** 'YYYY-MM-DD'(도착 현지 날짜) — SCHEDULED일 때만. 문자열 그대로 표시한다(`new Date` 금지 — UTC 자정 해석으로 하루 밀림). */
+  value: string | null;
+  basis: "ACTUAL" | "PLANNED" | null;
+  shipment_count: number;
+  unscheduled_count: number;
+}
+
 export interface PoLine {
   id: number;
   line_no: number;
@@ -16,6 +29,13 @@ export interface PoLine {
   sku_kind: string;
   quantity: number;
   requested_delivery_date: string | null;
+  /**
+   * 수입선적 **배정 가능량**(S3-2 PR-5a 파생값) = 라인 수량 − 살아 있는 수입선적 수량. PO 잔량(입고 전 수량)과 다르다.
+   * null·없음 = 이 필드가 생기기 전 저장된 멱등 재생 본문(R-5a-6) — 화면은 '정보 없음 — 새로고침'(0으로 보지 않는다).
+   */
+  assignable_quantity?: number | null;
+  /** 입고예정 계산값 — null·없음은 위와 같은 재생 본문. */
+  expected_receipt?: ExpectedReceipt | null;
   // ── 원가 키(없을 수 있다) ──
   unit_cost?: number;
   unit_cost_text?: string;
@@ -123,6 +143,36 @@ export interface PoCreateBody {
 }
 
 export const PURCHASE_ORDERS_QUERY_KEY = ["purchase-orders"] as const;
+
+// ── 수입선적(S3-2 PR-5b — PROGRESS 'S3-2 PR-5a' 인계 계약) ──
+
+/** 수입선적을 만들 수 있는 발주 상태(서버 `CONSUMABLE_STATUSES[PO]` — 발행·공급사 확인). 표시 편의일 뿐 서버가 정본(409 DOCUMENT_NOT_CONSUMABLE). */
+export const IMPORT_SHIPPABLE_PO_STATUSES: ReadonlySet<string> = new Set(["ISSUED", "SUPPLIER_CONFIRMED"]);
+
+/**
+ * 라인 배정 가능량 합 — 모르는 값(null·없음·음수)은 0으로 센다(fail-closed: 알 수 없으면 '만들기'를 열지 않는다).
+ * 버튼 노출 조건 `Σ lines[].assignable_quantity > 0`의 화면 쪽 계산(합산만 — 수량 산식 재현 0).
+ */
+export const assignableTotal = (lines: ReadonlyArray<Pick<PoLine, "assignable_quantity">>): number =>
+  lines.reduce((sum, line) => sum + (typeof line.assignable_quantity === "number" ? Math.max(line.assignable_quantity, 0) : 0), 0);
+
+/** 입고예정·배정 가능량이 없는 재생 본문(R-5a-6)인가 — 한 라인이라도 두 필드 중 하나가 null·없으면 true. */
+export const lacksReceiptFields = (lines: ReadonlyArray<Pick<PoLine, "assignable_quantity" | "expected_receipt">>): boolean =>
+  lines.some((line) => typeof line.assignable_quantity !== "number" || line.expected_receipt == null);
+
+/**
+ * 입고예정 표시 문구 — NONE "입고예정 미정(수입선적 없음)" / UNSCHEDULED "ETA 미정 n건" / SCHEDULED 날짜 문자열 그대로(+ 실적·예정 표지는
+ * `basis`로 화면이 붙인다). 모르는 상태·모양이 어긋난 값은 null(화면 '정보 없음' — 날짜를 지어내지 않는다).
+ */
+export function expectedReceiptText(receipt: ExpectedReceipt | null | undefined): string | null {
+  if (receipt == null) return null;
+  if (receipt.status === "NONE") return "입고예정 미정(수입선적 없음)";
+  if (receipt.status === "UNSCHEDULED") return `ETA 미정 ${receipt.unscheduled_count}건`;
+  if (receipt.status === "SCHEDULED" && typeof receipt.value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(receipt.value)) {
+    return receipt.value;
+  }
+  return null;
+}
 export const purchaseOrderDetailKey = (id: number) => ["purchase-orders", "detail", id] as const;
 
 /** 원가 열(합계)이 이 응답에 있는가 — 키 유무가 서버의 판정이다(화면이 역할을 따로 추측하지 않는다). */

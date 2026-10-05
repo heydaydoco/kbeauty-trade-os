@@ -9,6 +9,9 @@
 // - 쓰기는 화면이 본 기준 version(baseVersion)을 싣는다 — 서버 version이 앞서가면 '다른 곳에서 수정' 배너 + 불러오기(서버 409가 덮어쓰기를 막는다).
 // - 확인 대화상자·추가 폼 1회 = 멱등 키 1개(같은 본문 재시도 = 같은 키, 본문이 바뀌면 새 키), 더블클릭은 동기 잠금(ref).
 // - 금액은 서버 문자열, 날짜(`doc_date`·`fx_rate_date`)는 문자열 그대로, 시각만 KST(`toKstDisplay`).
+// - (S3-2 PR-5b) 응답은 `shipment_kind` 판별자 합집합 — 수입선적엔 통화·환율·합계·라인 단가/금액 키가 없어 그 칸들을 **그리지 않는다**
+//   (금액 칸 0 — 원가 열람 역할도 같다, R-5a-4). 수입 라인 원천 = 발주 라인(배정 가능량), 라인 추가 후보 = 발주 상세의 라인.
+//   수입의 동결 전이(RELEASE_ORDER)는 '선적 확정'으로 부른다(R-5a-8 — 화면 문구만).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -26,7 +29,7 @@ import { StatusTimeline } from "../components/status-timeline";
 import { ApiError, apiFetch } from "../lib/api";
 import { errorMessage, isVersionConflict } from "../lib/api-errors";
 import { toKstDisplay } from "../lib/datetime";
-import { salesOrderStatusLabel, shipmentStatusLabel } from "../lib/doc-status";
+import { purchaseOrderStatusLabel, salesOrderStatusLabel } from "../lib/doc-status";
 import {
   cancelBlockers,
   derivedChanges,
@@ -39,6 +42,7 @@ import {
 import { ORDER_BOARD_QUERY_KEY } from "../lib/order-board";
 import { usePagedQuery } from "../lib/paging";
 import { DOCUMENT_FLOW_QUERY_KEY, SALES_ORDERS_QUERY_KEY, salesOrderDetailKey, type SalesOrderDetail } from "../lib/sales-order";
+import { purchaseOrderDetailKey, type PurchaseOrderDetail } from "../lib/purchase-order";
 import { hasRole, useSession } from "../lib/session";
 import {
   PARTY_PARTNER_TYPE,
@@ -47,11 +51,17 @@ import {
   can,
   countryText,
   createKeyKeeper,
-  openQuantityByLine,
+  isExportShipment,
   partyRoleLabel,
+  poShipmentsKey,
+  quantityConflictByLine,
+  refreshAfterAssignableConflict,
   refreshAfterQuantityConflict,
+  releaseActionLabel,
+  releaseAwareErrorText,
   shipmentDetailKey,
   shipmentKindLabel,
+  shipmentStatusText,
   type SelectablePartyRole,
   type ShipmentDetail,
   type ShipmentLine,
@@ -73,6 +83,17 @@ interface UserLookup {
 
 /** 원천 수주 id — 수출선적만(수입선적의 원천은 발주라 수주 재조회 대상이 없다). */
 const soIdOf = (shipment: ShipmentDetail): number | null => (shipment.source.kind === "SALES_ORDER" ? shipment.source.id : null);
+/** 원천 발주 id — 수입선적만(배정 가능량·입고예정을 보여 주는 발주 상세 재조회 대상). */
+const poIdOf = (shipment: ShipmentDetail): number | null => (shipment.source.kind === "PURCHASE_ORDER" ? shipment.source.id : null);
+/** 라인의 원천 라인 id — 수출 = SO 라인, 수입 = PO 라인. */
+const sourceLineIdOf = (line: ShipmentLine): number | null => ("po_line_id" in line ? line.po_line_id : line.so_line_id);
+
+/** 수량 초과 409 뒤 재조회 — 수출은 수주·보드·흐름, 수입은 발주 상세·이 발주의 수입선적 목록. */
+function refreshAfterConflict(client: ReturnType<typeof useQueryClient>, shipment: ShipmentDetail) {
+  const poId = poIdOf(shipment);
+  if (poId !== null) refreshAfterAssignableConflict(client, poId, shipment.id);
+  else refreshAfterQuantityConflict(client, soIdOf(shipment), shipment.id);
+}
 
 /** 선적 오류 문구 — 서버 한국어 message 그대로(낙관 잠금은 '선적' 안내문). */
 const shipmentError = (error: unknown, fallback = "요청을 처리하지 못했습니다."): string => errorMessage(error, fallback, NOUN);
@@ -127,9 +148,19 @@ function ShipmentDetailView() {
     if (baseVersion === null && loadedVersion !== undefined) setBaseVersion(loadedVersion);
   }, [baseVersion, loadedVersion]);
 
-  /** 선적 쓰기는 원천 수주의 잔량·상태(선적중 수렴)를 바꾼다 — 그 화면들과 보드·흐름도 최신으로. */
-  function invalidateRelated(soId: number | null) {
+  /**
+   * 선적 쓰기는 원천 수주의 잔량·상태(선적중 수렴)를 바꾼다 — 그 화면들과 보드·흐름도 최신으로. 수입선적은 원천 발주의 라인
+   * 배정 가능량·입고예정을 바꾼다(발주 상태·version은 불변 — PR-5a) — 발주 상세·이 발주의 수입선적 목록을 다시 받는다.
+   */
+  function invalidateRelated(next: ShipmentDetail) {
+    const soId = soIdOf(next);
+    const poId = poIdOf(next);
     void client.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY });
+    if (poId !== null) {
+      void client.invalidateQueries({ queryKey: purchaseOrderDetailKey(poId) });
+      void client.invalidateQueries({ queryKey: poShipmentsKey(poId) });
+      return;
+    }
     void client.invalidateQueries({ queryKey: DOCUMENT_FLOW_QUERY_KEY });
     void client.invalidateQueries({ queryKey: ORDER_BOARD_QUERY_KEY });
     if (soId !== null) void client.invalidateQueries({ queryKey: salesOrderDetailKey(soId) });
@@ -145,7 +176,7 @@ function ShipmentDetailView() {
     client.setQueryData(detailKey, next);
     if (headerWrite) setBaseVersion(next.version);
     setNotice(null);
-    invalidateRelated(next.source.kind === "SALES_ORDER" ? next.source.id : null);
+    invalidateRelated(next);
   }
 
   /**
@@ -159,10 +190,22 @@ function ShipmentDetailView() {
     setAnnouncements(derivedChanges(previous?.milestones, board));
     void client.invalidateQueries({ queryKey: [...SHIPMENTS_QUERY_KEY, "list"] });
     void client.invalidateQueries({ queryKey: milestoneChangesKey("SHIPMENT", id) });
+    invalidateSourcePo();
+  }
+
+  /**
+   * 수입선적의 ETA(계획·실적)·통관이 바뀌면 원천 발주 라인의 **입고예정**(서버 파생값)이 바뀐다 — 발주 상세 캐시를 버려 다음 진입·포커스에서
+   * 새 값을 받게 한다(적대 검토 low ② — 옛 '입고예정 미정'이 남지 않게). 수출선적은 해당 없음.
+   */
+  function invalidateSourcePo() {
+    const current = client.getQueryData<ShipmentDetail>(detailKey);
+    const poId = current === undefined ? null : poIdOf(current);
+    if (poId !== null) void client.invalidateQueries({ queryKey: purchaseOrderDetailKey(poId), exact: true });
   }
 
   /** 통관 기록·통보가 바뀌면 보드(신고수리·미통보 수)·통관 요약이 서버에서 다시 계산된다 — 상세를 다시 받는다(기준 version 무변경). */
   function refreshBoard() {
+    invalidateSourcePo(); // 상세 재조회 전에 — 지금 캐시의 원천으로 판정
     void client.invalidateQueries({ queryKey: detailKey, exact: true });
     void client.invalidateQueries({ queryKey: [...SHIPMENTS_QUERY_KEY, "list"] });
     void client.invalidateQueries({ queryKey: milestoneChangesKey("SHIPMENT", id) });
@@ -256,7 +299,9 @@ function ShipmentDetailView() {
   const shipment = detail.data;
   const base = baseVersion ?? shipment.version;
   const stale = shipment.version !== base;
-  const isExport = shipment.shipment_kind === "EXPORT";
+  const isExport = isExportShipment(shipment);
+  const kind = shipment.shipment_kind;
+  const releaseName = releaseActionLabel(kind);
   const board = shipment.milestones;
   const canEditMilestones = can(shipment, "EDIT_MILESTONES");
   const hasMilestoneRows = board.rows.some((row) => row.kind === "STORED" && row.applicable && row.milestone_id !== null);
@@ -304,18 +349,22 @@ function ShipmentDetailView() {
         <div>
           <h1 className="flex flex-wrap items-center gap-3 text-2xl font-bold">
             <span className="cell-nowrap">{shipment.doc_number}</span>
-            <ShipmentStatusBadge status={shipment.status} />
+            <ShipmentStatusBadge status={shipment.status} kind={kind} />
             <span className="cell-nowrap rounded border border-gray-300 px-2 py-0.5 text-xs">
               {shipmentKindLabel(shipment.shipment_kind)}
             </span>
           </h1>
           <p className="mt-1 break-keep text-sm text-gray-500">
             {shipment.status === "PLANNED" &&
-              "계획 중인 선적입니다. 라인 수량·출발/도착국을 고칠 수 있습니다. 출고지시 뒤에는 바꿀 수 없습니다."}
+              `계획 중인 선적입니다. 라인 수량·출발/도착국을 고칠 수 있습니다. ${releaseName} 뒤에는 바꿀 수 없습니다.`}
             {shipment.status === "RELEASE_ORDERED" &&
-              "출고지시된 선적입니다. 라인·국가는 동결되었습니다(바꾸려면 취소 후 새로 만듭니다). 피킹·검수·출고는 재고 기능(Phase 4)에서 이어집니다."}
+              (isExport
+                ? "출고지시된 선적입니다. 라인·국가는 동결되었습니다(바꾸려면 취소 후 새로 만듭니다). 피킹·검수·출고는 재고 기능(Phase 4)에서 이어집니다."
+                : "선적 확정된 수입선적입니다(공급사 출하 지시). 라인·국가는 동결되었습니다(바꾸려면 취소 후 새로 만듭니다). 입고는 재고 기능(Phase 4)에서 이어집니다.")}
             {shipment.status === "CANCELLED" &&
-              "취소된 선적입니다. 선적번호는 남고 다시 쓰이지 않으며, 가져간 수량은 원천 수주 잔량으로 돌아갔습니다."}
+              (isExport
+                ? "취소된 선적입니다. 선적번호는 남고 다시 쓰이지 않으며, 가져간 수량은 원천 수주 잔량으로 돌아갔습니다."
+                : "취소된 수입선적입니다. 선적번호는 남고 다시 쓰이지 않으며, 배정했던 수량은 원천 발주 라인의 배정 가능량으로 돌아갔습니다.")}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -328,7 +377,7 @@ function ShipmentDetailView() {
               onClick={() => openAction("release")}
               className="cell-nowrap rounded border border-gray-900 px-3 py-2 text-sm"
             >
-              출고지시
+              {releaseName}
             </button>
           )}
           {can(shipment, "CANCEL") && (
@@ -357,7 +406,7 @@ function ShipmentDetailView() {
 
       {notice !== null && (
         <div role="alert" className="mt-4 rounded border border-signal-red p-3 text-sm text-signal-red">
-          <p className="break-keep">{shipmentError(notice)}</p>
+          <p className="break-keep">{releaseAwareErrorText(notice, kind) ?? shipmentError(notice)}</p>
           {(isVersionConflict(notice) || needsBoardReload(notice)) && (
             <button type="button" onClick={reload} className="cell-nowrap mt-2 rounded border border-signal-red px-3 py-1">
               최신 내용 불러오기
@@ -455,19 +504,26 @@ function ShipmentDetailView() {
           </p>
         )}
 
-        <StatusTimeline basePath={`/v1/shipments/${shipment.id}`} queryKey={detailKey} statusLabel={shipmentStatusLabel} />
+        <StatusTimeline
+          basePath={`/v1/shipments/${shipment.id}`}
+          queryKey={detailKey}
+          statusLabel={(code) => shipmentStatusText(code, kind)}
+        />
       </div>
 
       {action === "release" && can(shipment, "RELEASE_ORDER") && (
         <ConfirmDialog
-          title="출고지시할까요?"
-          confirmLabel="출고지시 확정"
+          title={isExport ? "출고지시할까요?" : "선적을 확정할까요?"}
+          confirmLabel={isExport ? "출고지시 확정" : "선적 확정"}
           description={
             <>
+              {!isExport && <p className="mb-2">공급사에 출하를 지시한 수입선적으로 확정합니다.</p>}
               <p>
-                출고지시 후에는 <strong>라인·국가를 바꿀 수 없습니다.</strong> 바꾸려면 취소 후 새로 만듭니다.
+                {releaseName} 후에는 <strong>라인·국가를 바꿀 수 없습니다.</strong> 바꾸려면 취소 후 새로 만듭니다.
               </p>
-              <p className="mt-2 text-gray-500">피킹·검수·출고는 재고 기능(Phase 4)에서 이어집니다.</p>
+              <p className="mt-2 text-gray-500">
+                {isExport ? "피킹·검수·출고는 재고 기능(Phase 4)에서 이어집니다." : "입고는 재고 기능(Phase 4)에서 이어집니다."}
+              </p>
             </>
           }
           pending={transition.isPending}
@@ -487,10 +543,17 @@ function ShipmentDetailView() {
           confirmLabel="취소 확정"
           reasonLabel="취소 사유 (필수)"
           description={
-            <p>
-              취소하면 <strong>되돌릴 수 없습니다.</strong> 선적번호는 남고 다시 쓰이지 않으며, 이 선적이 가져간 수량은 원천 수주 잔량으로
-              돌아갑니다. 수주의 마지막 살아 있는 선적이면 수주가 &lsquo;확정&rsquo;으로 돌아갑니다.
-            </p>
+            isExport ? (
+              <p>
+                취소하면 <strong>되돌릴 수 없습니다.</strong> 선적번호는 남고 다시 쓰이지 않으며, 이 선적이 가져간 수량은 원천 수주 잔량으로
+                돌아갑니다. 수주의 마지막 살아 있는 선적이면 수주가 &lsquo;확정&rsquo;으로 돌아갑니다.
+              </p>
+            ) : (
+              <p>
+                취소하면 <strong>되돌릴 수 없습니다.</strong> 선적번호는 남고 다시 쓰이지 않으며, 이 수입선적이 배정한 수량은 원천 발주 라인의
+                배정 가능량으로 돌아갑니다. 발주의 상태는 바뀌지 않습니다.
+              </p>
+            )
           }
           pending={transition.isPending}
           error={transition.error ? cancelErrorNode(transition.error) : null}
@@ -512,6 +575,8 @@ function ShipmentDetailView() {
           defaultZone={shipment.origin_country_code === "KR" ? "Asia/Seoul" : null}
           todayKst={board.today_kst}
           noticeBasePath={`/v1/shipments/${shipment.id}/milestone-changes`}
+          freezeActionLabel={releaseName}
+          rewriteError={(error) => releaseAwareErrorText(error, kind)}
           onSaved={(result) => applyBoard(result.board)}
           onNoticeSaved={refreshBoard}
           onClose={() => setEditing(null)}
@@ -528,14 +593,20 @@ function ShipmentDetailView() {
 // ── 선적 정보(읽기 — 원천 사본은 여기서 고치지 않는다) ─────────────────────────
 
 function HeaderCard({ shipment }: { shipment: ShipmentDetail }) {
-  const isExport = shipment.shipment_kind === "EXPORT";
   const sourcePath =
     shipment.source.kind === "SALES_ORDER" ? `/sales-orders/${shipment.source.id}` : `/purchase-orders/${shipment.source.id}`;
   const sourceStatus =
-    shipment.source.kind === "SALES_ORDER" ? salesOrderStatusLabel(shipment.source.status) : shipment.source.status;
+    shipment.source.kind === "SALES_ORDER"
+      ? salesOrderStatusLabel(shipment.source.status)
+      : purchaseOrderStatusLabel(shipment.source.status);
   return (
     <section aria-label="선적 정보" className="rounded-lg border border-gray-200 p-4">
       <h2 className="text-lg font-semibold">선적 정보</h2>
+      {!isExportShipment(shipment) && (
+        <p className="mt-1 break-keep text-sm text-gray-500">
+          수입선적은 발주의 단가·금액·통화·환율을 복사하지 않습니다(원가 비복사 — 금액은 발주 상세에서 원가 열람 권한으로만 봅니다).
+        </p>
+      )}
       <dl className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <DocField label="원천 전표">
           <Link to={sourcePath} className="cell-nowrap underline">
@@ -552,30 +623,35 @@ function HeaderCard({ shipment }: { shipment: ShipmentDetail }) {
         <DocField label="증빙일">
           <span className="num cell-nowrap">{shipment.doc_date}</span>
         </DocField>
-        <DocField label="통화">{shipment.currency}</DocField>
-        <DocField label="고정 환율">
-          {shipment.fx_rate === null ? (
-            EMPTY
-          ) : (
-            <span className="num cell-nowrap">
-              {shipment.fx_rate} (기준일 {show(shipment.fx_rate_date)})
-            </span>
-          )}
-          <span className="mt-0.5 block text-xs text-gray-500">수주에서 고정 — 바꾸려면 취소 후 새로 만듭니다.</span>
-        </DocField>
+        {/* 통화·고정 환율·합계 칸은 수출만 — 수입 응답엔 키 자체가 없다(R-5a-4: 빈칸·"(기준일 —)" 과도기 표시 제거). */}
+        {isExportShipment(shipment) && (
+          <>
+            <DocField label="통화">{shipment.currency}</DocField>
+            <DocField label="고정 환율">
+              {shipment.fx_rate === null ? (
+                EMPTY
+              ) : (
+                <span className="num cell-nowrap">
+                  {shipment.fx_rate} (기준일 {show(shipment.fx_rate_date)})
+                </span>
+              )}
+              <span className="mt-0.5 block text-xs text-gray-500">수주에서 고정 — 바꾸려면 취소 후 새로 만듭니다.</span>
+            </DocField>
+          </>
+        )}
         <DocField label="결제조건">{paymentTermsText(shipment.payment_terms)}</DocField>
         <DocField label="인코텀즈">{incotermText(shipment.incoterm)}</DocField>
-        <DocField label="합계">
-          {isExport ? (
+        {isExportShipment(shipment) && (
+          <DocField label="합계">
             <span className="num cell-nowrap">
               {shipment.total_text} {shipment.currency}
             </span>
-          ) : (
-            "— (수입선적은 금액을 복사하지 않습니다)"
-          )}
-        </DocField>
+          </DocField>
+        )}
         <DocField label="담당자">{shipment.assignee.display_name ?? `#${shipment.assignee.id}`}</DocField>
-        <DocField label="출고지시 시각">{shipment.frozen_at === null ? EMPTY : toKstDisplay(shipment.frozen_at)}</DocField>
+        <DocField label={`${releaseActionLabel(shipment.shipment_kind)} 시각`}>
+          {shipment.frozen_at === null ? EMPTY : toKstDisplay(shipment.frozen_at)}
+        </DocField>
         <DocField label="위험물(DG)">
           {shipment.dg_line_count > 0 ? (
             <>
@@ -730,7 +806,7 @@ function LinesSection({
   onError: (error: unknown) => void;
 }) {
   const editable = can(shipment, "EDIT_LINES");
-  const isExport = shipment.shipment_kind === "EXPORT";
+  const isExport = isExportShipment(shipment);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ShipmentLine | null>(null);
   const removeLock = useRef(false);
@@ -757,7 +833,8 @@ function LinesSection({
     },
   });
 
-  const cols = 10 + (editable ? 1 : 0);
+  // 수입은 단가·금액 열이 없다(응답에 키 자체가 없다 — 금액 칸 0, R-5a-4).
+  const cols = (isExport ? 10 : 8) + (editable ? 1 : 0);
 
   return (
     <section aria-labelledby="shipment-lines-title">
@@ -765,7 +842,9 @@ function LinesSection({
         라인
       </h2>
       <p className="mt-1 break-keep text-xs text-gray-500">
-        품목·단가는 수주에서 복사된 값입니다. &lsquo;선적 잔량&rsquo;은 이 선적까지 반영한 원천 수주 라인의 남은 수량입니다.
+        {isExport
+          ? "품목·단가는 수주에서 복사된 값입니다. ‘선적 잔량’은 이 선적까지 반영한 원천 수주 라인의 남은 수량입니다."
+          : "품목은 발주에서 복사된 값입니다(단가·금액은 복사하지 않습니다). ‘배정 가능’은 이 선적까지 반영한 원천 발주 라인의 남은 배정 가능량입니다(발주 잔량과 다릅니다)."}
       </p>
       <div className="mt-2 overflow-x-auto rounded-lg border border-gray-200">
         <table className="w-full text-sm">
@@ -776,9 +855,9 @@ function LinesSection({
               <th scope="col" className="cell-nowrap min-w-32 px-3 py-2">품명</th>
               <th scope="col" className="cell-nowrap px-3 py-2 text-center">수량</th>
               <th scope="col" className="cell-nowrap px-3 py-2 text-center">원천 라인</th>
-              <th scope="col" className="cell-nowrap px-3 py-2 text-center">선적 잔량</th>
-              <th scope="col" className="cell-nowrap px-3 py-2 text-center">단가</th>
-              <th scope="col" className="cell-nowrap px-3 py-2 text-center">금액</th>
+              <th scope="col" className="cell-nowrap px-3 py-2 text-center">{isExport ? "선적 잔량" : "배정 가능"}</th>
+              {isExport && <th scope="col" className="cell-nowrap px-3 py-2 text-center">단가</th>}
+              {isExport && <th scope="col" className="cell-nowrap px-3 py-2 text-center">금액</th>}
               <th scope="col" className="cell-nowrap px-3 py-2 text-center">DG</th>
               <th scope="col" className="cell-nowrap px-3 py-2 text-center">가용재고</th>
               {editable && <th scope="col" className="cell-nowrap px-3 py-2 text-center">편집</th>}
@@ -807,13 +886,16 @@ function LinesSection({
                   <td className="break-keep px-3 py-2">{line.sku.name_ko}</td>
                   <td className="num cell-nowrap px-3 py-2">{line.quantity}</td>
                   <td className="num cell-nowrap px-3 py-2">
-                    {isExport ? `#${line.source_line.line_no} · 수주 ${line.source_line.quantity}` : "—"}
+                    {`#${line.source_line.line_no} · ${isExport ? "수주" : "발주"} ${line.source_line.quantity}`}
                   </td>
-                  <td className="num cell-nowrap px-3 py-2">{isExport ? line.source_line.remaining_after : "—"}</td>
-                  <td className="num cell-nowrap px-3 py-2">
-                    {!isExport ? "—" : line.is_free ? "무상" : (line.unit_price_text ?? "—")}
-                  </td>
-                  <td className="num cell-nowrap px-3 py-2">{isExport ? line.line_amount_text : "—"}</td>
+                  <td className="num cell-nowrap px-3 py-2">{line.source_line.remaining_after}</td>
+                  {/* 금액 칸은 수출 라인만 — 수입 라인엔 단가·금액·무상 키가 없다(키 존재로 다시 확인 — fail-closed). */}
+                  {isExport && "line_amount_text" in line && (
+                    <>
+                      <td className="num cell-nowrap px-3 py-2">{line.is_free ? "무상" : (line.unit_price_text ?? "—")}</td>
+                      <td className="num cell-nowrap px-3 py-2">{line.line_amount_text}</td>
+                    </>
+                  )}
                   <td className="px-3 py-2 text-center">
                     <DgBadge dg={line.dg} />
                   </td>
@@ -842,7 +924,7 @@ function LinesSection({
               ),
             )}
           </tbody>
-          {isExport && (
+          {isExportShipment(shipment) && (
             <tfoot>
               <tr className="border-t border-gray-200 bg-gray-50 font-semibold">
                 <td colSpan={7} className="cell-nowrap px-3 py-2 text-right">
@@ -858,9 +940,7 @@ function LinesSection({
         </table>
       </div>
 
-      {editable && shipment.source.kind === "SALES_ORDER" && (
-        <LineAddForm shipment={shipment} version={version} onDone={onSaved} onError={onError} />
-      )}
+      {editable && <LineAddForm shipment={shipment} version={version} onDone={onSaved} onError={onError} />}
 
       {editable && removeTarget && (
         <ConfirmDialog
@@ -869,8 +949,9 @@ function LinesSection({
           confirmLabel="제외"
           description={
             <p>
-              {removeTarget.sku.code} {removeTarget.sku.name_ko} 라인을 제외합니다. 수량 {removeTarget.quantity}은 원천 수주 잔량으로 돌아가고 라인
-              번호는 다시 쓰이지 않습니다. 마지막 라인은 제외할 수 없습니다(선적 취소로).
+              {removeTarget.sku.code} {removeTarget.sku.name_ko} 라인을 제외합니다. 수량 {removeTarget.quantity}은{" "}
+              {isExport ? "원천 수주 잔량" : "원천 발주 라인의 배정 가능량"}으로 돌아가고 라인 번호는 다시 쓰이지 않습니다. 마지막 라인은 제외할
+              수 없습니다(선적 취소로).
             </p>
           }
           pending={remove.isPending}
@@ -908,13 +989,15 @@ function LineEditRow({
   onError: (error: unknown) => void;
 }) {
   const client = useQueryClient();
-  const isExport = shipment.shipment_kind === "EXPORT";
+  const isExport = isExportShipment(shipment);
   const [quantity, setQuantity] = useState(String(line.quantity));
   const [localError, setLocalError] = useState<unknown>(null);
   const lock = useRef(false);
   const quantityOk = isPositiveInt(quantity);
   const changed = quantity.trim() !== String(line.quantity);
-  const open = line.so_line_id === null ? undefined : openQuantityByLine(localError).get(line.so_line_id);
+  const sourceLineId = sourceLineIdOf(line);
+  // 수출 = 잔량 초과(EXCEEDS_OPEN), 수입 = 배정 가능량 초과(EXCEEDS_ASSIGNABLE) — detail 값 = 이 라인 상한(남은 양 + 현재 수량).
+  const open = sourceLineId === null ? undefined : quantityConflictByLine(localError, shipment.shipment_kind).get(sourceLineId);
   const hintId = `line-${line.id}-qty-hint`;
 
   const update = useMutation({
@@ -933,8 +1016,8 @@ function LineEditRow({
     onError: (error) => {
       if (isVersionConflict(error)) onError(error);
       else setLocalError(error);
-      // 잔량 초과면 다른 선적이 먼저 가져갔다 — 수주·이 선적을 다시 받아 상한 안내(원천 잔량 + 현재)를 서버 값으로(low ⑥).
-      if (openQuantityByLine(error).size > 0) refreshAfterQuantityConflict(client, soIdOf(shipment), shipment.id);
+      // 잔량·배정 가능량 초과면 다른 선적이 먼저 가져갔다 — 원천·이 선적을 다시 받아 상한 안내(남은 양 + 현재)를 서버 값으로(low ⑥).
+      if (quantityConflictByLine(error, shipment.shipment_kind).size > 0) refreshAfterConflict(client, shipment);
     },
   });
 
@@ -969,7 +1052,7 @@ function LineEditRow({
             />
           </label>
           <span id={hintId} className="cell-nowrap text-xs text-gray-500">
-            {isExport ? `상한 = 원천 잔량 ${line.source_line.remaining_after} + 현재 ${line.quantity}` : "상한은 서버가 판정합니다"}
+            {`상한 = ${isExport ? "원천 잔량" : "배정 가능"} ${line.source_line.remaining_after} + 현재 ${line.quantity}`}
           </span>
           <button
             type="submit"
@@ -1003,7 +1086,21 @@ function LineEditRow({
   );
 }
 
-/** 라인 추가 — 원천 수주 라인 중 이 선적에 없는 것만, 수주의 선적 잔량 안에서(초과는 서버 409를 칸 아래에). */
+/** 라인 추가 후보(원천 전표 라인 중 이 선적에 없는 것) — 수출 = 수주 라인·선적 잔량, 수입 = 발주 라인·배정 가능량. */
+interface AddCandidate {
+  id: number;
+  line_no: number;
+  sku_code: string;
+  sku_name_ko: string;
+  /** 남은 양(서버 파생값) — 응답에 없으면 null('?'로 보이고 [전부] 버튼을 두지 않는다). */
+  open: number | null;
+}
+
+/**
+ * 라인 추가 — 원천 전표 라인 중 이 선적에 없는 것만, 남은 양 안에서(초과는 서버 409를 칸 아래에).
+ * 수출 = 원천 수주의 선적 잔량, 수입(PR-5b) = 원천 발주(`GET /purchase-orders/{id}`) 라인의 배정 가능량 — 같은 경로 `POST /shipments/{id}/lines
+ * {version, source_line_id, quantity}`(수입은 source_line_id = po_line_id).
+ */
 function LineAddForm({
   shipment,
   version,
@@ -1016,10 +1113,33 @@ function LineAddForm({
   onError: (error: unknown) => void;
 }) {
   const client = useQueryClient();
-  const soId = shipment.source.id;
-  const so = useQuery({
-    queryKey: salesOrderDetailKey(soId),
-    queryFn: () => apiFetch<SalesOrderDetail>(`/v1/sales-orders/${soId}`),
+  const isImport = shipment.source.kind === "PURCHASE_ORDER";
+  const sourceId = shipment.source.id;
+  const sourceNoun = isImport ? "발주" : "수주";
+  const openNoun = isImport ? "배정 가능" : "선적 잔량";
+  const source = useQuery<SalesOrderDetail | PurchaseOrderDetail, Error, AddCandidate[]>({
+    queryKey: isImport ? purchaseOrderDetailKey(sourceId) : salesOrderDetailKey(sourceId),
+    queryFn: () =>
+      isImport
+        ? apiFetch<PurchaseOrderDetail>(`/v1/purchase-orders/${sourceId}`)
+        : apiFetch<SalesOrderDetail>(`/v1/sales-orders/${sourceId}`),
+    // 원천 응답의 원가·금액 키는 후보로 옮기지 않는다(번호·SKU·남은 양만).
+    select: (data) =>
+      "po_kind" in data
+        ? data.lines.map((line) => ({
+            id: line.id,
+            line_no: line.line_no,
+            sku_code: line.sku_code,
+            sku_name_ko: line.sku_name_ko,
+            open: line.assignable_quantity ?? null,
+          }))
+        : data.lines.map((line) => ({
+            id: line.id,
+            line_no: line.line_no,
+            sku_code: line.sku_code,
+            sku_name_ko: line.sku_name_ko,
+            open: line.shipment_open_quantity ?? null,
+          })),
     staleTime: 0,
   });
   const [lineId, setLineId] = useState("");
@@ -1028,11 +1148,11 @@ function LineAddForm({
   const lock = useRef(false);
   const [keys] = useState(() => createKeyKeeper());
 
-  const present = new Set(shipment.lines.map((line) => line.so_line_id));
-  const candidates = (so.data?.lines ?? []).filter((line) => !present.has(line.id));
+  const present = new Set(shipment.lines.map(sourceLineIdOf));
+  const candidates = (source.data ?? []).filter((line) => !present.has(line.id));
   const chosen = candidates.find((line) => String(line.id) === lineId);
-  const remaining = chosen?.shipment_open_quantity ?? null;
-  const open = chosen === undefined ? undefined : openQuantityByLine(localError).get(chosen.id);
+  const remaining = chosen?.open ?? null;
+  const open = chosen === undefined ? undefined : quantityConflictByLine(localError, shipment.shipment_kind).get(chosen.id);
 
   const add = useMutation({
     mutationFn: async (input: { key: string; body: Record<string, unknown> }) => {
@@ -1056,8 +1176,8 @@ function LineAddForm({
     onError: (error) => {
       if (isVersionConflict(error)) onError(error);
       else setLocalError(error);
-      // 잔량 초과면 원천 수주를 다시 받아 드롭다운의 '선적 잔량'·[잔량 전부]를 서버 값으로(low ⑥).
-      if (openQuantityByLine(error).size > 0) refreshAfterQuantityConflict(client, soId, shipment.id);
+      // 잔량·배정 가능량 초과면 원천을 다시 받아 드롭다운의 남은 양·[전부] 버튼을 서버 값으로(low ⑥).
+      if (quantityConflictByLine(error, shipment.shipment_kind).size > 0) refreshAfterConflict(client, shipment);
     },
   });
 
@@ -1077,14 +1197,16 @@ function LineAddForm({
     >
       <h3 className="font-medium">라인 추가</h3>
       <p className="mt-1 break-keep text-xs text-gray-500">
-        원천 수주 {shipment.source.doc_number}의 라인 중 이 선적에 없는 라인만, 선적 잔량 안에서 추가합니다(품목·단가는 수주에서 복사).
+        {isImport
+          ? `원천 발주 ${shipment.source.doc_number}의 라인 중 이 선적에 없는 라인만, 배정 가능량 안에서 추가합니다(품목은 발주에서 복사 — 단가·금액은 복사하지 않습니다).`
+          : `원천 수주 ${shipment.source.doc_number}의 라인 중 이 선적에 없는 라인만, 선적 잔량 안에서 추가합니다(품목·단가는 수주에서 복사).`}
       </p>
-      {so.error ? (
+      {source.error ? (
         <p role="alert" className="mt-2 break-keep text-sm text-signal-red">
-          {shipmentError(so.error, "원천 수주 라인을 불러오지 못했습니다.")}
+          {shipmentError(source.error, `원천 ${sourceNoun} 라인을 불러오지 못했습니다.`)}
         </p>
-      ) : so.isPending ? (
-        <p className="mt-2 text-sm text-gray-500">원천 수주 라인을 불러오는 중…</p>
+      ) : source.isPending ? (
+        <p className="mt-2 text-sm text-gray-500">원천 {sourceNoun} 라인을 불러오는 중…</p>
       ) : candidates.length === 0 ? (
         <p className="mt-2 break-keep text-sm text-gray-500">추가할 수 있는 원천 라인이 없습니다(모든 라인이 이미 이 선적에 있습니다).</p>
       ) : (
@@ -1103,7 +1225,7 @@ function LineAddForm({
                 <option value="">선택</option>
                 {candidates.map((line) => (
                   <option key={line.id} value={line.id}>
-                    #{line.line_no} {line.sku_code} {line.sku_name_ko} — 선적 잔량 {line.shipment_open_quantity ?? "?"}
+                    #{line.line_no} {line.sku_code} {line.sku_name_ko} — {openNoun} {line.open ?? "?"}
                   </option>
                 ))}
               </select>
@@ -1130,7 +1252,7 @@ function LineAddForm({
                 }}
                 className="cell-nowrap rounded border border-gray-300 px-3 py-2 disabled:opacity-50"
               >
-                잔량 전부
+                {isImport ? "배정 가능 전부" : "잔량 전부"}
               </button>
             )}
             <button
@@ -1151,7 +1273,7 @@ function LineAddForm({
       {localError !== null && (
         <p role="alert" className="mt-2 break-keep text-sm text-signal-red">
           {shipmentError(localError)}
-          {open !== undefined && ` — 원천 남은 수량 ${open}`}
+          {open !== undefined && (isImport ? ` — 남은 배정 가능량 ${open}` : ` — 원천 남은 수량 ${open}`)}
         </p>
       )}
     </form>
@@ -1201,8 +1323,10 @@ function PartiesSection({
         당사자
       </h2>
       <p className="mt-1 break-keep text-xs text-gray-500">
-        서류에 쓰는 영문 이름·주소는 지정 시점의 거래처 값이 복사됩니다(거래처를 나중에 고쳐도 바뀌지 않습니다). 수하인은 수주 바이어에서 자동으로
-        복사됩니다.
+        서류에 쓰는 영문 이름·주소는 지정 시점의 거래처 값이 복사됩니다(거래처를 나중에 고쳐도 바뀌지 않습니다).{" "}
+        {shipment.source.kind === "PURCHASE_ORDER"
+          ? "송하인은 발주 공급사에서 자동으로 복사되고, 수하인은 자사입니다."
+          : "수하인은 수주 바이어에서 자동으로 복사됩니다."}
       </p>
       <div className="mt-2 overflow-x-auto rounded-lg border border-gray-200">
         {shipment.parties.length === 0 ? (

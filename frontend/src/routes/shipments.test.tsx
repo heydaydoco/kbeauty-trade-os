@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
 import { stubGateFetch, type GateHandler } from "../test/gate-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
-import { shipmentListItem } from "../test/shipment-fixtures";
+import { importShipmentListItem, shipmentListItem } from "../test/shipment-fixtures";
 
 beforeEach(() => vi.stubGlobal("crypto", { randomUUID: () => "test-key" }));
 afterEach(() => {
@@ -18,15 +18,8 @@ const ROWS = [
   shipmentListItem(),
   shipmentListItem({ id: 32, doc_number: "SH-2026-0002", status: "RELEASE_ORDERED", origin_country_code: "KR", dest_country_code: "JP" }),
   shipmentListItem({ id: 33, doc_number: "SH-2026-0003", status: "CANCELLED", line_count: 2 }),
-  shipmentListItem({
-    id: 34,
-    doc_number: "SH-2026-0004",
-    shipment_kind: "IMPORT",
-    source: { kind: "PURCHASE_ORDER", id: 4, doc_number: "PO-2026-0004", status: "ISSUED" },
-    counterparty_name: "공급사 A",
-    total_amount: 0,
-    total_text: "0.00",
-  }),
+  // 수입선적 — 백엔드 ImportShipmentListItem 그대로(통화·합계 키 자체가 없다 — PR-5a, 0·"0.00"으로 흉내 내지 않는다).
+  importShipmentListItem({ id: 34, doc_number: "SH-2026-0004", counterparty_name: "공급사 A" }),
 ];
 
 const LIST: GateHandler = ["/v1/shipments", "GET", () => jsonResponse(page(ROWS))];
@@ -125,7 +118,7 @@ describe("선적 목록", () => {
     await screen.findByText("SH-2026-0001");
 
     const select = screen.getByLabelText("상태");
-    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["전체", "계획", "출고지시", "취소"]);
+    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["전체", "계획", "출고지시(수입: 선적 확정)", "취소"]);
     fireEvent.change(select, { target: { value: "RELEASE_ORDERED" } });
     await waitFor(() => expect(calls.map((c) => c.url)).toContain("/api/v1/shipments?status=RELEASE_ORDERED"));
     fireEvent.change(screen.getByLabelText("선적번호·거래 상대"), { target: { value: " ABC " } });

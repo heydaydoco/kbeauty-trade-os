@@ -150,38 +150,7 @@ describe("선적 상세 — 표시", () => {
     await waitFor(() => expect(sent(calls, "/v1/document-flow/SHIPMENT/31", "GET")).toHaveLength(1));
   });
 
-  it("수입선적은 문서 흐름을 부르지 않고 금액을 '—'로 보인다", async () => {
-    const { calls } = open(
-      shipmentDetail({
-        shipment_kind: "IMPORT",
-        source: { kind: "PURCHASE_ORDER", id: 4, doc_number: "PO-2026-0004", status: "ISSUED" },
-        // 백엔드 shipment_view.detail_body 그대로 — 수입 라인은 SO 원천이 없어 source_line = {id: po_line_id, line_no 0, quantity 0, remaining_after 0}.
-        lines: [
-          {
-            ...SHIPMENT_LINE,
-            so_line_id: null,
-            unit_price_amount: null,
-            unit_price_text: null,
-            line_amount: 0,
-            line_amount_text: "0.00",
-            source_line: { id: 77, line_no: 0, quantity: 0, remaining_after: 0 },
-          },
-        ],
-        allowed_actions: [],
-      }),
-    );
-    await heading();
-    expect(screen.getByRole("link", { name: "PO-2026-0004" })).toHaveAttribute("href", "/purchase-orders/4");
-    expect(screen.getByText(/수입선적은 문서 흐름/)).toBeInTheDocument();
-    expect(screen.queryByText("0.00")).not.toBeInTheDocument();
-    // 원천 라인·선적 잔량 칸은 '—' — '수주 0'·'0'으로 위장하지 않는다(적대 검토 low ⑫).
-    const row = within(screen.getByRole("region", { name: "라인" })).getByText("SKU-001").closest("tr") as HTMLElement;
-    const cells = within(row).getAllByRole("cell").map((cell) => cell.textContent);
-    expect(cells[4]).toBe("—");
-    expect(cells[5]).toBe("—");
-    expect(row.textContent).not.toContain("수주 0");
-    expect(sent(calls, "/v1/document-flow/SHIPMENT/31", "GET")).toHaveLength(0);
-  });
+  // 수입선적 상세(금액 칸 0·배정 가능·선적 확정 문구·라인 추가/수정)는 shipment-detail.import.test.tsx(S3-2 PR-5b).
 
   it("없는 선적은 404 문구와 목록 링크", async () => {
     stubGateFetch(TRADER, [[SH, "GET", () => jsonResponse(apiErrorResponse("COMMON.RESOURCE.NOT_FOUND", "없음"), 404)]]);
@@ -619,7 +588,7 @@ describe("선적 화면 — 소스 계약 (design-D D12·D13, PR-2b R-2b-2 승�
     const heads = Object.entries(sources)
       .filter(([path]) => !path.includes(".test."))
       .flatMap(([, src]) => code(src).match(/<th[\s>][^>]*>(품명|거래처\(영문\)|주소\(영문\))<\/th>/g) ?? []);
-    expect(heads.length).toBe(4);
+    expect(heads.length).toBe(5); // PR-5b: 수입 미리보기 표의 품명 칸 +1
     for (const th of heads) expect(th).toMatch(/min-w-\d+/);
   });
 });

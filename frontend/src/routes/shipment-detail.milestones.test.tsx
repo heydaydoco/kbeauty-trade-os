@@ -223,6 +223,14 @@ describe("실적 입력·정정", () => {
     expect(sent(stub.calls, `${SH}/milestones/ETD/actual`, "POST")[0]?.body).toEqual({ actual_on: null, version: 2, reason: "오입력" });
   });
 
+  it("수출 실적 대화상자 안내는 '출고지시' 그대로(PR-5b 회귀 — 수입만 '선적 확정')", async () => {
+    open(detail());
+    await heading();
+    fireEvent.click(within(card("ETD")).getByRole("button", { name: "실적 입력" }));
+    expect(dialog().textContent).toContain("ETD·B/L 발행·ETA 실적은 출고지시 뒤에만 기록합니다.");
+    expect(dialog().textContent).not.toContain("선적 확정");
+  });
+
   it("실적 입력 뒤 파생 행이 다시 계산되면 aria-live로 알린다(문자열 비교만)", async () => {
     const after = detail({
       ETD: { actual: "2026-10-03", effective: { value: "2026-10-03", basis: "ACTUAL" }, milestone_id: 55, version: 1 },
