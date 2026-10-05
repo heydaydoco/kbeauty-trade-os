@@ -2,14 +2,15 @@
 //
 // ★ S1-3이 서류 세트(item_profile_document_types)를, S2-1이 요건 세트
 //   (item_profile_requirement_templates)를 연결했다 — §4.8의 세 세트 중 둘.
-//   마일스톤 세트는 S3-2가 붙인다. "신규 등록 시 자동 적용"은 적용 결과물
-//   (인증 인스턴스)이 생기는 다음 단계의 일이다.
+//   마일스톤 세트는 S3-2 PR-4b가 붙였다(선적 계획 초안의 적용 종류 — 추가·제거는 관리자만, 서버 이중 가드).
+//   "신규 등록 시 자동 적용"(서류·요건)은 적용 결과물(인증 인스턴스)이 생기는 다음 단계의 일이다.
 // ★ 요건 세트 편집은 인증+관리자다(판정 ⑤ — 서류 세트의 무역+인증과 다르다).
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ListPager } from "../components/list-pager";
 import { ListState } from "../components/list-state";
+import { MilestoneSetEditor } from "../components/milestone-set-editor";
 import { apiDelete, apiFetch } from "../lib/api";
 import { orEmpty, templateStatusLabel } from "../lib/labels";
 import { usePagedList, usePagedQuery } from "../lib/paging";
@@ -300,12 +301,14 @@ export function ItemProfilesPage() {
   const canEditDocumentSet = hasRole(me, "TRADE") || hasRole(me, "CERT");
   // 요건 세트는 인증+관리자만이다(판정 ⑤ — 요건 데이터의 실무 취급 주체).
   const canEditRequirementSet = hasRole(me, "CERT");
+  // 마일스톤 세트는 관리자 전용이다(R-14 — 서버 require_roles(ADMIN) + AdminUser). hasRole(me)는 관리자만 참.
+  const canEditMilestoneSet = hasRole(me);
 
   const [code, setCode] = useState("");
   const [nameKo, setNameKo] = useState("");
   // 선택은 행 객체로 보관한다 — 현재 쪽 items에서 매번 찾으면 목록 쪽 이동만으로
   // 편집 패널이 조용히 닫힌다(리뷰 확정 발견). 패널 내용은 id로 따로 조회한다.
-  const [selected, setSelected] = useState<{ profile: ItemProfile; panel: "doc" | "req" } | null>(
+  const [selected, setSelected] = useState<{ profile: ItemProfile; panel: "doc" | "req" | "ms" } | null>(
     null,
   );
 
@@ -328,8 +331,8 @@ export function ItemProfilesPage() {
       <header>
         <h1 className="text-2xl font-bold">품목군</h1>
         <p className="mt-1 text-sm text-gray-500">
-          제품·SKU를 묶는 분류입니다. 서류 세트는 여기서 편집합니다 — 기본 요건·마일스톤 세트는
-          각 기능이 생기는 단계에서 연결됩니다.
+          제품·SKU를 묶는 분류입니다. 서류 세트·요건 세트·마일스톤 세트(선적 계획 초안의 적용 종류)를
+          여기서 편집합니다.
         </p>
       </header>
 
@@ -436,6 +439,21 @@ export function ItemProfilesPage() {
                         ? "요건 세트 닫기"
                         : "요건 세트"}
                     </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelected((previous) =>
+                          previous?.profile.id === profile.id && previous.panel === "ms"
+                            ? null
+                            : { profile, panel: "ms" },
+                        )
+                      }
+                      className="ml-3 text-sm text-gray-700 underline"
+                    >
+                      {selected?.profile.id === profile.id && selected.panel === "ms"
+                        ? "마일스톤 세트 닫기"
+                        : "마일스톤 세트"}
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -449,6 +467,9 @@ export function ItemProfilesPage() {
       )}
       {selected?.panel === "req" && (
         <RequirementSetEditor profile={selected.profile} canEdit={canEditRequirementSet} />
+      )}
+      {selected?.panel === "ms" && (
+        <MilestoneSetEditor key={selected.profile.id} profile={selected.profile} canEdit={canEditMilestoneSet} />
       )}
     </section>
   );

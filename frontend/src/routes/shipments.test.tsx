@@ -33,6 +33,35 @@ const LIST: GateHandler = ["/v1/shipments", "GET", () => jsonResponse(page(ROWS)
 const rowOf = (name: string) => screen.getByRole("link", { name }).closest("tr") as HTMLElement;
 
 describe("선적 목록", () => {
+  it("ETD·ETA 열(부채 R-3b-3 — PR-4a 유효값): 날짜 문자열 그대로 + 실적/예정 표지, 값 없으면 '—'", async () => {
+    stubGateFetch(TRADER, [
+      [
+        "/v1/shipments",
+        "GET",
+        () =>
+          jsonResponse(
+            page([
+              shipmentListItem({
+                etd: { value: "2026-10-03", basis: "ACTUAL" },
+                eta: { value: "2026-10-20", basis: "PLANNED" },
+              }),
+              shipmentListItem({ id: 32, doc_number: "SH-2026-0002" }),
+            ]),
+          ),
+      ],
+    ]);
+    renderWithProviders(<AppRoutes />, { route: "/shipments" });
+    await screen.findByRole("link", { name: "SH-2026-0001" });
+    const headers = screen.getAllByRole("columnheader").map((th) => th.textContent);
+    expect(headers).toEqual(expect.arrayContaining(["ETD", "ETA"]));
+    const cells = within(rowOf("SH-2026-0001")).getAllByRole("cell");
+    expect(cells[headers.indexOf("ETD")]).toHaveTextContent("2026-10-03 실적");
+    expect(cells[headers.indexOf("ETA")]).toHaveTextContent("2026-10-20 예정");
+    const empty = within(rowOf("SH-2026-0002")).getAllByRole("cell");
+    expect(empty[headers.indexOf("ETD")]).toHaveTextContent(/^—$/);
+    expect(empty[headers.indexOf("ETA")]).toHaveTextContent(/^—$/);
+  });
+
   it("행·상태 배지·구분·원천 링크·출발→도착·라인 수·합계(서버 문자열)·담당을 보인다", async () => {
     stubGateFetch(TRADER, [LIST]);
     renderWithProviders(<AppRoutes />, { route: "/shipments" });
@@ -60,7 +89,10 @@ describe("선적 목록", () => {
     expect(within(row).getByText("수입")).toBeInTheDocument();
     expect(within(row).getByRole("link", { name: "PO-2026-0004" })).toHaveAttribute("href", "/purchase-orders/4");
     expect(within(row).queryByText(/0\.00/)).not.toBeInTheDocument();
-    expect(within(row).getByText("—")).toBeInTheDocument();
+    // 합계 칸 자체가 '—'(PR-4b가 ETD·ETA 열을 더해 같은 행에 '—'가 여럿 — 칸을 머리글 위치로 찾는다).
+    const headers = screen.getAllByRole("columnheader").map((th) => th.textContent);
+    const cells = within(row).getAllByRole("cell");
+    expect(cells[headers.indexOf("합계")]).toHaveTextContent(/^—$/);
   });
 
   it("목록에는 '선적 만들기'가 없고, 빈 목록은 수주 상세에서 만든다고 안내한다", async () => {

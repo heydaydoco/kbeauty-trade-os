@@ -9,11 +9,13 @@
 // - ★ 원가 마스킹: 서버 응답에 원가 키(통화·합계·단가·라인금액·기준·환율)가 없을 수 있다(조회 전용 역할). 키가 있을 때만 그리고, 없으면 열·칸 자체를 만들지 않는다.
 //   원가 값은 상태·URL·로컬 스토리지·콘솔에 따로 보관·출력하지 않는다. 자유 텍스트(내부 메모·취소 사유·OC 참조) 옆에 원가 금지 안내를 둔다.
 // - 합계·라인 금액은 서버 문자열만 그대로 표시한다. 프런트 산술 0.
+// - (S3-2 PR-4b) OEM 생산 발주는 '생산 일정' 섹션(원료수급·충진·포장·출하검사 — 버튼은 보드 allowed_actions만, 원가 키 없음)을 더한다.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { ConfirmDialog, useDialogBehavior } from "../components/confirm-dialog";
+import { OemScheduleSection } from "../components/milestone-oem-section";
 import { DocField, EMPTY, incotermText, paymentTermsText, show } from "../components/proforma-facts";
 import { StatusTimeline } from "../components/status-timeline";
 import { ApiError, apiFetch } from "../lib/api";
@@ -370,6 +372,9 @@ function PurchaseOrderDetailView() {
             </table>
           </div>
         </section>
+
+        {/* OEM 생산 일정(S3-2 PR-4b — design-D D7): OEM 생산 발주에만(일반 구매 발주는 서버 422 OWNER_NOT_OEM — 섹션 자체를 두지 않는다). */}
+        {po.po_kind === "OEM_PRODUCTION" && <OemScheduleSection poId={po.id} />}
 
         <StatusTimeline
           basePath={`/v1/purchase-orders/${po.id}`}

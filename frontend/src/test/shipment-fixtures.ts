@@ -1,6 +1,7 @@
 // 선적 화면 테스트 픽스처 (S3-2 PR-3b) — 응답 모양은 backend shipments/schemas.py(ShipmentDetail·ShipmentListItem·ShipmentPreview) 그대로.
 
 import type { ShipmentDetail, ShipmentLine, ShipmentListItem, ShipmentParty, ShipmentPreview } from "../lib/shipment";
+import { exportBoard } from "./milestone-fixtures";
 
 // 서버 응답의 자릿수 필드 — 화면이 쓰지 않는 값이라 변수로 둔다(응답 모양 재현).
 const SERVER_MINOR_UNITS = 2;
@@ -69,6 +70,9 @@ export function shipmentDetail(over: Partial<ShipmentDetail> = {}): ShipmentDeta
     dg_line_count: 0,
     lines: [SHIPMENT_LINE],
     parties: [AUTO_CONSIGNEE],
+    // PR-4a 상세 내장 — 계획 전 수출선적의 보드(행 없음)·통관 요약 0. 마일스톤 버튼 동작은 시험이 allowed_actions에 더해 연다.
+    milestones: exportBoard(),
+    customs_summary: { live_count: 0, pending_count: 0, latest_accepted_on: null },
     allowed_actions: ["RELEASE_ORDER", "CANCEL", "EDIT_LINES", "EDIT_COUNTRIES", "EDIT_META", "EDIT_PARTIES"],
     created_at: "2026-10-04T01:00:00Z",
     updated_at: "2026-10-04T02:30:00Z",
@@ -91,6 +95,8 @@ export function shipmentListItem(over: Partial<ShipmentListItem> = {}): Shipment
     total_amount: 5000,
     total_text: "50.00",
     line_count: 1,
+    etd: null,
+    eta: null,
     assignee: { id: 1, display_name: "무역 담당" },
     created_at: "2026-10-04T01:00:00Z",
     updated_at: "2026-10-04T02:30:00Z",

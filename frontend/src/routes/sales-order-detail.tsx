@@ -51,7 +51,7 @@ import { hasRole, useSession } from "../lib/session";
 import { shipmentKindLabel, soShipmentsKey, successorNumbers, type ShipmentListItem } from "../lib/shipment";
 import type { Market } from "./markets";
 import { SalesOrderStatusBadge, SourceLinks } from "./sales-orders";
-import { CountryRoute, ShipmentStatusBadge } from "./shipments";
+import { CountryRoute, EffectiveDateCell, ShipmentStatusBadge } from "./shipments";
 import type { Sku } from "./skus";
 
 interface UserLookup {
@@ -425,7 +425,7 @@ function cancelErrorView(error: unknown): ReactNode {
   );
 }
 
-// ── 선적(S3-2 PR-3b — design-D D8) — 이 수주의 선적 목록 + '선적 만들기'(SO 참조 2단) ─────────────
+// ── 선적(S3-2 PR-3b — design-D D8) — 이 수주의 선적 목록(PR-4b: ETD·ETA 유효값 열 — 부채 R-3b-3) + '선적 만들기'(SO 참조 2단) ─────────────
 
 /** 선적을 만들 수 있는 수주 상태(서버 `CONSUMABLE_STATUSES[SO]` — 확정·선적중). 표시 편의일 뿐 서버가 정본. */
 const SHIPPABLE_SO_STATUSES = new Set(["CONFIRMED", "IN_SHIPMENT"]);
@@ -475,6 +475,8 @@ function ShipmentsSection({ so, canCreate, onReload }: { so: SalesOrderDetail; c
                 <th scope="col" className="cell-nowrap px-3 py-2 text-center">상태</th>
                 <th scope="col" className="cell-nowrap px-3 py-2 text-center">구분</th>
                 <th scope="col" className="cell-nowrap px-3 py-2 text-center">출발 → 도착</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">ETD</th>
+                <th scope="col" className="cell-nowrap px-3 py-2 text-center">ETA</th>
                 <th scope="col" className="cell-nowrap px-3 py-2 text-center">라인</th>
                 <th scope="col" className="cell-nowrap px-3 py-2 text-center">합계</th>
               </tr>
@@ -494,6 +496,12 @@ function ShipmentsSection({ so, canCreate, onReload }: { so: SalesOrderDetail; c
                   <td className="cell-nowrap px-3 py-2 text-center">{shipmentKindLabel(row.shipment_kind)}</td>
                   <td className="px-3 py-2 text-center">
                     <CountryRoute origin={row.origin_country_code} dest={row.dest_country_code} />
+                  </td>
+                  <td className="num cell-nowrap px-3 py-2">
+                    <EffectiveDateCell value={row.etd} />
+                  </td>
+                  <td className="num cell-nowrap px-3 py-2">
+                    <EffectiveDateCell value={row.eta} />
                   </td>
                   <td className="num cell-nowrap px-3 py-2">{row.line_count}</td>
                   <td className="num cell-nowrap px-3 py-2">

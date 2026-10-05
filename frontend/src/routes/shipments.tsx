@@ -4,6 +4,7 @@
 // ★ 선적은 목록에서 만들지 않는다 — 수주 상세의 '선적 만들기'(SO 참조 2단)로만 태어난다(원천 없는 생성 화면 금지 — design-D D5).
 // ★ 조회는 전 역할. 주소의 `?q=`·`?status=`는 첫 조건으로만 읽는다(수주 취소 409 '먼저 취소할 선적' 링크의 진입점).
 // ★ 수입선적(PR-5a)은 금액 축이 없다 — 합계 칸은 수출만, 수입은 '—'(0으로 그리지 않는다).
+// ★ ETD·ETA 열(S3-2 PR-4b — 부채 R-3b-3 해소): 서버 유효값(실적 우선) 'YYYY-MM-DD' 문자열 그대로 + 실적/예정 표지, 값 없으면 '—'.
 
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -12,6 +13,7 @@ import { ListState } from "../components/list-state";
 import { errorMessage } from "../lib/api-errors";
 import { shipmentStatusLabel, statusBadgeClass } from "../lib/doc-status";
 import { downloadFile } from "../lib/download";
+import type { EffectiveValue } from "../lib/milestone";
 import { usePagedList } from "../lib/paging";
 import {
   SHIPMENTS_QUERY_KEY,
@@ -45,6 +47,19 @@ export function CountryRoute({ origin, dest }: { origin: string; dest: string })
   return (
     <span className="cell-nowrap" title={label} aria-label={`출발국 ${origin} 도착국 ${dest}`}>
       {origin} → {dest}
+    </span>
+  );
+}
+
+/** ETD·ETA 유효값 칸 — 현지 날짜 문자열 그대로(시각 객체 변환 0) + 실적이면 '실적', 계획이면 '예정'. 행·값이 없으면 '—'. */
+export function EffectiveDateCell({ value }: { value: EffectiveValue | null }) {
+  if (value === null) return <span className="text-gray-400">—</span>;
+  return (
+    <span className="cell-nowrap">
+      {value.value}{" "}
+      <span className={`text-xs ${value.basis === "ACTUAL" ? "rounded border border-gray-400 px-1 text-gray-700" : "text-gray-500"}`}>
+        {value.basis === "ACTUAL" ? "실적" : "예정"}
+      </span>
     </span>
   );
 }
@@ -169,6 +184,8 @@ function ShipmentListView({ initial }: { initial: { status: string; q: string } 
                 <th scope="col" className="cell-nowrap px-4 py-2">원천 전표</th>
                 <th scope="col" className="cell-nowrap px-4 py-2">거래 상대</th>
                 <th scope="col" className="cell-nowrap px-4 py-2 text-center">출발 → 도착</th>
+                <th scope="col" className="cell-nowrap px-4 py-2 text-center">ETD</th>
+                <th scope="col" className="cell-nowrap px-4 py-2 text-center">ETA</th>
                 <th scope="col" className="cell-nowrap px-4 py-2 text-center">라인</th>
                 <th scope="col" className="cell-nowrap px-4 py-2 text-center">합계</th>
                 <th scope="col" className="cell-nowrap px-4 py-2">담당</th>
@@ -201,6 +218,12 @@ function ShipmentListView({ initial }: { initial: { status: string; q: string } 
                   <td className="break-keep px-4 py-2">{row.counterparty_name}</td>
                   <td className="px-4 py-2 text-center">
                     <CountryRoute origin={row.origin_country_code} dest={row.dest_country_code} />
+                  </td>
+                  <td className="num cell-nowrap px-4 py-2">
+                    <EffectiveDateCell value={row.etd} />
+                  </td>
+                  <td className="num cell-nowrap px-4 py-2">
+                    <EffectiveDateCell value={row.eta} />
                   </td>
                   <td className="num cell-nowrap px-4 py-2">{row.line_count}</td>
                   <td className="num cell-nowrap px-4 py-2">
