@@ -13,3 +13,5 @@
 **기각한 대안** — `lock_chain`·`converge`를 L0로 내림(L0→L1 금지), payments를 trade_chain 상위로 승격(L2 상호 의존 사이클), DAG 예외 ADR, 서비스 계층 검증만으로 사유 필수 유지(DB 백스톱 상실).
 
 **되돌리기 비용** — 낮음. 오케스트레이터·순수 원장 경계는 함수 이동 수준이고(테스트가 잠금·호출 순서를 고정), CHECK 가드는 신규 테이블이라 배포 전 무비용(배포 뒤 변경은 CHECK 재정의 마이그레이션 1건).
+
+**부기(2026-10-05 — S3-3 계획)** — (자율 확정 — 사후 번복 가능. 위 원문 결정은 고치지 않는다.) **역기록 오케스트레이션 순서 개정(S3-3 PR-2d — 적대 R-20·R-34, ADR-0089·0097)**: 위 ① 'PI `lock_chain` 단일 진입'을 **peek → 대상 판별(PI·채권) → 거래처 여신 잠금(`lock_buyer_for_credit` — 역기록은 노출 증가) → 대상별 잠금**(PI: `lock_chain(PI)` / 채권: PI `FOR SHARE`(있으면) → SO `lock_document(read=True)` → receivables `FOR UPDATE` — `lock_chain` 금지)으로 바꾼다. **PI 입금도 거래처 잠금을 먼저 잡는다**(멱등 → partners NKU → `lock_chain(PI)` — 같은 송금의 채권·PI 교차 경합에서 이중 입력 판정 창 0). `payment_flow.py:6` 독스트링 '거래처→QT→PI'는 실측(QT→PI)에 맞춘다. payments는 계속 순수 원장(잠금·멱등·수렴 0)이고 채권 입금 오케스트레이션도 `trade_chain`에 둔다. ②의 NULL 3값 논리 명시 가드 원칙은 M16b의 새 CHECK(`num_nonnulls(pi_id, receivable_id) = 1` 등)에도 적용하고 기존 CHECK는 무변경이다.

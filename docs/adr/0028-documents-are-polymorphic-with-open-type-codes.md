@@ -11,3 +11,5 @@
 **기각한 대안** — 소유자 전 열거 선반영(검증 불가한 값 — ADR-0021과 동일 사유), 종류 CHECK 고정(§4.6 유형 10종과 달리 §4.7 열거는 예시적 문면이고 ADR-11이 데이터로 지정), 해시 전역 유니크(실무 차단), 파기 잠금 트리거(ORM 밖 규칙 분산 — set_components 선례).
 
 **되돌리기 비용** — 소유 열거·종류 추가는 마이그레이션 1건씩으로 낮다. 해시 유니크 범위 변경은 데이터 정리가 따라와 중간이다.
+
+**부기(2026-10-05 — S3-3 계획)** — (자율 확정 — 사후 번복 가능. 위 원문 결정은 고치지 않는다.) **owner 열거 6종 확장(S3-3 PR-3a — M18)**: `owner_type` VARCHAR(13) → 24, 전표 소유 QUOTATION·PROFORMA_INVOICE·SALES_ORDER·SHIPMENT(**수출만**)·COMMERCIAL_INVOICE·SHIPPING_INSTRUCTION 추가(PURCHASE_ORDER = 원가 채널·ORDER_INTAKE = S6-1 미개방 — P-13 S3-3 몫 종결). 소유자 존재 확인·생성물 판정은 소유 모듈이 등록하는 해석기 레지스트리(documents는 전표·렌더 모듈 무임포트, 미등록 = 403). 요청 스키마 길이 = 열 길이 결속 상수(R-11), 쓰기 스키마 전부 `extra="forbid"`(R-12 — P-50 documents 몫). 문서 종류 시드 5행(QUOTATION·PROFORMA_INVOICE·COMMERCIAL_INVOICE·PACKING_LIST·SHIPPING_INSTRUCTION — 기준 표 관용). 열린 종류 코드 원칙은 그대로.
