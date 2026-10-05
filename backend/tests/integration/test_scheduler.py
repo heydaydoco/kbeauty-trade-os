@@ -130,6 +130,7 @@ def test_registering_is_idempotent() -> None:
         "session-purge",
         "stagnation-scan",
         "storage-monitor",
+        "trade-deadline-scan",
         "trade-docs-totals-verify",
     ]
     assert scheduler.register_jobs() == []

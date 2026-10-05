@@ -37,10 +37,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.orm import Session
 
 from app.core.db.uow import unit_of_work
@@ -107,24 +107,26 @@ def _title(text: str) -> str:
     return text if len(text) <= ALERT_TITLE_MAX else text[: ALERT_TITLE_MAX - 1] + "…"
 
 
-def _d_label(remaining: int) -> str:
+def d_label(remaining: int) -> str:
     """사람 표기 — 남았으면 D-N, 지났으면 D+N(음수 이중 하이픈 'D--19' 방지 — 관통 실측)."""
     return f"D-{remaining}" if remaining >= 0 else f"D+{-remaining}"
 
 
-def _normalize_thresholds(raw: Any) -> tuple[int, ...]:
-    """규칙 config의 thresholds — 양의 정수 목록만 받고, 아니면 기본값.
+def _normalize_thresholds(
+    raw: Any, defaults: tuple[int, ...] = DEFAULT_THRESHOLDS
+) -> tuple[int, ...]:
+    """규칙 config의 thresholds — 양의 정수 목록만 받고, 아니면 기본값(`defaults` — 축마다 다르다).
 
     config는 관리자가 손으로 적는 JSON이라 형이 흐릿할 수 있다. 잘못된 값으로
     스캔 전체가 서는 것보다 기본값으로 도는 편이 낫다(fail-visible은 알림
     자체의 몫이지 문턱 목록의 몫이 아니다).
     """
     if not isinstance(raw, list) or not raw:
-        return DEFAULT_THRESHOLDS
+        return defaults
     cleaned: set[int] = set()
     for item in raw:
         if isinstance(item, bool) or not isinstance(item, int) or item < 1:
-            return DEFAULT_THRESHOLDS
+            return defaults
         cleaned.add(item)
     return tuple(sorted(cleaned, reverse=True))
 
@@ -139,16 +141,59 @@ class Policy:
     thresholds: tuple[int, ...]
 
 
-def _policy(session: Session, event_type: str) -> Policy:
-    """이 기일 축의 활성 규칙(첫 번째)과 문턱 목록.
+def policy(
+    session: Session, event_type: str, *, defaults: tuple[int, ...] = DEFAULT_THRESHOLDS
+) -> Policy:
+    """이 기일 축의 활성 규칙(첫 번째)과 문턱 목록 — 규칙이 없거나 config가 흐리면 `defaults`.
 
     규칙은 사건 종류당 하나가 정상이다 — 둘 이상이면 id가 작은 것이 정본이고
     나머지는 무시한다(수신자 팬아웃은 규칙이 아니라 역할로 한다 — ADR-07).
+    ★ S3-2 PR-6 공개 승격(design-B B13 / ADR-0084 ③): 무역 기일 스캔(`trade_chain.deadline_scan`)이 같은 규칙 해석을
+      기본 D-7/3/1로 부른다. 인증·문서 2축은 인자 없이 불러 기본 D-180/90/30 그대로(회귀 시험 고정).
     """
     rules = notifications.matching_rules(session, event_type)
     rule = rules[0] if rules else None
-    thresholds = _normalize_thresholds((rule.config or {}).get("thresholds") if rule else None)
+    thresholds = _normalize_thresholds(
+        (rule.config or {}).get("thresholds") if rule else None, defaults
+    )
     return Policy(event_type=event_type, rule=rule, thresholds=thresholds)
+
+
+def _like_literal(value: str) -> str:
+    """LIKE 패턴의 와일드카드(`%`·`_`)와 이스케이프 문자를 글자 그대로로 — 키 세그먼트의 `_`가 아무 글자와 맞지 않게."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def has_unacknowledged_alert(
+    session: Session,
+    *,
+    key_prefix: str,
+    stamp: str,
+    created_before: datetime | None = None,
+    recipient_ids: tuple[int, ...] | None = None,
+) -> bool:
+    """`{key_prefix}…@{stamp}:{수신자}` 모양 dedup 키의 살아 있는 미확인 알림이 있는가 (D-3 에스컬레이션 판정 — 공용).
+
+    ★ 기일(`stamp`)이 다른 알림은 세지 않는다 — 옛 기일(지난 주기·롤오버 전)의 미확인은 새 기일의 판정 근거가 아니다.
+    ★ prefix·stamp는 글자 그대로 비교한다(LIKE 와일드카드 이스케이프) — 무역 키의 종류 세그먼트(`DOC_CUTOFF` 등)의 `_`가
+      아무 글자와 맞아 다른 종류 알림을 섞지 않게(S3-2 PR-6 — 통합 X-25 "에스컬레이션 조회 prefix는 TYPE까지").
+    ★ `created_before`(선택) — 그 시각 이전에 만든 알림만 센다. 무역 스캔은 '스캔일 KST 0시'를 준다: 같은 날 앞선 실행(CLI 재실행·
+      미스파이어 수렴)이 방금 만든 알림은 "안 읽었다"가 아니라 "받을 틈이 없었다"다(S2-3 ① 취지 — 실기동 재실행에서 확인).
+    ★ `recipient_ids`(선택) — 그 사람들이 받은 알림만 센다(무역 스캔 = `resolve_recipients` 결과). 인증·문서 축은 아직 인자 없이
+      부른다(부채 R-6-1·R-6-5).
+    """
+    pattern = f"{_like_literal(key_prefix)}%@{_like_literal(stamp)}:%"
+    conditions: list[ColumnElement[bool]] = [
+        Alert.dedup_key.like(pattern, escape="\\"),
+        Alert.acknowledged_at.is_(None),
+        Alert.deleted_at.is_(None),
+    ]
+    if created_before is not None:
+        conditions.append(Alert.created_at < created_before)
+    if recipient_ids is not None:
+        # 지금의 수신자가 받은 알림만 — 담당 변경 전 사람·비활성 계정의 옛 미확인이 새 수신자의 '안 읽음'이 되지 않게(PR-6 적대 검토 ④)
+        conditions.append(Alert.recipient_user_id.in_(recipient_ids))
+    return bool(session.execute(select(exists().where(*conditions))).scalar_one())
 
 
 # ── 스캔 대상 ────────────────────────────────────────────────────────────────
@@ -233,18 +278,10 @@ def _has_unacknowledged_deadline_alert(session: Session, subject: Subject) -> bo
       기일의 이야기라 새 기일의 D-3 판정 근거가 아니다(관통 실측에서 정정 직후
       옛 주기 미확인분이 새 주기 에스컬레이션을 즉시 발동시킨 것을 잡았다).
     """
-    prefix = _subject_key(KIND_DEADLINE, subject, "")
-    stamp = subject.expires_on.isoformat()
-    return bool(
-        session.execute(
-            select(
-                exists().where(
-                    Alert.dedup_key.like(f"{prefix}%@{stamp}:%"),
-                    Alert.acknowledged_at.is_(None),
-                    Alert.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one()
+    return has_unacknowledged_alert(
+        session,
+        key_prefix=_subject_key(KIND_DEADLINE, subject, ""),
+        stamp=subject.expires_on.isoformat(),
     )
 
 
@@ -271,7 +308,7 @@ def _scan_subject(
                 subject_key=_subject_key(KIND_ESCALATION, subject, f"D-{ESCALATION_DAYS}@{stamp}"),
                 title=_title(f"미확인 기일 에스컬레이션 — {subject.title}"),
                 body=(
-                    f"만료일 {stamp}({_d_label(remaining)})까지 {ESCALATION_DAYS}일 이내인데 "
+                    f"만료일 {stamp}({d_label(remaining)})까지 {ESCALATION_DAYS}일 이내인데 "
                     f"{who} 기일 알림을 확인하지 않았습니다. 진행 상황을 확인해 주세요."
                 ),
                 severity="CRITICAL",
@@ -404,7 +441,7 @@ def _scan_certification(session: Session, certification_id: int, base_date: date
     made = _scan_subject(
         session,
         _certification_subject(row),
-        policy=_policy(session, CERTIFICATION_EVENT),
+        policy=policy(session, CERTIFICATION_EVENT),
         base_date=base_date,
     )
     return {"certifications": 1, **made}
@@ -423,7 +460,7 @@ def _scan_document(session: Session, document_id: int, base_date: date) -> dict[
     made = _scan_subject(
         session,
         _document_subject(session, row),
-        policy=_policy(session, DOCUMENT_EVENT),
+        policy=policy(session, DOCUMENT_EVENT),
         base_date=base_date,
     )
     return {"documents": 1, **made}

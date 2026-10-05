@@ -32,7 +32,7 @@ from app.modules.proforma_invoices.models import ProformaInvoice
 from app.modules.quotations.models import Quotation
 from app.modules.trade_docs.chain import has_live_children
 from app.modules.trade_docs.constants import DocKind
-from app.modules.trade_docs.expiry import is_lapsed
+from app.modules.trade_docs.expiry import EXPIRY_CANDIDATE_STATUS, is_lapsed
 from app.modules.trade_docs.locking import lock_document
 from app.modules.trade_docs.transition import record_transition
 
@@ -61,7 +61,7 @@ def _candidate_ids(model: type[Quotation] | type[ProformaInvoice], today: date) 
             uow.session.execute(
                 select(model.id)
                 .where(
-                    model.status == "ISSUED",
+                    model.status == EXPIRY_CANDIDATE_STATUS,
                     model.deleted_at.is_(None),
                     model.valid_until < today,
                 )
@@ -79,7 +79,9 @@ def _expire_one(
         row = lock_document(
             session, model, doc_id
         )  # 잠금 순서: 후속 생성·입금·취소와 같은 행 잠금으로 직렬화
-        if row.status != "ISSUED" or not is_lapsed(kind, row.status, row.valid_until, today):
+        if row.status != EXPIRY_CANDIDATE_STATUS or not is_lapsed(
+            kind, row.status, row.valid_until, today
+        ):
             return False
         if has_live_children(session, kind, row.id):
             return False  # 후속이 부모를 붙잡는다(X-18) — 시스템이 닫지 않는다

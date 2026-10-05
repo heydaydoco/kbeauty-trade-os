@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -974,13 +975,14 @@ def _trade_chain_imports(tree: ast.Module) -> set[str]:
 
 
 def test_scheduler_and_cli_reach_only_the_totals_check_and_the_expiry_sweep() -> None:
-    """스케줄러·CLI가 임포트하는 전표 모듈은 검산(trade_docs.verify)과 **만료 스윕(trade_chain.expiry_sweep) 하나뿐**이다 —
-    발행·전이·확정 함수(lifecycle·reference·payment_status)와 전표 CRUD 모듈은 언급조차 못 한다"""
+    """스케줄러·CLI가 임포트하는 전표 모듈은 검산(trade_docs.verify)과 **만료 스윕(trade_chain.expiry_sweep)·무역 기일 스캔
+    (trade_chain.deadline_scan — S3-2 PR-6, 알림만) 둘뿐**이다 — 발행·전이·확정 함수(lifecycle·reference·payment_status)와 전표 CRUD
+    모듈은 언급조차 못 한다. 스캔을 이 시험 밖 새 모듈에 두어 우회하지 않는다(design-C C11 ③ — 아래 별도 시험이 스캔 본체를 고정)."""
     from tests.support.astscan import imported_modules
 
     for rel in ("modules/platform/scheduler.py", "cli.py"):
         tree = app_sources()[rel]
-        assert _trade_chain_imports(tree) == {"expiry_sweep"}, rel
+        assert _trade_chain_imports(tree) == {"expiry_sweep", "deadline_scan"}, rel
         modules = imported_modules(tree)
         assert not modules & {"quotations", "proforma_invoices", "bank_accounts"}, rel
         for forbidden in (
@@ -1021,6 +1023,176 @@ def test_the_expiry_sweep_creates_exactly_two_edges_and_touches_no_orders_or_num
         "payments",
     }, used
     assert not _mentions(tree, "issue_document_number") and not _mentions(tree, "notify")
+
+
+#: 무역 기일 스캔(S3-2 PR-6)이 임포트해도 되는 앱 모듈 — **서브모듈 단위 허용 목록**(적대 검토 ①). 전표 서비스·전이·잠금·채번·아웃박스는 없다.
+_SCAN_ALLOWED_APP_MODULES = frozenset(
+    {
+        "app.core.db.uow",
+        "app.core.logging",
+        "app.core.logging.redaction",
+        "app.core.time",
+        "app.modules.deadlines.service",
+        "app.modules.notifications.service",
+        "app.modules.proforma_invoices.models",
+        "app.modules.quotations.models",
+        "app.modules.shipments.models",  # shipments는 모델만(서비스 0)
+        "app.modules.trade_chain.milestone_view",  # 화면과 같은 판정 함수 — 읽기 조립
+        "app.modules.trade_docs.schedule",
+        "app.modules.trade_docs.chain",
+        "app.modules.trade_docs.constants",
+        "app.modules.trade_docs.expiry",
+        "app.modules.trade_docs.machine",
+    }
+)
+#: sqlalchemy에서 가져와도 되는 이름(읽기 질의 조립뿐 — update·delete·insert·text 별칭 0).
+_SCAN_ALLOWED_SQLA = frozenset({"exists", "or_", "select", "Session"})
+#: 호출해도 되는 이름(허용 목록) — 새 호출이 생기면 이 집합을 사람이 보고 늘린다. 쓰기는 `notify` 하나.
+_SCAN_ALLOWED_CALLS = frozenset(
+    {
+        "Due", "RuntimeError", "Unresolved", "ValueError", "_alert_due", "_alert_unresolved", "_candidates",
+        "_instant_shown", "_key", "_live_shipment", "_scan_one", "_shipment_verdict", "_title",
+        "_validity_candidate_page", "_validity_work", "_who", "append", "assemble", "astimezone", "bool", "cast",
+        "d_label", "dataclass", "date", "datetime", "days_left", "error", "escalation_cutoff", "execute", "exists",
+        "expire_all", "fromisoformat", "frozenset", "get", "get_logger", "getattr", "has_live_children",
+        "has_unacknowledged_alert", "in_", "in_unit_of_work", "instant_stamp", "int", "is_", "is_lapsed", "is_not",
+        "isoformat", "items", "len", "limit", "list", "min", "not_in", "notify", "or_", "order_by", "page",
+        "passed_thresholds", "policy", "resolve_recipients", "scalar_one_or_none", "scalars", "scrub_text", "select",
+        "set", "shipment_dues", "sorted", "str", "strftime", "threshold_label", "timedelta", "tuple", "type",
+        "unit_of_work", "utcnow", "verdict", "where", "work", "zone",
+    }
+)  # fmt: skip
+#: 이름이 무엇이든 금지 — 허용 목록이 실수로 넓어져도 이 집합은 막는다.
+_SCAN_FORBIDDEN_CALLS = frozenset(
+    {
+        "setattr", "text", "merge", "add", "add_all", "delete", "update", "insert", "flush", "with_for_update",
+        "record_transition", "record_birth", "lock_chain", "lock_document", "publish", "issue_document_number",
+    }
+)  # fmt: skip
+_SQL_WRITE = re.compile(
+    r"\bupdate\s+\S+\s+set\b|\binsert\s+into\b|\bdelete\s+from\b|\btruncate\b", re.IGNORECASE
+)
+#: 대입해도 되는 '로컬 데이터' 구독 대상(집계 dict)·속성(함수 이름 표지).
+_SCAN_LOCAL_SUBSCRIPTS = frozenset({"made", "counts"})
+_SCAN_ALLOWED_ATTR_TARGETS = frozenset({"__name__"})
+
+
+def _resolve_import(module: str, name: str) -> str:
+    """`from a.b import c` — c가 서브모듈이면 `a.b.c`, 아니면 `a.b`."""
+    import importlib.util
+
+    candidate = f"{module}.{name}"
+    try:
+        if importlib.util.find_spec(candidate) is not None:
+            return candidate
+    except (ModuleNotFoundError, ValueError):
+        pass
+    return module
+
+
+def _call_name(node: ast.Call) -> str:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return type(func).__name__
+
+
+def _alert_only_violations(tree: ast.Module) -> list[str]:
+    """'알림만 만든다' 규칙 위반 목록(빈 목록 = 통과). 무역 기일 스캔 본체와 자기검사 말뭉치가 같은 함수를 쓴다."""
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module.startswith("app."):
+                for alias in node.names:
+                    resolved = _resolve_import(node.module, alias.name)
+                    if resolved not in _SCAN_ALLOWED_APP_MODULES:
+                        out.append(f"허용 밖 앱 모듈 임포트: {resolved}")
+            elif node.module.split(".")[0] == "sqlalchemy":
+                for alias in node.names:
+                    if alias.name not in _SCAN_ALLOWED_SQLA:
+                        out.append(f"허용 밖 sqlalchemy 이름: {alias.name}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(("app.", "sqlalchemy")):
+                    out.append(f"모듈 통째 임포트: {alias.name}")
+        elif isinstance(node, ast.Call):
+            name = _call_name(node)
+            if name in _SCAN_FORBIDDEN_CALLS:
+                out.append(f"금지 호출: {name}")
+            elif name not in _SCAN_ALLOWED_CALLS:
+                out.append(f"허용 목록 밖 호출: {name}")
+        elif isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for leaf in ast.walk(target):
+                    if (
+                        isinstance(leaf, ast.Attribute)
+                        and leaf.attr not in _SCAN_ALLOWED_ATTR_TARGETS
+                    ):
+                        out.append(f"속성 대입: .{leaf.attr}")
+                    elif isinstance(leaf, ast.Subscript) and not (
+                        isinstance(leaf.value, ast.Name) and leaf.value.id in _SCAN_LOCAL_SUBSCRIPTS
+                    ):
+                        out.append("로컬 집계 밖 구독 대입")
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _SQL_WRITE.search(node.value)
+        ):
+            out.append(f"쓰기 SQL 문자열: {node.value[:40]!r}")
+    return out
+
+
+def test_the_trade_deadline_scan_only_creates_alerts() -> None:
+    """무역 기일 스캔(S3-2 PR-6 — ADR-0084 4금 논증)은 **알림만** 만든다 — 앱 모듈은 서브모듈 허용 목록(shipments = 모델만, trade_chain =
+    보드 조립만)·sqlalchemy는 읽기 이름만·호출은 허용 목록(쓰기 통로 = `notify` 하나)·속성/구독 대입은 로컬 집계와 함수 이름 표지뿐·
+    쓰기 SQL 문자열 0(적대 검토 ① — 언급·문자열 검사만으로는 별칭 import·`setattr`·`text()`로 우회됐다)."""
+    tree = app_sources()["modules/trade_chain/deadline_scan.py"]
+    assert _alert_only_violations(tree) == []
+    assert _trade_chain_imports(tree) == {"milestone_view"}
+    assert _mentions(tree, "notify")
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "row.status = 'CANCELLED'\n",
+        "row.version += 1\n",
+        "setattr(row, 'status', 'X')\n",
+        "session.execute(text('UPDATE shipments SET status = 1'))\n",
+        "session.merge(row)\n",
+        "session.add(row)\n",
+        "from sqlalchemy import update as u\n",
+        "from sqlalchemy.dialects.postgresql import insert as ins\n",
+        "from sqlalchemy import text as t\n",
+        "from app.modules.trade_chain.lifecycle import transition\n",
+        "from app.modules.trade_chain import shipment_flow\n",
+        "from app.modules.shipments.service import require_shipment\n",
+        "from app.modules.outbox import service as outbox\n",
+        "import app.modules.numbering\n",
+        "sql = 'delete from milestones where id = 1'\n",
+        "sql = 'Insert Into alerts values (1)'\n",
+        "stmt = select(Shipment).with_for_update()\n",
+        "other[0] = 1\n",
+        "do_something_new()\n",
+    ],
+)
+def test_the_alert_only_checker_flags_every_bypass(snippet: str) -> None:
+    """자기검사 말뭉치 — 별칭 import·대입·`setattr`·`text()`·`merge`·쓰기 SQL(대소문자 무시)·허용 밖 호출을 하나씩 잡는다"""
+    assert _alert_only_violations(parse_source(snippet)), snippet
+
+
+def test_the_alert_only_checker_is_quiet_on_clean_code() -> None:
+    clean = parse_source(
+        "from sqlalchemy import select\n"
+        "from app.modules.shipments.models import Shipment\n"
+        "made = {}\nmade['threshold'] = 1\nmade['threshold'] += 1\n"
+        "rows = select(Shipment).where(Shipment.id == 1)\n"
+        "doc = 'update 버튼은 화면에'\n"
+    )
+    assert _alert_only_violations(clean) == []
 
 
 def test_the_scanner_flags_a_forbidden_mention_and_a_forbidden_import() -> None:

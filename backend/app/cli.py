@@ -36,7 +36,7 @@ from app.modules.identity.passwords import hash_password
 from app.modules.identity.service import normalize_email
 from app.modules.platform import scheduler, storage
 from app.modules.seeds import service as seeds
-from app.modules.trade_chain import expiry_sweep
+from app.modules.trade_chain import deadline_scan, expiry_sweep
 from app.modules.trade_docs import verify as trade_docs_verify
 
 MIN_PASSWORD_LENGTH = 12
@@ -265,6 +265,14 @@ def main(argv: list[str] | None = None) -> int:
         help="승인 행과 이력 이벤트 전건 대사를 1회 실행한다(읽기 전용 — 불일치는 문제별 1회 관리자 알림, 자동 정정 없음)",
     )
 
+    # 무역 기일 스캔 수동 실행 (S3-2 PR-6 / ADR-0084 — 잡 `trade-deadline-scan`과 같은 함수, 알림만 생성·멱등).
+    # 기준일 인자는 두지 않는다: 시각형 도과는 '지금' UTC 시각과 비교하므로 날짜만 바꾼 실행은 D-N과 도과의 기준이 갈리고,
+    # 미래 기준일로 만든 알림은 dedup 자리를 선점해 실시간 알림을 막는다(자율 확정 — 더 좁은 쪽).
+    commands.add_parser(
+        "trade-deadline-scan",
+        help="선적 마일스톤 기일(서류마감·Cargo Closing·수입 세금·적재기한)·견적/PI 만료 임박 스캔을 1회 실행한다(알림만 생성 — 멱등)",
+    )
+
     # 실행기 진입점 — compose의 worker 서비스가 이 명령으로 뜬다.
     commands.add_parser("run-scheduler", help="배치 실행기를 기동한다(무한 루프)")
 
@@ -374,6 +382,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 1 if counts["mismatches"] else 0
+    if args.command == "trade-deadline-scan":
+        counts = deadline_scan.scan_trade_deadlines()
+        print(
+            f"무역 기일 스캔 완료: 선적 {counts['shipments']}건·견적 {counts['quotations']}건·PI {counts['proforma_invoices']}건 — "
+            f"신규 알림 문턱 {counts['threshold']}·도과 {counts['overdue']}·에스컬레이션 {counts['escalated']}·"
+            f"판정 불가 {counts['unresolved']}·실패 {counts['failed']}건"
+        )
+        return 1 if counts["failed"] else 0
     if args.command == "register-jobs":
         created = scheduler.register_jobs()
         if created:

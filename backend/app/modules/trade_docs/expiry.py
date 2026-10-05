@@ -11,6 +11,11 @@ from datetime import date
 
 from app.modules.trade_docs.constants import DocKind
 
+#: 만료 스윕(경과 → EXPIRED)·만료 임박 D-N 알림(S3-2 PR-6 `trade_chain.deadline_scan`)의 **공통 후보 상태** — 미입금 발행(ISSUED)뿐
+#: (일부입금·입금완료 PI·전환 QT는 상태로 비대상 — design-B B18 "후보는 만료 스윕과 같은 정의, 둘로 갈리면 안 된다").
+#: 후보의 나머지 조건(삭제 아님·`valid_until` 있음·살아 있는 후속 없음)도 두 경로가 같은 술어(`is_lapsed`·`has_live_children`)를 쓴다.
+EXPIRY_CANDIDATE_STATUS = "ISSUED"
+
 #: 경과 판정 대상 상태.
 LAPSE_STATUSES: dict[DocKind, frozenset[str]] = {
     DocKind.QUOTATION: frozenset({"ISSUED", "CONVERTED"}),
