@@ -250,3 +250,27 @@ def test_the_pin_scan_catches_a_missing_pin() -> None:
         "def f(m):\n    pin_today_kst(m, sys.modules[__name__])\n"
     )
     assert _pin_problems("c.py", good) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "covered"),
+    [
+        ("test_shipment_milestones.py", True),
+        ("test_shipment_customs.py", True),
+        ("test_receivable_aging.py", True),
+        ("test_receivables.py", True),
+        ("test_payment_service.py", True),
+        ("test_ar_aging_buckets.py", True),
+        ("test_lc_terms_flow.py", True),
+        ("test_letter_of_credit.py", True),
+        ("test_shipment_lc_checklist.py", True),
+        ("test_commercial_invoices.py", True),
+        ("test_renditions.py", True),
+        ("test_letterhead.py", True),
+        ("test_calc_totals.py", False),  # 'lc' 부분 문자열 오탐 금지
+        ("test_shipments.py", False),
+    ],
+)
+def test_the_today_test_name_pattern_covers_s3_3_files(name: str, covered: bool) -> None:
+    """S3-3 PR-1b 자기검사 — 고정 규율 대상 이름 패턴이 S3-3 채권·입금·aging·L/C·CI·렌더·레터헤드 시험 파일을 잡고 오탐은 없다"""
+    assert bool(_MILESTONE_TEST_NAME.match(name)) is covered

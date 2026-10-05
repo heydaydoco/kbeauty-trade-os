@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import ast
-from datetime import date
+from datetime import date, timedelta
 from types import ModuleType
 
 import pytest
@@ -115,18 +115,18 @@ def test_the_coverage_scan_catches_a_missing_point() -> None:
     assert problems[1].startswith("modules/receivables/aging.py")
 
 
-def test_the_pin_fixes_one_day_everywhere(monkeypatch: pytest.MonkeyPatch) -> None:
-    """고정이 원본·전 지점·extra에 같은 날을 준다 — extra가 쥔 다른 날(1999-01-01)도 덮어 고정 후 읽는 '오늘'은 전부 한 날"""
+def test_the_pin_holds_one_day_even_when_the_clock_crosses_midnight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """고정 뒤 시계(`app.core.time.utcnow`)를 하루 밀어도 원본·전 지점·함수 안 임포트·extra가 읽는 '오늘'은 전부 고정한 날이다
+    (원본 고정이 빠지면 원본·함수 안 임포트가 밀린 날을 읽어 실패 — 자정 경계 재현)"""
     extra = ModuleType("extra_probe")
     extra.today_kst = lambda: date(1999, 1, 1)  # type: ignore[attr-defined]
     base = pin_today_kst(monkeypatch, extra)
+    shifted = core_time.utcnow() + timedelta(days=1)
+    monkeypatch.setattr(core_time, "utcnow", lambda: shifted)
     seen = {module.today_kst() for module in (core_time, *TODAY_IMPORT_POINTS, extra)}
     assert seen == {base}
-
-
-def test_a_function_local_import_sees_the_pinned_day(monkeypatch: pytest.MonkeyPatch) -> None:
-    """함수 안 임포트(`trade_docs.verify.run_totals_verify` 형태)는 호출 때 원본을 읽으므로 원본 고정으로 같은 날을 본다"""
-    base = pin_today_kst(monkeypatch)
     assert _function_local_today() == base
 
 
