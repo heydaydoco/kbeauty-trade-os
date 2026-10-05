@@ -23,7 +23,8 @@ from app.core.db.session import SessionFactory
 from app.core.errors.codes import ErrorCode
 from app.core.errors.exceptions import AppError, ForbiddenError, UnauthenticatedError
 from app.core.logging.context import user_id_var, user_role_var
-from app.modules.idempotency.service import IDEMPOTENCY_HEADER
+from app.core.text import is_invisible_char
+from app.modules.idempotency.service import IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY_MAX_LENGTH
 from app.modules.identity import service as identity_service
 from app.modules.identity.models import RoleCode
 from app.modules.identity.service import SESSION_COOKIE_NAME, AuthenticatedUser
@@ -99,9 +100,21 @@ def get_idempotency_key(
     없으면 거절한다. "있으면 쓰고 없으면 그냥 실행"으로 두면 더블클릭 보호가
     클라이언트의 선의에 달리게 되고, 헤더를 빠뜨린 화면 하나가 조용히 이중 전표를
     만든다. 프런트 lib/api.ts는 모든 쓰기 요청에 자동으로 붙인다.
+
+    형식(P-39): 1~128자(`IDEMPOTENCY_KEY_MAX_LENGTH` — DB 열 길이와 같다)이고 보이지 않는 글자(제어·서식·줄/문단 구분·한글 채움 —
+    `app.core.text`)가 없어야 한다. 아니면 422 `KEY_INVALID` — DB에 닿기 전에 막는다(129자 키의 22001이 500으로 새던 결함).
+    빈 값은 종전대로 400 `KEY_REQUIRED`(키 없음과 같다).
     """
     if not idempotency_key:
         raise AppError(ErrorCode.IDEMPOTENCY_KEY_REQUIRED)
+    if len(idempotency_key) > IDEMPOTENCY_KEY_MAX_LENGTH or any(
+        is_invisible_char(char) for char in idempotency_key
+    ):
+        # 키 원문은 로그에 싣지 않는다(길이만) — 제어문자가 로그 줄을 깨뜨리지 않게.
+        raise AppError(
+            ErrorCode.IDEMPOTENCY_KEY_INVALID,
+            log_context={"key_length": len(idempotency_key)},
+        )
     return idempotency_key
 
 

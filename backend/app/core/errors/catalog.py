@@ -433,6 +433,10 @@ ERROR_CATALOG: dict[ErrorCode, ErrorSpec] = {
         400,
         "요청 식별 키가 없어 처리하지 못했습니다. 화면을 새로 고친 뒤 다시 시도해 주세요.",
     ),
+    ErrorCode.IDEMPOTENCY_KEY_INVALID: ErrorSpec(
+        422,
+        "요청 식별 키의 형식이 올바르지 않아 처리하지 못했습니다(1~128자, 보이지 않는 글자 불가). 화면을 새로 고친 뒤 다시 시도해 주세요.",
+    ),
     ErrorCode.TRANSACTION_BOUNDARY_VIOLATION: ErrorSpec(
         500,
         "요청을 처리하는 중 내부 오류가 발생했습니다. 잠시 후 다시 시도하시고, 계속되면 오류 번호와 함께 관리자에게 알려 주세요.",
