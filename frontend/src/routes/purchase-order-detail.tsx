@@ -525,8 +525,10 @@ function ImportShipmentsSection({ po, canCreate, onReload }: { po: PurchaseOrder
   const [creating, setCreating] = useState(false);
   const list = usePagedList<ShipmentListItem>(poShipmentsKey(po.id), `/v1/shipments?po_id=${po.id}`, true, { staleTime: 0 });
   const total = assignableTotal(po.lines);
+  // 재생 본문(R-5a-6)이면 배정 가능량을 모른다 — '모두 배정됨'으로 단정하지 않고 버튼도 닫는다(적대 검토 low ①).
+  const unknown = lacksReceiptFields(po.lines);
   const shippable = IMPORT_SHIPPABLE_PO_STATUSES.has(po.status);
-  const showCreate = canCreate && shippable && total > 0;
+  const showCreate = canCreate && shippable && !unknown && total > 0;
 
   return (
     <section aria-labelledby="po-shipments-title">
@@ -543,7 +545,9 @@ function ImportShipmentsSection({ po, canCreate, onReload }: { po: PurchaseOrder
       <p className="mt-1 break-keep text-xs text-gray-500">
         {!shippable
           ? "발행·공급사 확인 상태의 발주에서만 수입선적을 만들 수 있습니다."
-          : total <= 0
+          : unknown
+            ? "배정 가능량 정보 없음 — '최신 내용 불러오기' 후 다시 확인해 주세요."
+            : total <= 0
             ? "배정 가능량이 없습니다 — 모든 수량이 수입선적에 배정되었습니다(수입선적을 취소하면 돌아옵니다)."
             : canCreate
               ? "배정 가능량 안에서 여러 수입선적으로 나눠 만들 수 있습니다. 발주의 상태·수량은 바뀌지 않으며, 단가·금액은 복사하지 않습니다."

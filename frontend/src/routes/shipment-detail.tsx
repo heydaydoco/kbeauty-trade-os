@@ -58,6 +58,7 @@ import {
   refreshAfterAssignableConflict,
   refreshAfterQuantityConflict,
   releaseActionLabel,
+  releaseAwareErrorText,
   shipmentDetailKey,
   shipmentKindLabel,
   shipmentStatusText,
@@ -189,10 +190,22 @@ function ShipmentDetailView() {
     setAnnouncements(derivedChanges(previous?.milestones, board));
     void client.invalidateQueries({ queryKey: [...SHIPMENTS_QUERY_KEY, "list"] });
     void client.invalidateQueries({ queryKey: milestoneChangesKey("SHIPMENT", id) });
+    invalidateSourcePo();
+  }
+
+  /**
+   * 수입선적의 ETA(계획·실적)·통관이 바뀌면 원천 발주 라인의 **입고예정**(서버 파생값)이 바뀐다 — 발주 상세 캐시를 버려 다음 진입·포커스에서
+   * 새 값을 받게 한다(적대 검토 low ② — 옛 '입고예정 미정'이 남지 않게). 수출선적은 해당 없음.
+   */
+  function invalidateSourcePo() {
+    const current = client.getQueryData<ShipmentDetail>(detailKey);
+    const poId = current === undefined ? null : poIdOf(current);
+    if (poId !== null) void client.invalidateQueries({ queryKey: purchaseOrderDetailKey(poId), exact: true });
   }
 
   /** 통관 기록·통보가 바뀌면 보드(신고수리·미통보 수)·통관 요약이 서버에서 다시 계산된다 — 상세를 다시 받는다(기준 version 무변경). */
   function refreshBoard() {
+    invalidateSourcePo(); // 상세 재조회 전에 — 지금 캐시의 원천으로 판정
     void client.invalidateQueries({ queryKey: detailKey, exact: true });
     void client.invalidateQueries({ queryKey: [...SHIPMENTS_QUERY_KEY, "list"] });
     void client.invalidateQueries({ queryKey: milestoneChangesKey("SHIPMENT", id) });
@@ -393,7 +406,7 @@ function ShipmentDetailView() {
 
       {notice !== null && (
         <div role="alert" className="mt-4 rounded border border-signal-red p-3 text-sm text-signal-red">
-          <p className="break-keep">{shipmentError(notice)}</p>
+          <p className="break-keep">{releaseAwareErrorText(notice, kind) ?? shipmentError(notice)}</p>
           {(isVersionConflict(notice) || needsBoardReload(notice)) && (
             <button type="button" onClick={reload} className="cell-nowrap mt-2 rounded border border-signal-red px-3 py-1">
               최신 내용 불러오기
@@ -563,6 +576,7 @@ function ShipmentDetailView() {
           todayKst={board.today_kst}
           noticeBasePath={`/v1/shipments/${shipment.id}/milestone-changes`}
           freezeActionLabel={releaseName}
+          rewriteError={(error) => releaseAwareErrorText(error, kind)}
           onSaved={(result) => applyBoard(result.board)}
           onNoticeSaved={refreshBoard}
           onClose={() => setEditing(null)}

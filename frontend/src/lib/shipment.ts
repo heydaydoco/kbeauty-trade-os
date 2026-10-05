@@ -308,6 +308,19 @@ export const shipmentTotalText = (row: ShipmentListItem): string =>
 /** 동결 전이(`RELEASE_ORDER`) 이름 — 수출 '출고지시', 수입 '선적 확정'. 모르는 구분은 수출 문구(서버 상태명 그대로). */
 export const releaseActionLabel = (kind: string): string => (kind === "IMPORT" ? "선적 확정" : "출고지시");
 
+/** 서버 422 — ETD·B/L 발행·ETA 실적은 동결 전이 뒤에만(서버 문구는 수출 기준 '출고지시'). */
+export const ACTUAL_BEFORE_RELEASE_CODE = "SHIPMENTS.MILESTONE.ACTUAL_BEFORE_RELEASE";
+
+/**
+ * 수입선적에서 서버 422 `ACTUAL_BEFORE_RELEASE`의 '출고지시' 문구를 화면 이름('선적 확정')으로 바꾼 문구(적대 검토 low ③ — 백엔드 앱 코드 0이라
+ * 화면에서 대체). 수출·다른 오류는 null(서버 문구 그대로).
+ */
+export function releaseAwareErrorText(error: unknown, kind: string): string | null {
+  if (kind !== "IMPORT" || !(error instanceof ApiError) || error.code !== ACTUAL_BEFORE_RELEASE_CODE) return null;
+  const name = releaseActionLabel(kind);
+  return `ETD·B/L 발행·ETA 실적은 ${name} 뒤에만 기록할 수 있습니다. ${name}을 먼저 진행해 주세요.`;
+}
+
 /** 선적 상태 라벨(구분 반영) — 수입의 RELEASE_ORDERED는 '선적 확정', 나머지는 공용 표(`shipmentStatusLabel`). */
 export const shipmentStatusText = (status: string, kind: string): string =>
   status === "RELEASE_ORDERED" ? releaseActionLabel(kind) : shipmentStatusLabel(status);

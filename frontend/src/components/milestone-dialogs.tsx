@@ -242,6 +242,8 @@ interface ValueDialogProps<B extends MilestoneBoard> {
   reasonHint?: ReactNode;
   /** 선적 동결 전이 이름(실적 안내문) — 수출 '출고지시'(기본), 수입 '선적 확정'(S3-2 PR-5b — 부채 R-5a-8). */
   freezeActionLabel?: string;
+  /** 쓰기 오류 문구 대체(값이 있으면 그 문구) — 수입선적의 422 ACTUAL_BEFORE_RELEASE '출고지시' → '선적 확정'(PR-5b 적대 검토 low ③). */
+  rewriteError?: (error: unknown) => string | null;
 }
 
 function existingInstant(row: MilestoneRow): InstantValue | null {
@@ -264,6 +266,7 @@ export function MilestoneValueDialog<B extends MilestoneBoard>({
   onReload,
   reasonHint,
   freezeActionLabel,
+  rewriteError,
 }: ValueDialogProps<B>) {
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const firstRef = useRef<HTMLInputElement | null>(null);
@@ -671,7 +674,7 @@ export function MilestoneValueDialog<B extends MilestoneBoard>({
 
         {write.error && (
           <div role="alert" className="break-keep text-sm text-signal-red">
-            <p>{writeErrorText(write.error, noun)}</p>
+            <p>{rewriteError?.(write.error) ?? writeErrorText(write.error, noun)}</p>
             {needsBoardReload(write.error) && (
               <button
                 type="button"

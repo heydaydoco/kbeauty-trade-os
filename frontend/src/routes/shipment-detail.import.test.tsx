@@ -2,11 +2,14 @@
 // 라인 수량 수정 409 EXCEEDS_ASSIGNABLE 칸별 + 발주 재조회·라인 추가 후보 = 발주 라인(배정 가능량)·문서 흐름 미호출.
 // 응답은 백엔드 ImportShipmentDetail 그대로(금액·통화 키 자체가 없다). fetch 스텁은 정확 URL·메서드 일치(stubGateFetch).
 
+import { QueryClient } from "@tanstack/react-query";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppRoutes } from "../App";
+import { purchaseOrderDetailKey } from "../lib/purchase-order";
 import type { ImportShipmentDetail } from "../lib/shipment";
 import { stubGateFetch, type GateCall, type GateHandler } from "../test/gate-fixtures";
+import { exportBoard } from "../test/milestone-fixtures";
 import { PO_LINE, SENTINELS, poDetail } from "../test/po-fixtures";
 import { TRADER, VIEWER, jsonResponse, page, renderWithProviders } from "../test/render";
 import { AUTO_SHIPPER, IMPORT_LINE, apiErrorResponse, importShipmentDetail } from "../test/shipment-fixtures";
@@ -51,7 +54,7 @@ const writes = (next: ImportShipmentDetail, status = 200) => () => {
   return jsonResponse(next, status);
 };
 
-function open(detail = importShipmentDetail(), me: unknown = TRADER, extra: GateHandler[] = []) {
+function open(detail = importShipmentDetail(), me: unknown = TRADER, extra: GateHandler[] = [], client?: QueryClient) {
   server.detail = detail;
   server.po = sourcePo();
   const stub = stubGateFetch(me, [
@@ -61,7 +64,7 @@ function open(detail = importShipmentDetail(), me: unknown = TRADER, extra: Gate
     [PO, "GET", () => jsonResponse(server.po)],
     [SH, "GET", () => jsonResponse(server.detail)],
   ]);
-  renderWithProviders(<AppRoutes />, { route: "/shipments/41" });
+  renderWithProviders(<AppRoutes />, { route: "/shipments/41", client });
   return stub;
 }
 
@@ -224,5 +227,66 @@ describe("수입선적 상세 — 라인 수량 수정·추가(배정 가능량)
     const row = within(section).getByText("Seoul Cosmetics Co., Ltd.").closest("tr") as HTMLElement;
     expect(within(row).getByText("송하인")).toBeInTheDocument();
     expect(within(row).getByText("원천에서 복사")).toBeInTheDocument();
+  });
+});
+
+// ── 적대 검토 반영(low ②③④) — 마일스톤: '선적 확정' 안내·422 문구 대체·원천 발주 입고예정 캐시 무효화 ──
+
+const MILESTONE_ACTIONS = ["RELEASE_ORDER", "CANCEL", "EDIT_LINES", "EDIT_COUNTRIES", "EDIT_META", "EDIT_PARTIES", "EDIT_MILESTONES", "PLAN_DRAFT"];
+const withMilestones = (over: Partial<ImportShipmentDetail> = {}) =>
+  importShipmentDetail({ allowed_actions: MILESTONE_ACTIONS, milestones: exportBoard(), ...over });
+const card = (name: string) => within(screen.getByRole("list", { name: "마일스톤" })).getByRole("listitem", { name });
+
+describe("수입선적 마일스톤 — '선적 확정' 문구·입고예정 캐시(적대 검토 반영)", () => {
+  it.each(["ETD", "ETA"])("%s 실적 대화상자 안내는 '선적 확정 뒤에만 기록합니다'('출고지시' 0)", async (type) => {
+    open(withMilestones());
+    await heading();
+    fireEvent.click(within(card(type)).getByRole("button", { name: "실적 입력" }));
+    const box = screen.getByRole("dialog");
+    expect(box.textContent).toContain("ETD·B/L 발행·ETA 실적은 선적 확정 뒤에만 기록합니다.");
+    expect(box.textContent).not.toContain("출고지시");
+  });
+
+  it("서버 422 ACTUAL_BEFORE_RELEASE의 '출고지시' 문구를 '선적 확정'으로 바꿔 보인다", async () => {
+    open(withMilestones(), TRADER, [
+      [
+        `${SH}/milestones/ETA/actual`,
+        "POST",
+        () =>
+          jsonResponse(
+            apiErrorResponse(
+              "SHIPMENTS.MILESTONE.ACTUAL_BEFORE_RELEASE",
+              "ETD·B/L 발행·ETA 실적은 출고지시 뒤에만 기록할 수 있습니다. 출고지시를 먼저 진행해 주세요.",
+            ),
+            422,
+          ),
+      ],
+    ]);
+    await heading();
+    fireEvent.click(within(card("ETA")).getByRole("button", { name: "실적 입력" }));
+    const box = screen.getByRole("dialog");
+    fireEvent.change(within(box).getByLabelText(/실적일/), { target: { value: "2026-10-03" } });
+    fireEvent.click(within(box).getByRole("button", { name: "저장" }));
+    expect(
+      await within(box).findByText("ETD·B/L 발행·ETA 실적은 선적 확정 뒤에만 기록할 수 있습니다. 선적 확정을 먼저 진행해 주세요."),
+    ).toBeInTheDocument();
+    expect(box.textContent).not.toContain("출고지시");
+  });
+
+  it("ETA 계획 저장 뒤 원천 발주 상세 캐시(입고예정)를 exact로 무효화한다 — 다른 발주는 그대로", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const poInvalidations = () =>
+      spy.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(purchaseOrderDetailKey(4)) && filters?.exact === true);
+    const after = withMilestones({ milestones: exportBoard({ ETA: { planned: "2026-11-02", effective: { value: "2026-11-02", basis: "PLANNED" }, milestone_id: 70, version: 1 } }) });
+    open(withMilestones(), TRADER, [[`${SH}/milestones/ETA/plan`, "POST", () => jsonResponse({ board: after.milestones, change: { id: 1, change_kind: "PLAN_SET" } })]], client);
+    await heading();
+    expect(poInvalidations()).toHaveLength(0);
+    fireEvent.click(within(card("ETA")).getByRole("button", { name: "계획 입력" }));
+    const box = screen.getByRole("dialog");
+    fireEvent.change(within(box).getByLabelText(/계획일/), { target: { value: "2026-11-02" } });
+    fireEvent.click(within(box).getByRole("button", { name: "저장" }));
+    await waitFor(() => expect(poInvalidations().length).toBeGreaterThan(0));
+    expect(spy.mock.calls.some(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(purchaseOrderDetailKey(5)))).toBe(false);
   });
 });

@@ -151,6 +151,10 @@ describe("발주 상세 라인 — 배정 가능량·입고예정(원가 무관 
     expect(cellUnder(lineRow("SKU-001"), "수입선적 배정 가능")).toHaveTextContent("정보 없음");
     expect(cellUnder(lineRow("SKU-001"), "입고예정")).toHaveTextContent("정보 없음");
     expect(screen.queryByRole("button", { name: "수입선적 만들기" })).toBeNull();
+    // 배정 가능량을 모르는데 '모두 배정됨'으로 단정하지 않는다(적대 검토 low ①).
+    const section = screen.getByRole("region", { name: "수입선적" });
+    expect(section.textContent).toContain("배정 가능량 정보 없음 — '최신 내용 불러오기' 후 다시 확인해 주세요.");
+    expect(section.textContent).not.toContain("모든 수량이 수입선적에 배정");
     const reads = calls.filter((c) => c.url === "/api/v1/purchase-orders/9").length;
     const banner = screen.getByText(/배정 가능량·입고예정 정보가 없습니다/).closest("div") as HTMLElement;
     fireEvent.click(within(banner).getByRole("button", { name: "최신 내용 불러오기" }));
